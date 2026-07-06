@@ -116,7 +116,12 @@ export async function buildApp(
     origin: [config.publicUrl, config.webUrl].filter((value): value is string => Boolean(value)),
     credentials: true,
   });
-  await app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
+  // Insecure-dev already relaxes auth (dev-login); relax the rate limit there too
+  // so local/CI test runs aren't throttled. Production keeps the 200/min ceiling.
+  await app.register(rateLimit, {
+    max: config.facilityInsecureDev ? 100_000 : 200,
+    timeWindow: "1 minute",
+  });
   await app.register(swagger, {
     openapi: {
       info: { title: "Facility API", version: "0.3.0" },

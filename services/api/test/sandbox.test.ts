@@ -261,6 +261,12 @@ describe("sandbox api", async () => {
         },
       })
       .where(eq(runs.id, run.id));
+    // The message handler pins the owning run; finishConversationTurn only
+    // finalizes the run the conversation points at.
+    await db
+      .update(conversations)
+      .set({ lastRunId: run.id })
+      .where(eq(conversations.id, conversation.id));
     const [conversationRun] = await db.select().from(runs).where(eq(runs.id, run.id));
     if (!conversationRun) throw new Error("conversation run fixture missing");
     await appendRunEvents(db, orgId, run.id, [
@@ -287,6 +293,87 @@ describe("sandbox api", async () => {
     expect(stored?.status).toBe("idle");
     expect(stored?.lastRunId).toBe(run.id);
     expect(stored?.engineSessionId).toBe("sess_conversation_2");
+  });
+
+  it("a foreign run cannot finalize a conversation it doesn't own (even same agent)", async () => {
+    const contract = (
+      await db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          scope: "project",
+          projectId,
+          kind: "agent_contract",
+          name: `forge-contract-${Date.now()}`,
+        })
+        .returning()
+    )[0];
+    const sharedAgent = (
+      await db
+        .insert(agentDefs)
+        .values({
+          id: newId("agent"),
+          orgId,
+          projectId,
+          name: `forge-agent-${Date.now()}`,
+          engine: "claude_code",
+          model: {},
+          contractItemId: contract?.id ?? "",
+          triggers: [],
+          permissions: [],
+          enabled: true,
+        })
+        .returning()
+    )[0];
+    if (!sharedAgent) throw new Error("shared agent fixture missing");
+    // A running conversation pinned to its OWN in-flight run — same agent the
+    // attacker uses, so ONLY the lastRunId pin distinguishes owner from forger.
+    const victimRun = await insertRunnerRun("frt_victim", "running", newId("run"), {
+      runnerTokenHash: await hashKey("frt_victim"),
+    });
+    const victimConversationId = newId("evt");
+    await db.insert(conversations).values({
+      id: victimConversationId,
+      orgId,
+      projectId,
+      agentDefId: sharedAgent.id,
+      status: "running",
+      lastRunId: victimRun.id,
+      createdBy: { type: "user", id: "victim" },
+    });
+    const forged = await insertRunnerRun("frt_forge", "running", newId("run"), {
+      runnerTokenHash: await hashKey("frt_forge"),
+    });
+    await db
+      .update(runs)
+      .set({
+        agentDefId: sharedAgent.id,
+        engine: "claude_code",
+        mode: "conversation",
+        trigger: { type: "conversation", conversationId: victimConversationId },
+      })
+      .where(eq(runs.id, forged.id));
+    const [forgedRun] = await db.select().from(runs).where(eq(runs.id, forged.id));
+    if (!forgedRun) throw new Error("forged run fixture missing");
+    await appendRunEvents(db, orgId, forged.id, [
+      { type: "assistant", data: { text: "attacker reply" } },
+    ]);
+    await finishRun(db, forgedRun, {
+      status: "succeeded",
+      engineSessionId: "sess_attacker",
+    }).catch(() => undefined);
+    const [victim] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, victimConversationId));
+    expect(victim?.status).toBe("running"); // untouched — still owned by victimRun
+    expect(victim?.engineSessionId ?? null).toBeNull();
+    const forgedMessages = await db
+      .select()
+      .from(conversationMessages)
+      .where(eq(conversationMessages.conversationId, victimConversationId));
+    expect(forgedMessages).toHaveLength(0);
   });
 
   it("delivers run events over the NOTIFY-backed SSE path without safety polling", async () => {

@@ -919,6 +919,49 @@ describe("api", async () => {
     expect(loaded.json().events.map((event: { seq: number }) => event.seq)).toEqual([1, 2]);
   });
 
+  it("refuses an mcp_tool_call proposal on the generic route (per-tool perm bypass)", async () => {
+    const actionType =
+      (
+        await db
+          .select()
+          .from(actionTypes)
+          .where(sql`${actionTypes.orgId} = ${orgId} and ${actionTypes.name} = 'mcp_tool_call'`)
+          .limit(1)
+      )[0] ??
+      (
+        await db
+          .insert(actionTypes)
+          .values({
+            id: newId("act"),
+            orgId,
+            name: "mcp_tool_call",
+            payloadSchema: { type: "object", required: ["toolName", "args", "requestedBy"] },
+            resolver: { type: "permission", config: {} },
+            executor: { type: "mcp_tool_call", config: {} },
+            defaultTtlHours: 1,
+          })
+          .returning()
+      )[0];
+    // A hitl:write principal must not smuggle a privileged MCP op through the
+    // generic route — mcp_tool_call is reserved for /v1/mcp/tool-proposals which
+    // checks the specific tool's permission (e.g. agents:write).
+    const forged = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        actionTypeId: actionType?.id,
+        payload: {
+          toolName: "facility_create_agent",
+          args: {},
+          requestedBy: { type: "key", id: "x" },
+        },
+        contextMd: "smuggled privileged op",
+      },
+    });
+    expect(forged.statusCode).toBe(403);
+  });
+
   it("fails closed when executing task creation without a GitHub installation", async () => {
     const actionType = (
       await db

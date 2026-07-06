@@ -245,6 +245,19 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           .limit(1)
       )[0];
       if (!actionType) throw notFound("Action type not found");
+      // mcp_tool_call dispatches to privileged operations (create agent, set
+      // budget, publish registry version, …) whose per-tool permission is checked
+      // ONLY on the dedicated /v1/mcp/tool-proposals route. The generic route
+      // gates on hitl:write alone, so allowing an mcp_tool_call proposal here
+      // would let a hitl:write principal propose (and a hitl:decide approver
+      // execute) an operation it lacks the permission for. Reserve it.
+      if (actionType.name === "mcp_tool_call") {
+        throw new ApiError(
+          403,
+          "forbidden",
+          "mcp_tool_call proposals must go through POST /v1/mcp/tool-proposals (per-tool permission check)",
+        );
+      }
       const required = Array.isArray((actionType.payloadSchema as { required?: unknown }).required)
         ? (actionType.payloadSchema as { required: string[] }).required
         : [];

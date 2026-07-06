@@ -314,6 +314,10 @@ async function finishConversationTurn(
       .limit(1)
   )[0];
   if (!conversation) throw new Error("conversation_not_found");
+  // Only the run that owns the running turn may finalize it — the conversation
+  // pins its owning run at dispatch. A run carrying a forged/foreign
+  // conversationId (different pinned run) must not append a reply or unlock it.
+  if (conversation.lastRunId !== run.id) return;
   const reply = await lastAssistantText(db, run);
   await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
@@ -1048,7 +1052,9 @@ async function releaseConversationOnFailure(
         .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)))
         .limit(1)
     )[0];
-    if (conversation?.status !== "running") return;
+    // Release ONLY a thread pinned to THIS run's turn and still running — never
+    // a foreign conversation (forged trigger) or a newer turn.
+    if (conversation?.status !== "running" || conversation.lastRunId !== runId) return;
     const rows = await tx
       .select({ max: sql<number>`coalesce(max(seq), 0)` })
       .from(conversationMessages)

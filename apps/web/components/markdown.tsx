@@ -5,41 +5,43 @@ import type { JSX } from "react";
  * enough structure (headings, lists, code, quotes, bold/italic/code spans,
  * links) to read a document like a wiki, without pulling a parser into the
  * bundle. Everything is escaped by React; no raw HTML is ever injected.
+ *
+ * Keys come from a monotonic counter, not array indices: the source is parsed
+ * wholesale on every render into a fixed token sequence that never reorders, so
+ * a per-render running id is both unique and stable enough for React here.
  */
 
-type Inline = { text: string };
-
-function renderInline(text: string, keyPrefix: string): (string | JSX.Element)[] {
+function renderInline(text: string, key: string): (string | JSX.Element)[] {
   // Order matters: code spans first (their contents are literal), then links,
   // then bold, then italic. Each pass splits on the first matching token.
   const nodes: (string | JSX.Element)[] = [];
-  const codeSplit = text.split(/(`[^`]+`)/g);
-  codeSplit.forEach((chunk, i) => {
+  let n = 0;
+  for (const chunk of text.split(/(`[^`]+`)/g)) {
     if (/^`[^`]+`$/.test(chunk)) {
       nodes.push(
         <code
-          key={`${keyPrefix}-c${i}`}
+          key={`${key}-c${n++}`}
           className="rounded-[2px] bg-(--card) px-1 py-0.5 font-mono text-[0.92em] text-(--code)"
         >
           {chunk.slice(1, -1)}
         </code>,
       );
-      return;
+      continue;
     }
-    nodes.push(...renderLinks(chunk, `${keyPrefix}-c${i}`));
-  });
+    nodes.push(...renderLinks(chunk, `${key}-c${n++}`));
+  }
   return nodes;
 }
 
-function renderLinks(text: string, keyPrefix: string): (string | JSX.Element)[] {
+function renderLinks(text: string, key: string): (string | JSX.Element)[] {
   const out: (string | JSX.Element)[] = [];
-  const parts = text.split(/(\[[^\]]+\]\((?:https?:\/\/|\/)[^)]+\))/g);
-  parts.forEach((part, i) => {
+  let n = 0;
+  for (const part of text.split(/(\[[^\]]+\]\((?:https?:\/\/|\/)[^)]+\))/g)) {
     const match = part.match(/^\[([^\]]+)\]\(((?:https?:\/\/|\/)[^)]+)\)$/);
     if (match?.[1] && match[2]) {
       out.push(
         <a
-          key={`${keyPrefix}-l${i}`}
+          key={`${key}-l${n++}`}
           href={match[2]}
           target={match[2].startsWith("http") ? "_blank" : undefined}
           rel="noreferrer"
@@ -48,33 +50,33 @@ function renderLinks(text: string, keyPrefix: string): (string | JSX.Element)[] 
           {match[1]}
         </a>,
       );
-      return;
+      continue;
     }
-    out.push(...renderEmphasis(part, `${keyPrefix}-l${i}`));
-  });
+    out.push(...renderEmphasis(part, `${key}-l${n++}`));
+  }
   return out;
 }
 
-function renderEmphasis(text: string, keyPrefix: string): (string | JSX.Element)[] {
+function renderEmphasis(text: string, key: string): (string | JSX.Element)[] {
   const out: (string | JSX.Element)[] = [];
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_)/g);
-  parts.forEach((part, i) => {
+  let n = 0;
+  for (const part of text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_)/g)) {
     if (/^\*\*[^*]+\*\*$/.test(part)) {
       out.push(
-        <strong key={`${keyPrefix}-b${i}`} className="font-semibold text-(--ink)">
+        <strong key={`${key}-b${n++}`} className="font-semibold text-(--ink)">
           {part.slice(2, -2)}
         </strong>,
       );
     } else if (/^\*[^*]+\*$/.test(part) || /^_[^_]+_$/.test(part)) {
       out.push(
-        <em key={`${keyPrefix}-i${i}`} className="italic">
+        <em key={`${key}-i${n++}`} className="italic">
           {part.slice(1, -1)}
         </em>,
       );
     } else if (part) {
       out.push(part);
     }
-  });
+  }
   return out;
 }
 
@@ -86,11 +88,15 @@ export function Markdown({ source }: { source: string }) {
 
   const flushList = () => {
     if (!list) return;
-    const items = list.items.map((item, i) => (
-      <li key={`li-${blocks.length}-${i}`} className="leading-relaxed">
-        {renderInline(item, `li-${blocks.length}-${i}`)}
-      </li>
-    ));
+    let n = 0;
+    const items = list.items.map((item) => {
+      const key = `li-${blocks.length}-${n++}`;
+      return (
+        <li key={key} className="leading-relaxed">
+          {renderInline(item, key)}
+        </li>
+      );
+    });
     blocks.push(
       list.ordered ? (
         <ol key={`ol-${blocks.length}`} className="ml-5 list-decimal space-y-1 text-(--mut)">
@@ -155,7 +161,7 @@ export function Markdown({ source }: { source: string }) {
       continue;
     }
     if (bullet?.[1] !== undefined) {
-      if (list && list.ordered) flushList();
+      if (list?.ordered) flushList();
       if (!list) list = { ordered: false, items: [] };
       list.items.push(bullet[1]);
       continue;
@@ -200,5 +206,3 @@ export function Markdown({ source }: { source: string }) {
 
   return <div className="flex flex-col gap-2 text-[13px]">{blocks}</div>;
 }
-
-export type { Inline };

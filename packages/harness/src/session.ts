@@ -57,7 +57,9 @@ function toolsMd(input: HarnessSessionInput) {
   const base = input.apiBaseUrl.replace(/\/$/, "");
   return `# Platform Tool Notes
 
-Use the run token supplied by the runner when calling platform APIs.
+Authenticate with the run's platform key: send \`Authorization: Bearer $FACILITY_PLATFORM_KEY\`
+(the runner exports it into the environment) against \`$FACILITY_API_URL\`. It is a
+least-privilege, run-scoped key revoked when the run ends.
 
 - Preflight KB write: POST ${base}/v1/projects/:projectId/kb/entries?dry=1
 - Create KB entry: POST ${base}/v1/projects/:projectId/kb/entries

@@ -240,6 +240,14 @@ export async function registerConversationsRoutes(app: FastifyInstance, context:
             .returning()
         )[0];
         if (!message || !run) throw new Error("conversation_turn_create_failed");
+        // Pin the run that OWNS this running turn. Both finalize paths
+        // (finishConversationTurn / releaseConversationOnFailure) require the
+        // finishing run to be this one — so a forged run carrying another
+        // conversation's id can't release or append to a thread it doesn't own.
+        await tx
+          .update(conversations)
+          .set({ lastRunId: run.id, updatedAt: new Date() })
+          .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
         await tx.insert(runEvents).values({
           orgId: p.orgId,
           runId: run.id,
