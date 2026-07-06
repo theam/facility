@@ -1,15 +1,22 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
-import { appendFile, mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { appendFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { parseClaudeStreamJsonLine, parseCodexJsonlLine } from "./parsers.js";
+import {
+  parseClaudeSessionId,
+  parseClaudeStreamJsonLine,
+  parseCodexJsonlLine,
+  parseCodexSessionId,
+} from "./parsers.js";
 import type { RunBundle, RunEvent } from "./types.js";
 
 const workRoot = "/work";
 const steerFile = join(workRoot, "STEERING.md");
+const transcriptFile = join(workRoot, "engine.stream.jsonl");
+let engineSessionId: string | null = null;
 
 // Secret values injected into the run (virtual key, platform key, runner token,
 // repo clone token) that must never surface in captured check output persisted to
@@ -56,7 +63,9 @@ async function main() {
         return;
       }
     }
+    await writeFile(transcriptFile, "");
     const engineCode = await runEngine(bundle, startedAt);
+    await uploadTranscript();
     await emitChecks(cwdFor(bundle));
     // Platform-owned acceptance gates run independently of the engine's own
     // exit code and self-report: a run only succeeds if the engine succeeded AND
@@ -163,6 +172,7 @@ async function runEngine(bundle: RunBundle, startedAt: number) {
       args,
       cwdFor(bundle),
       parseClaudeStreamJsonLine,
+      parseClaudeSessionId,
       timeoutMin,
       startedAt,
     );
@@ -173,6 +183,7 @@ async function runEngine(bundle: RunBundle, startedAt: number) {
       ["exec", "--json", "-s", "danger-full-access", composedPrompt(bundle)],
       cwdFor(bundle),
       parseCodexJsonlLine,
+      parseCodexSessionId,
       timeoutMin,
       startedAt,
     );
@@ -207,6 +218,7 @@ async function runJsonProcess(
   args: string[],
   cwd: string,
   parse: (line: string) => RunEvent | null,
+  parseSessionId: (line: string) => string | null,
   timeoutMin: number,
   startedAt: number,
 ) {
@@ -216,6 +228,14 @@ async function runJsonProcess(
   const clearTimers = armEngineTimeout(child, timeoutMin);
   const rl = createInterface({ input: child.stdout });
   for await (const line of rl) {
+    await appendFile(transcriptFile, `${redactSecrets(line)}\n`);
+    if (!engineSessionId) {
+      const sessionId = parseSessionId(line);
+      if (sessionId) {
+        engineSessionId = sessionId;
+        await emit([{ type: "session", data: { engine_session_id: sessionId } }]);
+      }
+    }
     const event = parse(line);
     if (event) await emit([event]);
   }
@@ -225,6 +245,25 @@ async function runJsonProcess(
     return 124;
   }
   return code;
+}
+
+async function uploadTranscript() {
+  const size = await stat(transcriptFile)
+    .then((info) => info.size)
+    .catch(() => 0);
+  if (size === 0) return;
+  try {
+    await api(`/internal/runs/${currentRunId()}/transcript`, {
+      method: "POST",
+      headers: { "content-type": "application/x-ndjson" },
+      body: createReadStream(transcriptFile) as unknown as RequestInit["body"],
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+  } catch {
+    await emit([{ type: "artifact_error", data: { kind: "transcript_upload_failed" } }]).catch(
+      () => undefined,
+    );
+  }
 }
 
 async function runShell(command: string, cwd: string, eventType: string, timeoutMin: number) {
@@ -389,6 +428,7 @@ async function postResult(
         ? redactSecrets(`${JSON.stringify(error)} ${stderrTail.slice(-2000)}`)
         : undefined,
       git,
+      engineSessionId: engineSessionId ?? undefined,
     }),
   });
 }
@@ -601,7 +641,9 @@ export function composedPrompt(bundle: RunBundle) {
   const harnessNote = bundle.harness?.files
     ? "\n\nProject harness/KB context is in ./harness/SESSION.md - read it first."
     : "";
-  return `${bundle.contract}\n\nScope:\n${JSON.stringify(bundle.scope, null, 2)}${harnessNote}`;
+  const steeringNote =
+    "\n\nHuman steering may arrive in ./STEERING.md while you work (it starts empty). Re-read it after finishing each task or before major decisions; if it contains new instructions, follow them.";
+  return `${bundle.contract}\n\nScope:\n${JSON.stringify(bundle.scope, null, 2)}${harnessNote}${steeringNote}`;
 }
 
 function addModelFlags(args: string[], config: Record<string, unknown>) {

@@ -37,6 +37,27 @@ export function parseCodexJsonlLine(line: string): RunEvent | null {
   return { type: "engine", data: parsed };
 }
 
+export function parseClaudeSessionId(line: string): string | null {
+  const parsed = parseJson(line);
+  if (!parsed) return null;
+  const type = stringField(parsed, "type");
+  if (type !== "system" && type !== "init" && type !== "result") return null;
+  return stringField(parsed, "session_id") ?? stringField(parsed, "sessionId");
+}
+
+export function parseCodexSessionId(line: string): string | null {
+  const parsed = parseJson(line);
+  if (!parsed) return null;
+  return (
+    stringField(parsed, "session_id") ??
+    stringField(parsed, "sessionId") ??
+    stringField(parsed, "thread_id") ??
+    stringField(parsed, "threadId") ??
+    stringField(parsed, "conversation_id") ??
+    stringField(parsed, "conversationId")
+  );
+}
+
 function toolData(value: Record<string, unknown>) {
   const input = value.input ?? value.arguments ?? value.args ?? {};
   return {

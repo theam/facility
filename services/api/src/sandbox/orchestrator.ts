@@ -179,6 +179,7 @@ export async function finishRun(
     receipt?: Record<string, unknown>;
     error?: string;
     git?: { branch?: string; headSha?: string; changed: boolean; pushError?: string };
+    engineSessionId?: string;
   },
   deps?: { config?: AppConfig; githubClientFactory?: GithubClientFactory },
 ) {
@@ -220,6 +221,7 @@ export async function finishRun(
         status,
         receipt,
         error,
+        engineSessionId: input.engineSessionId,
         endedAt: new Date(),
         sandbox: { ...sandbox, finishedAt: new Date().toISOString() },
         updatedAt: new Date(),

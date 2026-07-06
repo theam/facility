@@ -57,6 +57,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/runs/:runId",
   "GET /v1/runs/:runId/events",
   "GET /v1/runs/:runId/stream",
+  "GET /v1/runs/:runId/transcript",
   "GET /v1/sandbox-profiles",
   "GET /v1/spend",
   "PATCH /v1/budgets/:budgetId",

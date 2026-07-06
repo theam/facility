@@ -3,6 +3,7 @@ import { githubInstallations, insertAuditEvent, repos, runs, steerMessages } fro
 import { and, asc, eq, gt, inArray, isNull, notInArray } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { writeTranscriptObject } from "../envelopes.js";
 import { ApiError, notFound } from "../errors.js";
 import { createGithubInstallationTokenFactory } from "../github/client.js";
 import { signedBundleToken, verifyBundleToken } from "../sandbox/bundle-url.js";
@@ -17,6 +18,7 @@ import {
 import type { AppConfig } from "../types.js";
 
 const Params = z.object({ runId: z.string() });
+const TRANSCRIPT_MAX_BYTES = 50 * 1024 * 1024;
 const EventBatch = z.array(
   z.object({
     type: z.string().min(1),
@@ -31,6 +33,14 @@ type RunnerRequest = FastifyRequest & {
 
 export async function registerInternalRoutes(app: FastifyInstance, config: AppConfig) {
   const db = app.facilityDb;
+
+  if (!app.hasContentTypeParser("application/x-ndjson")) {
+    app.addContentTypeParser(
+      "application/x-ndjson",
+      { parseAs: "buffer", bodyLimit: TRANSCRIPT_MAX_BYTES },
+      (_request, body, done) => done(null, body),
+    );
+  }
 
   async function authenticate(request: FastifyRequest) {
     const { runId } = request.params as { runId: string };
@@ -248,6 +258,39 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
   );
 
   app.post(
+    "/internal/runs/:runId/transcript",
+    {
+      config: { public: true },
+      preHandler: authenticate,
+      schema: {
+        params: Params,
+        response: { 200: z.object({ uri: z.string() }) },
+      },
+    },
+    async (request) => {
+      const run = (request as RunnerRequest).runnerRun;
+      if (!run) throw notFound("Run not found");
+      if (!Buffer.isBuffer(request.body)) {
+        throw new ApiError(400, "invalid_transcript", "Transcript body must be ndjson bytes");
+      }
+      if (request.body.length > TRANSCRIPT_MAX_BYTES) {
+        throw new ApiError(413, "payload_too_large", "Transcript exceeds 50 MB");
+      }
+      const uri = await writeTranscriptObject({
+        config,
+        orgId: run.orgId,
+        runId: run.id,
+        body: request.body,
+      });
+      await db
+        .update(runs)
+        .set({ transcriptUri: uri, updatedAt: new Date() })
+        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id)));
+      return { uri };
+    },
+  );
+
+  app.post(
     "/internal/runs/:runId/result",
     {
       config: { public: true },
@@ -266,6 +309,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
               pushError: z.string().optional(),
             })
             .optional(),
+          engineSessionId: z.string().optional(),
         }),
         response: { 200: z.record(z.string(), z.unknown()) },
       },
@@ -278,6 +322,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         receipt?: Record<string, unknown>;
         error?: string;
         git?: { branch?: string; headSha?: string; changed: boolean; pushError?: string };
+        engineSessionId?: string;
       };
       return (await finishRun(db, run, body, {
         config,

@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseClaudeStreamJsonLine, parseCodexJsonlLine } from "../src/parsers.js";
+import {
+  parseClaudeSessionId,
+  parseClaudeStreamJsonLine,
+  parseCodexJsonlLine,
+} from "../src/parsers.js";
 
 const fixtureRoot = join(import.meta.dirname, "fixtures");
 
@@ -24,5 +28,13 @@ describe("engine parsers", () => {
     expect(events.map((event) => event?.type)).toEqual(["assistant", "tool", "engine_result"]);
     expect(events[1]?.data?.name).toBe("shell");
     expect(String(events[1]?.data?.input).length).toBeLessThanOrEqual(503);
+  });
+
+  it("extracts the Claude stream-json session id from init/system lines", () => {
+    expect(
+      parseClaudeSessionId(
+        '{"type":"system","subtype":"init","session_id":"sess_claude_123","tools":[]}',
+      ),
+    ).toBe("sess_claude_123");
   });
 });

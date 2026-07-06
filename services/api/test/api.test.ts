@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { gzipSync } from "node:zlib";
-import { newId, seal } from "@facility/core";
+import { hashKey, newId, seal } from "@facility/core";
 import {
   actionTypes,
   agentDefs,
@@ -1671,6 +1671,174 @@ describe("api", async () => {
       config.s3AccessKey = previousAccessKey;
       config.s3SecretKey = previousSecretKey;
       config.awsRegion = previousRegion;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("requires the runner token for transcript uploads", async () => {
+    const token = "frt_transcript_auth";
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId,
+          mode: "builder",
+          engine: "codex",
+          status: "running",
+          sandbox: { runnerTokenHash: await hashKey(token) },
+          createdBy: { type: "user", id: "test" },
+        })
+        .returning()
+    )[0];
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run?.id}/transcript`,
+      headers: { "content-type": "application/x-ndjson" },
+      payload: '{"type":"result"}\n',
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects transcript uploads over 50 MB", async () => {
+    const token = "frt_transcript_large";
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId,
+          mode: "builder",
+          engine: "codex",
+          status: "running",
+          sandbox: { runnerTokenHash: await hashKey(token) },
+          createdBy: { type: "user", id: "test" },
+        })
+        .returning()
+    )[0];
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run?.id}/transcript`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/x-ndjson",
+      },
+      payload: Buffer.alloc(50 * 1024 * 1024 + 1, "x"),
+    });
+    expect(response.statusCode).toBe(413);
+  });
+
+  it("round trips a run transcript and hides it from another project-scoped key", async () => {
+    const transcript = '{"type":"system","session_id":"sess_1"}\n{"type":"result"}\n';
+    const objects = new Map<string, Buffer>();
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const key = request.url ?? "";
+        if (request.method === "PUT") {
+          objects.set(key, Buffer.concat(chunks));
+          response.writeHead(200).end();
+          return;
+        }
+        const body = objects.get(key);
+        if (request.method === "GET" && body) {
+          response.writeHead(200, { "content-type": "application/x-ndjson" });
+          response.end(body);
+          return;
+        }
+        response.writeHead(404).end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind");
+    const previous = {
+      s3Bucket: config.s3Bucket,
+      s3Endpoint: config.s3Endpoint,
+      s3AccessKey: config.s3AccessKey,
+      s3SecretKey: config.s3SecretKey,
+      awsRegion: config.awsRegion,
+    };
+    config.s3Bucket = "facility-test";
+    config.s3Endpoint = `http://127.0.0.1:${address.port}`;
+    config.s3AccessKey = "test";
+    config.s3SecretKey = "test";
+    config.awsRegion = "us-east-1";
+    try {
+      const token = "frt_transcript_roundtrip";
+      const run = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId,
+            mode: "builder",
+            engine: "codex",
+            status: "running",
+            sandbox: { runnerTokenHash: await hashKey(token) },
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const upload = await app.inject({
+        method: "POST",
+        url: `/internal/runs/${run?.id}/transcript`,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/x-ndjson",
+        },
+        payload: transcript,
+      });
+      expect(upload.statusCode).toBe(200);
+      const stored = (
+        await db
+          .select()
+          .from(runs)
+          .where(eq(runs.id, run?.id ?? ""))
+          .limit(1)
+      )[0];
+      expect(stored?.transcriptUri).toBe(
+        `s3://facility-test/transcripts/${orgId}/${run?.id}.jsonl`,
+      );
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${run?.id}/transcript`,
+        headers: { cookie },
+      });
+      expect(loaded.statusCode).toBe(200);
+      expect(loaded.headers["content-type"]).toContain("application/x-ndjson");
+      expect(loaded.body).toBe(transcript);
+
+      const otherProject = (
+        await db
+          .insert(projects)
+          .values({
+            id: newId("proj"),
+            orgId,
+            name: "Transcript Other Project",
+            slug: `transcript-other-${Date.now()}`,
+            settings: {},
+          })
+          .returning()
+      )[0];
+      const issued = await app.inject({
+        method: "POST",
+        url: "/v1/keys",
+        headers: { cookie },
+        payload: { name: "transcript-other-key", roleId: ownerRole, projectId: otherProject?.id },
+      });
+      const crossProject = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${run?.id}/transcript`,
+        headers: { authorization: `Bearer ${issued.json().secret}` },
+      });
+      expect(crossProject.statusCode).toBe(404);
+    } finally {
+      Object.assign(config, previous);
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
