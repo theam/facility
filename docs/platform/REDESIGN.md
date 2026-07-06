@@ -2,6 +2,10 @@
 
 **Date:** 2026-07-06 · **Input:** GOAL.md + Adrián's product feedback + a full audit of the current implementation (web surfaces read first-hand; backend/API, runner, and end-to-end flows traced against source). Every claim below carries a file reference.
 
+> **Implementation status (2026-07-06, branch `feat/redesign-control-plane`).**
+> Landed with a green floor per commit: **P0** close-the-loop backend — PR outcome hook + `contents:write` push tokens + run↔outcome linkage, repo discovery, `gh_issues` read-mirror + direct trigger (0a6042e); session identity, raw transcripts to the object store, honest STEERING.md, generic agent scheduler, PO on claude_code (1c19dd6); dispatch-loss backstop (8ddcea9). **P1** the IA flip — project world + thin org shell, switcher, ⌘K, last-used landing, voice purge, kickstart repo picker, renames w/ redirects (e045841). **P2** daily loop — `GET /v1/outcomes`, audit time/prefix/project filters, inbox PR-review queue, audit drawer + chain verify (3966be3). **P4 slices** — harness item draft→publish editor, project agents editor incl. grantable permissions (4f1c7f6), Owner surface: KB reader + conversation UI + activity (7ba9c17), members management (ae48974), org fleet view (6142666), kickstart discard-draft (b54d057). **P3** interactive layer (real `--resume` via persisted session state, interrupt, PO conversations as resume-chained runs) — migration 0017, merging from `lane/p3`.
+> Verification: independent GPT-5.5 xhigh rounds; UX round 1 scored IA 84 / voice 80 / verbs 58 / honesty 72 (verb+honesty findings dominated by the then-unmerged P3 routes). **Open follow-ups:** harness item creation + test-run + where-used/diffs, KB in-place editing + validation UI, issue stage filters + PR mirror, CLI/MCP parity for the new verbs, roles editor + sandbox-profile UI, md rendering for KB/harness content, per-project SSE channel (LiveRefresh polls today). **Owner-gated:** GitHub App install, tam-os cutover + the §0 week-long dogfood, branch push/PR.
+
 ---
 
 ## 0. Verdict
