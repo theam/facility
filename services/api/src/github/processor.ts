@@ -7,6 +7,7 @@ import {
   integrations,
   outcomes,
   repos,
+  runs,
 } from "@facility/db";
 import { and, eq, sql } from "drizzle-orm";
 import type { AppConfig } from "../types.js";
@@ -15,6 +16,11 @@ import {
   FacilityGithubClient,
   type GithubClientFactory,
 } from "./client.js";
+import {
+  bumpGhIssueCommentCount,
+  syncRepoIssues,
+  upsertGhIssueFromWebhook,
+} from "./issues-sync.js";
 import { verifyFingerprints } from "./kickstart.js";
 import { routeTrigger, type TriggerPayload } from "./router.js";
 
@@ -53,10 +59,20 @@ export async function processGithubWebhook(
   const payload = event.payload as WebhookPayload;
   try {
     if (event.eventType === "installation" || event.eventType === "installation_repositories") {
-      await processInstallation(db, event.orgId, payload);
+      await processInstallation(db, event.orgId, payload, enqueue);
     } else if (event.eventType === "push") {
       await processPush(db, event.orgId, payload, enqueue);
-    } else if (event.eventType === "issues" || event.eventType === "issue_comment") {
+    } else if (event.eventType === "issues") {
+      await upsertGhIssueFromWebhook(db, event.orgId, payload);
+      await processTrigger(
+        db,
+        event.orgId,
+        factory ?? createGithubClientFactory(config),
+        payload,
+        enqueue,
+      );
+    } else if (event.eventType === "issue_comment") {
+      await bumpGhIssueCommentCount(db, event.orgId, payload);
       await processTrigger(
         db,
         event.orgId,
@@ -87,7 +103,12 @@ export async function processGithubWebhook(
   }
 }
 
-async function processInstallation(db: FacilityDb, orgId: string, payload: WebhookPayload) {
+async function processInstallation(
+  db: FacilityDb,
+  orgId: string,
+  payload: WebhookPayload,
+  enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+) {
   const installationId = payload.installation?.id;
   const accountLogin = payload.installation?.account?.login;
   if (!installationId || !accountLogin) return;
@@ -130,6 +151,28 @@ async function processInstallation(db: FacilityDb, orgId: string, payload: Webho
       .update(repos)
       .set({ fingerprintStatus: "orphaned", updatedAt: new Date() })
       .where(eq(repos.installationId, row.id));
+    return;
+  }
+  const installationRepos =
+    payload.repositories?.map((repo) => ({
+      owner: repo.owner?.login ?? repo.full_name?.split("/")[0],
+      name: repo.name ?? repo.full_name?.split("/")[1],
+      defaultBranch: repo.default_branch,
+    })) ?? [];
+  for (const item of installationRepos) {
+    if (!item.owner || !item.name) continue;
+    const updated = await db
+      .update(repos)
+      .set({
+        installationId: row.id,
+        defaultBranch: item.defaultBranch ?? sql`${repos.defaultBranch}`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(repos.orgId, orgId), eq(repos.owner, item.owner), eq(repos.name, item.name)))
+      .returning();
+    for (const repo of updated) {
+      await enqueue?.("github.issues-sync", { repoId: repo.id, orgId: repo.orgId });
+    }
   }
 }
 
@@ -228,6 +271,19 @@ async function processPullRequest(
   )[0];
   if (!repo) return;
   const metrics = await pullRequestMetrics(factory, payload, owner, name, number);
+  const producingRun = (
+    await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, repo.orgId),
+          eq(runs.projectId, repo.projectId),
+          sql`${runs.gh}->>'branch' = ${head}`,
+        ),
+      )
+      .limit(1)
+  )[0];
   await db
     .insert(outcomes)
     .values({
@@ -237,6 +293,7 @@ async function processPullRequest(
       repo: `${owner}/${name}`,
       prNumber: number,
       agentLane: head.split("/")[0] ?? "facility",
+      runId: producingRun?.id,
       openedAt: payload.pull_request?.created_at
         ? new Date(payload.pull_request.created_at)
         : new Date(),
@@ -256,6 +313,7 @@ async function processPullRequest(
         fate: payload.pull_request?.merged ? "merged" : "closed",
         reviewRounds: metrics.reviewRounds,
         fixupCommits: metrics.fixupCommits,
+        runId: producingRun?.id,
         updatedAt: new Date(),
       },
     });
@@ -318,6 +376,24 @@ export async function enqueueFingerprintVerify(
   const repo = (await db.select().from(repos).where(eq(repos.id, data.repoId)).limit(1))[0];
   if (!repo) return;
   await verifyFingerprints({ db, factory, repo });
+}
+
+export async function enqueueGithubIssuesSync(
+  db: FacilityDb,
+  config: AppConfig,
+  data: { repoId?: string; orgId?: string },
+  factory: GithubClientFactory = createGithubClientFactory(config),
+) {
+  if (!data.repoId || !data.orgId) return;
+  const repo = (
+    await db
+      .select()
+      .from(repos)
+      .where(and(eq(repos.orgId, data.orgId), eq(repos.id, data.repoId)))
+      .limit(1)
+  )[0];
+  if (!repo) return;
+  await syncRepoIssues(db, factory, repo);
 }
 
 /**

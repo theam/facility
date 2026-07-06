@@ -102,7 +102,12 @@ function laneFor(repo: typeof repos.$inferSelect, command: string): "repo" | "pl
   return lane === "platform" ? "platform" : "repo";
 }
 
-async function findAgentDef(db: FacilityDb, orgId: string, projectId: string, command: string) {
+export async function findAgentDef(
+  db: FacilityDb,
+  orgId: string,
+  projectId: string,
+  command: string,
+) {
   const rows = await db
     .select()
     .from(agentDefs)

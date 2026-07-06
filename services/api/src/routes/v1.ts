@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "../types.js";
 import { registerAdminDoctorRoutes } from "./v1/admin-doctor.js";
 import { registerAgentsSandboxesRoutes } from "./v1/agents-sandboxes.js";
+import { registerGithubV1Routes } from "./v1/github.js";
 import { registerHitlRoutes } from "./v1/hitl.js";
 import { registerAnalyticsRoutes, registerIssuesAuditRoutes } from "./v1/issues-audit-analytics.js";
 import { registerKbTasksRoutes } from "./v1/kb-tasks.js";
@@ -26,6 +27,7 @@ export async function registerV1Routes(app: FastifyInstance, config: AppConfig) 
   await registerProjectsReposRoutes(app, context);
   await registerRegistryRoutes(app, context);
   await registerRunsRoutes(app, context);
+  await registerGithubV1Routes(app, context);
   await registerProvidersBudgetsSpendRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
   await registerHitlRoutes(app, context);

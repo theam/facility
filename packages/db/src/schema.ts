@@ -170,6 +170,46 @@ export const repos = pgTable(
   ],
 );
 
+export const ghIssues = pgTable(
+  "gh_issues",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repoId: text("repo_id")
+      .notNull()
+      .references(() => repos.id),
+    number: integer("number").notNull(),
+    title: text("title").notNull(),
+    state: text("state").notNull(),
+    author: text("author"),
+    labels: jsonb("labels").notNull().default(sql`'[]'::jsonb`),
+    assignees: jsonb("assignees").notNull().default(sql`'[]'::jsonb`),
+    htmlUrl: text("html_url").notNull(),
+    bodyMd: text("body_md"),
+    commentsCount: integer("comments_count").notNull().default(0),
+    ghCreatedAt: timestamp("gh_created_at", { withTimezone: true }),
+    ghUpdatedAt: timestamp("gh_updated_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("gh_issues_repo_number_uidx").on(table.repoId, table.number),
+    index("gh_issues_org_project_state_idx").on(table.orgId, table.projectId, table.state),
+    index("gh_issues_org_project_updated_idx").on(
+      table.orgId,
+      table.projectId,
+      table.ghUpdatedAt.desc(),
+    ),
+    check("gh_issues_state_check", sql`${table.state} in ('open', 'closed')`),
+  ],
+);
+
 export const registryItems = pgTable(
   "registry_items",
   {
@@ -710,6 +750,7 @@ export const outcomes = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => orgs.id),
+    runId: text("run_id").references(() => runs.id),
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),

@@ -3,9 +3,11 @@ import {
   agentDefs,
   apiKeys,
   createDb,
+  githubInstallations,
   insertAuditEvent,
   kbSpaces,
   llmRequests,
+  outcomes,
   projects,
   registryItems,
   registryVersions,
@@ -16,6 +18,11 @@ import {
   virtualKeys,
 } from "@facility/db";
 import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import {
+  createGithubClientFactory,
+  FacilityGithubClient,
+  type GithubClientFactory,
+} from "../github/client.js";
 import { harnessFragmentForBundle, validateProjectKb } from "../harness.js";
 import type { AppConfig } from "../types.js";
 import { raisePlatformIssue } from "../watchtower/issues.js";
@@ -171,7 +178,9 @@ export async function finishRun(
     status: "succeeded" | "failed";
     receipt?: Record<string, unknown>;
     error?: string;
+    git?: { branch?: string; headSha?: string; changed: boolean; pushError?: string };
   },
+  deps?: { config?: AppConfig; githubClientFactory?: GithubClientFactory },
 ) {
   if (terminalStatus(run.status)) return run;
   // A harness run that succeeds must leave the KB valid. If the checkpoint
@@ -236,7 +245,136 @@ export async function finishRun(
     target: { type: "run", id: run.id },
     payload: { status, error },
   });
+  if (status === "succeeded" && input.git?.branch) {
+    await openRunPullRequest(db, claimed, receipt, input.git, deps).catch(async (prError) => {
+      const message = errorMessage(prError);
+      await appendRunEvents(db, run.orgId, run.id, [
+        { type: "artifact_error", data: { kind: "pr_open_failed", error: message } },
+      ]).catch(() => undefined);
+      await raisePlatformIssue(db, {
+        orgId: run.orgId,
+        projectId: run.projectId,
+        kind: "pr_open_failed",
+        severity: "error",
+        fingerprint: `pr_open_failed:${run.id}`,
+        title: "Failed to open run pull request",
+        bodyMd: `Run ${run.id} succeeded and pushed ${input.git?.branch}, but Facility could not open a pull request.\n\n${message}`,
+      }).catch(() => undefined);
+    });
+  }
   return claimed;
+}
+
+async function openRunPullRequest(
+  db: ReturnType<typeof createDb>["db"],
+  run: RunRow,
+  receipt: Record<string, unknown>,
+  git: { branch?: string; headSha?: string; changed: boolean; pushError?: string },
+  deps?: { config?: AppConfig; githubClientFactory?: GithubClientFactory },
+) {
+  if (!git.branch || git.pushError) return;
+  // Resolve the repo the run actually worked on: the trigger recorded it in
+  // run.gh (owner/repo). Fall back to the project's oldest repo only for runs
+  // that carry no gh ref — never an arbitrary limit(1) pick (nondeterministic,
+  // and wrong the moment a project has two repos).
+  const gh = objectOrEmpty(run.gh);
+  const ghOwner = typeof gh.owner === "string" ? gh.owner : null;
+  const ghRepoName = typeof gh.repo === "string" ? gh.repo : null;
+  const repo = (
+    await db
+      .select()
+      .from(repos)
+      .where(
+        and(
+          eq(repos.orgId, run.orgId),
+          eq(repos.projectId, run.projectId),
+          ...(ghOwner && ghRepoName ? [eq(repos.owner, ghOwner), eq(repos.name, ghRepoName)] : []),
+        ),
+      )
+      .orderBy(repos.createdAt)
+      .limit(1)
+  )[0];
+  // From here on, a succeeded run HAS pushed a branch — failing to open its PR
+  // must be loud (artifact_error + platform issue via the caller's catch), not a
+  // silent early return that strands the branch.
+  if (!repo?.installationId) throw new Error("run_repo_missing_installation");
+  const installation = (
+    await db
+      .select()
+      .from(githubInstallations)
+      .where(
+        and(
+          eq(githubInstallations.orgId, run.orgId),
+          eq(githubInstallations.id, repo.installationId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!installation) throw new Error("run_installation_missing");
+  if (installation.suspendedAt) throw new Error("run_installation_suspended");
+  const config = deps?.config;
+  const factory =
+    deps?.githubClientFactory ??
+    (config?.githubAppId && config.githubAppPrivateKey ? createGithubClientFactory(config) : null);
+  if (!factory) throw new Error("github_app_unconfigured");
+  const client = new FacilityGithubClient(await factory(installation.installationId), {
+    owner: repo.owner,
+    repo: repo.name,
+    defaultBranch: repo.defaultBranch,
+  });
+  const issueNumber = numberOrUndefined(gh.issueNumber);
+  const pr = await client.createPullRequest({
+    head: git.branch,
+    base: repo.defaultBranch,
+    title: issueNumber ? `${run.mode}: #${issueNumber}` : `${run.mode}: run ${run.id}`,
+    body: prBody(run, receipt, issueNumber),
+  });
+  const nextGh = { ...gh, branch: git.branch, pr: { number: pr.number, url: pr.url } };
+  await db.update(runs).set({ gh: nextGh, updatedAt: new Date() }).where(eq(runs.id, run.id));
+  await db
+    .insert(outcomes)
+    .values({
+      id: newId("evt"),
+      orgId: run.orgId,
+      projectId: run.projectId,
+      runId: run.id,
+      repo: `${repo.owner}/${repo.name}`,
+      prNumber: pr.number,
+      agentLane: run.engine,
+      openedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [outcomes.orgId, outcomes.repo, outcomes.prNumber],
+      set: { runId: run.id, updatedAt: new Date() },
+    });
+  if (issueNumber) {
+    await client
+      .createIssueComment(issueNumber, `Facility opened PR #${pr.number}: ${pr.url}`)
+      .catch(() => undefined);
+  }
+  await insertAuditEvent(db, {
+    orgId: run.orgId,
+    projectId: run.projectId,
+    actor: { type: "agent", id: run.id },
+    action: "github.pr.created",
+    target: { type: "run", id: run.id },
+    payload: { runId: run.id, branch: git.branch, pr },
+  });
+}
+
+function prBody(run: RunRow, receipt: Record<string, unknown>, issueNumber: number | undefined) {
+  const usage = objectOrEmpty(receipt.usage);
+  const cost = usage.cost_cents;
+  return [
+    `Facility run: ${run.id}`,
+    `Mode: ${run.mode}`,
+    `Engine: ${run.engine}`,
+    `Cost: ${typeof cost === "number" ? `${cost} cents` : "unknown"}`,
+    "",
+    issueNumber ? `Closes #${issueNumber}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export async function cancelRun(config: AppConfig, run: RunRow) {
@@ -721,6 +859,10 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function numberOrUndefined(value: unknown) {
+  return typeof value === "number" ? value : undefined;
 }
 
 function errorMessage(error: unknown) {

@@ -446,6 +446,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/runs/{runId}/push-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            token: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/runs/{runId}/result": {
         parameters: {
             query?: never;
@@ -473,6 +512,12 @@ export interface paths {
                             [key: string]: unknown;
                         };
                         error?: string;
+                        git?: {
+                            branch?: string;
+                            headSha?: string;
+                            changed: boolean;
+                            pushError?: string;
+                        };
                     };
                 };
             };
@@ -2592,6 +2637,358 @@ export interface paths {
                     content: {
                         "application/json": {
                             [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/github/installations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            installationId: number;
+                            accountLogin: string;
+                            targetType: string;
+                            /** Format: date-time */
+                            suspendedAt: string | null;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/github/installations/{installationId}/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    query?: string;
+                };
+                header?: never;
+                path: {
+                    installationId: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                owner: string;
+                                name: string;
+                                fullName: string;
+                                private: boolean;
+                                defaultBranch: string;
+                                htmlUrl: string;
+                            }[];
+                            truncated: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    state?: "open" | "closed" | "all";
+                    q?: string;
+                    cursor?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                id: string;
+                                number: number;
+                                title: string;
+                                state: string;
+                                labels: unknown;
+                                assignees: unknown;
+                                author: string | null;
+                                htmlUrl: string;
+                                commentsCount: number;
+                                /** Format: date-time */
+                                ghUpdatedAt: string | null;
+                                linkedRuns: {
+                                    id: string;
+                                    mode: string;
+                                    status: string;
+                                    engine: string;
+                                    pr?: unknown;
+                                }[];
+                            }[];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/issues/{number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    number: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            number: number;
+                            title: string;
+                            state: string;
+                            labels: unknown;
+                            assignees: unknown;
+                            author: string | null;
+                            htmlUrl: string;
+                            commentsCount: number;
+                            /** Format: date-time */
+                            ghUpdatedAt: string | null;
+                            linkedRuns: {
+                                id: string;
+                                mode: string;
+                                status: string;
+                                engine: string;
+                                pr?: unknown;
+                            }[];
+                            bodyMd: string | null;
+                            runs: {
+                                id: string;
+                                mode: string;
+                                engine: string;
+                                status: string;
+                                /** Format: date-time */
+                                startedAt: string | null;
+                                /** Format: date-time */
+                                endedAt: string | null;
+                                receipt: unknown;
+                                pr?: unknown;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/issues/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            queued: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/issues/{number}/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    number: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agent: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string;
+                            agentDefId: string | null;
+                            mode: string;
+                            engine: string;
+                            status: string;
+                            trigger: unknown;
+                            sandbox: unknown;
+                            receipt: unknown;
+                            gh: unknown;
+                            error: string | null;
+                            /** Format: date-time */
+                            queuedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            endedAt: string | null;
+                            createdBy: unknown;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
                         };
                     };
                 };

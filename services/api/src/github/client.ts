@@ -2,6 +2,10 @@ import { App } from "@octokit/app";
 import type { AppConfig } from "../types.js";
 
 export type Octokit = {
+  request?: (
+    route: string,
+    args?: Record<string, unknown>,
+  ) => Promise<{ data: Record<string, unknown> }>;
   rest: {
     apps?: {
       createInstallationAccessToken: (args: Record<string, unknown>) => Promise<{
@@ -50,6 +54,7 @@ export type Octokit = {
       createComment: (
         args: Record<string, unknown>,
       ) => Promise<{ data: { id: number; html_url?: string } }>;
+      listForRepo: (args: Record<string, unknown>) => Promise<{ data: unknown[] }>;
     };
     gitignore?: unknown;
   };
@@ -60,6 +65,7 @@ export type GithubInstallationTokenFactory = (input: {
   installationId: number;
   owner: string;
   repo: string;
+  permissions?: Record<string, string>;
 }) => Promise<string>;
 
 export function createGithubClientFactory(config: AppConfig): GithubClientFactory {
@@ -87,16 +93,19 @@ export function createGithubInstallationTokenFactory(
   return async ({
     installationId,
     repo,
+    permissions,
   }: {
     installationId: number;
     owner: string;
     repo: string;
+    permissions?: Record<string, string>;
   }) => {
     const response = await app.octokit.request(
       "POST /app/installations/{installation_id}/access_tokens",
       {
         installation_id: installationId,
         repositories: [repo],
+        ...(permissions ? { permissions } : {}),
       },
     );
     return response.data.token;
@@ -277,6 +286,23 @@ export class FacilityGithubClient {
       body,
     });
     return { id: response.data.id, url: response.data.html_url };
+  }
+
+  async listIssues(params: {
+    state: "all" | "open" | "closed";
+    since?: string;
+    page?: number;
+    perPage?: number;
+  }): Promise<unknown[]> {
+    const response = await this.octokit.rest.issues.listForRepo({
+      owner: this.repo.owner,
+      repo: this.repo.repo,
+      state: params.state,
+      since: params.since,
+      page: params.page,
+      per_page: params.perPage,
+    });
+    return response.data;
   }
 
   async userCanWrite(username: string): Promise<boolean> {
