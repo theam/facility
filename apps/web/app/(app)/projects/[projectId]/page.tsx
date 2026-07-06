@@ -38,13 +38,14 @@ export default async function ProjectOverviewPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [project, runs, spend, health, inbox, agents] = await Promise.all([
+  const [project, runs, spend, health, inbox, agents, outcomes] = await Promise.all([
     api.project(projectId),
     api.runs(projectId),
     api.spend(`?projectId=${projectId}&groupBy=agent`),
     api.projectHealth(projectId),
     api.inboxFull(),
     api.projectAgents(projectId),
+    api.outcomes(`?state=open&projectId=${projectId}&limit=10`),
   ]);
 
   if (!project.ok) {
@@ -66,7 +67,8 @@ export default async function ProjectOverviewPage({
   const watchtower = inbox.ok
     ? inbox.data.issues.filter((x) => !x.projectId || x.projectId === projectId)
     : [];
-  const needsYou = blocked.length + proposals.length;
+  const openPrs = outcomes.ok ? outcomes.data : [];
+  const needsYou = blocked.length + proposals.length + openPrs.length;
 
   const healthData = health.ok
     ? (health.data as { status?: string; signals?: HealthSignal[] })
@@ -127,10 +129,25 @@ export default async function ProjectOverviewPage({
                 </span>
               </Link>
             ))}
+            {openPrs.slice(0, 5).map((outcome) => (
+              <a
+                key={outcome.id}
+                href={`https://github.com/${outcome.repo}/pull/${outcome.prNumber}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-4 border-b border-(--line) px-5 py-3.5 transition-colors last:border-b-0 hover:bg-(--card)"
+              >
+                <StatusDot tone="human" />
+                <span className="font-mono text-[13px] text-(--ink)">
+                  {outcome.repo}#{outcome.prNumber}
+                </span>
+                <span className="text-[12.5px] text-(--mut)">PR awaiting your review ↗</span>
+              </a>
+            ))}
             {proposals.slice(0, 5).map((proposal) => (
               <Link
                 key={proposal.id}
-                href={`/inbox?focus=${proposal.id}`}
+                href={`/inbox?focus=${proposal.id}&projectId=${projectId}`}
                 className="flex items-center gap-4 border-b border-(--line) px-5 py-3.5 transition-colors last:border-b-0 hover:bg-(--card)"
               >
                 <StatusDot tone="human" />

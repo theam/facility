@@ -1,4 +1,4 @@
-import { auditEvents, llmRequests, platformIssues, verifyAuditChain } from "@facility/db";
+import { auditEvents, llmRequests, outcomes, platformIssues, verifyAuditChain } from "@facility/db";
 import { and, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -156,8 +156,13 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
         querystring: z.object({
           from: z.coerce.number().optional(),
           to: z.coerce.number().optional(),
+          // Wall-clock window — the seq-based from/to stay for chain slicing.
+          createdFrom: z.string().datetime({ offset: true }).optional(),
+          createdTo: z.string().datetime({ offset: true }).optional(),
+          projectId: z.string().optional(),
           actor: z.string().optional(),
           action: z.string().optional(),
+          actionPrefix: z.string().optional(),
           limit: z.coerce.number().int().min(1).max(500).default(200),
           cursor: z.coerce.number().optional(),
         }),
@@ -171,18 +176,33 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
       const q = request.query as {
         from?: number;
         to?: number;
+        createdFrom?: string;
+        createdTo?: string;
+        projectId?: string;
         actor?: string;
         action?: string;
+        actionPrefix?: string;
         limit?: number;
         cursor?: number;
       };
       const limit = Math.min(Math.max(Number(q.limit ?? 200), 1), 500);
       const clauses = [eq(auditEvents.orgId, p.orgId)];
       if (p.projectId) clauses.push(eq(auditEvents.projectId, p.projectId));
+      // A requested project filter never widens a project-scoped principal —
+      // the clamp above still applies; for org principals it narrows the view.
+      if (q.projectId) {
+        assertProjectScope(p, q.projectId);
+        clauses.push(eq(auditEvents.projectId, q.projectId));
+      }
       if (q.from) clauses.push(gte(auditEvents.seq, q.from));
       if (q.to) clauses.push(lte(auditEvents.seq, q.to));
+      if (q.createdFrom) clauses.push(gte(auditEvents.createdAt, new Date(q.createdFrom)));
+      if (q.createdTo) clauses.push(lte(auditEvents.createdAt, new Date(q.createdTo)));
       if (q.cursor) clauses.push(lt(auditEvents.seq, q.cursor));
       if (q.action) clauses.push(eq(auditEvents.action, q.action));
+      if (q.actionPrefix && !q.action) {
+        clauses.push(sql`${auditEvents.action} like ${`${q.actionPrefix.replaceAll("%", "")}%`}`);
+      }
       if (q.actor) {
         const [actorType, actorId] = q.actor.includes(":") ? q.actor.split(":", 2) : [];
         if (actorType && actorId) {
@@ -204,6 +224,44 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
         items,
         nextCursor: rows.length > limit ? (items.at(-1)?.seq ?? null) : null,
       };
+    },
+  );
+
+  // PR-level outcomes as a first-class list: the inbox's "PRs awaiting review"
+  // and overview boards read open agent PRs from here (rows are written at
+  // PR-open by the platform lane and at PR-close by the webhook collector).
+  app.get(
+    "/v1/outcomes",
+    {
+      config: { permission: "runs:read" },
+      schema: {
+        querystring: z.object({
+          projectId: z.string().optional(),
+          state: z.enum(["open", "terminal", "all"]).default("open"),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+        }),
+        response: { 200: z.array(AnyObject) },
+      },
+    },
+    async (request) => {
+      const p = principal(request);
+      const q = request.query as {
+        projectId?: string;
+        state: "open" | "terminal" | "all";
+        limit: number;
+      };
+      assertProjectScope(p, q.projectId);
+      const projectId = p.projectId ?? q.projectId;
+      const clauses = [eq(outcomes.orgId, p.orgId)];
+      if (projectId) clauses.push(eq(outcomes.projectId, projectId));
+      if (q.state === "open") clauses.push(sql`${outcomes.terminalAt} is null`);
+      if (q.state === "terminal") clauses.push(sql`${outcomes.terminalAt} is not null`);
+      return db
+        .select()
+        .from(outcomes)
+        .where(and(...clauses))
+        .orderBy(desc(outcomes.openedAt))
+        .limit(q.limit);
     },
   );
 

@@ -28,6 +28,7 @@ export type {
   Me,
   Member,
   MemberRow,
+  Outcome,
   Project,
   ProjectRepo,
   Proposal,
@@ -135,10 +136,22 @@ export const api = {
     };
   },
   proposal: (id: string) => apiFetch("GET", `/v1/proposals/${id}`),
+  outcomes: (params = "") => apiFetch("GET", "/v1/outcomes", { query: queryFromParams(params) }),
+  auditVerify: () => apiFetch("GET", "/v1/audit/verify"),
   audit: async (params = ""): Promise<ApiResult<AuditEvent[]>> => {
     const res = await apiFetch("GET", "/v1/audit", { query: queryFromParams(params) });
     if (!res.ok) return res;
     return { ok: true, data: Array.isArray(res.data) ? res.data : res.data.items };
+  },
+  auditPage: async (
+    params = "",
+  ): Promise<ApiResult<{ items: AuditEvent[]; nextCursor: number | null }>> => {
+    const res = await apiFetch("GET", "/v1/audit", { query: queryFromParams(params) });
+    if (!res.ok) return res;
+    return {
+      ok: true,
+      data: Array.isArray(res.data) ? { items: res.data, nextCursor: null } : res.data,
+    };
   },
   registry: (params = "") =>
     apiFetch("GET", "/v1/registry/items", { query: queryFromParams(params) }),

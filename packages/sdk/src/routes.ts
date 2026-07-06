@@ -35,6 +35,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/me",
   "GET /v1/members",
   "GET /v1/org",
+  "GET /v1/outcomes",
   "GET /v1/projects",
   "GET /v1/projects/:projectId",
   "GET /v1/projects/:projectId/agents",

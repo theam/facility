@@ -6,6 +6,7 @@ import type {
   llmRequests,
   orgMembers,
   orgs,
+  outcomes,
   platformIssues,
   projects,
   proposalEvents,
@@ -189,6 +190,10 @@ export type Issue = Serialized<Omit<PlatformIssueRow, "state" | "severity">> & {
   state: IssueState;
   severity: IssueSeverity;
 };
+
+type OutcomeRow = typeof outcomes.$inferSelect;
+/** PR-level fate row — written at PR-open (platform lane) and PR-close (webhook). */
+export type Outcome = Serialized<OutcomeRow>;
 
 export type GithubInstallation = {
   id: string;
@@ -374,6 +379,7 @@ export type FacilityGetRoutePath =
   | `/v1/runs/${string}/events`
   | "/v1/inbox"
   | "/v1/issues"
+  | "/v1/outcomes"
   | "/v1/github/installations"
   | `/v1/github/installations/${string}/repos`
   | `/v1/proposals/${string}`
@@ -446,51 +452,53 @@ export type FacilityGetRouteResponse<Path extends FacilityGetRoutePath> = Path e
                                       ? InboxResponse
                                       : Path extends "/v1/issues"
                                         ? Issue[]
-                                        : Path extends "/v1/github/installations"
-                                          ? GithubInstallation[]
-                                          : Path extends `/v1/github/installations/${string}/repos`
-                                            ? GithubInstallationReposResponse
-                                            : Path extends `/v1/proposals/${infer Id}`
-                                              ? IfLeaf<Id, ProposalWithEvents>
-                                              : Path extends "/v1/audit"
-                                                ? AuditTail
-                                                : Path extends "/v1/audit/verify"
-                                                  ? { ok: boolean; firstBreakSeq: number | null }
-                                                  : Path extends "/v1/admin/doctor"
-                                                    ? DoctorResponse
-                                                    : Path extends "/v1/registry/items"
-                                                      ? RegistryItem[]
-                                                      : Path extends `/v1/registry/items/${infer Id}`
-                                                        ? IfLeaf<Id, RegistryItemWithVersions>
-                                                        : Path extends "/v1/spend"
-                                                          ? SpendRow[]
-                                                          : Path extends "/v1/members"
-                                                            ? MemberRow[]
-                                                            : Path extends "/v1/roles"
-                                                              ? Role[]
-                                                              : Path extends "/v1/keys"
-                                                                ? ApiKey[]
-                                                                : Path extends "/v1/providers"
-                                                                  ? Provider[]
-                                                                  : Path extends "/v1/budgets"
-                                                                    ? Budget[]
-                                                                    : Path extends `/v1/budgets/${infer Id}`
-                                                                      ? IfLeaf<Id, Budget>
-                                                                      : Path extends "/v1/llm-requests"
-                                                                        ? LlmRequestPage
-                                                                        : Path extends `/v1/llm-requests/${string}/envelope`
-                                                                          ? LlmRequestEnvelope
-                                                                          : Path extends "/v1/sandbox-profiles"
-                                                                            ? SandboxProfile[]
-                                                                            : // Non-core surfaces the API serves as permissive AnyObject; typed
-                                                                              // here as JsonObject so clients can call them without a cast.
-                                                                              Path extends "/v1/analytics"
-                                                                              ? JsonObject[]
-                                                                              : Path extends "/v1/analytics/overview"
-                                                                                ? JsonObject
-                                                                                : Path extends `/v1/kb/entries/${string}`
+                                        : Path extends "/v1/outcomes"
+                                          ? Outcome[]
+                                          : Path extends "/v1/github/installations"
+                                            ? GithubInstallation[]
+                                            : Path extends `/v1/github/installations/${string}/repos`
+                                              ? GithubInstallationReposResponse
+                                              : Path extends `/v1/proposals/${infer Id}`
+                                                ? IfLeaf<Id, ProposalWithEvents>
+                                                : Path extends "/v1/audit"
+                                                  ? AuditTail
+                                                  : Path extends "/v1/audit/verify"
+                                                    ? { ok: boolean; firstBreakSeq: number | null }
+                                                    : Path extends "/v1/admin/doctor"
+                                                      ? DoctorResponse
+                                                      : Path extends "/v1/registry/items"
+                                                        ? RegistryItem[]
+                                                        : Path extends `/v1/registry/items/${infer Id}`
+                                                          ? IfLeaf<Id, RegistryItemWithVersions>
+                                                          : Path extends "/v1/spend"
+                                                            ? SpendRow[]
+                                                            : Path extends "/v1/members"
+                                                              ? MemberRow[]
+                                                              : Path extends "/v1/roles"
+                                                                ? Role[]
+                                                                : Path extends "/v1/keys"
+                                                                  ? ApiKey[]
+                                                                  : Path extends "/v1/providers"
+                                                                    ? Provider[]
+                                                                    : Path extends "/v1/budgets"
+                                                                      ? Budget[]
+                                                                      : Path extends `/v1/budgets/${infer Id}`
+                                                                        ? IfLeaf<Id, Budget>
+                                                                        : Path extends "/v1/llm-requests"
+                                                                          ? LlmRequestPage
+                                                                          : Path extends `/v1/llm-requests/${string}/envelope`
+                                                                            ? LlmRequestEnvelope
+                                                                            : Path extends "/v1/sandbox-profiles"
+                                                                              ? SandboxProfile[]
+                                                                              : // Non-core surfaces the API serves as permissive AnyObject; typed
+                                                                                // here as JsonObject so clients can call them without a cast.
+                                                                                Path extends "/v1/analytics"
+                                                                                ? JsonObject[]
+                                                                                : Path extends "/v1/analytics/overview"
                                                                                   ? JsonObject
-                                                                                  : never;
+                                                                                  : Path extends `/v1/kb/entries/${string}`
+                                                                                    ? JsonObject
+                                                                                    : never;
 
 export type FacilityPostRoutes = {
   "/v1/projects": Route<Project, CreateProjectRequest>;
