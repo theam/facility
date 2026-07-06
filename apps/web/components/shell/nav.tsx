@@ -13,6 +13,7 @@ type NavItem = { href: string; label: string; badge?: number };
 export function orgNav(inboxCount?: number): NavItem[] {
   return [
     { href: "/projects", label: "projects" },
+    { href: "/sessions", label: "fleet" },
     { href: "/inbox", label: "inbox", badge: inboxCount },
     { href: "/harness", label: "harness" },
     { href: "/audit", label: "audit" },

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-/** Sessions live inside each project now; the portfolio shows org-wide state. */
+/** Legacy path — the fleet lives at /sessions now. */
 export default function LegacyRunsRedirect() {
-  redirect("/projects");
+  redirect("/sessions");
 }
