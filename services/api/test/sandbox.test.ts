@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { AwsSandboxDriver } from "../src/sandbox/aws.js";
 import { DockerSandboxDriver } from "../src/sandbox/docker.js";
-import { reconcileSandboxes } from "../src/sandbox/orchestrator.js";
+import { finishRun, reconcileSandboxes } from "../src/sandbox/orchestrator.js";
 import { appendRunEvents } from "../src/sandbox/state.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -185,6 +185,13 @@ describe("sandbox api", async () => {
       payload: [{ type: "assistant", data: { text: "late" } }],
     });
     expect(terminal.statusCode).toBe(409);
+  });
+
+  it("finishRun persists the engine session id from the runner result", async () => {
+    const run = await insertRunnerRun("frt_finish_session", "running");
+    await finishRun(db, run, { status: "succeeded", engineSessionId: "sess_finish_123" });
+    const stored = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    expect(stored?.engineSessionId).toBe("sess_finish_123");
   });
 
   it("delivers run events over the NOTIFY-backed SSE path without safety polling", async () => {

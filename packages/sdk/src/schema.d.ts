@@ -485,6 +485,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/runs/{runId}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            uri: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/runs/{runId}/result": {
         parameters: {
             query?: never;
@@ -518,6 +557,7 @@ export interface paths {
                             changed: boolean;
                             pushError?: string;
                         };
+                        engineSessionId?: string;
                     };
                 };
             };
@@ -2184,6 +2224,8 @@ export interface paths {
                             sandbox: unknown;
                             receipt: unknown;
                             gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2255,6 +2297,8 @@ export interface paths {
                             sandbox: unknown;
                             receipt: unknown;
                             gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2316,6 +2360,8 @@ export interface paths {
                             sandbox: unknown;
                             receipt: unknown;
                             gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2392,6 +2438,8 @@ export interface paths {
                             sandbox: unknown;
                             receipt: unknown;
                             gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2465,6 +2513,8 @@ export interface paths {
                             sandbox: unknown;
                             receipt: unknown;
                             gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2482,6 +2532,51 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{runId}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2977,6 +3072,8 @@ export interface paths {
                             sandbox: unknown;
                             receipt: unknown;
                             gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;

@@ -4,6 +4,7 @@ import { and, desc, eq, notInArray } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import postgres from "postgres";
 import { z } from "zod";
+import { readTranscriptObject } from "../../envelopes.js";
 import { ApiError, notFound } from "../../errors.js";
 import { cancelRun } from "../../sandbox/orchestrator.js";
 import { appendRunEvents, TERMINAL_RUN_STATUSES } from "../../sandbox/state.js";
@@ -266,6 +267,21 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
       // response copy — redactRunSecrets returns a fresh object, leaving row intact.
       await cancelRun(config, row);
       return redactRunSecrets(row);
+    },
+  );
+
+  app.get(
+    "/v1/runs/:runId/transcript",
+    {
+      config: { permission: "runs:read" },
+      schema: { params: IdParams },
+    },
+    async (request, reply) => {
+      const p = principal(request);
+      const { runId } = request.params as { runId: string };
+      const run = await loadRun(p, runId);
+      const body = await readTranscriptObject(config, run.transcriptUri, run.orgId);
+      return reply.type("application/x-ndjson").send(body);
     },
   );
 

@@ -144,6 +144,9 @@ describe("db", async () => {
       ["learning", true],
       ["project-owner", true],
     ]);
+    const po = agents.find((agent) => agent.name === "project-owner");
+    expect(po?.engine).toBe("claude_code");
+    expect(po?.model).toEqual({ model: "claude-sonnet-5" });
   });
 
   it("non-demo seed populates org essentials without demo projects", async () => {
@@ -269,7 +272,7 @@ describe("db", async () => {
       Array.from(applied)
         .map((row) => row.name)
         .at(-1),
-    ).toBe("0015_github_issues_pr_outcomes.sql");
+    ).toBe("0016_run_sessions_transcripts_scheduler.sql");
 
     // Budget enum/limit + scope-coherence CHECK constraints backstop every write
     // path (migrations 0013 + 0014).

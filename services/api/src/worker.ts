@@ -9,6 +9,7 @@ import {
 } from "./github/processor.js";
 import { runLearningNightly } from "./learning.js";
 import { dispatchRun, reconcileSandboxes } from "./sandbox/orchestrator.js";
+import { runScheduledAgents } from "./scheduler.js";
 import { runAnalyticsRollup } from "./watchtower/analytics.js";
 import { runWatchtowerCanary } from "./watchtower/canary.js";
 import { runWatchtowerHealth } from "./watchtower/health.js";
@@ -28,6 +29,7 @@ export async function startWorker() {
     "watchtower.health",
     "watchtower.canary",
     "analytics.rollup",
+    "agents.schedule",
     "learning.nightly",
     "github.webhook",
     "github.issues-sync",
@@ -54,6 +56,10 @@ export async function startWorker() {
         await runWatchtowerCanary(config, (name, payload) => boss.send(name, payload));
       } else if (queue === "analytics.rollup") {
         await runAnalyticsRollup(config);
+      } else if (queue === "agents.schedule") {
+        await runScheduledAgents(config, (targetQueue, targetData) =>
+          boss.send(targetQueue, targetData),
+        );
       } else if (queue === "hitl.expire") {
         await runHitlExpire(config);
       } else if (queue === "learning.nightly") {
@@ -82,6 +88,7 @@ export async function startWorker() {
   await boss.schedule("watchtower.health", "0 3 * * *", {});
   await boss.schedule("watchtower.canary", "0 4 * * 2", {});
   await boss.schedule("analytics.rollup", "5 * * * *", {});
+  await boss.schedule("agents.schedule", "* * * * *", {});
   await boss.schedule("learning.nightly", "0 3 * * *", {});
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());

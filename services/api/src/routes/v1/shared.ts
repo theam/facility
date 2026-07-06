@@ -112,6 +112,8 @@ export const RunSchema = z.object({
   sandbox: JsonValue,
   receipt: JsonValue.nullable(),
   gh: JsonValue,
+  engineSessionId: z.string().nullable(),
+  transcriptUri: z.string().nullable(),
   error: z.string().nullable(),
   queuedAt: DateValue,
   startedAt: DateValue.nullable(),

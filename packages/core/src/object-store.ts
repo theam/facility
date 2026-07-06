@@ -49,6 +49,13 @@ export type ObjectStore = {
   // envelope prefix): if the stored URI's key does not start with it, the read
   // fails as not-found instead of trusting the URI alone.
   getObject: (uri: string, options?: { expectedKeyPrefix?: string }) => Promise<unknown>;
+  putBytes: (input: {
+    key: string;
+    body: Buffer;
+    contentType: string;
+    now?: Date;
+  }) => Promise<string>;
+  getBytes: (uri: string, options?: { expectedKeyPrefix?: string }) => Promise<Buffer>;
   verifyRoundTrip: (input: {
     orgId: string;
     requestId: string;
@@ -98,6 +105,28 @@ export function createObjectStore(
   const fetchImpl = options.fetch ?? globalFetch;
   const clock = options.now ?? (() => new Date());
 
+  async function getBytesWithRef(uri: string, options?: { expectedKeyPrefix?: string }) {
+    const bucket = requiredBucket(config);
+    const ref = parseConfiguredS3Uri(uri, bucket);
+    if (options?.expectedKeyPrefix && !ref.key.startsWith(options.expectedKeyPrefix)) {
+      // The URI is well-formed for this bucket but points outside the caller's
+      // key namespace — treat as not-found rather than reading another tenant.
+      throw new ObjectStoreNotFoundError();
+    }
+    const response = await signedFetch({
+      config,
+      fetchImpl,
+      method: "GET",
+      bucket: ref.bucket,
+      key: ref.key,
+      now: clock(),
+    });
+    if (response.status === 404) throw new ObjectStoreNotFoundError();
+    if (!response.ok) throw new ObjectStoreHttpError(response.status);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return { ref, buffer, contentEncoding: response.headers.get("content-encoding") };
+  }
+
   const store: ObjectStore = {
     putObject: async ({ orgId, requestId, payload, now }) => {
       const bucket = requiredBucket(config);
@@ -111,6 +140,8 @@ export function createObjectStore(
         key,
         body,
         now: now ?? clock(),
+        contentType: "application/json",
+        contentEncoding: "gzip",
       });
       if (!response.ok) {
         throw new ObjectStoreHttpError(response.status);
@@ -118,29 +149,31 @@ export function createObjectStore(
       return envelopeUri(bucket, key);
     },
     getObject: async (uri, options) => {
+      const { ref, buffer, contentEncoding } = await getBytesWithRef(uri, options);
+      const body =
+        contentEncoding === "gzip" || ref.key.endsWith(".gz") ? await maybeGunzip(buffer) : buffer;
+      return JSON.parse(body.toString("utf8")) as unknown;
+    },
+    putBytes: async ({ key, body, contentType, now }) => {
       const bucket = requiredBucket(config);
-      const ref = parseConfiguredS3Uri(uri, bucket);
-      if (options?.expectedKeyPrefix && !ref.key.startsWith(options.expectedKeyPrefix)) {
-        // The URI is well-formed for this bucket but points outside the caller's
-        // key namespace — treat as not-found rather than reading another tenant.
-        throw new ObjectStoreNotFoundError();
-      }
       const response = await signedFetch({
         config,
         fetchImpl,
-        method: "GET",
-        bucket: ref.bucket,
-        key: ref.key,
-        now: clock(),
+        method: "PUT",
+        bucket,
+        key,
+        body,
+        now: now ?? clock(),
+        contentType,
       });
-      if (response.status === 404) throw new ObjectStoreNotFoundError();
-      if (!response.ok) throw new ObjectStoreHttpError(response.status);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const body =
-        response.headers.get("content-encoding") === "gzip" || ref.key.endsWith(".gz")
-          ? await maybeGunzip(buffer)
-          : buffer;
-      return JSON.parse(body.toString("utf8")) as unknown;
+      if (!response.ok) {
+        throw new ObjectStoreHttpError(response.status);
+      }
+      return envelopeUri(bucket, key);
+    },
+    getBytes: async (uri, options) => {
+      const { buffer } = await getBytesWithRef(uri, options);
+      return buffer;
     },
     verifyRoundTrip: async (input) => {
       const uri = await store.putObject(input);
@@ -283,6 +316,8 @@ async function signedFetch(input: {
   key: string;
   body?: Buffer;
   now: Date;
+  contentType?: string;
+  contentEncoding?: string;
 }) {
   const region = input.config.awsRegion ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION;
   if (!region) {
@@ -292,7 +327,10 @@ async function signedFetch(input: {
   const target = objectTarget(input.config, input.bucket, input.key, region);
   const requestHeaders =
     input.method === "PUT"
-      ? { "content-type": "application/json", "content-encoding": "gzip" }
+      ? {
+          ...(input.contentType ? { "content-type": input.contentType } : {}),
+          ...(input.contentEncoding ? { "content-encoding": input.contentEncoding } : {}),
+        }
       : undefined;
   const headers = signS3Request({
     method: input.method,
