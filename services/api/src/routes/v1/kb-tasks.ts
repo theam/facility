@@ -52,15 +52,16 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       const p = principal(request);
       const { projectId } = request.params as { projectId: string };
       assertProjectScope(p, projectId);
-      return (
-        (
-          await db
-            .select()
-            .from(kbSpaces)
-            .where(and(eq(kbSpaces.orgId, p.orgId), eq(kbSpaces.projectId, projectId)))
-            .limit(1)
-        )[0] ?? null
-      );
+      const space = (
+        await db
+          .select()
+          .from(kbSpaces)
+          .where(and(eq(kbSpaces.orgId, p.orgId), eq(kbSpaces.projectId, projectId)))
+          .limit(1)
+      )[0];
+      // A project without a KB yet is an empty space, not a serialization crash
+      // (the response schema is a record — `null` used to 500 here).
+      return space ?? { projectId, charterMd: "", activeMd: "", config: {}, exists: false };
     },
   );
 
