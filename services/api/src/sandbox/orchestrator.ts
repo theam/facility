@@ -430,9 +430,26 @@ async function ensureHarnessAgentRole(
   return row?.id ?? id;
 }
 
-export async function reconcileSandboxes(config: AppConfig) {
+export async function reconcileSandboxes(
+  config: AppConfig,
+  enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+) {
   const { db, client } = createDb(config.databaseUrl);
   try {
+    // Dispatch-loss backstop: run rows are committed BEFORE their pg-boss
+    // enqueue (route + scheduler style), so a broker outage at that instant
+    // strands a run in "queued" forever. Re-enqueue anything queued for >5
+    // minutes — dispatchRun claims atomically, so duplicate deliveries are safe.
+    if (enqueue) {
+      const stuck = await db
+        .select({ id: runs.id, orgId: runs.orgId })
+        .from(runs)
+        .where(and(eq(runs.status, "queued"), sql`${runs.queuedAt} < now() - interval '5 minutes'`))
+        .limit(20);
+      for (const run of stuck) {
+        await enqueue("runs.dispatch", { runId: run.id, orgId: run.orgId }).catch(() => undefined);
+      }
+    }
     // The orphan-container sweep is docker-specific. Skip it gracefully when the
     // daemon isn't reachable (e.g. an aws-driver deployment has no local Docker)
     // so the driver-agnostic reconciliation below — timeout cost-cap backstop and

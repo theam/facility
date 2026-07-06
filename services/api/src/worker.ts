@@ -47,7 +47,7 @@ export async function startWorker() {
       if (queue === "runs.dispatch") {
         await dispatchRun(config, data as { runId?: string; orgId?: string });
       } else if (queue === "sandbox.reconcile") {
-        await reconcileSandboxes(config);
+        await reconcileSandboxes(config, (name, payload) => boss.send(name, payload));
       } else if (queue === "watchtower.outcomes") {
         await runWatchtowerOutcomes(config);
       } else if (queue === "watchtower.health") {
