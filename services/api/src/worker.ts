@@ -2,7 +2,11 @@ import { createDb } from "@facility/db";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
-import { enqueueFingerprintVerify, processGithubWebhook } from "./github/processor.js";
+import {
+  enqueueFingerprintVerify,
+  enqueueGithubIssuesSync,
+  processGithubWebhook,
+} from "./github/processor.js";
 import { runLearningNightly } from "./learning.js";
 import { dispatchRun, reconcileSandboxes } from "./sandbox/orchestrator.js";
 import { runAnalyticsRollup } from "./watchtower/analytics.js";
@@ -26,6 +30,7 @@ export async function startWorker() {
     "analytics.rollup",
     "learning.nightly",
     "github.webhook",
+    "github.issues-sync",
     "fingerprints.verify",
     "hitl.expire",
     "sandbox.reconcile",
@@ -65,6 +70,8 @@ export async function startWorker() {
         );
       } else if (queue === "fingerprints.verify") {
         await enqueueFingerprintVerify(db, config, data as { repoId?: string });
+      } else if (queue === "github.issues-sync") {
+        await enqueueGithubIssuesSync(db, config, data as { repoId?: string; orgId?: string });
       }
       logger.info({ queue, jobId }, "worker completed job");
     });

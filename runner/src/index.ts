@@ -65,10 +65,12 @@ async function main() {
     // success while its required checks are red.
     const checksPassed = engineCode === 0 ? await runChecks(bundle, cwdFor(bundle)) : false;
     const succeeded = engineCode === 0 && checksPassed;
+    const git = succeeded ? await shipGitChanges(bundle) : undefined;
     await postResult(
       succeeded ? "succeeded" : "failed",
       startedAt,
       succeeded ? undefined : engineCode !== 0 ? { code: engineCode } : { code: "checks_failed" },
+      git,
     );
   } catch (error) {
     await postResult("failed", startedAt, { error: errorMessage(error) }).catch(() => undefined);
@@ -358,6 +360,7 @@ async function postResult(
   status: "succeeded" | "failed",
   startedAt: number,
   error?: Record<string, unknown>,
+  git?: Record<string, unknown>,
 ) {
   const stderrTail = await readFile(join(workRoot, "engine.stderr.log"), "utf8").catch(() => "");
   await api(`/internal/runs/${currentRunId()}/result`, {
@@ -385,8 +388,78 @@ async function postResult(
       error: error
         ? redactSecrets(`${JSON.stringify(error)} ${stderrTail.slice(-2000)}`)
         : undefined,
+      git,
     }),
   });
+}
+
+async function shipGitChanges(bundle: RunBundle): Promise<Record<string, unknown> | undefined> {
+  if (!bundle.repo.cloneUrl || bundle.mode === "architect") return undefined;
+  const cwd = cwdFor(bundle);
+  const baseBranch = bundle.repo.branch ?? "main";
+  try {
+    const status = (await gitOutput(cwd, ["status", "--porcelain"])).trim();
+    if (status) {
+      await gitOutput(cwd, ["add", "-A"]);
+      await gitOutput(cwd, [
+        "-c",
+        "user.name=Facility Runner",
+        "-c",
+        "user.email=runner@facility.local",
+        "commit",
+        "-m",
+        `facility: ${bundle.mode} run ${currentRunId()}`,
+      ]);
+    }
+    const ahead = Number(
+      (await gitOutput(cwd, ["rev-list", "--count", `origin/${baseBranch}..HEAD`])).trim(),
+    );
+    if (!status && ahead <= 0) return { changed: false };
+    const branch = `facility/run-${currentRunId().slice(-8)}`;
+    const headSha = (await gitOutput(cwd, ["rev-parse", "HEAD"])).trim();
+    await gitOutput(cwd, ["branch", "-f", branch, headSha]);
+    try {
+      const { token } = await api<{ token: string }>(
+        `/internal/runs/${currentRunId()}/push-token`,
+        { method: "POST" },
+      );
+      secretsToRedact.add(token);
+      await gitOutput(cwd, [
+        "push",
+        pushUrlFor(bundle.repo.cloneUrl, token),
+        `${headSha}:refs/heads/${branch}`,
+      ]);
+      return { branch, headSha, changed: true };
+    } catch (error) {
+      const pushError = errorMessage(error);
+      await emit([{ type: "artifact_error", data: { kind: "git_push_failed", error: pushError } }]);
+      return { branch, headSha, changed: true, pushError };
+    }
+  } catch (error) {
+    const pushError = errorMessage(error);
+    await emit([{ type: "artifact_error", data: { kind: "git_push_failed", error: pushError } }]);
+    return { changed: true, pushError };
+  }
+}
+
+async function gitOutput(cwd: string, args: string[]) {
+  const child = spawn("git", args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  const code = await exitCode(child);
+  if (code !== 0) throw new Error(redactSecrets(`git ${args[0]} exited ${code}: ${stderr}`));
+  return stdout;
+}
+
+function pushUrlFor(cloneUrl: string, token: string) {
+  if (!cloneUrl.startsWith("https://github.com/")) return cloneUrl;
+  return cloneUrl.replace("https://github.com/", `https://x-access-token:${token}@github.com/`);
 }
 
 // Recursively scrub injected secrets from every string in a value — the engine's

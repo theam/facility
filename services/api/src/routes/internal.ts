@@ -1,5 +1,5 @@
 import { open, verifyKey } from "@facility/core";
-import { githubInstallations, runs, steerMessages } from "@facility/db";
+import { githubInstallations, insertAuditEvent, repos, runs, steerMessages } from "@facility/db";
 import { and, asc, eq, gt, inArray, isNull, notInArray } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -200,6 +200,54 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
   );
 
   app.post(
+    "/internal/runs/:runId/push-token",
+    {
+      config: { public: true },
+      preHandler: authenticate,
+      schema: {
+        params: Params,
+        response: { 200: z.object({ token: z.string() }) },
+      },
+    },
+    async (request) => {
+      const run = (request as RunnerRequest).runnerRun;
+      if (!run) throw notFound("Run not found");
+      const sandbox = readSandbox(run.sandbox);
+      const repoRef = await repoForRun(run, sandbox);
+      if (!repoRef?.installationId) {
+        throw new ApiError(409, "no_installation", "Run repository has no GitHub installation");
+      }
+      const installation = (
+        await db
+          .select()
+          .from(githubInstallations)
+          .where(eq(githubInstallations.id, repoRef.installationId))
+          .limit(1)
+      )[0];
+      if (!installation) {
+        throw new ApiError(409, "no_installation", "Run repository has no GitHub installation");
+      }
+      const tokenFactory =
+        app.githubInstallationTokenFactory ?? createGithubInstallationTokenFactory(config);
+      const token = await tokenFactory({
+        installationId: installation.installationId,
+        owner: repoRef.owner,
+        repo: repoRef.name,
+        permissions: { contents: "write" },
+      });
+      await insertAuditEvent(db, {
+        orgId: run.orgId,
+        projectId: run.projectId,
+        actor: { type: "agent", id: run.id },
+        action: "run.push_token_issued",
+        target: { type: "run", id: run.id },
+        payload: { repoId: repoRef.id },
+      });
+      return { token };
+    },
+  );
+
+  app.post(
     "/internal/runs/:runId/result",
     {
       config: { public: true },
@@ -210,6 +258,14 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
           status: z.enum(["succeeded", "failed"]),
           receipt: z.record(z.string(), z.unknown()).optional(),
           error: z.string().optional(),
+          git: z
+            .object({
+              branch: z.string().optional(),
+              headSha: z.string().optional(),
+              changed: z.boolean(),
+              pushError: z.string().optional(),
+            })
+            .optional(),
         }),
         response: { 200: z.record(z.string(), z.unknown()) },
       },
@@ -221,8 +277,12 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         status: "succeeded" | "failed";
         receipt?: Record<string, unknown>;
         error?: string;
+        git?: { branch?: string; headSha?: string; changed: boolean; pushError?: string };
       };
-      return (await finishRun(db, run, body)) as unknown as Record<string, unknown>;
+      return (await finishRun(db, run, body, {
+        config,
+        githubClientFactory: app.githubClientFactory,
+      })) as unknown as Record<string, unknown>;
     },
   );
 
@@ -257,7 +317,29 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       installationId: installation.installationId,
       owner: parsed.owner,
       repo: parsed.repo,
+      permissions: { contents: "read" },
     });
+  }
+
+  async function repoForRun(run: typeof runs.$inferSelect, sandbox: RunSandboxState) {
+    const parsed = sandbox.bundle?.repo?.cloneUrl
+      ? parseGithubCloneUrl(sandbox.bundle.repo.cloneUrl)
+      : null;
+    if (!parsed) return null;
+    return (
+      await db
+        .select()
+        .from(repos)
+        .where(
+          and(
+            eq(repos.orgId, run.orgId),
+            eq(repos.projectId, run.projectId),
+            eq(repos.owner, parsed.owner),
+            eq(repos.name, parsed.repo),
+          ),
+        )
+        .limit(1)
+    )[0];
   }
 }
 

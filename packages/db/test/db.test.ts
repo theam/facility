@@ -269,7 +269,7 @@ describe("db", async () => {
       Array.from(applied)
         .map((row) => row.name)
         .at(-1),
-    ).toBe("0014_budget_scope_coherence.sql");
+    ).toBe("0015_github_issues_pr_outcomes.sql");
 
     // Budget enum/limit + scope-coherence CHECK constraints backstop every write
     // path (migrations 0013 + 0014).

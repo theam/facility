@@ -227,7 +227,9 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         autoInit: boolean;
       };
       const creation = body.create === true || body.mode === "create";
-      const installation = creation ? await loadGithubInstallation(p.orgId, body.owner) : undefined;
+      const installation = creation
+        ? await loadGithubInstallation(p.orgId, body.owner)
+        : await findGithubInstallation(p.orgId, body.owner);
       const githubRepo = installation
         ? await createGithubRepository({
             installationId: installation.installationId,
@@ -238,7 +240,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
             autoInit: body.autoInit,
           })
         : null;
-      return (
+      const row = (
         await db
           .insert(repos)
           .values({
@@ -252,11 +254,27 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
           })
           .returning()
       )[0];
+      if (row?.installationId) {
+        await app.enqueue("github.issues-sync", { repoId: row.id, orgId: p.orgId });
+      }
+      return row;
     },
   );
 
   async function loadGithubInstallation(orgId: string, owner: string) {
-    const installation = (
+    const installation = await findGithubInstallation(orgId, owner);
+    if (!installation) {
+      throw new ApiError(
+        400,
+        "github_installation_required",
+        "A GitHub App installation for this owner is required to create repositories",
+      );
+    }
+    return installation;
+  }
+
+  async function findGithubInstallation(orgId: string, owner: string) {
+    return (
       await db
         .select()
         .from(githubInstallations)
@@ -269,14 +287,6 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         )
         .limit(1)
     )[0];
-    if (!installation) {
-      throw new ApiError(
-        400,
-        "github_installation_required",
-        "A GitHub App installation for this owner is required to create repositories",
-      );
-    }
-    return installation;
   }
 
   async function createGithubRepository(input: {

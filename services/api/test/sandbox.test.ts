@@ -273,6 +273,7 @@ describe("sandbox api", async () => {
       installationId: installationNumber,
       owner,
       repo: "private-repo",
+      permissions: { contents: "read" },
     });
     app.githubInstallationTokenFactory = undefined;
   });
