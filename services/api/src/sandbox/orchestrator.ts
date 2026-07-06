@@ -2,6 +2,8 @@ import { generateApiKey, hashKey, newId, seal } from "@facility/core";
 import {
   agentDefs,
   apiKeys,
+  conversationMessages,
+  conversations,
   createDb,
   githubInstallations,
   insertAuditEvent,
@@ -13,6 +15,7 @@ import {
   registryVersions,
   repos,
   roles,
+  runEvents,
   runs,
   sandboxProfiles,
   virtualKeys,
@@ -175,7 +178,7 @@ export async function finishRun(
   db: ReturnType<typeof createDb>["db"],
   run: RunRow,
   input: {
-    status: "succeeded" | "failed";
+    status: "succeeded" | "failed" | "canceled";
     receipt?: Record<string, unknown>;
     error?: string;
     git?: { branch?: string; headSha?: string; changed: boolean; pushError?: string };
@@ -264,7 +267,97 @@ export async function finishRun(
       }).catch(() => undefined);
     });
   }
+  await finishConversationTurn(db, claimed, input.engineSessionId).catch(
+    async (conversationError) => {
+      const message = errorMessage(conversationError);
+      await appendRunEvents(db, run.orgId, run.id, [
+        { type: "artifact_error", data: { kind: "conversation_finish_failed", error: message } },
+      ]).catch(() => undefined);
+      await raisePlatformIssue(db, {
+        orgId: run.orgId,
+        projectId: run.projectId,
+        kind: "conversation_finish_failed",
+        severity: "error",
+        fingerprint: `conversation_finish_failed:${run.id}`,
+        title: "Failed to finalize conversation turn",
+        bodyMd: `Run ${run.id} finished, but Facility could not append the conversation reply.\n\n${message}`,
+      }).catch(() => undefined);
+    },
+  );
   return claimed;
+}
+
+async function finishConversationTurn(
+  db: ReturnType<typeof createDb>["db"],
+  run: RunRow,
+  engineSessionId: string | undefined,
+) {
+  const trigger = objectOrEmpty(run.trigger);
+  if (trigger.type !== "conversation") return;
+  const conversationId =
+    typeof trigger.conversationId === "string" ? trigger.conversationId : undefined;
+  if (!conversationId) return;
+  const conversation = (
+    await db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.orgId, run.orgId),
+          eq(conversations.projectId, run.projectId),
+          run.agentDefId ? eq(conversations.agentDefId, run.agentDefId) : sql`false`,
+          eq(conversations.id, conversationId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!conversation) throw new Error("conversation_not_found");
+  const reply = await lastAssistantText(db, run);
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+    const rows = await tx
+      .select({ max: sql<number>`coalesce(max(seq), 0)` })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.conversationId, conversationId));
+    const seq = Number(rows[0]?.max ?? 0) + 1;
+    await tx.insert(conversationMessages).values({
+      id: newId("evt"),
+      orgId: run.orgId,
+      conversationId,
+      seq,
+      role: "agent",
+      body: reply ?? "(no reply captured - see the session transcript)",
+      runId: run.id,
+    });
+    await tx
+      .update(conversations)
+      .set({
+        lastRunId: run.id,
+        engineSessionId: engineSessionId ?? run.engineSessionId ?? conversation.engineSessionId,
+        status: "idle",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(conversations.orgId, run.orgId), eq(conversations.id, conversationId)));
+  });
+}
+
+async function lastAssistantText(db: ReturnType<typeof createDb>["db"], run: RunRow) {
+  const row = (
+    await db
+      .select({ data: runEvents.data })
+      .from(runEvents)
+      .where(
+        and(
+          eq(runEvents.orgId, run.orgId),
+          eq(runEvents.runId, run.id),
+          eq(runEvents.type, "assistant"),
+        ),
+      )
+      .orderBy(desc(runEvents.seq))
+      .limit(1)
+  )[0];
+  const data = objectOrEmpty(row?.data);
+  return typeof data.text === "string" && data.text.trim() ? data.text : null;
 }
 
 async function openRunPullRequest(
@@ -615,7 +708,88 @@ async function buildRunBundle(
     timeoutMin,
     harness: harnessFragmentForBundle({ space, config, runId: run.id }),
   };
+  const resume = await resumeForRun(db, run);
+  if (resume) bundle.resume = resume;
   return { bundle, profile };
+}
+
+async function resumeForRun(db: ReturnType<typeof createDb>["db"], run: RunRow) {
+  const trigger = objectOrEmpty(run.trigger);
+  if (trigger.type === "resume") {
+    const parentId = typeof trigger.resumeOf === "string" ? trigger.resumeOf : undefined;
+    if (!parentId) return null;
+    const parent = await loadResumeParent(db, run, parentId);
+    if (!parent?.engineSessionId) return null;
+    return {
+      sessionId: parent.engineSessionId,
+      sessionStateFrom: parent.id,
+      prompt: resumePrompt(trigger),
+      ...resumeBranch(parent),
+    };
+  }
+  if (trigger.type === "conversation") {
+    const conversationId =
+      typeof trigger.conversationId === "string" ? trigger.conversationId : undefined;
+    if (!conversationId) return null;
+    const conversation = (
+      await db
+        .select()
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.orgId, run.orgId),
+            eq(conversations.projectId, run.projectId),
+            run.agentDefId ? eq(conversations.agentDefId, run.agentDefId) : sql`false`,
+            eq(conversations.id, conversationId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    const parentId =
+      typeof trigger.resumeOf === "string" ? trigger.resumeOf : conversation?.lastRunId;
+    if (!conversation?.engineSessionId || !parentId) return null;
+    const parent = await loadResumeParent(db, run, parentId);
+    if (!parent) return null;
+    return {
+      sessionId: conversation.engineSessionId,
+      sessionStateFrom: parent.id,
+      prompt: resumePrompt(trigger),
+      ...resumeBranch(parent),
+    };
+  }
+  return null;
+}
+
+async function loadResumeParent(
+  db: ReturnType<typeof createDb>["db"],
+  run: RunRow,
+  parentId: string,
+) {
+  const parent = (
+    await db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, run.orgId),
+          eq(runs.projectId, run.projectId),
+          run.agentDefId ? eq(runs.agentDefId, run.agentDefId) : isNull(runs.agentDefId),
+          eq(runs.id, parentId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  return parent ?? null;
+}
+
+function resumePrompt(trigger: Record<string, unknown>) {
+  const message = trigger.message;
+  return typeof message === "string" && message.trim() ? message : "Continue where you left off.";
+}
+
+function resumeBranch(parent: RunRow) {
+  const gh = objectOrEmpty(parent.gh);
+  return typeof gh.branch === "string" && gh.branch.trim() ? { branch: gh.branch } : {};
 }
 
 async function runUsesHarness(db: ReturnType<typeof createDb>["db"], run: RunRow) {

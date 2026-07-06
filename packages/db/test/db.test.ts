@@ -272,7 +272,7 @@ describe("db", async () => {
       Array.from(applied)
         .map((row) => row.name)
         .at(-1),
-    ).toBe("0016_run_sessions_transcripts_scheduler.sql");
+    ).toBe("0017_interactive_sessions.sql");
 
     // Budget enum/limit + scope-coherence CHECK constraints backstop every write
     // path (migrations 0013 + 0014).
@@ -290,6 +290,27 @@ describe("db", async () => {
         "budgets_mode_check",
         "budgets_limit_cents_check",
         "budgets_scope_coherence_check",
+      ]),
+    );
+
+    const interactiveChecks = (await db.execute(
+      sql`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conname in (
+          'steer_messages_kind_check',
+          'conversations_status_check',
+          'conversation_messages_role_check',
+          'conversation_messages_seq_positive_check'
+        )
+      `,
+    )) as Iterable<{ conname: string }>;
+    expect(new Set(Array.from(interactiveChecks).map((row) => row.conname))).toEqual(
+      new Set([
+        "steer_messages_kind_check",
+        "conversations_status_check",
+        "conversation_messages_role_check",
+        "conversation_messages_seq_positive_check",
       ]),
     );
   });

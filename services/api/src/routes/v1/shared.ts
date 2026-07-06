@@ -114,6 +114,7 @@ export const RunSchema = z.object({
   gh: JsonValue,
   engineSessionId: z.string().nullable(),
   transcriptUri: z.string().nullable(),
+  sessionStateUri: z.string().nullable(),
   error: z.string().nullable(),
   queuedAt: DateValue,
   startedAt: DateValue.nullable(),
@@ -134,6 +135,31 @@ export const RunEventSchema = z.object({
   ts: DateValue,
   type: z.string(),
   data: JsonValue,
+});
+
+export const ConversationSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string(),
+  agentDefId: z.string(),
+  title: z.string().nullable(),
+  lastRunId: z.string().nullable(),
+  engineSessionId: z.string().nullable(),
+  status: z.string(),
+  createdBy: JsonValue,
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const ConversationMessageSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  conversationId: z.string(),
+  seq: z.number(),
+  role: z.string(),
+  body: z.string(),
+  runId: z.string().nullable(),
+  createdAt: DateValue,
 });
 
 export const ProposalSchema = z.object({
