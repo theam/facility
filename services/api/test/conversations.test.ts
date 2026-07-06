@@ -125,7 +125,7 @@ describe("conversation scoping", async () => {
       await db
         .insert(registryItems)
         .values({
-          id: newId("reg"),
+          id: newId("item"),
           orgId,
           scope: "project",
           projectId,

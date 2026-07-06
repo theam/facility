@@ -366,6 +366,36 @@ describe("github platform lane", async () => {
       headers: { cookie },
     });
     expect(cross.statusCode).toBe(404);
+
+    // A project-pinned key must NOT enumerate the org's whole installation repo
+    // inventory (cross-project info leak) — even a maintainer key with
+    // projects:kickstart. Kickstart creates org-level projects, so discovery is
+    // an org operation, refused to project principals (404, not an oracle).
+    const pinned = await generateApiKey("fak");
+    await db.insert(apiKeys).values({
+      id: pinned.id,
+      orgId,
+      name: "pinned-kickstart",
+      prefix: pinned.lookup,
+      last4: pinned.last4,
+      hash: pinned.hash,
+      scopeType: "project",
+      projectId,
+      roleId: "role_bundled_maintainer",
+    });
+    const pinnedAuth = { authorization: `Bearer ${pinned.secret}` };
+    const pinnedList = await app.inject({
+      method: "GET",
+      url: "/v1/github/installations",
+      headers: pinnedAuth,
+    });
+    expect(pinnedList.statusCode).toBe(404);
+    const pinnedRepos = await app.inject({
+      method: "GET",
+      url: `/v1/github/installations/${installation.installationId}/repos`,
+      headers: pinnedAuth,
+    });
+    expect(pinnedRepos.statusCode).toBe(404);
     app.githubClientFactory = undefined;
   });
 

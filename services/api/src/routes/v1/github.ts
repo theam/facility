@@ -90,6 +90,10 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
     },
     async (request) => {
       const p = principal(request);
+      // Kickstart creates NEW org-level projects, so installation discovery is an
+      // org operation. A project-pinned key must not enumerate the org's whole
+      // GitHub App repo inventory through it (that's a cross-project info leak).
+      requireOrgPrincipal(p);
       return db
         .select({
           id: githubInstallations.id,
@@ -120,6 +124,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
     },
     async (request) => {
       const p = principal(request);
+      requireOrgPrincipal(p);
       const { installationId } = request.params as { installationId: number };
       const { query } = request.query as { query?: string };
       const installation = (
@@ -386,6 +391,11 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
       return run;
     },
   );
+}
+
+/** Org-level operations refuse project-pinned principals (404, not an oracle). */
+function requireOrgPrincipal(p: { projectId?: string | null }) {
+  if (p.projectId) throw notFound("Not found");
 }
 
 type InstallationRepo = {

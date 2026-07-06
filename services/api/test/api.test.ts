@@ -3092,7 +3092,8 @@ describe("api", async () => {
       headers: { cookie },
     });
     expect(interrupted.statusCode).toBe(200);
-    const messages = await db.select().from(steerMessages).where(eq(steerMessages.runId, run?.id));
+    if (!run) throw new Error("interrupt run fixture missing");
+    const messages = await db.select().from(steerMessages).where(eq(steerMessages.runId, run.id));
     expect(messages).toHaveLength(1);
     expect(messages[0]?.kind).toBe("interrupt");
     const steerEvent = (

@@ -67,7 +67,7 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob) {
     if (claimed.length === 0) return;
     await appendRunEvents(db, run.orgId, run.id, [{ type: "provisioning", data: {} }]);
 
-    const { bundle, profile } = await buildRunBundle(db, run, config);
+    const { bundle, profile, agentPermissions } = await buildRunBundle(db, run, config);
     const virtualKey = await generateApiKey("fvk");
     await db.insert(virtualKeys).values({
       id: virtualKey.id,
@@ -84,10 +84,12 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob) {
     // Track the moment it exists — before any further step that could throw.
     createdKeys.virtualKeyId = virtualKey.id;
 
-    // Run-scoped platform key: least-privilege (kb + tasks only), pinned to the
-    // run's project, so a harness agent (Project Owner, learning) can maintain
-    // the KB / propose tasks through the /v1 API. Revoked when the run ends.
-    const harnessRoleId = await ensureHarnessAgentRole(db, run.orgId);
+    // Run-scoped platform key: the agent's OWN declared permissions (what the
+    // web/API editor shows) clamped to a run-safe ceiling — so editing an
+    // agent's permissions actually changes what its run can do, and a run key
+    // can never carry org-admin/destructive scopes regardless of the agent def.
+    // Pinned to the run's project; revoked when the run ends.
+    const harnessRoleId = await ensureRunAgentRole(db, run.orgId, agentPermissions);
     const platformKey = await generateApiKey("fak");
     await db.insert(apiKeys).values({
       id: platformKey.id,
@@ -489,16 +491,60 @@ export async function cancelRun(config: AppConfig, run: RunRow) {
 
 const HARNESS_AGENT_PERMS = ["kb:read", "kb:write", "tasks:read", "tasks:write"];
 
-/** Idempotently ensure the least-privilege role a harness agent's key binds to. */
-async function ensureHarnessAgentRole(
+// A run-scoped platform key may only ever carry these resources, no matter what
+// an agent def declares. Destructive / tenant-admin scopes (members, roles,
+// keys, providers, org, budget writes, audit envelopes) are NEVER run-mintable —
+// so a compromised agent or an over-broad agent def can't escalate the tenant.
+const RUN_SAFE_RESOURCES = new Set([
+  "kb",
+  "tasks",
+  "hitl",
+  "runs",
+  "issues",
+  "registry",
+  "spend",
+  "analytics",
+  "sessions",
+]);
+
+/** Intersect an agent def's declared permissions with the run-safe ceiling. */
+export function runSafePermissions(agentPermissions: string[]): string[] {
+  const safe = new Set<string>();
+  for (const perm of agentPermissions) {
+    if (perm === "*") continue; // wildcard is never run-mintable
+    const [resource, action] = perm.split(":");
+    if (!resource || !action) continue;
+    if (!RUN_SAFE_RESOURCES.has(resource)) continue;
+    // A run key gets kb/tasks read+write but only write-forward on hitl (propose,
+    // never decide) — a run must not approve its own gate.
+    if (resource === "hitl" && !["read", "write"].includes(action)) continue;
+    safe.add(perm);
+  }
+  // Back-compat / safety floor: an agent with no run-safe permissions still gets
+  // the harness minimum so a mis-seeded PO/learning agent isn't silently inert.
+  if (safe.size === 0) return [...HARNESS_AGENT_PERMS];
+  return [...safe].sort();
+}
+
+/**
+ * Idempotently ensure the run-scoped role for an agent's clamped permission set.
+ * Keyed by the permission fingerprint so distinct sets get distinct roles and an
+ * edit to an agent's permissions takes effect on its next run — while identical
+ * sets are deduped (no role-table churn per run).
+ */
+async function ensureRunAgentRole(
   db: ReturnType<typeof createDb>["db"],
   orgId: string,
+  agentPermissions: string[],
 ): Promise<string> {
+  const permissions = runSafePermissions(agentPermissions);
+  const fingerprint = permissions.join(",") || "none";
+  const name = `run-agent:${fingerprint}`;
   const existing = (
     await db
       .select()
       .from(roles)
-      .where(and(eq(roles.orgId, orgId), eq(roles.name, "harness-agent")))
+      .where(and(eq(roles.orgId, orgId), eq(roles.name, name)))
       .limit(1)
   )[0];
   if (existing) return existing.id;
@@ -508,16 +554,16 @@ async function ensureHarnessAgentRole(
     .values({
       id,
       orgId,
-      name: "harness-agent",
-      description: "Run-scoped key for Project Owner / learning agents (KB + tasks).",
-      permissions: HARNESS_AGENT_PERMS,
+      name,
+      description: "Run-scoped agent key (permissions clamped to the run-safe ceiling).",
+      permissions,
     })
     .onConflictDoNothing();
   const row = (
     await db
       .select()
       .from(roles)
-      .where(and(eq(roles.orgId, orgId), eq(roles.name, "harness-agent")))
+      .where(and(eq(roles.orgId, orgId), eq(roles.name, name)))
       .limit(1)
   )[0];
   return row?.id ?? id;
@@ -664,11 +710,25 @@ async function buildRunBundle(
       .limit(1)
   )[0];
   if (!profile) throw new Error("run_missing_sandbox_profile");
+  // Clone the repo the run is ACTUALLY about: an issue/resume trigger records it
+  // in run.gh (owner/repo). Only fall back to the project's oldest repo when the
+  // trigger carries none — never an arbitrary first-repo pick, which would clone
+  // repo A for an issue in repo B (and then finishRun would open the PR in B).
+  const runGh = objectOrEmpty(run.gh);
+  const ghOwner = typeof runGh.owner === "string" ? runGh.owner : null;
+  const ghRepoName = typeof runGh.repo === "string" ? runGh.repo : null;
   const repo = (
     await db
       .select()
       .from(repos)
-      .where(and(eq(repos.orgId, run.orgId), eq(repos.projectId, run.projectId)))
+      .where(
+        and(
+          eq(repos.orgId, run.orgId),
+          eq(repos.projectId, run.projectId),
+          ...(ghOwner && ghRepoName ? [eq(repos.owner, ghOwner), eq(repos.name, ghRepoName)] : []),
+        ),
+      )
+      .orderBy(repos.createdAt)
       .limit(1)
   )[0];
   // The project's configured acceptance gates (settings.check_cmds) — what
@@ -727,7 +787,7 @@ async function buildRunBundle(
   };
   const resume = await resumeForRun(db, run);
   if (resume) bundle.resume = resume;
-  return { bundle, profile };
+  return { bundle, profile, agentPermissions: agent.permissions ?? [] };
 }
 
 async function resumeForRun(db: ReturnType<typeof createDb>["db"], run: RunRow) {
@@ -936,11 +996,18 @@ async function failRun(
         notInArray(runs.status, [...TERMINAL_RUN_STATUSES]),
       ),
     )
-    .returning({ projectId: runs.projectId, sandbox: runs.sandbox });
+    .returning({ projectId: runs.projectId, sandbox: runs.sandbox, trigger: runs.trigger });
   if (!failed) return; // already terminal — another path handled it.
   // Reclaim the run's credentials + sandbox so a failed run can't keep calling
   // the gateway or the platform API.
   await revokeRunKeys(db, readSandbox(failed.sandbox));
+  // A conversation turn holds its thread's "running" lock (new messages are
+  // rejected while running). If the run failed BEFORE finishRun could release it
+  // (bad image, provisioning error), the thread would deadlock forever — so free
+  // it here too, recording the failure as the agent turn.
+  await releaseConversationOnFailure(db, orgId, runId, failed.trigger, message).catch(
+    () => undefined,
+  );
   // Route through raisePlatformIssue so the run failure is canonical severity,
   // carries its projectId (so it surfaces in project health), and dedups on
   // repeated failures instead of violating the org+fingerprint unique index.
@@ -956,6 +1023,51 @@ async function failRun(
   await appendRunEvents(db, orgId, runId, [
     { type: "result", data: { status: "failed", kind, error: message } },
   ]);
+}
+
+/** Free a conversation's turn lock when its run failed before finishRun ran. */
+async function releaseConversationOnFailure(
+  db: ReturnType<typeof createDb>["db"],
+  orgId: string,
+  runId: string,
+  trigger: unknown,
+  message: string,
+) {
+  const t = objectOrEmpty(trigger);
+  if (t.type !== "conversation") return;
+  const conversationId = typeof t.conversationId === "string" ? t.conversationId : undefined;
+  if (!conversationId) return;
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+    // Only release a thread still pinned to THIS run's turn — never clobber a
+    // newer turn or a normal idle state.
+    const conversation = (
+      await tx
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)))
+        .limit(1)
+    )[0];
+    if (conversation?.status !== "running") return;
+    const rows = await tx
+      .select({ max: sql<number>`coalesce(max(seq), 0)` })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.conversationId, conversationId));
+    const seq = Number(rows[0]?.max ?? 0) + 1;
+    await tx.insert(conversationMessages).values({
+      id: newId("evt"),
+      orgId,
+      conversationId,
+      seq,
+      role: "system",
+      body: `Turn failed: ${message}`,
+      runId,
+    });
+    await tx
+      .update(conversations)
+      .set({ status: "idle", updatedAt: new Date() })
+      .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)));
+  });
 }
 
 async function loadRun(db: ReturnType<typeof createDb>["db"], orgId: string, runId: string) {
