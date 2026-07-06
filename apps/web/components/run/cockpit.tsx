@@ -198,17 +198,33 @@ function linkFromValue(value: unknown) {
   return /^https?:\/\//.test(value) ? value : null;
 }
 
+// A gh artifact can be a bare string/number, or the {number,url} object the
+// platform PR hook actually writes onto runs.gh.pr — resolve either shape.
+function artifactFrom(value: unknown): { text: string; href: string | null } | null {
+  if (typeof value === "string" || typeof value === "number") {
+    return { text: String(value), href: linkFromValue(value) };
+  }
+  if (value && typeof value === "object") {
+    const obj = value as { number?: unknown; url?: unknown };
+    const href = linkFromValue(obj.url);
+    const text = typeof obj.number === "number" ? `#${obj.number}` : href ? "open" : null;
+    if (text || href) return { text: text ?? "open", href };
+  }
+  return null;
+}
+
 function githubArtifacts(run: Run) {
   const gh = (run.gh ?? {}) as Record<string, unknown>;
-  const prHref = linkFromValue(gh.pr) ?? linkFromValue(gh.prUrl) ?? linkFromValue(gh.url);
-  const issueHref =
-    linkFromValue(gh.issue) ?? linkFromValue(gh.issueUrl) ?? linkFromValue(gh.htmlUrl);
-  const prText = typeof gh.pr === "string" || typeof gh.pr === "number" ? String(gh.pr) : null;
-  const issueText =
-    typeof gh.issue === "string" || typeof gh.issue === "number" ? String(gh.issue) : null;
+  const pr = artifactFrom(gh.pr) ?? artifactFrom(gh.prUrl) ?? artifactFrom(gh.url);
+  const issueNumber = typeof gh.issueNumber === "number" ? gh.issueNumber : undefined;
+  const issue =
+    artifactFrom(gh.issue) ??
+    artifactFrom(gh.issueUrl) ??
+    artifactFrom(gh.htmlUrl) ??
+    (issueNumber !== undefined ? { text: `#${issueNumber}`, href: null } : null);
   return [
-    prText || prHref ? { label: "PR", text: prText ?? "open", href: prHref } : null,
-    issueText || issueHref ? { label: "issue", text: issueText ?? "open", href: issueHref } : null,
+    pr ? { label: "PR", text: pr.text, href: pr.href } : null,
+    issue ? { label: "issue", text: issue.text, href: issue.href } : null,
   ].filter((item): item is { label: string; text: string; href: string | null } => Boolean(item));
 }
 
