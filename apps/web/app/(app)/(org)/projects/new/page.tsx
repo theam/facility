@@ -280,6 +280,31 @@ export default function KickstartPage() {
   const prUrl = result?.pr?.url ?? result?.pr?.html_url;
   const busy = phase === "previewing" || phase === "opening";
 
+  // Preview needs real project/repo rows, so they exist before the final
+  // confirm — discarding deletes the draft project instead of orphaning it.
+  async function discardDraft() {
+    if (!project) {
+      setPhase("pick");
+      return;
+    }
+    setError(null);
+    try {
+      await apiJson(`/v1/projects/${project.id}`, { method: "DELETE" });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `couldn't discard the draft project — ${err.message}`
+          : "couldn't discard the draft project",
+      );
+      return;
+    }
+    setProject(null);
+    setRepoRow(null);
+    setPreview(null);
+    setPhase("pick");
+    router.refresh();
+  }
+
   return (
     <div className="flex max-w-6xl flex-col gap-8">
       <div className="flex flex-col gap-2">
@@ -505,6 +530,15 @@ export default function KickstartPage() {
               <div className="flex gap-3">
                 <Button type="button" variant="outline" onClick={() => setPhase("pick")}>
                   back
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void discardDraft()}
+                  title="Deletes the draft project created for this preview"
+                >
+                  discard draft
                 </Button>
                 <Button
                   type="button"
