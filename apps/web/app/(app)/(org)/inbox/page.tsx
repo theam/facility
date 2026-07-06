@@ -20,13 +20,10 @@ export default async function InboxPage({
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
         <Eyebrow>inbox</Eyebrow>
-        <h1 className="text-[clamp(24px,3.6vw,40px)] font-semibold leading-[1.08] tracking-[-0.02em]">
-          People decide twice.
-        </h1>
-        <p className="max-w-xl text-sm leading-relaxed text-(--mut)">
-          Every request an agent needs a human for lands here: plan acceptances, learning-mode
-          validations, kickstart reviews, budget overrides. Approving dispatches the action;
-          everything is recorded in the ledger. Watchtower issues surface here too.
+        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Inbox</h1>
+        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+          {proposals.length} gate{proposals.length === 1 ? "" : "s"} · {issues.length} issue
+          {issues.length === 1 ? "" : "s"} waiting on you
         </p>
       </div>
 

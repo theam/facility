@@ -103,6 +103,11 @@ export const api = {
   kickstart: (projectId: string, body: { repoId: string; answers: KickstartAnswers; mode: "pr" }) =>
     apiFetch("POST", `/v1/projects/${projectId}/kickstart`, { body }),
   projectAgents: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/agents`),
+  projectHealth: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/health`),
+  updateProject: (projectId: string, body: Record<string, unknown>) =>
+    apiFetch("PATCH", `/v1/projects/${projectId}`, {
+      body: body as FacilityRouteBody<"PATCH", `/v1/projects/${string}`>,
+    }),
   runs: (projectId: string, params = "") =>
     apiFetch("GET", `/v1/projects/${projectId}/runs`, { query: queryFromParams(params) }),
   allRuns: (params = "") => apiFetch("GET", "/v1/runs", { query: queryFromParams(params) }),
@@ -144,6 +149,50 @@ export const api = {
   providers: () => apiFetch("GET", "/v1/providers"),
   budgets: () => apiFetch("GET", "/v1/budgets"),
 };
+
+/**
+ * Escape hatch for endpoints landing in this same release train (issue mirror,
+ * repo discovery) whose SDK contracts don't exist yet. Every caller carries a
+ * TODO(sdk) and migrates to the typed client once the route map regenerates.
+ */
+export async function untypedApi<T>(
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+): Promise<ApiResult<T>> {
+  const jar = await cookies();
+  const session = jar.get(SESSION_COOKIE);
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method,
+      cache: "no-store",
+      headers: {
+        ...(session ? { cookie: `${SESSION_COOKIE}=${session.value}` } : {}),
+        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      return {
+        ok: false,
+        status: res.status,
+        offline: false,
+        message: detail?.error?.message ?? `${res.status} ${res.statusText}`,
+      };
+    }
+    return { ok: true, data: (await res.json()) as T };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      offline: true,
+      message: error instanceof Error ? error.message : "control plane unreachable",
+    };
+  }
+}
 
 /** Sum + descending groups from the spend endpoint's raw rows. */
 export function summarizeSpend(rows: SpendRow[]): {

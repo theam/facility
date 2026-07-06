@@ -14,12 +14,9 @@ export default async function AuditPage() {
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
         <Eyebrow>audit</Eyebrow>
-        <h1 className="text-[clamp(24px,3.6vw,40px)] font-semibold leading-[1.08] tracking-[-0.02em]">
-          Everything, attributable.
-        </h1>
-        <p className="max-w-xl text-sm leading-relaxed text-(--mut)">
-          Append-only and hash-chained. Every platform action — human, agent, or system — lands here
-          and can be verified for tamper evidence.
+        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Audit log</h1>
+        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+          last {items.length} events · append-only · hash-chained
         </p>
       </div>
 

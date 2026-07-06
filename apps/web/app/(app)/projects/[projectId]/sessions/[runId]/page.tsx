@@ -1,15 +1,27 @@
+import { notFound, redirect } from "next/navigation";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { RunCockpit } from "@/components/run/cockpit";
 import { api } from "@/lib/api";
 
-export const metadata = { title: "run" };
+export const metadata = { title: "session" };
 
-export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
-  const { runId } = await params;
+export default async function SessionPage({
+  params,
+}: {
+  params: Promise<{ projectId: string; runId: string }>;
+}) {
+  const { projectId, runId } = await params;
   const [run, me, events] = await Promise.all([api.run(runId), api.me(), api.runEvents(runId)]);
 
   if (!run.ok) {
-    return run.offline ? <Offline /> : <ErrorNotice message={`run not found (${run.status})`} />;
+    if (run.offline) return <Offline />;
+    if (run.status === 404) notFound();
+    return <ErrorNotice message={`session not found (${run.status})`} />;
+  }
+
+  // Canonicalize: a session belongs to exactly one project world.
+  if (run.data.projectId !== projectId) {
+    redirect(`/projects/${run.data.projectId}/sessions/${runId}`);
   }
 
   const r = run.data;

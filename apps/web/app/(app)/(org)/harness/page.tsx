@@ -2,7 +2,7 @@ import { Eyebrow, PillTag } from "@facility/ui";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { api } from "@/lib/api";
 
-export const metadata = { title: "registry" };
+export const metadata = { title: "harness" };
 
 const KINDS = [
   "skill",
@@ -15,7 +15,12 @@ const KINDS = [
   "standard_section",
 ] as const;
 
-export default async function RegistryPage({
+/**
+ * The harness defines how well the factory implements, verifies, and
+ * researches: skills, rules, contracts, guards. Read view for now — item
+ * detail, version diffs, and draft→publish editing land with P4.
+ */
+export default async function HarnessPage({
   searchParams,
 }: {
   searchParams: Promise<{ kind?: string }>;
@@ -30,22 +35,20 @@ export default async function RegistryPage({
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
-        <Eyebrow>registry</Eyebrow>
-        <h1 className="text-[clamp(24px,3.6vw,40px)] font-semibold leading-[1.08] tracking-[-0.02em]">
-          The knowledge, versioned.
-        </h1>
-        <p className="max-w-xl text-sm leading-relaxed text-(--mut)">
-          Skills, rules, agent contracts, harnesses, guards, and template sets — enterprise-wide or
-          per project, immutable once published. The ratchet lives here.
+        <Eyebrow>harness</Eyebrow>
+        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Harness</h1>
+        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+          {items.length} published item{items.length === 1 ? "" : "s"}
+          {kind ? ` · ${kind.replace("_", " ")}` : ""} · immutable once published
         </p>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <a href="/registry">
+        <a href="/harness">
           <PillTag active={!kind}>all</PillTag>
         </a>
         {KINDS.map((k) => (
-          <a key={k} href={`/registry?kind=${k}`}>
+          <a key={k} href={`/harness?kind=${k}`}>
             <PillTag active={kind === k}>{k.replace("_", " ")}</PillTag>
           </a>
         ))}

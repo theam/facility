@@ -88,10 +88,10 @@ export function RunTranscript({
           <form onSubmit={sendSteer} className="flex items-center gap-3">
             <TextInput
               name="steer"
-              aria-label="Steer this session — delivered to the agent, recorded in the audit log"
+              aria-label="Steer this session — appended to the agent's STEERING.md and audited"
               value={steer}
               onChange={(e) => setSteer(e.target.value)}
-              placeholder="Steer this session — delivered to the agent, recorded in the audit log"
+              placeholder="Steer this session — appended to the agent's STEERING.md and audited"
               className="border-0 bg-transparent px-0"
             />
             <Button type="submit" size="sm" variant="outline" disabled={sending || !steer.trim()}>

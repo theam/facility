@@ -360,7 +360,7 @@ export function RunCockpit({
       });
       if (!res.ok) throw new Error(`retry failed (${res.status})`);
       const next = (await res.json()) as { id?: string };
-      if (next.id) window.location.assign(`/runs/${next.id}`);
+      if (next.id) window.location.assign(`/projects/${run.projectId}/sessions/${next.id}`);
       else setAction({ tone: "ok", message: "retry queued" });
     } catch (err) {
       setAction({ tone: "bad", message: err instanceof Error ? err.message : "retry failed" });
@@ -375,7 +375,7 @@ export function RunCockpit({
         <div className="flex flex-col gap-5 border-b border-(--line) p-4 sm:p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1">
-              <Eyebrow>run · {run.id}</Eyebrow>
+              <Eyebrow>session · {run.id}</Eyebrow>
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                 <h1 className="min-w-0 break-words font-mono text-[clamp(20px,3vw,32px)] font-semibold tracking-tight">
                   {run.mode}
