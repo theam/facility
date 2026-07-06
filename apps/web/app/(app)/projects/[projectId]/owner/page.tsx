@@ -15,14 +15,18 @@ type ScheduleTrigger = { type?: string; config?: { cron?: string } };
 
 export default async function OwnerPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const [space, entries, agents, runs] = await Promise.all([
+  const [space, entries, agents, runs, me] = await Promise.all([
     api.kbSpace(projectId),
     api.kbEntries(projectId),
     api.projectAgents(projectId),
     api.runs(projectId),
+    api.me(),
   ]);
 
   if (!space.ok && space.offline) return <Offline />;
+
+  const canWriteKb =
+    me.ok && me.data.permissions.some((p) => p === "*" || p === "kb:write" || p === "kb:*");
 
   const ownerAgents = (agents.ok ? agents.data : []).filter((a) => OWNER_NAMES.has(a.name));
   const ownerAgent = ownerAgents.find((a) => a.name === "project-owner");
@@ -61,7 +65,12 @@ export default async function OwnerPage({ params }: { params: Promise<{ projectI
               message={`Couldn't load the knowledge base — ${!space.ok ? space.message : entries.ok ? "" : entries.message}`}
             />
           ) : (
-            <KbReader space={kbSpace} entries={kbEntries} />
+            <KbReader
+              space={kbSpace}
+              entries={kbEntries}
+              projectId={projectId}
+              canWrite={canWriteKb}
+            />
           )}
         </div>
 

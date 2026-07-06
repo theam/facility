@@ -3,6 +3,7 @@
 import { Button, cx, PillTag } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { Markdown } from "@/components/markdown";
 import type { RegistryItemWithVersions, RegistryVersion } from "@/lib/api";
 
 /**
@@ -192,9 +193,9 @@ export function HarnessItemEditor({ item }: { item: RegistryItemWithVersions }) 
                 </div>
               </div>
             ) : (
-              <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap border border-(--line) bg-(--bg-subtle) p-5 font-mono text-[12.5px] leading-relaxed text-(--mut)">
-                {selected.content}
-              </pre>
+              <div className="max-h-[70vh] overflow-auto border border-(--line) bg-(--bg-subtle) p-5">
+                <Markdown source={selected.content} />
+              </div>
             )}
           </>
         ) : (
