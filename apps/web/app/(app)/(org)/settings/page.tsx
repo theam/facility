@@ -41,6 +41,9 @@ export default async function SettingsPage() {
   const canManageProviders = me.data.permissions.some(
     (p) => p === "*" || p === "providers:write" || p === "providers:*",
   );
+  const canManageMembers = me.data.permissions.some(
+    (p) => p === "*" || p === "members:write" || p === "members:*",
+  );
 
   return (
     <div className="flex flex-col gap-10">
@@ -76,7 +79,11 @@ export default async function SettingsPage() {
       <section className="flex max-w-2xl flex-col gap-4">
         <Eyebrow>members</Eyebrow>
         {membersRaw.ok ? (
-          <MembersList members={flattenMembers(membersRaw.data)} />
+          <MembersList
+            members={flattenMembers(membersRaw.data)}
+            roles={roles.ok ? roles.data : []}
+            canManage={canManageMembers && roles.ok}
+          />
         ) : (
           <p className="text-sm text-(--dim)">Members are visible to admins.</p>
         )}
