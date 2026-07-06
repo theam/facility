@@ -259,8 +259,14 @@ export function RunCockpit({
 }) {
   const [events, setEvents] = useState(initialEvents);
   const [action, setAction] = useState<ActionState>(null);
-  const [busy, setBusy] = useState<"cancel" | "retry" | null>(null);
+  const [busy, setBusy] = useState<"cancel" | "retry" | "interrupt" | "resume" | null>(null);
   const lastSeq = useRef(initialEvents.at(-1)?.seq ?? 0);
+  // Session identity lands on runs written after the resume infrastructure —
+  // older rows simply don't offer resume.
+  const engineSessionId = (run as { engineSessionId?: string | null }).engineSessionId ?? null;
+  const transcriptUri = (run as { transcriptUri?: string | null }).transcriptUri ?? null;
+  const resumable =
+    !LIVE.has(run.status) && run.engine === "claude_code" && Boolean(engineSessionId);
 
   const live = LIVE.has(run.status);
   const canSteer = hasPermission(permissions, "runs:steer");
@@ -338,6 +344,53 @@ export function RunCockpit({
     }
   }
 
+  async function interruptRun() {
+    if (
+      !window.confirm(
+        "Interrupt this session? The engine stops gracefully, uploads its state, and stays resumable.",
+      )
+    ) {
+      return;
+    }
+    setBusy("interrupt");
+    setAction(null);
+    try {
+      const res = await fetch(`/api/v1/runs/${run.id}/interrupt`, { method: "POST" });
+      if (!res.ok) throw new Error(`interrupt failed (${res.status})`);
+      setAction({ tone: "ok", message: "interrupt requested — the session will stop shortly" });
+    } catch (err) {
+      setAction({ tone: "bad", message: err instanceof Error ? err.message : "interrupt failed" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function resumeRun() {
+    const message = window.prompt(
+      "Resume this session — what should the agent do next? (empty = continue where it left off)",
+    );
+    if (message === null) return;
+    setBusy("resume");
+    setAction(null);
+    try {
+      const res = await fetch(`/api/v1/runs/${run.id}/resume`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(message.trim() ? { message: message.trim() } : {}),
+      });
+      const next = (await res.json().catch(() => null)) as {
+        id?: string;
+        error?: { message?: string };
+      } | null;
+      if (!res.ok) throw new Error(next?.error?.message ?? `resume failed (${res.status})`);
+      if (next?.id) window.location.assign(`/projects/${run.projectId}/sessions/${next.id}`);
+    } catch (err) {
+      setAction({ tone: "bad", message: err instanceof Error ? err.message : "resume failed" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function retryRun() {
     if (!window.confirm("Retry this run with the same project and agent?")) return;
     setBusy("retry");
@@ -394,6 +447,18 @@ export function RunCockpit({
 
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[260px]">
               <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+                {live && canSteer ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    disabled={busy !== null}
+                    onClick={interruptRun}
+                    title="Stop gracefully; the session stays resumable"
+                  >
+                    {busy === "interrupt" ? "interrupting" : "interrupt"}
+                  </Button>
+                ) : null}
                 {live && canWrite ? (
                   <Button
                     variant="danger"
@@ -403,6 +468,18 @@ export function RunCockpit({
                     onClick={cancelRun}
                   >
                     {busy === "cancel" ? "canceling" : "cancel"}
+                  </Button>
+                ) : null}
+                {resumable && canTrigger ? (
+                  <Button
+                    variant="primary"
+                    tone="agent"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    disabled={busy !== null}
+                    onClick={resumeRun}
+                  >
+                    {busy === "resume" ? "resuming" : "resume session"}
                   </Button>
                 ) : null}
                 {RETRYABLE.has(run.status) && canTrigger ? (
@@ -554,6 +631,16 @@ export function RunCockpit({
                         </div>
                       ))}
                     </div>
+                  ) : null}
+                  {transcriptUri ? (
+                    <a
+                      href={`/api/v1/runs/${run.id}/transcript`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-[12px] text-(--info) underline-offset-4 hover:underline"
+                    >
+                      raw transcript ↗
+                    </a>
                   ) : null}
                   {artifacts.length ? (
                     <div className="flex flex-col gap-2">

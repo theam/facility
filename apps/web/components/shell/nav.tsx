@@ -27,6 +27,7 @@ export function projectNav(projectId: string): NavItem[] {
     { href: base, label: "overview" },
     { href: `${base}/issues`, label: "issues" },
     { href: `${base}/sessions`, label: "sessions" },
+    { href: `${base}/owner`, label: "owner" },
     { href: `${base}/agents`, label: "agents" },
     { href: `${base}/settings`, label: "settings" },
   ];
