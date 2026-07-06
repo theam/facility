@@ -10745,6 +10745,12 @@
                   "sandboxProfileId": {
                     "type": "string"
                   },
+                  "permissions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "enabled": {
                     "default": true,
                     "type": "boolean"
@@ -10898,6 +10904,12 @@
                   },
                   "sandboxProfileId": {
                     "type": "string"
+                  },
+                  "permissions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   },
                   "enabled": {
                     "type": "boolean"

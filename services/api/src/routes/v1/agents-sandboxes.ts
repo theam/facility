@@ -8,6 +8,7 @@ import type { Principal } from "../../types.js";
 import {
   AnyObject,
   assertBareRowProjectScope,
+  assertPermissionsGrantable,
   IdParams,
   Ok,
   principal,
@@ -46,6 +47,9 @@ function registerCrud(
           harnessItemId: z.string().optional(),
           triggers: z.array(AnyObject).default([]),
           sandboxProfileId: z.string().optional(),
+          // Grantable-subset checked at the handler: an agent can never carry a
+          // permission its creator couldn't grant (same rule as role writes).
+          permissions: z.array(z.string()).optional(),
           enabled: z.boolean().default(true),
         })
       : z.object({
@@ -66,6 +70,7 @@ function registerCrud(
           harnessItemId: z.string().optional(),
           triggers: z.array(AnyObject).optional(),
           sandboxProfileId: z.string().optional(),
+          permissions: z.array(z.string()).optional(),
           enabled: z.boolean().optional(),
         })
       : z.object({
@@ -204,9 +209,11 @@ function registerCrud(
           harnessItemId?: string;
           triggers: Record<string, unknown>[];
           sandboxProfileId?: string;
+          permissions?: string[];
           enabled: boolean;
         };
         await assertAgentReferences(p, params.projectId, body);
+        if (body.permissions) assertPermissionsGrantable(p, body.permissions);
         return (
           await app.facilityDb
             .insert(table)
@@ -221,6 +228,7 @@ function registerCrud(
               harnessItemId: body.harnessItemId,
               triggers: body.triggers,
               sandboxProfileId: body.sandboxProfileId,
+              permissions: body.permissions ?? [],
               enabled: body.enabled,
             })
             .returning()
@@ -286,6 +294,10 @@ function registerCrud(
           },
         );
       }
+      const patchPermissions = (request.body as { permissions?: string[] }).permissions;
+      if (prefix === "agent" && patchPermissions) {
+        assertPermissionsGrantable(p, patchPermissions);
+      }
       const set =
         prefix === "agent"
           ? crudDefinedFields({
@@ -296,6 +308,7 @@ function registerCrud(
               harnessItemId: (request.body as { harnessItemId?: string }).harnessItemId,
               triggers: (request.body as { triggers?: Record<string, unknown>[] }).triggers,
               sandboxProfileId: (request.body as { sandboxProfileId?: string }).sandboxProfileId,
+              permissions: patchPermissions,
               enabled: (request.body as { enabled?: boolean }).enabled,
               updatedAt: new Date(),
             })

@@ -16,6 +16,7 @@ import { FacilityClient } from "@facility/sdk";
 import { cookies } from "next/headers";
 
 export type {
+  AgentDef,
   ApiKey,
   AuditEvent,
   Budget,
@@ -34,6 +35,8 @@ export type {
   Proposal,
   Provider,
   RegistryItem,
+  RegistryItemWithVersions,
+  RegistryVersion,
   Role,
   Run,
   RunEvent,
@@ -155,6 +158,7 @@ export const api = {
   },
   registry: (params = "") =>
     apiFetch("GET", "/v1/registry/items", { query: queryFromParams(params) }),
+  registryItem: (id: string) => apiFetch("GET", `/v1/registry/items/${id}`),
   spend: (params = "") => apiFetch("GET", "/v1/spend", { query: queryFromParams(params) }),
   members: () => apiFetch("GET", "/v1/members"),
   roles: () => apiFetch("GET", "/v1/roles"),

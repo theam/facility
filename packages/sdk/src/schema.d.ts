@@ -5233,6 +5233,7 @@ export interface paths {
                             [key: string]: unknown;
                         }[];
                         sandboxProfileId?: string;
+                        permissions?: string[];
                         /** @default true */
                         enabled?: boolean;
                     };
@@ -5319,6 +5320,7 @@ export interface paths {
                             [key: string]: unknown;
                         }[];
                         sandboxProfileId?: string;
+                        permissions?: string[];
                         enabled?: boolean;
                     };
                 };

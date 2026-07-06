@@ -59,9 +59,10 @@ export default async function HarnessPage({
       ) : (
         <div className="flex flex-col border border-(--line)">
           {items.map((item) => (
-            <div
+            <a
               key={item.id}
-              className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-(--line) px-5 py-4 last:border-b-0"
+              href={`/harness/${item.id}`}
+              className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-(--line) px-5 py-4 transition-colors last:border-b-0 hover:bg-(--card)"
             >
               <span className="font-mono text-[13px] text-(--ink)">{item.name}</span>
               <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
@@ -72,7 +73,7 @@ export default async function HarnessPage({
                   {item.description}
                 </span>
               ) : null}
-            </div>
+            </a>
           ))}
         </div>
       )}
