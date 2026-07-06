@@ -364,8 +364,8 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
           orgId,
           projectId,
           name: "project-owner",
-          engine: "codex",
-          model: { primary: "gpt-5.5" },
+          engine: "claude_code",
+          model: { model: "claude-sonnet-5" },
           contractItemId: poContract.id,
           harnessItemId: productChain.id,
           triggers: [

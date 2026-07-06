@@ -98,8 +98,50 @@ export async function readTranscriptObject(
   }
 }
 
+export async function writeSessionStateObject(input: {
+  config: AppConfig;
+  orgId: string;
+  runId: string;
+  body: Buffer;
+  now?: Date;
+}) {
+  if (!input.config.s3Bucket) {
+    throw new ApiError(500, "session_state_store_unconfigured", "S3_BUCKET is required");
+  }
+  try {
+    return await createObjectStore(input.config).putBytes({
+      key: sessionStateKey(input.orgId, input.runId),
+      body: input.body,
+      contentType: "application/gzip",
+      now: input.now,
+    });
+  } catch (error) {
+    throw mapSessionStateWriteError(error);
+  }
+}
+
+export async function readSessionStateObject(
+  config: AppConfig,
+  uri: string | null | undefined,
+  orgId: string,
+) {
+  if (!uri) throw sessionStateNotFound();
+  if (!config.s3Bucket) throw sessionStateNotFound();
+  try {
+    return await createObjectStore(config).getBytes(uri, {
+      expectedKeyPrefix: `session-state/${orgId}/`,
+    });
+  } catch (error) {
+    throw mapSessionStateReadError(error);
+  }
+}
+
 function transcriptKey(orgId: string, runId: string) {
   return `transcripts/${orgId}/${runId}.jsonl`;
+}
+
+function sessionStateKey(orgId: string, runId: string) {
+  return `session-state/${orgId}/${runId}.tgz`;
 }
 
 function mapObjectStoreReadError(error: unknown) {
@@ -150,10 +192,44 @@ function mapTranscriptWriteError(error: unknown) {
   return new ApiError(502, "transcript_write_failed", "Transcript write failed");
 }
 
+function mapSessionStateReadError(error: unknown) {
+  if (error instanceof ObjectStoreNotFoundError) return sessionStateNotFound();
+  if (error instanceof ObjectStoreHttpError) {
+    if (error.status === 404) return sessionStateNotFound();
+    return new ApiError(
+      502,
+      "session_state_read_failed",
+      `Session state store returned ${error.status}`,
+    );
+  }
+  if (error instanceof ObjectStoreConfigurationError) {
+    return new ApiError(500, "session_state_store_unconfigured", error.message);
+  }
+  return new ApiError(502, "session_state_read_failed", "Session state read failed");
+}
+
+function mapSessionStateWriteError(error: unknown) {
+  if (error instanceof ObjectStoreConfigurationError) {
+    return new ApiError(500, "session_state_store_unconfigured", error.message);
+  }
+  if (error instanceof ObjectStoreHttpError) {
+    return new ApiError(
+      502,
+      "session_state_write_failed",
+      `Session state store returned ${error.status}`,
+    );
+  }
+  return new ApiError(502, "session_state_write_failed", "Session state write failed");
+}
+
 function envelopeNotFound() {
   return new ApiError(404, "envelope_not_found", "Envelope not found");
 }
 
 function transcriptNotFound() {
   return new ApiError(404, "transcript_not_found", "Transcript not found");
+}
+
+function sessionStateNotFound() {
+  return new ApiError(404, "session_state_not_found", "Session state not found");
 }

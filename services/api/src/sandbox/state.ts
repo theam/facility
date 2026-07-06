@@ -23,6 +23,12 @@ export type RunBundle = {
   scope: Record<string, unknown>;
   timeoutMin: number;
   harness?: { files: Record<string, string> };
+  resume?: {
+    sessionId: string;
+    sessionStateFrom: string;
+    prompt: string;
+    branch?: string;
+  };
 };
 
 export type RunSandboxState = {

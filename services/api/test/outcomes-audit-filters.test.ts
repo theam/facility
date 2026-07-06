@@ -82,12 +82,13 @@ describe("outcomes list + audit filters", async () => {
   });
 
   it("lists open outcomes scoped to org and project, newest first", async () => {
+    const repo = `theam/mirror-${Date.now()}`;
     const mkOutcome = (projectId: string, prNumber: number, terminal: boolean) =>
       db.insert(outcomes).values({
         id: newId("evt"),
         orgId,
         projectId,
-        repo: "theam/mirror",
+        repo,
         prNumber,
         agentLane: "claude_code",
         openedAt: new Date(Date.now() - prNumber * 1000),

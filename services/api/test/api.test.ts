@@ -8,6 +8,8 @@ import {
   agentDefs,
   auditEvents,
   budgets,
+  conversationMessages,
+  conversations,
   createDb,
   githubInstallations,
   inboundEvents,
@@ -31,6 +33,7 @@ import {
   runs,
   sandboxProfiles,
   seed,
+  steerMessages,
   users,
   verifyAuditChain,
 } from "@facility/db";
@@ -1843,6 +1846,166 @@ describe("api", async () => {
     }
   });
 
+  it("uploads session state and serves the parent archive only to a matching resume run", async () => {
+    const archive = gzipSync(Buffer.from("claude state"));
+    const objects = new Map<string, Buffer>();
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const key = request.url ?? "";
+        if (request.method === "PUT") {
+          objects.set(key, Buffer.concat(chunks));
+          response.writeHead(200).end();
+          return;
+        }
+        const body = objects.get(key);
+        if (request.method === "GET" && body) {
+          response.writeHead(200, { "content-type": "application/gzip" });
+          response.end(body);
+          return;
+        }
+        response.writeHead(404).end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind");
+    const previous = {
+      s3Bucket: config.s3Bucket,
+      s3Endpoint: config.s3Endpoint,
+      s3AccessKey: config.s3AccessKey,
+      s3SecretKey: config.s3SecretKey,
+      awsRegion: config.awsRegion,
+    };
+    config.s3Bucket = "facility-test";
+    config.s3Endpoint = `http://127.0.0.1:${address.port}`;
+    config.s3AccessKey = "test";
+    config.s3SecretKey = "test";
+    config.awsRegion = "us-east-1";
+    try {
+      const target = await createProjectWithAgent("Session State");
+      const parentToken = "frt_session_state_parent";
+      const parent = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            status: "running",
+            sandbox: { runnerTokenHash: await hashKey(parentToken) },
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const unauth = await app.inject({
+        method: "POST",
+        url: `/internal/runs/${parent?.id}/session-state`,
+        headers: { "content-type": "application/gzip" },
+        payload: archive,
+      });
+      expect(unauth.statusCode).toBe(401);
+      const upload = await app.inject({
+        method: "POST",
+        url: `/internal/runs/${parent?.id}/session-state`,
+        headers: {
+          authorization: `Bearer ${parentToken}`,
+          "content-type": "application/gzip",
+        },
+        payload: archive,
+      });
+      expect(upload.statusCode).toBe(200);
+      const stored = (
+        await db
+          .select()
+          .from(runs)
+          .where(eq(runs.id, parent?.id ?? ""))
+          .limit(1)
+      )[0];
+      expect(stored?.sessionStateUri).toBe(
+        `s3://facility-test/session-state/${orgId}/${parent?.id}.tgz`,
+      );
+
+      const currentToken = "frt_session_state_current";
+      const current = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            status: "running",
+            sandbox: {
+              runnerTokenHash: await hashKey(currentToken),
+              bundle: {
+                resume: { sessionId: "sess_1", sessionStateFrom: parent?.id, prompt: "go" },
+              },
+            },
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const loaded = await app.inject({
+        method: "GET",
+        url: `/internal/runs/${current?.id}/session-state`,
+        headers: { authorization: `Bearer ${currentToken}` },
+      });
+      expect(loaded.statusCode).toBe(200);
+      expect(Buffer.compare(loaded.rawPayload, archive)).toBe(0);
+
+      const otherProject = (
+        await db
+          .insert(projects)
+          .values({
+            id: newId("proj"),
+            orgId,
+            name: "Session State Other",
+            slug: `session-state-other-${Date.now()}`,
+            settings: {},
+          })
+          .returning()
+      )[0];
+      const mismatchToken = "frt_session_state_mismatch";
+      const mismatched = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: otherProject?.id ?? projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            status: "running",
+            sandbox: {
+              runnerTokenHash: await hashKey(mismatchToken),
+              bundle: {
+                resume: { sessionId: "sess_1", sessionStateFrom: parent?.id, prompt: "go" },
+              },
+            },
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const blocked = await app.inject({
+        method: "GET",
+        url: `/internal/runs/${mismatched?.id}/session-state`,
+        headers: { authorization: `Bearer ${mismatchToken}` },
+      });
+      expect(blocked.statusCode).toBe(404);
+    } finally {
+      Object.assign(config, previous);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("denies the llm envelope to a spend:read-only principal", async () => {
     const role = await app.inject({
       method: "POST",
@@ -2904,6 +3067,311 @@ describe("api", async () => {
       payload: { body: "hello?" },
     });
     expect(steer.statusCode).toBe(409);
+  });
+
+  it("interrupts live runs through steer_messages and rejects terminal or unauthorized calls", async () => {
+    const target = await createProjectWithAgent("Interrupt Run");
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: target.projectId,
+          agentDefId: target.agent.id,
+          mode: "builder",
+          engine: "claude_code",
+          status: "running",
+          createdBy: { type: "user", id: "test" },
+        })
+        .returning()
+    )[0];
+    const interrupted = await app.inject({
+      method: "POST",
+      url: `/v1/runs/${run?.id}/interrupt`,
+      headers: { cookie },
+    });
+    expect(interrupted.statusCode).toBe(200);
+    const messages = await db.select().from(steerMessages).where(eq(steerMessages.runId, run?.id));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.kind).toBe("interrupt");
+    const steerEvent = (
+      await db
+        .select()
+        .from(runEvents)
+        .where(eq(runEvents.runId, run?.id ?? ""))
+        .orderBy(runEvents.seq)
+    ).find((event) => event.type === "steer");
+    expect(steerEvent?.data).toMatchObject({ kind: "interrupt" });
+
+    const finished = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: target.projectId,
+          agentDefId: target.agent.id,
+          mode: "builder",
+          engine: "claude_code",
+          status: "succeeded",
+          createdBy: { type: "user", id: "test" },
+        })
+        .returning()
+    )[0];
+    const terminal = await app.inject({
+      method: "POST",
+      url: `/v1/runs/${finished?.id}/interrupt`,
+      headers: { cookie },
+    });
+    expect(terminal.statusCode).toBe(409);
+
+    const role = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: { name: `read-only-${Date.now()}`, permissions: ["runs:read"] },
+    });
+    const issued = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: { name: "interrupt-read-only", roleId: role.json().id, projectId: target.projectId },
+    });
+    const forbidden = await app.inject({
+      method: "POST",
+      url: `/v1/runs/${run?.id}/interrupt`,
+      headers: { authorization: `Bearer ${issued.json().secret}` },
+    });
+    expect(forbidden.statusCode).toBe(403);
+  });
+
+  it("resumes terminal claude_code runs with a session id and preserves parent scope", async () => {
+    const target = await createProjectWithAgent("Resume Run");
+    const dispatched: { queue: string; data: Record<string, unknown> }[] = [];
+    const originalEnqueue = app.enqueue;
+    app.enqueue = async (queue: string, data: Record<string, unknown>) => {
+      dispatched.push({ queue, data });
+      return `job_${dispatched.length}`;
+    };
+    try {
+      const parent = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            status: "succeeded",
+            engineSessionId: "sess_resume_1",
+            gh: { owner: "octo", repo: "repo", branch: "facility/old" },
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const resumed = await app.inject({
+        method: "POST",
+        url: `/v1/runs/${parent?.id}/resume`,
+        headers: { cookie },
+        payload: { message: "continue this" },
+      });
+      expect(resumed.statusCode).toBe(200);
+      expect(resumed.json().trigger).toEqual({
+        type: "resume",
+        resumeOf: parent?.id,
+        message: "continue this",
+      });
+      expect(resumed.json().gh).toEqual({ owner: "octo", repo: "repo", branch: "facility/old" });
+      expect(dispatched).toEqual([
+        { queue: "runs.dispatch", data: { runId: resumed.json().id, orgId } },
+      ]);
+
+      const runningParent = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            status: "running",
+            engineSessionId: "sess_resume_2",
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const running = await app.inject({
+        method: "POST",
+        url: `/v1/runs/${runningParent?.id}/resume`,
+        headers: { cookie },
+      });
+      expect(running.statusCode).toBe(409);
+
+      const codexParent = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "codex",
+            status: "succeeded",
+            engineSessionId: "sess_codex",
+            createdBy: { type: "user", id: "test" },
+          })
+          .returning()
+      )[0];
+      const codex = await app.inject({
+        method: "POST",
+        url: `/v1/runs/${codexParent?.id}/resume`,
+        headers: { cookie },
+      });
+      expect(codex.statusCode).toBe(409);
+      expect(codex.json().error.code).toBe("not_resumable");
+
+      const other = (
+        await db
+          .insert(projects)
+          .values({
+            id: newId("proj"),
+            orgId,
+            name: "Resume Other",
+            slug: `resume-other-${Date.now()}`,
+            settings: {},
+          })
+          .returning()
+      )[0];
+      const issued = await app.inject({
+        method: "POST",
+        url: "/v1/keys",
+        headers: { cookie },
+        payload: { name: "resume-other-key", roleId: ownerRole, projectId: other?.id },
+      });
+      const scoped = await app.inject({
+        method: "POST",
+        url: `/v1/runs/${parent?.id}/resume`,
+        headers: { authorization: `Bearer ${issued.json().secret}` },
+      });
+      expect(scoped.statusCode).toBe(404);
+    } finally {
+      app.enqueue = originalEnqueue;
+    }
+  });
+
+  it("creates project-owner conversations, dispatches turns, and enforces project scope", async () => {
+    const target = await createProjectWithAgent("Conversation Run");
+    const ownerAgent = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(
+          sql`${agentDefs.projectId} = ${target.projectId} and ${agentDefs.name} = 'project-owner'`,
+        )
+        .limit(1)
+    )[0];
+    expect(ownerAgent).toBeTruthy();
+    const dispatched: { queue: string; data: Record<string, unknown> }[] = [];
+    const originalEnqueue = app.enqueue;
+    app.enqueue = async (queue: string, data: Record<string, unknown>) => {
+      dispatched.push({ queue, data });
+      return `job_${dispatched.length}`;
+    };
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${target.projectId}/conversations`,
+        headers: { cookie },
+        payload: { title: "Owner chat" },
+      });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().agentDefId).toBe(ownerAgent?.id);
+      expect(created.json().status).toBe("idle");
+
+      const turn = await app.inject({
+        method: "POST",
+        url: `/v1/conversations/${created.json().id}/messages`,
+        headers: { cookie },
+        payload: { body: "What should we do next?" },
+      });
+      expect(turn.statusCode).toBe(200);
+      const storedConversation = (
+        await db
+          .select()
+          .from(conversations)
+          .where(eq(conversations.id, created.json().id))
+          .limit(1)
+      )[0];
+      expect(storedConversation?.status).toBe("running");
+      const userMessages = await db
+        .select()
+        .from(conversationMessages)
+        .where(eq(conversationMessages.conversationId, created.json().id));
+      expect(userMessages.map((message) => message.seq)).toEqual([1]);
+      expect(userMessages[0]?.role).toBe("user");
+      const run = (await db.select().from(runs).where(eq(runs.id, turn.json().runId)).limit(1))[0];
+      expect(run?.mode).toBe("conversation");
+      expect(run?.trigger).toEqual({
+        type: "conversation",
+        conversationId: created.json().id,
+        message: "What should we do next?",
+      });
+      expect(dispatched).toEqual([
+        { queue: "runs.dispatch", data: { runId: turn.json().runId, orgId } },
+      ]);
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/v1/conversations/${created.json().id}/messages`,
+        headers: { cookie },
+        payload: { body: "Second turn" },
+      });
+      expect(second.statusCode).toBe(409);
+
+      const detail = await app.inject({
+        method: "GET",
+        url: `/v1/conversations/${created.json().id}`,
+        headers: { cookie },
+      });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json().messages).toHaveLength(1);
+
+      const codexAgent = (
+        await db
+          .insert(agentDefs)
+          .values({
+            id: newId("agent"),
+            orgId,
+            projectId: target.projectId,
+            name: `codex-owner-${Date.now()}`,
+            engine: "codex",
+            model: {},
+            contractItemId: target.agent.contractItemId,
+            harnessItemId: target.agent.harnessItemId,
+            triggers: [],
+            sandboxProfileId: target.agent.sandboxProfileId,
+            permissions: [],
+            enabled: true,
+          })
+          .returning()
+      )[0];
+      const unsupported = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${target.projectId}/conversations`,
+        headers: { cookie },
+        payload: { agentDefId: codexAgent?.id },
+      });
+      expect(unsupported.statusCode).toBe(409);
+      expect(unsupported.json().error.code).toBe("engine_unsupported");
+    } finally {
+      app.enqueue = originalEnqueue;
+    }
   });
 });
 

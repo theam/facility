@@ -3,7 +3,11 @@ import { githubInstallations, insertAuditEvent, repos, runs, steerMessages } fro
 import { and, asc, eq, gt, inArray, isNull, notInArray } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { writeTranscriptObject } from "../envelopes.js";
+import {
+  readSessionStateObject,
+  writeSessionStateObject,
+  writeTranscriptObject,
+} from "../envelopes.js";
 import { ApiError, notFound } from "../errors.js";
 import { createGithubInstallationTokenFactory } from "../github/client.js";
 import { signedBundleToken, verifyBundleToken } from "../sandbox/bundle-url.js";
@@ -19,6 +23,7 @@ import type { AppConfig } from "../types.js";
 
 const Params = z.object({ runId: z.string() });
 const TRANSCRIPT_MAX_BYTES = 50 * 1024 * 1024;
+const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
 const EventBatch = z.array(
   z.object({
     type: z.string().min(1),
@@ -38,6 +43,13 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
     app.addContentTypeParser(
       "application/x-ndjson",
       { parseAs: "buffer", bodyLimit: TRANSCRIPT_MAX_BYTES },
+      (_request, body, done) => done(null, body),
+    );
+  }
+  if (!app.hasContentTypeParser("application/gzip")) {
+    app.addContentTypeParser(
+      "application/gzip",
+      { parseAs: "buffer", bodyLimit: SESSION_STATE_MAX_BYTES },
       (_request, body, done) => done(null, body),
     );
   }
@@ -291,6 +303,72 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
   );
 
   app.post(
+    "/internal/runs/:runId/session-state",
+    {
+      config: { public: true },
+      preHandler: authenticate,
+      schema: {
+        params: Params,
+        response: { 200: z.object({ uri: z.string() }) },
+      },
+    },
+    async (request) => {
+      const run = (request as RunnerRequest).runnerRun;
+      if (!run) throw notFound("Run not found");
+      if (!Buffer.isBuffer(request.body)) {
+        throw new ApiError(400, "invalid_session_state", "Session state body must be gzip bytes");
+      }
+      if (request.body.length > SESSION_STATE_MAX_BYTES) {
+        throw new ApiError(413, "payload_too_large", "Session state exceeds 200 MB");
+      }
+      const uri = await writeSessionStateObject({
+        config,
+        orgId: run.orgId,
+        runId: run.id,
+        body: request.body,
+      });
+      await db
+        .update(runs)
+        .set({ sessionStateUri: uri, updatedAt: new Date() })
+        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id)));
+      return { uri };
+    },
+  );
+
+  app.get(
+    "/internal/runs/:runId/session-state",
+    {
+      config: { public: true },
+      preHandler: authenticate,
+      schema: { params: Params },
+    },
+    async (request, reply) => {
+      const run = (request as RunnerRequest).runnerRun;
+      if (!run) throw notFound("Run not found");
+      const sandbox = readSandbox(run.sandbox);
+      const resume = sandbox.bundle?.resume;
+      if (!resume?.sessionStateFrom) throw notFound("Session state not found");
+      const parent = (
+        await db
+          .select()
+          .from(runs)
+          .where(
+            and(
+              eq(runs.orgId, run.orgId),
+              eq(runs.projectId, run.projectId),
+              run.agentDefId ? eq(runs.agentDefId, run.agentDefId) : isNull(runs.agentDefId),
+              eq(runs.id, resume.sessionStateFrom),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!parent) throw notFound("Session state not found");
+      const body = await readSessionStateObject(config, parent.sessionStateUri, parent.orgId);
+      return reply.type("application/gzip").send(body);
+    },
+  );
+
+  app.post(
     "/internal/runs/:runId/result",
     {
       config: { public: true },
@@ -298,7 +376,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       schema: {
         params: Params,
         body: z.object({
-          status: z.enum(["succeeded", "failed"]),
+          status: z.enum(["succeeded", "failed", "canceled"]),
           receipt: z.record(z.string(), z.unknown()).optional(),
           error: z.string().optional(),
           git: z
@@ -318,7 +396,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       const run = (request as RunnerRequest).runnerRun;
       if (!run) throw notFound("Run not found");
       const body = request.body as {
-        status: "succeeded" | "failed";
+        status: "succeeded" | "failed" | "canceled";
         receipt?: Record<string, unknown>;
         error?: string;
         git?: { branch?: string; headSha?: string; changed: boolean; pushError?: string };

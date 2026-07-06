@@ -2,7 +2,13 @@ import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { composedPrompt, prepareWorkspace } from "../src/index.js";
+import {
+  buildClaudeCodeArgs,
+  composedPrompt,
+  handleControlMessage,
+  prepareWorkspace,
+  terminateChild,
+} from "../src/index.js";
 import type { RunBundle } from "../src/types.js";
 
 function bundle(overrides: Partial<RunBundle> = {}): RunBundle {
@@ -96,6 +102,97 @@ describe("workspace preparation", () => {
       restoreEnv("OPENAI_API_KEY", previousEnv.openai);
       restoreEnv("FACILITY_PLATFORM_KEY", previousEnv.platform);
     }
+  });
+});
+
+describe("Claude resume controls", () => {
+  it("uses --resume only after session state has been restored", () => {
+    const runBundle = bundle({
+      engine: "claude_code",
+      resume: {
+        sessionId: "sess_123",
+        sessionStateFrom: "run_parent",
+        prompt: "continue",
+      },
+    });
+    expect(buildClaudeCodeArgs(runBundle, true).slice(0, 4)).toEqual([
+      "-p",
+      "continue",
+      "--resume",
+      "sess_123",
+    ]);
+    expect(buildClaudeCodeArgs(runBundle, false)).not.toContain("--resume");
+    expect(buildClaudeCodeArgs(runBundle, false)).toContain(composedPrompt(runBundle));
+  });
+
+  it("branches steer and interrupt control messages", async () => {
+    const events: unknown[] = [];
+    const steers: string[] = [];
+    let interrupted = false;
+    await expect(
+      handleControlMessage(
+        { id: "msg_1", kind: "steer", body: "please adjust" },
+        {
+          appendSteer: async (body) => {
+            steers.push(body);
+          },
+          emit: async (batch) => {
+            events.push(...batch);
+          },
+          interrupt: async () => {
+            interrupted = true;
+          },
+        },
+      ),
+    ).resolves.toBe("steer");
+    expect(steers).toEqual(["please adjust"]);
+    expect(interrupted).toBe(false);
+
+    await expect(
+      handleControlMessage(
+        { id: "msg_2", kind: "interrupt", body: "stop" },
+        {
+          appendSteer: async (body) => {
+            steers.push(body);
+          },
+          emit: async (batch) => {
+            events.push(...batch);
+          },
+          interrupt: async () => {
+            interrupted = true;
+          },
+        },
+      ),
+    ).resolves.toBe("interrupt");
+    expect(interrupted).toBe(true);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { type: "status", data: { message: "human interrupt" } },
+        { type: "steer", data: { id: "msg_2", kind: "interrupt" } },
+      ]),
+    );
+  });
+
+  it("signals SIGTERM before SIGKILL on interrupt termination", () => {
+    const signals: string[] = [];
+    const timers: Array<() => void> = [];
+    const clear = terminateChild(
+      {
+        kill: (signal) => {
+          signals.push(String(signal));
+          return true;
+        },
+      },
+      15_000,
+      ((callback: () => void) => {
+        timers.push(callback);
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout,
+    );
+    expect(signals).toEqual(["SIGTERM"]);
+    timers[0]?.();
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    clear();
   });
 });
 

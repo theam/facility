@@ -524,6 +524,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/runs/{runId}/session-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            uri: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/runs/{runId}/result": {
         parameters: {
             query?: never;
@@ -546,7 +604,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        status: "succeeded" | "failed";
+                        status: "succeeded" | "failed" | "canceled";
                         receipt?: {
                             [key: string]: unknown;
                         };
@@ -2226,6 +2284,7 @@ export interface paths {
                             gh: unknown;
                             engineSessionId: string | null;
                             transcriptUri: string | null;
+                            sessionStateUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2299,6 +2358,7 @@ export interface paths {
                             gh: unknown;
                             engineSessionId: string | null;
                             transcriptUri: string | null;
+                            sessionStateUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2362,6 +2422,7 @@ export interface paths {
                             gh: unknown;
                             engineSessionId: string | null;
                             transcriptUri: string | null;
+                            sessionStateUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2440,6 +2501,7 @@ export interface paths {
                             gh: unknown;
                             engineSessionId: string | null;
                             transcriptUri: string | null;
+                            sessionStateUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2515,6 +2577,7 @@ export interface paths {
                             gh: unknown;
                             engineSessionId: string | null;
                             transcriptUri: string | null;
+                            sessionStateUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;
@@ -2732,6 +2795,379 @@ export interface paths {
                     content: {
                         "application/json": {
                             [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{runId}/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/{runId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        message?: string;
+                    } | null;
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string;
+                            agentDefId: string | null;
+                            mode: string;
+                            engine: string;
+                            status: string;
+                            trigger: unknown;
+                            sandbox: unknown;
+                            receipt: unknown;
+                            gh: unknown;
+                            engineSessionId: string | null;
+                            transcriptUri: string | null;
+                            sessionStateUri: string | null;
+                            error: string | null;
+                            /** Format: date-time */
+                            queuedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            endedAt: string | null;
+                            createdBy: unknown;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string;
+                            agentDefId: string;
+                            title: string | null;
+                            lastRunId: string | null;
+                            engineSessionId: string | null;
+                            status: string;
+                            createdBy: unknown;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                            lastMessage: {
+                                id: string;
+                                orgId: string;
+                                conversationId: string;
+                                seq: number;
+                                role: string;
+                                body: string;
+                                runId: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                            } | null;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agentDefId?: string;
+                        title?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string;
+                            agentDefId: string;
+                            title: string | null;
+                            lastRunId: string | null;
+                            engineSessionId: string | null;
+                            status: string;
+                            createdBy: unknown;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    conversationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            conversation: {
+                                id: string;
+                                orgId: string;
+                                projectId: string;
+                                agentDefId: string;
+                                title: string | null;
+                                lastRunId: string | null;
+                                engineSessionId: string | null;
+                                status: string;
+                                createdBy: unknown;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                            };
+                            messages: {
+                                id: string;
+                                orgId: string;
+                                conversationId: string;
+                                seq: number;
+                                role: string;
+                                body: string;
+                                runId: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversationId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    conversationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        body: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            message: {
+                                id: string;
+                                orgId: string;
+                                conversationId: string;
+                                seq: number;
+                                role: string;
+                                body: string;
+                                runId: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                            };
+                            runId: string;
                         };
                     };
                 };
@@ -3074,6 +3510,7 @@ export interface paths {
                             gh: unknown;
                             engineSessionId: string | null;
                             transcriptUri: string | null;
+                            sessionStateUri: string | null;
                             error: string | null;
                             /** Format: date-time */
                             queuedAt: string;

@@ -12,6 +12,12 @@ export type RunBundle = {
   gatewayUrls: { anthropic: string; openai: string };
   scope: Record<string, unknown>;
   timeoutMin: number;
+  resume?: {
+    sessionId: string;
+    sessionStateFrom: string;
+    prompt: string;
+    branch?: string;
+  };
 };
 
 export type RunEvent = {
