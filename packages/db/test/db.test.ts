@@ -6,7 +6,7 @@ import { createDb, insertAuditEvent, migrate, seed, withOrg } from "../src/index
 import * as schema from "../src/schema.js";
 
 const databaseUrl =
-  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility";
+  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
 
 async function canConnect() {
   // Generous connect timeout: this runs during vitest's module-import phase,

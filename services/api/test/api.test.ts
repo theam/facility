@@ -46,7 +46,7 @@ import { ensureWorkosUser } from "../src/routes/auth.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
-  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility";
+  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
 const masterKey = Buffer.alloc(32, 9).toString("base64");
 
 async function canConnect() {

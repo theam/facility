@@ -28,7 +28,7 @@ import { appendRunEvents } from "../src/sandbox/state.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
-  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility";
+  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
 const masterKey = Buffer.alloc(32, 8).toString("base64");
 
 async function canConnect() {

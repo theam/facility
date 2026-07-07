@@ -17,7 +17,7 @@ import { runScheduledAgents } from "../src/scheduler.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
-  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility";
+  process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
 const config = { databaseUrl } as AppConfig;
 
 async function canConnect() {
