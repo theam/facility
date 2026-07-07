@@ -63,6 +63,10 @@ export default async function ProjectOverviewPage({
   const runsError = runs.ok ? null : runs.message;
   const items = runs.ok ? runs.data : [];
   const live = items.filter((r) => LIVE.has(r.status));
+  const workingCount = items.filter(
+    (r) => r.status === "running" || r.status === "provisioning",
+  ).length;
+  const queuedCount = items.filter((r) => r.status === "queued").length;
   const blocked = items.filter((r) => r.status === "awaiting_human");
   const proposals = inbox.ok
     ? inbox.data.proposals.filter((x) => !x.projectId || x.projectId === projectId)
@@ -109,7 +113,7 @@ export default async function ProjectOverviewPage({
           <span className="text-[12.5px] text-(--dim)">
             {runsError
               ? "sessions —"
-              : `${live.length} running · ${blocked.length} blocked · ${needsYou} need you`}
+              : `${workingCount} working${queuedCount > 0 ? ` · ${queuedCount} queued` : ""} · ${blocked.length} blocked · ${needsYou} need you`}
           </span>
         </div>
         {p.description ? (
