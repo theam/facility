@@ -87,7 +87,7 @@ describe("catalog + agents status + integrations", async () => {
         await db
           .insert(registryItems)
           .values({
-            id: newId("itm"),
+            id: newId("item"),
             orgId,
             scope: "project",
             projectId,

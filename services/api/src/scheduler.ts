@@ -1,6 +1,8 @@
 import { newId } from "@facility/core";
 import { agentDefs, createDb, insertAuditEvent, runEvents, runs } from "@facility/db";
-import { parseExpression } from "cron-parser";
+// Default-import: cron-parser is CJS and its named exports aren't statically
+// visible to Node's ESM loader (tsx runs the worker in real ESM mode).
+import cronParser from "cron-parser";
 import { and, eq, not, notInArray, sql } from "drizzle-orm";
 import { TERMINAL_RUN_STATUSES } from "./sandbox/state.js";
 import type { AppConfig } from "./types.js";
@@ -152,7 +154,7 @@ function scheduleTriggers(value: unknown): ScheduleTrigger[] {
 
 function previousOccurrence(trigger: ScheduleTrigger, now: Date): Date | null {
   try {
-    const interval = parseExpression(trigger.config.cron, {
+    const interval = cronParser.parseExpression(trigger.config.cron, {
       currentDate: new Date(now.getTime() + 1_000),
       tz: trigger.config.timezone ?? "UTC",
     });
