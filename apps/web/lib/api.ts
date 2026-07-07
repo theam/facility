@@ -171,6 +171,7 @@ export const api = {
   kbSpace: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/kb/space`),
   kbEntries: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/kb/entries`),
   spend: (params = "") => apiFetch("GET", "/v1/spend", { query: queryFromParams(params) }),
+  sandboxProfiles: () => apiFetch("GET", "/v1/sandbox-profiles"),
   members: () => apiFetch("GET", "/v1/members"),
   roles: () => apiFetch("GET", "/v1/roles"),
   keys: () => apiFetch("GET", "/v1/keys"),
