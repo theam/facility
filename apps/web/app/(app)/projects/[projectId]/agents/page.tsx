@@ -1,4 +1,5 @@
 import { ButtonLink, Eyebrow, Metric } from "@facility/ui";
+import { EngineLoop } from "@/components/agents/engine-loop";
 import { EngineTable } from "@/components/agents/engine-table";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -93,7 +94,17 @@ export default async function ProjectAgentsPage({
         </div>
       ) : null}
 
-      <EngineTable projectId={projectId} rows={rows} />
+      {rows.length > 0 ? (
+        <section className="flex flex-col gap-4">
+          <Eyebrow>the loop</Eyebrow>
+          <EngineLoop projectId={projectId} rows={rows} />
+        </section>
+      ) : null}
+
+      <section className="flex flex-col gap-4">
+        <Eyebrow>every agent</Eyebrow>
+        <EngineTable projectId={projectId} rows={rows} />
+      </section>
     </div>
   );
 }

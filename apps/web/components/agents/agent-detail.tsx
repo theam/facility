@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { Markdown } from "@/components/markdown";
+import { agentHealth, triggerSummary } from "@/lib/agent-view";
 import type {
   AgentDef,
   AgentStatus,
@@ -28,7 +29,6 @@ import type {
 import { clientApi } from "@/lib/client-api";
 import { fmtAgo, fmtCost, fmtDuration } from "@/lib/run-format";
 import { cronToWords, fmtIn } from "@/lib/schedule";
-import { agentHealth, triggerSummary } from "./engine-table";
 import { PermissionMatrix } from "./permission-matrix";
 import { ScheduleBuilder } from "./schedule-builder";
 
