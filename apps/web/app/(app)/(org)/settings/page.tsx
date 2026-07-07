@@ -1,6 +1,7 @@
 import { Divider, Eyebrow } from "@facility/ui";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { BudgetsManager } from "@/components/settings/budgets-manager";
+import { IntegrationsManager } from "@/components/settings/integrations-manager";
 import { KeysManager } from "@/components/settings/keys-manager";
 import { MembersList } from "@/components/settings/members-list";
 import { ProvidersManager } from "@/components/settings/providers-manager";
@@ -19,14 +20,17 @@ function flattenMembers(rows: MemberRow[]): Member[] {
 }
 
 export default async function SettingsPage() {
-  const [me, keys, roles, budgets, membersRaw, providers] = await Promise.all([
-    api.me(),
-    api.keys(),
-    api.roles(),
-    api.budgets(),
-    api.members(),
-    api.providers(),
-  ]);
+  const [me, keys, roles, budgets, membersRaw, providers, integrations, projects] =
+    await Promise.all([
+      api.me(),
+      api.keys(),
+      api.roles(),
+      api.budgets(),
+      api.members(),
+      api.providers(),
+      api.integrations(),
+      api.projects(),
+    ]);
   if (!me.ok) return <Offline detail={me.message} />;
 
   // Match the backend's wildcard-aware `can()`: a grant of `resource:*` (e.g. the
@@ -43,6 +47,9 @@ export default async function SettingsPage() {
   );
   const canManageMembers = me.data.permissions.some(
     (p) => p === "*" || p === "members:write" || p === "members:*",
+  );
+  const canManageIntegrations = me.data.permissions.some(
+    (p) => p === "*" || p === "integrations:write" || p === "integrations:*",
   );
 
   return (
@@ -122,6 +129,24 @@ export default async function SettingsPage() {
             <ProvidersManager providers={providers.data} />
           ) : (
             <ErrorNotice message={`Couldn't load providers — ${providers.message}`} />
+          )}
+        </section>
+      ) : null}
+
+      {canManageIntegrations ? (
+        <section className="flex max-w-3xl flex-col gap-4">
+          <Eyebrow>integrations — event sources</Eyebrow>
+          <p className="text-sm leading-relaxed text-(--mut)">
+            Where events come from: feedback tools, transcript feeds, custom sources. Configured
+            once with a sealed secret; an event can raise an alert or dispatch an agent session.
+          </p>
+          {integrations.ok ? (
+            <IntegrationsManager
+              integrations={integrations.data}
+              projects={projects.ok ? projects.data.map((p) => ({ id: p.id, slug: p.slug })) : []}
+            />
+          ) : (
+            <ErrorNotice message={`Couldn't load integrations — ${integrations.message}`} />
           )}
         </section>
       ) : null}
