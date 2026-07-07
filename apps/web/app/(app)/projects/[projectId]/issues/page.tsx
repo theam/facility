@@ -11,7 +11,7 @@ export const metadata = { title: "issues" };
 
 // TODO(sdk): migrate to the typed client once the issue-mirror routes are in
 // the regenerated SDK route map.
-type IssueList = { items: GhIssue[]; nextCursor?: string | null };
+type IssueListResponse = { items: GhIssue[]; nextCursor?: string | null };
 
 function hasPermission(permissions: string[], permission: string) {
   const [resource] = permission.split(":");
@@ -28,7 +28,7 @@ export default async function ProjectIssuesPage({
   const [{ projectId }, { state }] = await Promise.all([params, searchParams]);
   const activeState = state === "closed" || state === "all" ? state : "open";
   const [issues, me] = await Promise.all([
-    untypedApi<IssueList>("GET", `/v1/projects/${projectId}/issues?state=${activeState}`),
+    untypedApi<IssueListResponse>("GET", `/v1/projects/${projectId}/issues?state=${activeState}`),
     api.me(),
   ]);
 
