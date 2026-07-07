@@ -52,7 +52,7 @@ Every surface passes **all** of them or it doesn't ship. (L8–L10 carry over fr
 - **L4 — Semantic controls.** Any value the system already knows is picked, never typed: provider/model from the provider registry plus a model catalog; schedules from a builder that speaks human ("every 5 days at 06:00 · next in 4h") and stores cron; permissions from a matrix; triggers from a catalog. Raw strings survive only behind an "advanced" escape hatch. Violations to purge: free-text model (components/harness/agent-editor.tsx:112), cron string input with placeholder `0 6 * * *` (:123), space-separated permissions (:135).
 - **L5 — Type-specific experiences.** An agent, a skill, a rule, a guard, a sandbox profile are different concepts; each gets a tailored reader and editor. One `<textarea rows={24}>` for every kind (components/harness/item-editor.tsx:166) is banned. Implementation indirections — an agent's prompt living in a referenced contract item — are hidden by the UI, never homework for the user.
 - **L6 — Show the engine.** Agents are the heart of the platform; render them as a running system: description, health glyph derived from recent sessions, last run and its outcome, next run in words — **and the pipeline view**: trigger → agent → output → consumer as a live, clickable diagram (feedback source → Feedback agent → assessed issue → Architect → plan → Builder → PR → Reviewer → merge). If the loop is only explained in docs, the product has failed to explain it.
-- **L7 — Human language in the chrome.** Cron, IDs, and raw JSON live one layer down, on demand. Timestamps humanize; statuses are words plus glyphs.
+- **L7 — Human language in the chrome.** Cron, IDs, and raw JSON live one layer down, on demand. Timestamps humanize; statuses are words plus glyphs. A queued session is never shown as working; machine payloads become sentences before they reach any surface, including terminals.
 - **L8 — Verbs where the answers are; UI verb = SDK verb.** MCP/CLI parity by construction (REDESIGN §6.1).
 - **L9 — Never claim what isn't wired.** Every label is backed by a mechanism or it doesn't ship (REDESIGN §1.6).
 - **L10 — Live-first.** No surface that says "now" may require F5 (REDESIGN §6.3).
@@ -88,10 +88,21 @@ REDESIGN's surface targets stand. These extend them:
 
 Sequencing: fold into REDESIGN §9's remaining phases. Deltas 4/5/7 are retrofits on shipped surfaces and come first; deltas 1/2/3/6 are the heart of the remaining P4 work.
 
+## Visual register (ratified 2026-07-07 — TAM-50 is an optional guideline, not law)
+
+Adrián's call: strictly following TAM-50 was making the UI/UX worse. What survives is what works; the rest is judgment:
+
+- **Keep**: the void-black surfaces, hairline grids, IBM Plex family, and **agent yellow reserved strictly for agent work**. These are identity.
+- **The register splits by meaning, not by style**: `font-mono` is for machine tokens only — agent names (they double as /commands), run ids, cron strings, paths, code, costs/numbers (tabular), terminal output. ALL scaffolding — nav, section labels, table headers, statuses, buttons, pills, form labels, meta lines — is sans, sentence case, 11–13px.
+- **No terminal cosplay**: mono-uppercase-wide-tracking on structural text is banned. The sanctioned exceptions: the tiny PROJECT/ORG nav rail markers and LegendChip.
+- **Hierarchy comes from weight and ink** (medium vs regular, --ink vs --mut vs --dim), not from letter-spacing tricks.
+- When a TAM-50 rule fights readability or scanability, readability wins. Note the departure; don't ask permission per instance.
+
 ## Working rules
 
 - **Questions-first artifact.** Every surface lane/PR states its ranked questions and verbs up front; review rejects a surface that can't.
 - **Dogfood the mirror.** Validate every surface against the tam-os mirror tenant (web :3400, dev sign-in, project `tam-os`: 6 real agents, 341 issues, KB, receipts). A screen that confuses on that data fails, whatever it looks like empty.
+- **Tests never touch the dev tenant.** All suites default to `facility_test`; anything that seeds the dev DB is a bug (the org-wide surfaces render whatever is there as truth).
 - **Fix the surface before feeding it.** No new features on a surface that violates the laws (extends "don't add features to the old IA").
 - **Two-tier design weight still applies** (REDESIGN §3): flow surfaces get the investment; admin surfaces are plain, dense, fast forms.
 - **DoD per surface:** laws L1–L10 pass · the question set is answered on mirror data · no dead labels · the verbs exist in SDK/MCP/CLI.
