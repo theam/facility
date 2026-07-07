@@ -1,6 +1,8 @@
-Right now, we see a major limitation with the current approach to this project: it consists of a collection of scripts, skills, and other components that are managed through code across multiple services, GitHub repositories, and different systems.
+Right now, we see a major limitation with the current approach to this project: it consists of a collection of scripts, skills, and other components that are managed through code across multiple services, GitHub repositories, and different systems. Teams run their AI SDLCs in isolated repositories, with custom configuration spread across files and code, and with poor or sparse visibility into the data the system produces.
 
-Ideally, everything should be centralized into a single platform that governs all of this. Think of something similar to Vercel as a platform, but focused entirely on the AI SDLC process.
+Ideally, everything should be centralized into a single platform that governs all of this — a place where we can do the same things much more easily and with better control, in a more semantic way, enabling collaboration, reusability, and governance. Think of something similar to Vercel as a platform, but focused entirely on the AI SDLC process.
+
+> **How we approach this from now on:** the product strategy and design laws live in [.claude/skills/control-plane-strategy/SKILL.md](.claude/skills/control-plane-strategy/SKILL.md); the current working spec is [docs/platform/REDESIGN.md](docs/platform/REDESIGN.md).
 
 Following the TAM-50 brand system, design and build a platform that aligns with the vision presented at **https://sdlc.theagilemonkeys.com/** (theam/theam-ai-sdlc on GitHub) and Facility. This platform must be deployable by any organization on any cloud provider and enable companies to govern their entire AI SDLC process.
 
