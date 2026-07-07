@@ -14,6 +14,19 @@ function checkTone(data: Record<string, unknown>): "ok" | "bad" | "machine" {
   return "machine";
 }
 
+// Known machine payloads become sentences; unknown ones become terse
+// key–value pairs. Raw JSON never reaches the terminal either.
+function fallbackText(data: Record<string, unknown>): string | null {
+  if (typeof data.queue === "string") {
+    return data.queue === "runs.dispatch" ? "waiting in the dispatch queue" : `queue ${data.queue}`;
+  }
+  const pairs = Object.entries(data)
+    .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+    .slice(0, 3)
+    .map(([k, v]) => `${k} ${String(v)}`);
+  return pairs.length > 0 ? pairs.join(" · ") : null;
+}
+
 function toLine(event: RunEvent): TerminalLine {
   const ts = new Date(event.ts).toLocaleTimeString("en-GB", { hour12: false });
   const text =
@@ -23,7 +36,7 @@ function toLine(event: RunEvent): TerminalLine {
         ? event.data.message
         : typeof event.data.command === "string"
           ? event.data.command
-          : JSON.stringify(event.data);
+          : (fallbackText(event.data) ?? event.type);
   switch (event.type) {
     case "status":
       return { tag: ts, text, tone: "info" };
@@ -39,7 +52,11 @@ function toLine(event: RunEvent): TerminalLine {
     case "assistant":
       return { tag: ts, text, tone: "plain" };
     default:
-      return { tag: ts, text: `${event.type}: ${text}`, tone: "muted" };
+      return {
+        tag: ts,
+        text: text === event.type ? event.type : `${event.type}: ${text}`,
+        tone: "muted",
+      };
   }
 }
 

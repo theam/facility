@@ -65,7 +65,7 @@ export function ProposalCard({ proposal, focused }: { proposal: Proposal; focuse
       </div>
 
       <details className="group">
-        <summary className="cursor-pointer select-none font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--dim) hover:text-(--mut)">
+        <summary className="cursor-pointer select-none text-[12px] font-medium text-(--dim) hover:text-(--mut)">
           payload
         </summary>
         <pre className="mt-3 overflow-x-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[11.5px] leading-relaxed text-(--code)">
@@ -76,8 +76,7 @@ export function ProposalCard({ proposal, focused }: { proposal: Proposal; focuse
       {pending ? (
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-[13px] text-(--ink)">
-            Confirm <span className="font-mono uppercase">{pending}</span>? Recorded in the HITL
-            ledger.
+            Confirm <span className="font-mono">{pending}</span>? Recorded in the HITL ledger.
           </span>
           <Button
             size="sm"

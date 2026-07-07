@@ -39,9 +39,7 @@ export function Terminal({
   return (
     <div className={cx("flex min-h-0 flex-col border border-(--line) bg-(--bg-subtle)", className)}>
       <div className="flex items-center justify-between border-b border-(--line) px-5 py-3">
-        <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-(--mut)">
-          {title}
-        </span>
+        <span className="text-[11px] font-medium text-(--mut)">{title}</span>
       </div>
       <div className={cx("overflow-y-auto overflow-x-auto px-5 py-4", maxHeight)}>
         {lines ? (

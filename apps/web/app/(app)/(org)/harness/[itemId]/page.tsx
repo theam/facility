@@ -22,10 +22,7 @@ export default async function HarnessItemPage({ params }: { params: Promise<{ it
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
-        <Link
-          href="/harness"
-          className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
-        >
+        <Link href="/harness" className="text-[12px] font-medium text-(--mut) hover:text-(--ink)">
           ← harness
         </Link>
         <Eyebrow>
@@ -34,7 +31,7 @@ export default async function HarnessItemPage({ params }: { params: Promise<{ it
         <h1 className="font-mono text-[clamp(20px,2.6vw,28px)] font-semibold tracking-tight">
           {data.name}
         </h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {data.versions.length} version{data.versions.length === 1 ? "" : "s"} ·{" "}
           {activeVersion ? `v${activeVersion.version} active` : "no active version"} · publish
           supersedes atomically

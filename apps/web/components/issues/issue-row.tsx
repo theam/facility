@@ -91,7 +91,7 @@ export function IssueRow({
         {issue.labels.slice(0, 3).map((label) => (
           <span
             key={label}
-            className="border border-(--line) px-1.5 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-(--dim)"
+            className="border border-(--line) px-1.5 py-0.5 font-mono text-[10px] text-(--dim)"
           >
             {label}
           </span>

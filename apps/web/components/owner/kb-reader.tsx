@@ -36,6 +36,12 @@ const TYPE_LABELS: Record<string, string> = {
 
 type Doc = { kind: "charter" } | { kind: "active" } | { kind: "entry"; entry: KbEntry };
 
+/** Display-only: YAML frontmatter is metadata, not prose — never render it raw. */
+function stripFrontmatter(md: string): string {
+  const match = md.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return match ? md.slice(match[0].length) : md;
+}
+
 /**
  * The Owner's knowledge base, readable like a wiki: charter + active pinned,
  * the typed artifact chain grouped and ordered, every entry one click away.
@@ -118,7 +124,7 @@ export function KbReader({
               type="button"
               onClick={() => setDoc({ kind: pin.key })}
               className={cx(
-                "border-b border-(--line) px-4 py-2.5 text-left font-mono text-[12px] uppercase tracking-[0.16em] last:border-b-0 hover:bg-(--card)",
+                "border-b border-(--line) px-4 py-2.5 text-left text-[12.5px] font-medium last:border-b-0 hover:bg-(--card)",
                 doc.kind === pin.key ? "bg-(--card) text-(--ink)" : "text-(--mut)",
               )}
             >
@@ -128,7 +134,7 @@ export function KbReader({
         </div>
         {groups.map(([type, list]) => (
           <div key={type} className="flex flex-col gap-1">
-            <span className="font-mono text-[9.5px] uppercase tracking-[0.22em] text-(--dim)">
+            <span className="text-[10.5px] font-medium text-(--dim)">
               {TYPE_LABELS[type] ?? type} · {list.length}
             </span>
             <div className="flex flex-col">
@@ -137,17 +143,18 @@ export function KbReader({
                   key={entry.id}
                   type="button"
                   onClick={() => setDoc({ kind: "entry", entry })}
+                  title={entry.slug}
                   className={cx(
-                    "flex items-baseline gap-2 px-2 py-1.5 text-left font-mono text-[11.5px] hover:text-(--ink)",
-                    selectedEntry?.id === entry.id ? "text-(--ink)" : "text-(--mut)",
+                    "flex items-baseline gap-2 px-2 py-1.5 text-left text-[12.5px] hover:text-(--ink)",
+                    selectedEntry?.id === entry.id ? "font-medium text-(--ink)" : "text-(--mut)",
                   )}
                 >
-                  <span className="shrink-0 text-(--dim)">
+                  <span className="shrink-0 font-mono text-[10.5px] text-(--dim)">
                     {entry.type}-{entry.number}
                   </span>
-                  <span className="min-w-0 truncate">{entry.slug}</span>
+                  <span className="min-w-0 truncate">{entry.slug.replaceAll("-", " ")}</span>
                   {entry.status === "superseded" ? (
-                    <span className="text-[9px] uppercase text-(--dim)">old</span>
+                    <span className="text-[9.5px] font-medium text-(--dim)">old</span>
                   ) : null}
                 </button>
               ))}
@@ -176,9 +183,7 @@ export function KbReader({
           </div>
         ) : (
           <div className="flex items-center justify-between gap-3">
-            <span className="font-mono text-[12px] uppercase tracking-[0.16em] text-(--dim)">
-              {doc.kind}
-            </span>
+            <span className="text-[12.5px] font-medium text-(--dim)">{doc.kind}</span>
             {canWrite && editablePin && !editing ? (
               <Button
                 size="sm"
@@ -225,7 +230,7 @@ export function KbReader({
         ) : (
           <div className="max-h-[68vh] overflow-auto border border-(--line) bg-(--bg-subtle) p-5">
             {body.trim() ? (
-              <Markdown source={body} />
+              <Markdown source={stripFrontmatter(body)} />
             ) : (
               <p className="font-mono text-[12.5px] text-(--dim)">(empty)</p>
             )}

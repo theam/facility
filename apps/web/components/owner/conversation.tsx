@@ -129,7 +129,7 @@ export function OwnerConversation({ projectId }: { projectId: string }) {
           tone={conversation?.status === "running" ? "agent" : "machine"}
           pulse={conversation?.status === "running"}
         />
-        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-(--dim)">
+        <span className="text-[11.5px] font-medium text-(--dim)">
           {conversation?.status === "running"
             ? "the owner is working on your message"
             : "talk to the owner"}
@@ -154,7 +154,7 @@ export function OwnerConversation({ projectId }: { projectId: string }) {
                 message.role === "user" ? "self-end items-end" : "self-start",
               )}
             >
-              <span className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-(--dim)">
+              <span className="text-[10.5px] font-medium text-(--dim)">
                 {message.role === "user" ? "you" : "owner"}
                 {message.runId ? (
                   <>

@@ -142,9 +142,7 @@ export function ScheduleBuilder({ value, onChange, timezone }: Props) {
       {cron ? (
         <p className="font-mono text-[11.5px] text-(--mut)">
           {cronToWords(cron, timezone)}
-          <span className="ml-3 text-[10px] uppercase tracking-[0.14em] text-(--dim)">
-            stored as {cron}
-          </span>
+          <span className="ml-3 text-[10.5px] text-(--dim)">stored as {cron}</span>
         </p>
       ) : (
         <p className="text-[12.5px] text-(--dim)">

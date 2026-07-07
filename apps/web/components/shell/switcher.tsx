@@ -98,7 +98,7 @@ export function ProjectSwitcher({
           <Link
             href="/projects"
             onClick={() => setOpen(false)}
-            className="block border-t border-(--line) px-4 py-2.5 font-mono text-[10.5px] uppercase tracking-[0.18em] text-(--mut) hover:text-(--ink)"
+            className="block border-t border-(--line) px-4 py-2.5 text-[12px] font-medium text-(--mut) hover:text-(--ink)"
           >
             all projects →
           </Link>

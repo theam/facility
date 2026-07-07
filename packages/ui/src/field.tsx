@@ -1,7 +1,7 @@
 import type { InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { cx } from "./cx";
 
-/** Boxed register: uppercase mono label, 1px border, surface tint. */
+/** Boxed register: quiet sans label, 1px border, surface tint. */
 export function Field({
   label,
   error,
@@ -18,9 +18,7 @@ export function Field({
   return (
     // biome-ignore lint/a11y/noLabelWithoutControl: the control is passed as children and wrapped by this label (valid implicit association).
     <label className={cx("flex flex-col gap-2", className)}>
-      <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut)">
-        {label}
-      </span>
+      <span className="text-[11.5px] font-medium text-(--mut)">{label}</span>
       {children}
       {error ? (
         <span className="text-[12px] text-(--bad)">{error}</span>

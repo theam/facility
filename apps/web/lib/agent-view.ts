@@ -7,9 +7,12 @@ import { cronToWords } from "@/lib/schedule";
 export function agentHealth(status: AgentStatus): { tone: Semantic; pulse: boolean; word: string } {
   if (!status.enabled) return { tone: "machine", pulse: false, word: "off" };
   if (status.liveRun) {
-    return status.liveRun.status === "awaiting_human"
-      ? { tone: "human", pulse: false, word: "waiting on you" }
-      : { tone: "agent", pulse: true, word: "working now" };
+    // Queued is not working — never show the yellow pulse for a session
+    // that hasn't started.
+    if (status.liveRun.status === "awaiting_human")
+      return { tone: "human", pulse: false, word: "waiting on you" };
+    if (status.liveRun.status === "queued") return { tone: "info", pulse: false, word: "queued" };
+    return { tone: "agent", pulse: true, word: "working now" };
   }
   if (status.lastRun?.status === "failed") return { tone: "bad", pulse: false, word: "failing" };
   if (status.lastRun?.status === "awaiting_human")

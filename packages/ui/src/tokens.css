@@ -48,13 +48,14 @@ textarea {
   border-radius: 0;
 }
 
-/* The TAM label voice. */
+/* Section label — calm sans. Mono is reserved for genuinely technical
+ * tokens (ids, cron, code, costs, agent names), never for scaffolding. */
 .eyebrow {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--mut);
+  font-family: var(--font-sans, ui-sans-serif, sans-serif);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--dim);
 }
 
 .tabular {

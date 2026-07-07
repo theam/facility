@@ -78,10 +78,7 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
         </Button>
         {verify ? (
           <span
-            className={cx(
-              "font-mono text-[11px] uppercase tracking-[0.14em]",
-              verify.ok ? "text-(--ok)" : "text-(--bad)",
-            )}
+            className={cx("text-[12px] font-medium", verify.ok ? "text-(--ok)" : "text-(--bad)")}
           >
             {verify.ok ? "chain intact" : `chain breaks at seq ${verify.firstBreakSeq}`}
           </span>
@@ -96,10 +93,7 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
           <thead>
             <tr className="border-b border-(--line)">
               {["seq", "actor", "action", "target", "when"].map((h) => (
-                <th
-                  key={h}
-                  className="px-5 py-3 font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-(--dim)"
-                >
+                <th key={h} className="px-5 py-3 text-[11px] font-medium text-(--dim)">
                   {h}
                 </th>
               ))}
@@ -120,7 +114,7 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
                 </td>
                 <td className="px-5 py-3 font-mono text-[12px] text-(--mut)">
                   {event.actor.name ?? event.actor.id}
-                  <span className="ml-2 text-[10px] uppercase text-(--dim)">
+                  <span className="ml-2 text-[10px] font-medium text-(--dim)">
                     {event.actor.type}
                   </span>
                 </td>
@@ -149,13 +143,13 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
         >
           <div className="flex h-full w-full max-w-xl flex-col overflow-y-auto border-l border-(--line) bg-(--bg)">
             <div className="flex items-center justify-between border-b border-(--line) px-6 py-4">
-              <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-(--dim)">
+              <span className="text-[11.5px] font-medium text-(--dim)">
                 event · seq {selected.seq}
               </span>
               <button
                 type="button"
                 onClick={() => setOpenSeq(null)}
-                className="font-mono text-[11px] uppercase tracking-[0.18em] text-(--mut) hover:text-(--ink)"
+                className="text-[12px] font-medium text-(--mut) hover:text-(--ink)"
               >
                 close
               </button>
@@ -173,17 +167,13 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
               <DrawerRow label="project" value={selected.projectId ?? "org-wide"} />
               <DrawerRow label="when" value={new Date(selected.createdAt).toISOString()} />
               <div className="flex flex-col gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-                  payload
-                </span>
+                <span className="text-[11px] font-medium text-(--dim)">payload</span>
                 <pre className="max-h-[40vh] overflow-auto whitespace-pre-wrap border border-(--line) bg-(--bg-subtle) p-3 font-mono text-[11px] leading-relaxed text-(--mut)">
                   {JSON.stringify(selected.payload ?? {}, null, 2)}
                 </pre>
               </div>
               <div className="flex flex-col gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-                  chain
-                </span>
+                <span className="text-[11px] font-medium text-(--dim)">chain</span>
                 <p className="break-all font-mono text-[10.5px] leading-relaxed text-(--dim)">
                   prev {selected.prevHash ?? "genesis"}
                   <br />
@@ -209,9 +199,7 @@ function DrawerRow({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-        {label}
-      </span>
+      <span className="text-[11px] font-medium text-(--dim)">{label}</span>
       <span
         className={cx(
           "break-words font-mono text-[12.5px]",

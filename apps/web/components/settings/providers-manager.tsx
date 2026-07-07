@@ -149,9 +149,7 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
               key={row.id}
               className="flex min-w-0 items-center gap-4 border-b border-(--line) px-4 py-3 last:border-b-0"
             >
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
-                {row.provider}
-              </span>
+              <span className="shrink-0 text-[11px] font-medium text-(--dim)">{row.provider}</span>
               <span className="shrink-0 font-mono text-[13px] text-(--ink)">{row.name}</span>
               {row.baseUrl ? (
                 <span className="min-w-0 truncate font-mono text-[11px] text-(--dim)">
@@ -160,14 +158,14 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
               ) : null}
               {pendingDeleteId === row.id ? (
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-(--bad)">
+                  <span className="text-[11.5px] font-medium text-(--bad)">
                     remove this credential?
                   </span>
                   <button
                     type="button"
                     onClick={() => remove(row.id)}
                     disabled={deletingId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--bad) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--bad) disabled:opacity-50"
                   >
                     {deletingId === row.id ? "removing…" : "confirm"}
                   </button>
@@ -175,7 +173,7 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
                     type="button"
                     onClick={() => setPendingDeleteId(null)}
                     disabled={deletingId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--mut) hover:text-(--ink) disabled:opacity-50"
                   >
                     cancel
                   </button>
@@ -188,7 +186,7 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
                     setNotice(null);
                     setPendingDeleteId(row.id);
                   }}
-                  className="ml-auto font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--bad)"
+                  className="ml-auto text-[12px] font-medium text-(--mut) hover:text-(--bad)"
                 >
                   remove
                 </button>

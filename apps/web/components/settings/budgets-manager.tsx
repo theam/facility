@@ -171,29 +171,25 @@ export function BudgetsManager({ budgets }: { budgets: Budget[] }) {
               </span>
               <span className="shrink-0 font-mono text-[11px] text-(--dim)">/ {b.period}</span>
               <span
-                className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em]"
+                className="shrink-0 text-[11px] font-medium"
                 style={{ color: b.mode === "hard" ? "var(--bad)" : "var(--human)" }}
               >
                 {b.mode}
               </span>
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
-                {b.scope}
-              </span>
+              <span className="shrink-0 text-[11px] font-medium text-(--dim)">{b.scope}</span>
               {b.enabled ? null : (
-                <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
-                  disabled
-                </span>
+                <span className="shrink-0 text-[11px] font-medium text-(--dim)">disabled</span>
               )}
               {pendingDeleteId === b.id ? (
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-(--bad)">
+                  <span className="text-[11.5px] font-medium text-(--bad)">
                     remove this budget?
                   </span>
                   <button
                     type="button"
                     onClick={() => remove(b)}
                     disabled={rowBusyId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--bad) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--bad) disabled:opacity-50"
                   >
                     {rowBusyId === b.id ? "removing…" : "confirm"}
                   </button>
@@ -201,7 +197,7 @@ export function BudgetsManager({ budgets }: { budgets: Budget[] }) {
                     type="button"
                     onClick={() => setPendingDeleteId(null)}
                     disabled={rowBusyId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--mut) hover:text-(--ink) disabled:opacity-50"
                   >
                     cancel
                   </button>
@@ -218,7 +214,7 @@ export function BudgetsManager({ budgets }: { budgets: Budget[] }) {
                       )
                     }
                     disabled={rowBusyId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--mut) hover:text-(--ink) disabled:opacity-50"
                   >
                     {b.enabled ? "disable" : "enable"}
                   </button>
@@ -229,7 +225,7 @@ export function BudgetsManager({ budgets }: { budgets: Budget[] }) {
                       setNotice(null);
                       setPendingDeleteId(b.id);
                     }}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--bad)"
+                    className="text-[12px] font-medium text-(--mut) hover:text-(--bad)"
                   >
                     remove
                   </button>

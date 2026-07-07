@@ -12,12 +12,12 @@ type NavItem = { href: string; label: string; badge?: number };
 /** Org-level destinations — thin by design; the daily loop lives inside a project. */
 export function orgNav(inboxCount?: number): NavItem[] {
   return [
-    { href: "/projects", label: "projects" },
-    { href: "/sessions", label: "fleet" },
-    { href: "/inbox", label: "inbox", badge: inboxCount },
-    { href: "/harness", label: "harness" },
-    { href: "/audit", label: "audit" },
-    { href: "/settings", label: "settings" },
+    { href: "/projects", label: "Projects" },
+    { href: "/sessions", label: "Fleet" },
+    { href: "/inbox", label: "Inbox", badge: inboxCount },
+    { href: "/harness", label: "Harness" },
+    { href: "/audit", label: "Audit" },
+    { href: "/settings", label: "Settings" },
   ];
 }
 
@@ -25,12 +25,12 @@ export function orgNav(inboxCount?: number): NavItem[] {
 export function projectNav(projectId: string): NavItem[] {
   const base = `/projects/${projectId}`;
   return [
-    { href: base, label: "overview" },
-    { href: `${base}/issues`, label: "issues" },
-    { href: `${base}/sessions`, label: "sessions" },
-    { href: `${base}/owner`, label: "owner" },
-    { href: `${base}/agents`, label: "agents" },
-    { href: `${base}/settings`, label: "settings" },
+    { href: base, label: "Overview" },
+    { href: `${base}/issues`, label: "Issues" },
+    { href: `${base}/sessions`, label: "Sessions" },
+    { href: `${base}/owner`, label: "Owner" },
+    { href: `${base}/agents`, label: "Agents" },
+    { href: `${base}/settings`, label: "Settings" },
   ];
 }
 
@@ -60,18 +60,18 @@ function NavLinks({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cx(
-              "group flex items-baseline gap-3 border-l-2 px-5 py-2.5 font-mono text-[12px] uppercase tracking-[0.18em] transition-colors",
+              "group flex items-baseline gap-3 border-l-2 px-5 py-2 text-[13px] transition-colors",
               active
-                ? "border-(--line-strong) text-(--ink)"
+                ? "border-(--line-strong) font-medium text-(--ink)"
                 : "border-transparent text-(--mut) hover:text-(--ink)",
             )}
           >
-            <span className={cx("text-[10px]", active ? "text-(--ink)" : "text-(--dim)")}>
+            <span className={cx("font-mono text-[10px]", active ? "text-(--ink)" : "text-(--dim)")}>
               {String(i + 1).padStart(2, "0")}
             </span>
             {item.label}
             {item.badge ? (
-              <span className="ml-auto font-mono text-[10px] text-(--human)">{item.badge}</span>
+              <span className="ml-auto font-mono text-[11px] text-(--human)">{item.badge}</span>
             ) : null}
           </Link>
         );
@@ -82,7 +82,7 @@ function NavLinks({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="px-5 font-mono text-[9px] uppercase tracking-[0.24em] text-(--dim)">
+    <span className="px-5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-(--dim)">
       {children}
     </span>
   );

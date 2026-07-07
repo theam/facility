@@ -227,7 +227,7 @@ export function CreateAgent({ projectId, catalog, myPermissions }: Props) {
         </Button>
         <Link
           href={`/projects/${projectId}/agents`}
-          className="font-mono text-[11px] uppercase tracking-[0.16em] text-(--mut) hover:text-(--ink)"
+          className="text-[12px] font-medium text-(--mut) hover:text-(--ink)"
         >
           cancel
         </Link>

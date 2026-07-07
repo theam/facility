@@ -161,9 +161,7 @@ export function CommandPalette({
               )}
             >
               <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{entry.label}</span>
-              <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-[0.18em] text-(--dim)">
-                {entry.hint}
-              </span>
+              <span className="shrink-0 text-[10.5px] font-medium text-(--dim)">{entry.hint}</span>
             </button>
           ))}
           {filtered.length === 0 ? (

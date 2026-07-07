@@ -40,7 +40,7 @@ export default async function ProjectsPage() {
         <div className="flex flex-col gap-2">
           <Eyebrow>projects</Eyebrow>
           <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Projects</h1>
-          <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+          <p className="text-[12.5px] text-(--dim)">
             {runsError
               ? `${projects.length} projects`
               : `${projects.length} projects · ${liveTotal} agents live · ${needsYou} need you`}
@@ -79,7 +79,7 @@ export default async function ProjectsPage() {
                   <p className="line-clamp-2 flex-1 text-[13px] leading-relaxed text-(--mut)">
                     {project.description ?? "—"}
                   </p>
-                  <div className="flex items-center gap-4 font-mono text-[10px] uppercase tracking-[0.16em]">
+                  <div className="flex items-center gap-4 text-[11px] font-medium">
                     <span className="inline-flex items-center gap-1.5 text-(--mut)">
                       <StatusDot tone={live > 0 ? "agent" : "machine"} pulse={live > 0} />
                       {live} live

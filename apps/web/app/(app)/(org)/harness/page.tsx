@@ -41,7 +41,7 @@ export default async function HarnessPage({
       <div className="flex flex-col gap-2">
         <Eyebrow>harness</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Harness</h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {items.length} published item{items.length === 1 ? "" : "s"}
           {kind ? ` · ${kind.replace("_", " ")}` : ""} · immutable once published
         </p>

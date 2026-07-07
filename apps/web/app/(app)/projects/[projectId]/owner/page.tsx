@@ -5,7 +5,8 @@ import { OwnerConversation } from "@/components/owner/conversation";
 import { type KbEntry, KbReader, type KbSpace } from "@/components/owner/kb-reader";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
-import { fmtAgo } from "@/lib/runs";
+import { fmtAgo, fmtStatus } from "@/lib/runs";
+import { cronToWords } from "@/lib/schedule";
 
 export const metadata = { title: "owner" };
 
@@ -47,9 +48,9 @@ export default async function OwnerPage({ params }: { params: Promise<{ projectI
       <div className="flex flex-col gap-2">
         <Eyebrow>owner</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Project Owner</h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {ownerAgent
-            ? `${ownerAgent.engine}${cron ? ` · runs at cron ${cron}` : " · manual"} · ${
+            ? `${ownerAgent.engine}${cron ? ` · ${cronToWords(cron)}` : " · on demand"} · ${
                 ownerAgent.enabled ? "enabled" : "disabled"
               }`
             : "no project-owner agent configured"}{" "}
@@ -86,7 +87,7 @@ export default async function OwnerPage({ params }: { params: Promise<{ projectI
             <Eyebrow>owner activity</Eyebrow>
             {ownerRuns.length === 0 ? (
               <p className="text-sm text-(--dim)">
-                No Owner sessions yet{cron ? ` — next scheduled window is cron ${cron}` : ""}.
+                No Owner sessions yet{cron ? ` — it runs ${cronToWords(cron)}` : ""}.
               </p>
             ) : (
               <div className="flex flex-col border border-(--line)">
@@ -98,9 +99,7 @@ export default async function OwnerPage({ params }: { params: Promise<{ projectI
                   >
                     <StatusDot tone={toneFor(run.status)} pulse={run.status === "running"} />
                     <span className="font-mono text-[12px] text-(--ink)">{run.mode}</span>
-                    <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-(--mut)">
-                      {run.status}
-                    </span>
+                    <span className="text-[12px] text-(--mut)">{fmtStatus(run.status)}</span>
                     <span className="ml-auto font-mono text-[10.5px] text-(--dim)">
                       {fmtAgo(run.queuedAt)}
                     </span>

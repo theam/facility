@@ -1,6 +1,5 @@
 import { ButtonLink, Eyebrow, Metric } from "@facility/ui";
 import { EngineLoop } from "@/components/agents/engine-loop";
-import { EngineTable } from "@/components/agents/engine-table";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
@@ -19,7 +18,11 @@ export default async function ProjectAgentsPage({
 
   const rows = status.data;
   const enabled = rows.filter((r) => r.enabled);
-  const running = rows.filter((r) => r.liveRun);
+  const working = rows.filter(
+    (r) => r.liveRun && (r.liveRun.status === "running" || r.liveRun.status === "provisioning"),
+  );
+  const queued = rows.filter((r) => r.liveRun?.status === "queued");
+  const waiting = rows.filter((r) => r.liveRun?.status === "awaiting_human");
   const totals = rows.reduce(
     (acc, r) => {
       acc.sessions += r.counts14d.total;
@@ -55,8 +58,10 @@ export default async function ProjectAgentsPage({
             </ButtonLink>
           </span>
         </div>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
-          {enabled.length} of {rows.length} enabled · {running.length} running
+        <p className="text-[12.5px] text-(--dim)">
+          {enabled.length} of {rows.length} enabled · {working.length} working
+          {queued.length > 0 ? ` · ${queued.length} queued` : ""}
+          {waiting.length > 0 ? ` · ${waiting.length} waiting on you` : ""}
           {nextUp ? ` · next: ${nextUp.name} ${fmtIn(nextUp.nextRunAt)}` : ""}
         </p>
       </div>
@@ -65,9 +70,12 @@ export default async function ProjectAgentsPage({
         <div className="grid gap-px border border-(--line) bg-(--line) sm:grid-cols-2 lg:grid-cols-4">
           <div className="bg-(--bg) p-5">
             <Metric
-              label="running now"
-              value={String(running.length)}
-              hint={running.map((r) => r.name).join(" · ") || "engine idle"}
+              label="working now"
+              value={String(working.length)}
+              hint={
+                working.map((r) => r.name).join(" · ") ||
+                (queued.length > 0 ? `${queued.length} queued for a worker` : "engine idle")
+              }
             />
           </div>
           <div className="bg-(--bg) p-5">
@@ -94,16 +102,9 @@ export default async function ProjectAgentsPage({
         </div>
       ) : null}
 
-      {rows.length > 0 ? (
-        <section className="flex flex-col gap-4">
-          <Eyebrow>the loop</Eyebrow>
-          <EngineLoop projectId={projectId} rows={rows} />
-        </section>
-      ) : null}
-
       <section className="flex flex-col gap-4">
-        <Eyebrow>every agent</Eyebrow>
-        <EngineTable projectId={projectId} rows={rows} />
+        <Eyebrow>the loop</Eyebrow>
+        <EngineLoop projectId={projectId} rows={rows} />
       </section>
     </div>
   );

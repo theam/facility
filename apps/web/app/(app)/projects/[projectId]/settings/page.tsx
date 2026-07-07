@@ -39,7 +39,7 @@ export default async function ProjectSettingsPage({
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
           Project settings
         </h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {p.slug} · system {p.systemVersion ?? "unpinned"}
         </p>
       </div>
@@ -72,7 +72,7 @@ export default async function ProjectSettingsPage({
                   {repo.owner}/{repo.name}
                 </a>
                 <span className="font-mono text-[11px] text-(--dim)">{repo.defaultBranch}</span>
-                <span className="ml-auto inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-(--mut)">
+                <span className="ml-auto inline-flex items-center gap-2 text-[11px] font-medium text-(--mut)">
                   <StatusDot tone={fingerprintTone(repo.fingerprintStatus ?? "unknown")} />
                   fingerprint {repo.fingerprintStatus ?? "unknown"}
                 </span>

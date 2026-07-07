@@ -19,15 +19,10 @@ export function Topbar({
         <ProjectSwitcher projects={projects} current={current} />
       </div>
       <div className="flex items-center gap-4">
-        <span className="hidden font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim) xl:inline">
-          ⌘K
-        </span>
+        <span className="hidden text-[11px] font-medium text-(--dim) xl:inline">⌘K</span>
         <span className="font-mono text-[11px] text-(--dim)">{me.principal.email}</span>
         <form action="/api/auth/logout" method="post">
-          <button
-            type="submit"
-            className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
-          >
+          <button type="submit" className="text-[12px] font-medium text-(--mut) hover:text-(--ink)">
             sign out
           </button>
         </form>

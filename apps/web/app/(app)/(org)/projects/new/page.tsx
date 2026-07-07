@@ -312,7 +312,7 @@ export default function KickstartPage() {
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
           Kickstart a project
         </h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           pick a repository → preview the assets → open the PR
         </p>
       </div>
@@ -584,7 +584,7 @@ export default function KickstartPage() {
                       <span className="min-w-0 flex-1 break-all font-mono text-[12px] text-(--ink)">
                         {file.path}
                       </span>
-                      <span className="font-mono text-[10px] uppercase text-(--dim)">
+                      <span className="text-[10.5px] font-medium text-(--dim)">
                         {file.action ?? "write"}
                       </span>
                       <span className="font-mono text-[10.5px] text-(--mut)">
@@ -620,9 +620,7 @@ export default function KickstartPage() {
           <div className="flex flex-col gap-4 border border-(--ok) bg-(--bg-subtle) p-6">
             <div className="flex items-center gap-3">
               <StatusDot tone="ok" />
-              <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-(--ok)">
-                kickstart PR opened
-              </span>
+              <span className="text-[12.5px] font-medium text-(--ok)">kickstart PR opened</span>
             </div>
             {prUrl ? (
               <a
@@ -680,9 +678,7 @@ export default function KickstartPage() {
 function KeyValue({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-        {label}
-      </span>
+      <span className="text-[11px] font-medium text-(--dim)">{label}</span>
       <span className="break-words font-mono text-[12px] leading-relaxed text-(--code)">
         {value}
       </span>

@@ -4,7 +4,7 @@ import { Button, Cell, cx, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } f
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RunTranscript } from "@/components/run/transcript";
 import type { Project, Run, RunEvent } from "@/lib/api";
-import { fmtCost, fmtDuration } from "@/lib/run-format";
+import { fmtCost, fmtDuration, fmtStatus } from "@/lib/run-format";
 
 const LIVE = new Set(["queued", "provisioning", "running", "awaiting_human"]);
 const RETRYABLE = new Set(["failed", "canceled"]);
@@ -39,16 +39,28 @@ function textFromData(data: Record<string, unknown>) {
             : typeof data.name === "string"
               ? data.name
               : null;
-  return value ?? JSON.stringify(data);
+  if (value) return value;
+  // Known machine payloads become sentences; unknown ones become terse
+  // key–value pairs. Raw JSON never reaches the chrome.
+  if (typeof data.queue === "string") {
+    return data.queue === "runs.dispatch" ? "waiting in the dispatch queue" : `queue ${data.queue}`;
+  }
+  const pairs = Object.entries(data)
+    .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+    .slice(0, 3)
+    .map(([k, v]) => `${k} ${String(v)}`);
+  return pairs.length > 0 ? pairs.join(" · ") : null;
 }
 
 function eventLabel(event: RunEvent) {
   const text = textFromData(event.data);
+  if (!text) return event.type;
   if (event.type === "tool") return `tool: ${text}`;
   if (event.type === "shell") return `shell: ${text}`;
   if (event.type === "check") return `check: ${text}`;
   if (event.type === "status") return text;
   if (event.type === "steer") return `human steer: ${text}`;
+  if (event.type === "queued") return text;
   return `${event.type}: ${text}`;
 }
 
@@ -142,6 +154,15 @@ function derivePhases(events: RunEvent[], run: Run) {
   });
 }
 
+const PHASE_STATUS_WORDS: Record<PhaseStatus, string> = {
+  active: "now",
+  waiting: "on you",
+  ok: "done",
+  bad: "failed",
+  canceled: "canceled",
+  pending: "",
+};
+
 function toneForPhase(status: PhaseStatus) {
   if (status === "active") return "agent";
   if (status === "waiting") return "human";
@@ -152,7 +173,7 @@ function toneForPhase(status: PhaseStatus) {
 
 function chipClass(tone: "ok" | "bad" | "machine" | "human") {
   return cx(
-    "inline-flex items-center border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em]",
+    "inline-flex items-center border px-2 py-1 text-[11px] font-medium",
     tone === "ok" && "border-(--ok) text-(--ok)",
     tone === "bad" && "border-(--bad) text-(--bad)",
     tone === "human" && "border-(--human) text-(--human)",
@@ -449,12 +470,12 @@ export function RunCockpit({
                 <h1 className="min-w-0 break-words font-mono text-[clamp(20px,3vw,32px)] font-semibold tracking-tight">
                   {run.mode}
                 </h1>
-                <span className="inline-flex items-center gap-2 font-mono text-[12px] uppercase tracking-[0.14em] text-(--mut)">
+                <span className="inline-flex items-center gap-2 text-[12.5px] text-(--mut)">
                   <StatusDot tone={toneFor(run.status)} pulse={run.status === "running"} />
-                  {run.status}
+                  {fmtStatus(run.status)}
                 </span>
               </div>
-              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] uppercase tracking-[0.14em] text-(--dim)">
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[12px] text-(--dim)">
                 <span>{run.engine}</span>
                 <span>{agentDisplayName ?? agentName(run)}</span>
                 <span>{project?.slug ?? run.projectId}</span>
@@ -528,15 +549,19 @@ export function RunCockpit({
           <div className="flex items-start gap-3 border border-(--line) bg-(--bg-subtle) px-4 py-3">
             <StatusDot
               tone={
-                run.status === "awaiting_human" ? "human" : live ? "agent" : toneFor(run.status)
+                run.status === "awaiting_human"
+                  ? "human"
+                  : run.status === "queued"
+                    ? "info"
+                    : live
+                      ? "agent"
+                      : toneFor(run.status)
               }
               pulse={run.status === "running"}
               className="mt-1"
             />
             <div className="min-w-0">
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-                current activity
-              </p>
+              <p className="text-[11px] font-medium text-(--dim)">current activity</p>
               <p className="mt-1 break-words text-sm text-(--ink)">
                 {latestMeaningful
                   ? eventLabel(latestMeaningful)
@@ -552,13 +577,25 @@ export function RunCockpit({
 
         <HairlineGrid cols="grid-cols-2 lg:grid-cols-5" className="border-0 border-b">
           <Cell className="p-4 sm:p-5">
-            <Metric label="started" value={formatStarted(run)} />
+            <Metric
+              label={run.startedAt ? "started" : "queued"}
+              value={formatStarted(run)}
+              hint={run.startedAt ? undefined : "waiting for a worker to pick it up"}
+            />
           </Cell>
           <Cell className="p-4 sm:p-5">
-            <Metric label="duration" value={fmtDuration(run.startedAt, run.endedAt)} />
+            <Metric
+              label="duration"
+              value={fmtDuration(run.startedAt, run.endedAt)}
+              hint={run.startedAt ? undefined : "starts when the sandbox does"}
+            />
           </Cell>
           <Cell className="p-4 sm:p-5">
-            <Metric label="cost" value={fmtCost(usage?.cost_cents)} />
+            <Metric
+              label="cost"
+              value={fmtCost(usage?.cost_cents)}
+              hint={usage ? undefined : live ? "metered as it works" : "no receipt"}
+            />
           </Cell>
           <Cell className="p-4 sm:p-5">
             <Metric
@@ -589,15 +626,17 @@ export function RunCockpit({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="font-mono text-[12px] uppercase tracking-[0.16em] text-(--ink)">
-                        {phase.label}
-                      </span>
-                      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-(--dim)">
-                        {phase.status}
+                      <span className="text-[13px] font-medium text-(--ink)">{phase.label}</span>
+                      <span className="text-[11px] text-(--dim)">
+                        {PHASE_STATUS_WORDS[phase.status]}
                       </span>
                     </div>
                     <p className="mt-2 line-clamp-2 text-[12px] leading-relaxed text-(--mut)">
-                      {phase.latest ? eventLabel(phase.latest) : `${phase.count} events`}
+                      {phase.latest
+                        ? eventLabel(phase.latest)
+                        : phase.count > 0
+                          ? `${phase.count} events`
+                          : "nothing yet"}
                     </p>
                   </div>
                 </div>
@@ -623,7 +662,7 @@ export function RunCockpit({
                                   ? "platform-owned acceptance gate"
                                   : "agent self-reported"
                               }
-                              className="font-mono text-[9px] uppercase tracking-[0.16em] text-(--dim)"
+                              className="text-[10px] font-medium text-(--dim)"
                             >
                               {check.platform ? "gate" : "self"}
                             </span>

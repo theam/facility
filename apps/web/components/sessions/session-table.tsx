@@ -3,7 +3,7 @@
 import { PillTag, StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { fmtAgo, fmtCost, fmtDuration } from "@/lib/run-format";
+import { fmtAgo, fmtCost, fmtDuration, fmtStatus } from "@/lib/run-format";
 
 export type SessionRow = {
   id: string;
@@ -143,10 +143,7 @@ export function SessionTable({
                   "cost",
                   "when",
                 ].map((h) => (
-                  <th
-                    key={h}
-                    className="px-5 py-3 font-mono text-[10px] font-medium uppercase tracking-[0.2em] text-(--dim)"
-                  >
+                  <th key={h} className="px-5 py-3 text-[11px] font-medium text-(--dim)">
                     {h}
                   </th>
                 ))}
@@ -166,9 +163,7 @@ export function SessionTable({
                     </Link>
                   </td>
                   <td className="px-5 py-3 font-mono text-[11px] text-(--dim)">{row.engine}</td>
-                  <td className="px-5 py-3 font-mono text-[11px] uppercase tracking-[0.12em] text-(--mut)">
-                    {row.status}
-                  </td>
+                  <td className="px-5 py-3 text-[12px] text-(--mut)">{fmtStatus(row.status)}</td>
                   <td className="px-5 py-3">
                     {row.prUrl ? (
                       <a

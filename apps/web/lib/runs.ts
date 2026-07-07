@@ -1,6 +1,6 @@
 import { api, type Project, type Run } from "./api";
 
-export { fmtAgo, fmtCost, fmtDuration } from "./run-format";
+export { fmtAgo, fmtCost, fmtDuration, fmtStatus } from "./run-format";
 
 export type RunWithProject = Run & { project: Pick<Project, "id" | "name" | "slug"> };
 

@@ -84,9 +84,7 @@ export function HarnessItemEditor({ item }: { item: RegistryItemWithVersions }) 
   return (
     <div className="grid gap-8 lg:grid-cols-[280px_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-          versions
-        </span>
+        <span className="text-[11px] font-medium text-(--dim)">versions</span>
         <div className="flex flex-col border border-(--line)">
           {versions.map((version) => (
             <button

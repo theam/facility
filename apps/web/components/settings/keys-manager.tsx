@@ -81,14 +81,12 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
           aria-live="polite"
           className="flex flex-col gap-2 border border-(--line-strong) bg-(--bg-subtle) p-4"
         >
-          <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--ink)">
-            copy this now — shown once
-          </span>
+          <span className="text-[12px] font-medium text-(--ink)">copy this now — shown once</span>
           <code className="break-all font-mono text-[13px] text-(--ink)">{issued}</code>
           <button
             type="button"
             onClick={() => setIssued(null)}
-            className="self-start font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
+            className="self-start text-[12px] font-medium text-(--mut) hover:text-(--ink)"
           >
             dismiss
           </button>
@@ -143,19 +141,15 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
               <span className="shrink-0 font-mono text-[11px] text-(--dim)">
                 {k.prefix}…{k.last4}
               </span>
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
-                {k.scopeType}
-              </span>
+              <span className="shrink-0 text-[11px] font-medium text-(--dim)">{k.scopeType}</span>
               {pendingRevokeId === k.id ? (
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-(--bad)">
-                    revoke this key?
-                  </span>
+                  <span className="text-[11.5px] font-medium text-(--bad)">revoke this key?</span>
                   <button
                     type="button"
                     onClick={() => revoke(k.id)}
                     disabled={revokingId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--bad) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--bad) disabled:opacity-50"
                   >
                     {revokingId === k.id ? "revoking…" : "confirm"}
                   </button>
@@ -163,7 +157,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
                     type="button"
                     onClick={() => setPendingRevokeId(null)}
                     disabled={revokingId !== null}
-                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink) disabled:opacity-50"
+                    className="text-[12px] font-medium text-(--mut) hover:text-(--ink) disabled:opacity-50"
                   >
                     cancel
                   </button>
@@ -176,7 +170,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
                     setNotice(null);
                     setPendingRevokeId(k.id);
                   }}
-                  className="ml-auto font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--bad)"
+                  className="ml-auto text-[12px] font-medium text-(--mut) hover:text-(--bad)"
                 >
                   revoke
                 </button>

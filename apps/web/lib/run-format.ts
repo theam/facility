@@ -12,6 +12,21 @@ export function fmtDuration(start?: string | null, end?: string | null): string 
   return `${Math.floor(min / 60)}h ${min % 60}m`;
 }
 
+/** Lifecycle statuses in words a person would say. Unknown statuses pass through. */
+const STATUS_WORDS: Record<string, string> = {
+  queued: "queued",
+  provisioning: "provisioning",
+  running: "running",
+  awaiting_human: "waiting on human",
+  succeeded: "succeeded",
+  failed: "failed",
+  canceled: "canceled",
+};
+
+export function fmtStatus(status: string): string {
+  return STATUS_WORDS[status] ?? status.replaceAll("_", " ");
+}
+
 export function fmtAgo(iso?: string | null): string {
   if (!iso) return "—";
   const ms = Date.now() - new Date(iso).getTime();

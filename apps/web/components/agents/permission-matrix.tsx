@@ -39,7 +39,7 @@ export function PermissionMatrix({ value, onChange, grantable, resources, specia
         onClick={() => toggle(perm)}
         title={allowed ? perm : `${perm} — you don't hold this, so you can't grant it`}
         className={cx(
-          "inline-flex h-7 items-center border px-2 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+          "inline-flex h-7 items-center border px-2 text-[11px] font-medium transition-colors",
           checked
             ? "border-(--line-strong) bg-(--card) text-(--ink)"
             : "border-(--line) text-(--dim)",
@@ -68,16 +68,12 @@ export function PermissionMatrix({ value, onChange, grantable, resources, specia
         ))}
       </div>
       <div className="flex flex-col gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-          special verbs
-        </span>
+        <span className="text-[11px] font-medium text-(--dim)">special verbs</span>
         <div className="flex flex-wrap gap-1.5">{special.map((perm) => box(perm, perm))}</div>
       </div>
       {extras.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-            other grants
-          </span>
+          <span className="text-[11px] font-medium text-(--dim)">other grants</span>
           {extras.map((perm) => (
             <button
               key={perm}

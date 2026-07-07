@@ -1,7 +1,7 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx";
 
-/** Mono uppercase micro-label — the TAM label voice. Narrative sections only. */
+/** Calm sans section label. Mono stays reserved for technical tokens. */
 export function Eyebrow({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
   return <p className={cx("eyebrow", className)} {...props} />;
 }
@@ -25,8 +25,8 @@ export function PillTag({
   return (
     <span
       className={cx(
-        "inline-flex h-8 items-center rounded-full border px-3.5 font-mono text-[11px] uppercase tracking-[0.14em]",
-        active ? "border-(--line-strong) text-(--ink)" : "border-(--line) text-(--mut)",
+        "inline-flex h-7 items-center rounded-full border px-3 text-[12px] font-medium",
+        active ? "border-(--line-strong) bg-(--card) text-(--ink)" : "border-(--line) text-(--mut)",
         className,
       )}
       {...props}

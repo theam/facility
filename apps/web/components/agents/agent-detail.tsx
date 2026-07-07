@@ -165,7 +165,7 @@ export function AgentDetail(props: Props) {
             </Button>
           </span>
         </div>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {health?.word ?? "no status"}
           {status ? ` · ${triggerSummary(status)}` : ""}
         </p>
@@ -186,9 +186,7 @@ export function AgentDetail(props: Props) {
           <span className="font-mono text-[13px] text-(--ink)">
             session {status.liveRun.status} right now
           </span>
-          <span className="ml-auto font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut)">
-            open cockpit →
-          </span>
+          <span className="ml-auto text-[12px] font-medium text-(--mut)">open cockpit →</span>
         </Link>
       ) : null}
 
@@ -312,9 +310,7 @@ function ContractSection({ item, act, busy, note }: SectionProps) {
     <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <Eyebrow>the contract — what this agent is</Eyebrow>
-        <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-(--dim)">
-          {item.name}
-        </span>
+        <span className="text-[12px] text-(--dim)">{item.name}</span>
         <span className="ml-auto flex items-center gap-3">
           <SectionNote note={note} scope="contract" />
           {!editing ? (
@@ -472,9 +468,7 @@ function TriggersSection({ projectId, agent, status, catalog, act, busy, note }:
       <div className="flex flex-col gap-px border border-(--line) bg-(--line)">
         <div className="flex flex-col gap-3 bg-(--bg) px-5 py-4">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="w-24 font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-              schedule
-            </span>
+            <span className="w-24 text-[11px] font-medium text-(--dim)">schedule</span>
             {existing && !editing ? (
               <>
                 <span className="font-mono text-[12.5px] text-(--ink)">
@@ -527,9 +521,7 @@ function TriggersSection({ projectId, agent, status, catalog, act, busy, note }:
         </div>
 
         <div className="flex flex-wrap items-center gap-3 bg-(--bg) px-5 py-4">
-          <span className="w-24 font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-            events
-          </span>
+          <span className="w-24 text-[11px] font-medium text-(--dim)">events</span>
           {bindings.length === 0 ? (
             <span className="text-[12.5px] text-(--dim)">
               no event source routes here yet — connect one under{" "}
@@ -555,7 +547,7 @@ function TriggersSection({ projectId, agent, status, catalog, act, busy, note }:
               ))}
               <Link
                 href="/settings"
-                className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-(--mut) hover:text-(--ink)"
+                className="text-[11.5px] font-medium text-(--mut) hover:text-(--ink)"
               >
                 manage →
               </Link>
@@ -564,9 +556,7 @@ function TriggersSection({ projectId, agent, status, catalog, act, busy, note }:
         </div>
 
         <div className="flex flex-wrap items-center gap-3 bg-(--bg) px-5 py-4">
-          <span className="w-24 font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-            on demand
-          </span>
+          <span className="w-24 text-[11px] font-medium text-(--dim)">on demand</span>
           <span className="text-[12.5px] text-(--mut)">
             always — run now here, trigger from an issue, or{" "}
             <span className="font-mono text-(--code)">/{agent.name}</span> in a comment on a
@@ -753,7 +743,7 @@ function SessionsSection({ projectId, agent, recentRuns }: Props) {
         <Eyebrow>recent sessions</Eyebrow>
         <Link
           href={`/projects/${projectId}/sessions?agent=${agent.id}`}
-          className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
+          className="text-[12px] font-medium text-(--mut) hover:text-(--ink)"
         >
           all sessions →
         </Link>
@@ -778,9 +768,7 @@ function SessionsSection({ projectId, agent, recentRuns }: Props) {
                 >
                   {run.id.slice(0, 14)}…
                 </Link>
-                <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-(--mut)">
-                  {run.status}
-                </span>
+                <span className="text-[12px] text-(--mut)">{run.status}</span>
                 {pr ? (
                   <a
                     href={pr}
@@ -837,9 +825,7 @@ function DangerSection({
 
   return (
     <section className="flex flex-wrap items-center gap-3">
-      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-        remove agent
-      </span>
+      <span className="text-[11px] font-medium text-(--dim)">remove agent</span>
       <span className="text-[12px] text-(--dim)">
         sessions and receipts stay; the definition and its schedule go
       </span>

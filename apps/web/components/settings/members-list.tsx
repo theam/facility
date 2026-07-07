@@ -113,7 +113,7 @@ export function MembersList({
                     </Button>
                   </>
                 ) : (
-                  <span className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-(--dim)">
+                  <span className="text-[11.5px] font-medium text-(--dim)">
                     {m.roleName ?? m.roleId}
                   </span>
                 )}

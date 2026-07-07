@@ -48,7 +48,7 @@ export default async function InboxPage({
       <div className="flex flex-col gap-2">
         <Eyebrow>inbox</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Inbox</h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {proposals.length} gate{proposals.length === 1 ? "" : "s"} · {openPrs.length} PR
           {openPrs.length === 1 ? "" : "s"} to review · {issues.length} issue
           {issues.length === 1 ? "" : "s"}
@@ -85,11 +85,11 @@ export default async function InboxPage({
                     >
                       {outcome.repo}#{outcome.prNumber}
                     </a>
-                    <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-(--dim)">
+                    <span className="font-mono text-[10.5px] text-(--dim)">
                       {outcome.agentLane}
                     </span>
                     {slugById.get(outcome.projectId) ? (
-                      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-(--mut)">
+                      <span className="text-[11px] font-medium text-(--mut)">
                         {slugById.get(outcome.projectId)}
                       </span>
                     ) : null}
@@ -127,9 +127,7 @@ export default async function InboxPage({
             <section className="flex flex-col gap-4">
               <div className="flex items-baseline justify-between">
                 <Eyebrow className="text-(--bad)">issues · {issues.length}</Eyebrow>
-                <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--dim)">
-                  from watchtower
-                </span>
+                <span className="text-[12px] font-medium text-(--dim)">from watchtower</span>
               </div>
               <div className="flex flex-col gap-4">
                 {issues.map((issue) => (

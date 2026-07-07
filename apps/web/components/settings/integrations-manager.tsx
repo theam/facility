@@ -75,21 +75,19 @@ export function IntegrationsManager({
                 >
                   <StatusDot tone={row.enabled ? "ok" : "machine"} />
                   <span className="font-mono text-[12.5px] text-(--ink)">{row.name}</span>
-                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-(--dim)">
-                    {row.kind}
-                  </span>
+                  <span className="font-mono text-[10.5px] text-(--dim)">{row.kind}</span>
                   <span className="font-mono text-[11px] text-(--mut)">{routingOf(row)}</span>
                   {projectSlug ? (
                     <span className="font-mono text-[10px] text-(--dim)">in {projectSlug}</span>
                   ) : null}
-                  <span className="ml-auto font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
+                  <span className="ml-auto text-[11px] font-medium text-(--dim)">
                     {openId === row.id ? "close" : "details"}
                   </span>
                 </button>
                 {openId === row.id ? (
                   <div className="flex flex-col gap-3 border-t border-(--line) bg-(--bg-subtle) px-4 py-4">
                     <div className="flex flex-wrap items-center gap-3">
-                      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
+                      <span className="text-[11px] font-medium text-(--dim)">
                         deliver events to
                       </span>
                       <code className="border border-(--line) bg-(--bg) px-2 py-1 font-mono text-[11px] text-(--code)">
@@ -109,7 +107,7 @@ export function IntegrationsManager({
                       </Button>
                     </div>
                     <div className="flex flex-col gap-1.5">
-                      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
+                      <span className="text-[11px] font-medium text-(--dim)">
                         recent deliveries
                       </span>
                       {(events[row.id] ?? []).length === 0 ? (
@@ -202,9 +200,7 @@ function CreateIntegration({
 
   return (
     <form onSubmit={create} className="flex flex-col gap-4 border border-(--line) p-5">
-      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)">
-        connect an event source
-      </span>
+      <span className="text-[11px] font-medium text-(--dim)">connect an event source</span>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Field label="name">
           <TextInput

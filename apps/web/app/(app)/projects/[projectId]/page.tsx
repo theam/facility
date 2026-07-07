@@ -4,7 +4,7 @@ import { EngineLoop } from "@/components/agents/engine-loop";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api, summarizeSpend } from "@/lib/api";
-import { fmtAgo, fmtCost, fmtDuration } from "@/lib/runs";
+import { fmtAgo, fmtCost, fmtDuration, fmtStatus } from "@/lib/runs";
 
 export const metadata = { title: "overview" };
 
@@ -102,11 +102,11 @@ export default async function ProjectOverviewPage({
           <h1 className="font-mono text-[clamp(22px,3.2vw,34px)] font-semibold tracking-tight">
             {p.slug}
           </h1>
-          <span className="inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--mut)">
+          <span className="inline-flex items-center gap-2 text-[12.5px] text-(--mut)">
             <StatusDot tone={healthTone(healthData?.status)} />
             {healthData ? `health ${healthData.status}` : "health —"}
           </span>
-          <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+          <span className="text-[12.5px] text-(--dim)">
             {runsError
               ? "sessions —"
               : `${live.length} running · ${blocked.length} blocked · ${needsYou} need you`}
@@ -157,7 +157,7 @@ export default async function ProjectOverviewPage({
                 className="flex items-center gap-4 border-b border-(--line) px-5 py-3.5 transition-colors last:border-b-0 hover:bg-(--card)"
               >
                 <StatusDot tone="human" />
-                <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-(--human)">
+                <span className="text-[12px] font-medium text-(--human)">
                   {proposal.actionType}
                 </span>
                 <span className="truncate text-[12.5px] text-(--mut)">
@@ -175,9 +175,7 @@ export default async function ProjectOverviewPage({
                 className="flex items-center gap-4 border-b border-(--line) px-5 py-3.5 transition-colors last:border-b-0 hover:bg-(--card)"
               >
                 <StatusDot tone="bad" />
-                <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-(--bad)">
-                  {issue.severity}
-                </span>
+                <span className="text-[12px] font-medium text-(--bad)">{issue.severity}</span>
                 <span className="truncate text-[12.5px] text-(--mut)">{issue.title}</span>
               </Link>
             ))}
@@ -187,10 +185,10 @@ export default async function ProjectOverviewPage({
 
       <section className="flex flex-col gap-4">
         <div className="flex items-baseline justify-between">
-          <Eyebrow>running now</Eyebrow>
+          <Eyebrow>in flight</Eyebrow>
           <Link
             href={`/projects/${projectId}/sessions`}
-            className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
+            className="text-[12px] font-medium text-(--mut) hover:text-(--ink)"
           >
             all sessions →
           </Link>
@@ -221,9 +219,7 @@ export default async function ProjectOverviewPage({
                 <span className="hidden font-mono text-[11px] text-(--dim) sm:inline">
                   {run.engine}
                 </span>
-                <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-(--mut)">
-                  {run.status}
-                </span>
+                <span className="text-[12px] text-(--mut)">{fmtStatus(run.status)}</span>
                 <span className="ml-auto font-mono text-[11px] text-(--mut)">
                   {fmtDuration(run.startedAt, null)}
                 </span>
@@ -238,7 +234,7 @@ export default async function ProjectOverviewPage({
           <Eyebrow>the engine</Eyebrow>
           <Link
             href={`/projects/${projectId}/agents`}
-            className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
+            className="text-[12px] font-medium text-(--mut) hover:text-(--ink)"
           >
             all agents →
           </Link>
@@ -288,7 +284,7 @@ export default async function ProjectOverviewPage({
                   The Project Owner hasn't run yet. It runs on its schedule or on demand.
                 </p>
               )}
-              <p className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-(--dim)">
+              <p className="text-[11.5px] font-medium text-(--dim)">
                 knowledge base + conversation land with the Owner surface
               </p>
             </div>
@@ -308,9 +304,7 @@ export default async function ProjectOverviewPage({
                 signals.slice(0, 5).map((signal) => (
                   <div key={`${signal.kind}-${signal.title}`} className="flex items-center gap-3">
                     <StatusDot tone={signal.severity === "info" ? "machine" : "bad"} />
-                    <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-(--dim)">
-                      {signal.kind}
-                    </span>
+                    <span className="text-[11.5px] text-(--dim)">{signal.kind}</span>
                     <span className="truncate text-[12.5px] text-(--mut)">{signal.title}</span>
                   </div>
                 ))
@@ -403,12 +397,10 @@ export default async function ProjectOverviewPage({
                     <span className="font-mono text-[11.5px] text-(--ink)">
                       #{outcome.prNumber}
                     </span>
-                    <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-(--mut)">
-                      {outcome.fate ?? "open"}
-                    </span>
+                    <span className="text-[12px] text-(--mut)">{outcome.fate ?? "open"}</span>
                     {outcome.fate === "merged" && outcome.fixupCommits === 0 ? (
                       <span
-                        className="border border-(--line) px-1.5 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-(--ok)"
+                        className="border border-(--line) px-1.5 py-0.5 text-[10px] font-medium text-(--ok)"
                         title="merged with zero fixup commits"
                       >
                         one-shot

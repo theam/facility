@@ -35,7 +35,7 @@ export function HarnessList({
 }) {
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [scope, setScope] = useState<"all" | "org" | "project">("all");
+  const [scope, setScope] = useState<"all" | "org" | "project" | "bundled">("all");
   const [creating, setCreating] = useState(false);
 
   const filtered = useMemo(() => {
@@ -60,7 +60,7 @@ export function HarnessList({
           className="h-8 w-56 border border-(--line) bg-transparent px-3 font-mono text-[12px] text-(--ink) outline-none placeholder:text-(--dim) focus:border-(--line-strong)"
           aria-label="search harness items"
         />
-        {(["all", "org", "project"] as const).map((s) => (
+        {(["all", "bundled", "org", "project"] as const).map((s) => (
           <button key={s} type="button" onClick={() => setScope(s)}>
             <PillTag active={scope === s}>{s === "all" ? "any scope" : s}</PillTag>
           </button>
@@ -92,26 +92,38 @@ export function HarnessList({
         </p>
       ) : (
         <div className="flex flex-col border border-(--line)">
-          {filtered.map((item) => (
-            <Link
-              key={item.id}
-              href={`/harness/${item.id}`}
-              className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-(--line) px-5 py-4 transition-colors last:border-b-0 hover:bg-(--card)"
-            >
-              <span className="font-mono text-[13px] text-(--ink)">{item.name}</span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
-                {item.kind.replace("_", " ")} · {item.scope} · v{item.latestVersion}
-              </span>
-              {item.description ? (
-                <span className="min-w-0 flex-1 truncate text-[12.5px] leading-relaxed text-(--mut)">
-                  {item.description}
+          {filtered.map((item) => {
+            // Bundled items are named by repo path — show the leaf, keep the
+            // directory as quiet context instead of a filesystem dump.
+            const slash = item.name.lastIndexOf("/");
+            const base = slash >= 0 ? item.name.slice(slash + 1) : item.name;
+            const dir = slash >= 0 ? item.name.slice(0, slash + 1) : null;
+            const pathyDescription =
+              item.description && !item.description.includes(" ") && item.description.includes("/");
+            return (
+              <Link
+                key={item.id}
+                href={`/harness/${item.id}`}
+                className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-(--line) px-5 py-3.5 transition-colors last:border-b-0 hover:bg-(--card)"
+              >
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  {dir ? <span className="font-mono text-[10.5px] text-(--dim)">{dir}</span> : null}
+                  <span className="truncate font-mono text-[13px] text-(--ink)">{base}</span>
                 </span>
-              ) : null}
-              <span className="ml-auto font-mono text-[10.5px] text-(--dim)">
-                {fmtAgo(item.updatedAt)}
-              </span>
-            </Link>
-          ))}
+                <span className="text-[11px] font-medium text-(--dim)">
+                  {item.kind.replace("_", " ")} · {item.scope} · v{item.latestVersion}
+                </span>
+                {item.description && !pathyDescription ? (
+                  <span className="min-w-0 flex-1 truncate text-[12.5px] leading-relaxed text-(--mut)">
+                    {item.description}
+                  </span>
+                ) : null}
+                <span className="ml-auto font-mono text-[10.5px] text-(--dim)">
+                  {fmtAgo(item.updatedAt)}
+                </span>
+              </Link>
+            );
+          })}
         </div>
       )}
     </div>

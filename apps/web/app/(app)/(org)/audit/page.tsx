@@ -58,7 +58,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
       <div className="flex flex-col gap-2">
         <Eyebrow>audit</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Audit log</h1>
-        <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+        <p className="text-[12.5px] text-(--dim)">
           {items.length} event{items.length === 1 ? "" : "s"}
           {search.actionPrefix ? ` · action ${search.actionPrefix}*` : ""} · append-only ·
           hash-chained
@@ -67,10 +67,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
 
       <form method="get" action="/audit" className="flex flex-wrap items-end gap-3">
         <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="audit-action"
-            className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)"
-          >
+          <label htmlFor="audit-action" className="text-[11px] font-medium text-(--dim)">
             action prefix
           </label>
           <TextInput
@@ -82,10 +79,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="audit-actor"
-            className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)"
-          >
+          <label htmlFor="audit-actor" className="text-[11px] font-medium text-(--dim)">
             actor
           </label>
           <TextInput
@@ -97,10 +91,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="audit-project"
-            className="font-mono text-[10px] uppercase tracking-[0.18em] text-(--dim)"
-          >
+          <label htmlFor="audit-project" className="text-[11px] font-medium text-(--dim)">
             project id
           </label>
           <TextInput
@@ -115,7 +106,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
         <Button type="submit" size="sm" variant="outline">
           filter
         </Button>
-        <div className="ml-auto flex items-center gap-1 font-mono text-[10.5px] uppercase tracking-[0.16em]">
+        <div className="ml-auto flex items-center gap-1 text-[11.5px] font-medium">
           {WINDOWS.map((w) => (
             <Link
               key={w.key}
@@ -146,7 +137,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                 ...(search.window ? { window: search.window } : {}),
                 cursor: String(nextCursor),
               }).toString()}`}
-              className="self-start font-mono text-[11px] uppercase tracking-[0.18em] text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
+              className="self-start text-[12px] font-medium text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
             >
               older events →
             </Link>

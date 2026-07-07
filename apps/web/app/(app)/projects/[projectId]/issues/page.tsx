@@ -46,7 +46,7 @@ export default async function ProjectIssuesPage({
         <div className="flex flex-col gap-2">
           <Eyebrow>issues</Eyebrow>
           <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Issues</h1>
-          <p className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-(--dim)">
+          <p className="text-[12.5px] text-(--dim)">
             {issues.ok ? `${items.length} ${activeState}` : "mirror unavailable"} · read-mirror of
             GitHub — authoring stays there
           </p>
