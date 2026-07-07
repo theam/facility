@@ -104,6 +104,7 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
         params: IdParams,
         querystring: z.object({
           status: z.string().optional(),
+          agentDefId: z.string().optional(),
           limit: z.coerce.number().int().min(1).max(200).default(50),
           offset: z.coerce.number().int().min(0).default(0),
         }),
@@ -116,9 +117,15 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
       // A project-scoped principal may only list its own project's runs — without
       // this a key pinned to project X could read project Y's runs in the same org.
       assertProjectScope(p, projectId);
-      const query = request.query as { status?: string; limit: number; offset: number };
+      const query = request.query as {
+        status?: string;
+        agentDefId?: string;
+        limit: number;
+        offset: number;
+      };
       const clauses = [eq(runs.orgId, p.orgId), eq(runs.projectId, projectId)];
       if (query.status) clauses.push(eq(runs.status, query.status));
+      if (query.agentDefId) clauses.push(eq(runs.agentDefId, query.agentDefId));
       const rows = await db
         .select()
         .from(runs)

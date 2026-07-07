@@ -267,6 +267,100 @@ export type GithubIssueDetail = GithubIssue & {
 
 export type GithubIssuePage = { items: GithubIssue[]; nextCursor: string | null };
 
+/** Platform vocabulary for semantic pickers — engines, models, permissions, trigger kinds. */
+export type CatalogEngine = { id: string; label: string; note: string };
+export type CatalogModel = {
+  id: string;
+  provider: string;
+  inputPer1M: number;
+  outputPer1M: number;
+};
+export type CatalogTriggerType = { type: string; label: string; note: string };
+export type Catalog = {
+  engines: CatalogEngine[];
+  models: CatalogModel[];
+  permissions: { resources: string[]; special: string[]; all: string[] };
+  triggerTypes: CatalogTriggerType[];
+};
+
+export type AgentStatusRunRef = {
+  id: string;
+  status: string;
+  queuedAt: string;
+  endedAt: string | null;
+  costCents: number | null;
+  prUrl: string | null;
+};
+
+/** Per-agent engine-view feed: schedule truth, next fire, last/live run, 14d counts, event bindings. */
+export type AgentStatus = {
+  agentId: string;
+  name: string;
+  enabled: boolean;
+  engine: string;
+  model: JsonObject;
+  contractItemId: string;
+  contractName: string | null;
+  description: string | null;
+  triggers: JsonObject[];
+  schedule: { cron: string; timezone: string | null; source: string } | null;
+  nextRunAt: string | null;
+  lastRun: AgentStatusRunRef | null;
+  liveRun: { id: string; status: string } | null;
+  counts14d: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    canceled: number;
+    awaitingHuman: number;
+  };
+  prCount14d: number;
+  eventBindings: Array<{
+    integrationId: string;
+    name: string;
+    kind: string;
+    enabled: boolean;
+    dispatchesRuns: boolean;
+  }>;
+};
+
+export type Integration = {
+  id: string;
+  orgId: string;
+  projectId: string | null;
+  kind: string;
+  name: string;
+  config: JsonObject;
+  enabled: boolean;
+  hasSecret: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+export type IntegrationEvent = {
+  id: string;
+  receivedAt: string;
+  verified: boolean;
+  eventType: string;
+  processedAt: string | null;
+  error: string | null;
+};
+export type CreateIntegrationRequest = {
+  name: string;
+  kind: string;
+  config?: JsonObject;
+  secret?: string;
+  projectId?: string;
+  enabled?: boolean;
+};
+export type UpdateIntegrationRequest = {
+  name?: string;
+  kind?: string;
+  config?: JsonObject;
+  secret?: string;
+  projectId?: string | null;
+  enabled?: boolean;
+};
+
 export type Principal = {
   type: "user" | "key";
   id: string;
@@ -401,6 +495,7 @@ export type FacilityGetRoutePath =
   | `/v1/projects/${string}/issues/${string}`
   | `/v1/projects/${string}/kickstart/preview`
   | `/v1/projects/${string}/agents`
+  | `/v1/projects/${string}/agents/status`
   | `/v1/projects/${string}/conversations`
   | `/v1/projects/${string}/runs`
   | "/v1/runs"
@@ -410,6 +505,9 @@ export type FacilityGetRoutePath =
   | "/v1/inbox"
   | "/v1/issues"
   | "/v1/outcomes"
+  | "/v1/catalog"
+  | "/v1/integrations"
+  | `/v1/integrations/${string}/events`
   | "/v1/github/installations"
   | `/v1/github/installations/${string}/repos`
   | `/v1/proposals/${string}`
@@ -456,86 +554,100 @@ export type FacilityGetRouteResponse<Path extends FacilityGetRoutePath> = Path e
             ? GithubIssueDetail
             : Path extends `/v1/projects/${string}/kickstart/preview`
               ? KickstartPreview
-              : Path extends `/v1/projects/${string}/agents`
-                ? AgentDef[]
-                : Path extends `/v1/projects/${string}/runs`
-                  ? Run[]
-                  : Path extends `/v1/projects/${string}/conversations`
-                    ? ConversationListItem[]
-                    : Path extends `/v1/projects/${string}/health`
-                      ? JsonObject
-                      : Path extends `/v1/projects/${string}/tasks`
-                        ? JsonObject[]
-                        : Path extends `/v1/projects/${string}/virtual-keys`
+              : Path extends `/v1/projects/${string}/agents/status`
+                ? AgentStatus[]
+                : Path extends `/v1/projects/${string}/agents`
+                  ? AgentDef[]
+                  : Path extends `/v1/projects/${string}/runs`
+                    ? Run[]
+                    : Path extends `/v1/projects/${string}/conversations`
+                      ? ConversationListItem[]
+                      : Path extends `/v1/projects/${string}/health`
+                        ? JsonObject
+                        : Path extends `/v1/projects/${string}/tasks`
                           ? JsonObject[]
-                          : Path extends `/v1/projects/${string}/kb/entries`
+                          : Path extends `/v1/projects/${string}/virtual-keys`
                             ? JsonObject[]
-                            : Path extends `/v1/projects/${string}/kb/space`
-                              ? JsonObject
-                              : Path extends `/v1/projects/${infer Id}`
-                                ? IfLeaf<Id, Project>
-                                : Path extends "/v1/runs"
-                                  ? RunWithProject[]
-                                  : Path extends `/v1/runs/${string}/events`
-                                    ? RunEvent[]
-                                    : Path extends `/v1/runs/${infer Id}`
-                                      ? IfLeaf<Id, Run>
-                                      : Path extends `/v1/conversations/${infer Id}`
-                                        ? IfLeaf<Id, ConversationDetail>
-                                        : Path extends "/v1/inbox"
-                                          ? InboxResponse
-                                          : Path extends "/v1/issues"
-                                            ? Issue[]
-                                            : Path extends "/v1/outcomes"
-                                              ? Outcome[]
-                                              : Path extends "/v1/github/installations"
-                                                ? GithubInstallation[]
-                                                : Path extends `/v1/github/installations/${string}/repos`
-                                                  ? GithubInstallationReposResponse
-                                                  : Path extends `/v1/proposals/${infer Id}`
-                                                    ? IfLeaf<Id, ProposalWithEvents>
-                                                    : Path extends "/v1/audit"
-                                                      ? AuditTail
-                                                      : Path extends "/v1/audit/verify"
-                                                        ? {
-                                                            ok: boolean;
-                                                            firstBreakSeq: number | null;
-                                                          }
-                                                        : Path extends "/v1/admin/doctor"
-                                                          ? DoctorResponse
-                                                          : Path extends "/v1/registry/items"
-                                                            ? RegistryItem[]
-                                                            : Path extends `/v1/registry/items/${infer Id}`
-                                                              ? IfLeaf<Id, RegistryItemWithVersions>
-                                                              : Path extends "/v1/spend"
-                                                                ? SpendRow[]
-                                                                : Path extends "/v1/members"
-                                                                  ? MemberRow[]
-                                                                  : Path extends "/v1/roles"
-                                                                    ? Role[]
-                                                                    : Path extends "/v1/keys"
-                                                                      ? ApiKey[]
-                                                                      : Path extends "/v1/providers"
-                                                                        ? Provider[]
-                                                                        : Path extends "/v1/budgets"
-                                                                          ? Budget[]
-                                                                          : Path extends `/v1/budgets/${infer Id}`
-                                                                            ? IfLeaf<Id, Budget>
-                                                                            : Path extends "/v1/llm-requests"
-                                                                              ? LlmRequestPage
-                                                                              : Path extends `/v1/llm-requests/${string}/envelope`
-                                                                                ? LlmRequestEnvelope
-                                                                                : Path extends "/v1/sandbox-profiles"
-                                                                                  ? SandboxProfile[]
-                                                                                  : // Non-core surfaces the API serves as permissive AnyObject; typed
-                                                                                    // here as JsonObject so clients can call them without a cast.
-                                                                                    Path extends "/v1/analytics"
-                                                                                    ? JsonObject[]
-                                                                                    : Path extends "/v1/analytics/overview"
-                                                                                      ? JsonObject
-                                                                                      : Path extends `/v1/kb/entries/${string}`
-                                                                                        ? JsonObject
-                                                                                        : never;
+                            : Path extends `/v1/projects/${string}/kb/entries`
+                              ? JsonObject[]
+                              : Path extends `/v1/projects/${string}/kb/space`
+                                ? JsonObject
+                                : Path extends `/v1/projects/${infer Id}`
+                                  ? IfLeaf<Id, Project>
+                                  : Path extends "/v1/runs"
+                                    ? RunWithProject[]
+                                    : Path extends `/v1/runs/${string}/events`
+                                      ? RunEvent[]
+                                      : Path extends `/v1/runs/${infer Id}`
+                                        ? IfLeaf<Id, Run>
+                                        : Path extends `/v1/conversations/${infer Id}`
+                                          ? IfLeaf<Id, ConversationDetail>
+                                          : Path extends "/v1/inbox"
+                                            ? InboxResponse
+                                            : Path extends "/v1/catalog"
+                                              ? Catalog
+                                              : Path extends "/v1/integrations"
+                                                ? Integration[]
+                                                : Path extends `/v1/integrations/${string}/events`
+                                                  ? IntegrationEvent[]
+                                                  : Path extends "/v1/issues"
+                                                    ? Issue[]
+                                                    : Path extends "/v1/outcomes"
+                                                      ? Outcome[]
+                                                      : Path extends "/v1/github/installations"
+                                                        ? GithubInstallation[]
+                                                        : Path extends `/v1/github/installations/${string}/repos`
+                                                          ? GithubInstallationReposResponse
+                                                          : Path extends `/v1/proposals/${infer Id}`
+                                                            ? IfLeaf<Id, ProposalWithEvents>
+                                                            : Path extends "/v1/audit"
+                                                              ? AuditTail
+                                                              : Path extends "/v1/audit/verify"
+                                                                ? {
+                                                                    ok: boolean;
+                                                                    firstBreakSeq: number | null;
+                                                                  }
+                                                                : Path extends "/v1/admin/doctor"
+                                                                  ? DoctorResponse
+                                                                  : Path extends "/v1/registry/items"
+                                                                    ? RegistryItem[]
+                                                                    : Path extends `/v1/registry/items/${infer Id}`
+                                                                      ? IfLeaf<
+                                                                          Id,
+                                                                          RegistryItemWithVersions
+                                                                        >
+                                                                      : Path extends "/v1/spend"
+                                                                        ? SpendRow[]
+                                                                        : Path extends "/v1/members"
+                                                                          ? MemberRow[]
+                                                                          : Path extends "/v1/roles"
+                                                                            ? Role[]
+                                                                            : Path extends "/v1/keys"
+                                                                              ? ApiKey[]
+                                                                              : Path extends "/v1/providers"
+                                                                                ? Provider[]
+                                                                                : Path extends "/v1/budgets"
+                                                                                  ? Budget[]
+                                                                                  : Path extends `/v1/budgets/${infer Id}`
+                                                                                    ? IfLeaf<
+                                                                                        Id,
+                                                                                        Budget
+                                                                                      >
+                                                                                    : Path extends "/v1/llm-requests"
+                                                                                      ? LlmRequestPage
+                                                                                      : Path extends `/v1/llm-requests/${string}/envelope`
+                                                                                        ? LlmRequestEnvelope
+                                                                                        : Path extends "/v1/sandbox-profiles"
+                                                                                          ? SandboxProfile[]
+                                                                                          : // Non-core surfaces the API serves as permissive AnyObject; typed
+                                                                                            // here as JsonObject so clients can call them without a cast.
+                                                                                            Path extends "/v1/analytics"
+                                                                                            ? JsonObject[]
+                                                                                            : Path extends "/v1/analytics/overview"
+                                                                                              ? JsonObject
+                                                                                              : Path extends `/v1/kb/entries/${string}`
+                                                                                                ? JsonObject
+                                                                                                : never;
 
 export type FacilityPostRoutes = {
   "/v1/projects": Route<Project, CreateProjectRequest>;
@@ -564,6 +676,7 @@ export type FacilityPostRoutes = {
     CreateConversationMessageRequest
   >;
   "/v1/proposals": Route<Proposal, CreateProposalRequest>;
+  "/v1/integrations": Route<Integration, CreateIntegrationRequest>;
   "/v1/mcp/tool-proposals": Route<Proposal, McpToolProposalRequest>;
   [path: `/v1/proposals/${string}/decide`]: {
     body: DecideProposalRequest;
@@ -611,6 +724,7 @@ export type FacilityPatchRoutes = {
     response: Serialized<OrgMemberRow>;
   };
   [path: `/v1/roles/${string}`]: { body: UpdateRoleRequest; response: Role };
+  [path: `/v1/integrations/${string}`]: { body: UpdateIntegrationRequest; response: Integration };
   "/v1/org": Route<JsonObject, JsonObject>;
   [path: `/v1/kb/entries/${string}`]: Route<JsonObject, JsonObject>;
   [path: `/v1/sandbox-profiles/${string}`]: Route<JsonObject, JsonObject>;

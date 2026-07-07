@@ -17,11 +17,15 @@ import { cookies } from "next/headers";
 
 export type {
   AgentDef,
+  AgentStatus,
   ApiKey,
   AuditEvent,
   Budget,
+  Catalog,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
+  Integration,
+  IntegrationEvent,
   Issue,
   KickstartAnswers,
   KickstartPreview,
@@ -107,6 +111,11 @@ export const api = {
   kickstart: (projectId: string, body: { repoId: string; answers: KickstartAnswers; mode: "pr" }) =>
     apiFetch("POST", `/v1/projects/${projectId}/kickstart`, { body }),
   projectAgents: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/agents`),
+  agentsStatus: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/agents/status`),
+  catalog: () => apiFetch("GET", "/v1/catalog"),
+  integrations: () => apiFetch("GET", "/v1/integrations"),
+  integrationEvents: (integrationId: string) =>
+    apiFetch("GET", `/v1/integrations/${integrationId}/events`),
   projectHealth: (projectId: string) => apiFetch("GET", `/v1/projects/${projectId}/health`),
   updateProject: (projectId: string, body: Record<string, unknown>) =>
     apiFetch("PATCH", `/v1/projects/${projectId}`, {

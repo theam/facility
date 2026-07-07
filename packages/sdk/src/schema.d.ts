@@ -2243,6 +2243,7 @@ export interface paths {
             parameters: {
                 query?: {
                     status?: string;
+                    agentDefId?: string;
                     limit?: number;
                     offset?: number;
                 };
@@ -5959,6 +5960,370 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/v1/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            engines: {
+                                id: string;
+                                label: string;
+                                note: string;
+                            }[];
+                            models: {
+                                id: string;
+                                provider: string;
+                                inputPer1M: number;
+                                outputPer1M: number;
+                            }[];
+                            permissions: {
+                                resources: string[];
+                                special: string[];
+                                all: string[];
+                            };
+                            triggerTypes: {
+                                type: string;
+                                label: string;
+                                note: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/agents/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    runId: string;
+                    itemId: string;
+                    versionId: string;
+                    proposalId: string;
+                    entryId: string;
+                    taskId: string;
+                    issueId: string;
+                    keyId: string;
+                    userId: string;
+                    roleId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            agentId: string;
+                            name: string;
+                            enabled: boolean;
+                            engine: string;
+                            model: {
+                                [key: string]: unknown;
+                            };
+                            contractItemId: string;
+                            contractName: string | null;
+                            description: string | null;
+                            triggers: {
+                                [key: string]: unknown;
+                            }[];
+                            schedule: {
+                                cron: string;
+                                timezone: string | null;
+                                source: string;
+                            } | null;
+                            /** Format: date-time */
+                            nextRunAt: string | null;
+                            lastRun: {
+                                id: string;
+                                status: string;
+                                /** Format: date-time */
+                                queuedAt: string;
+                                /** Format: date-time */
+                                endedAt: string | null;
+                                costCents: number | null;
+                                prUrl: string | null;
+                            } | null;
+                            liveRun: {
+                                id: string;
+                                status: string;
+                            } | null;
+                            counts14d: {
+                                total: number;
+                                succeeded: number;
+                                failed: number;
+                                canceled: number;
+                                awaitingHuman: number;
+                            };
+                            prCount14d: number;
+                            eventBindings: {
+                                integrationId: string;
+                                name: string;
+                                kind: string;
+                                enabled: boolean;
+                                dispatchesRuns: boolean;
+                            }[];
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string | null;
+                            kind: string;
+                            name: string;
+                            config: {
+                                [key: string]: unknown;
+                            };
+                            enabled: boolean;
+                            hasSecret: boolean;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name: string;
+                        kind: string;
+                        /** @default {} */
+                        config?: {
+                            [key: string]: unknown;
+                        };
+                        secret?: string;
+                        projectId?: string;
+                        /** @default true */
+                        enabled?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string | null;
+                            kind: string;
+                            name: string;
+                            config: {
+                                [key: string]: unknown;
+                            };
+                            enabled: boolean;
+                            hasSecret: boolean;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/integrations/{integrationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    integrationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        kind?: string;
+                        config?: {
+                            [key: string]: unknown;
+                        };
+                        secret?: string;
+                        projectId?: string | null;
+                        enabled?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            orgId: string;
+                            projectId: string | null;
+                            kind: string;
+                            name: string;
+                            config: {
+                                [key: string]: unknown;
+                            };
+                            enabled: boolean;
+                            hasSecret: boolean;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/integrations/{integrationId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    integrationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            /** Format: date-time */
+                            receivedAt: string;
+                            verified: boolean;
+                            eventType: string;
+                            /** Format: date-time */
+                            processedAt: string | null;
+                            error: string | null;
+                        }[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/admin/doctor": {
