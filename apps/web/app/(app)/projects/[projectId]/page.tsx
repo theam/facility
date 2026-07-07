@@ -1,5 +1,6 @@
 import { Cell, Divider, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
+import { EngineLoop } from "@/components/agents/engine-loop";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api, summarizeSpend } from "@/lib/api";
@@ -38,15 +39,17 @@ export default async function ProjectOverviewPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [project, runs, spend, health, inbox, agents, outcomes] = await Promise.all([
-    api.project(projectId),
-    api.runs(projectId),
-    api.spend(`?projectId=${projectId}&groupBy=agent`),
-    api.projectHealth(projectId),
-    api.inboxFull(),
-    api.projectAgents(projectId),
-    api.outcomes(`?state=open&projectId=${projectId}&limit=10`),
-  ]);
+  const [project, runs, spend, health, inbox, agentsStatus, outcomes, allOutcomes] =
+    await Promise.all([
+      api.project(projectId),
+      api.runs(projectId),
+      api.spend(`?projectId=${projectId}&groupBy=agent`),
+      api.projectHealth(projectId),
+      api.inboxFull(),
+      api.agentsStatus(projectId),
+      api.outcomes(`?state=open&projectId=${projectId}&limit=10`),
+      api.outcomes(`?state=all&projectId=${projectId}&limit=6`),
+    ]);
 
   if (!project.ok) {
     return project.offline ? (
@@ -75,16 +78,19 @@ export default async function ProjectOverviewPage({
     : null;
   const signals = healthData?.signals ?? [];
 
+  const agentRows = agentsStatus.ok ? agentsStatus.data : [];
+  const agentNameById = new Map(agentRows.map((row) => [row.agentId, row.name]));
   const ownerAgentIds = new Set(
-    (agents.ok ? agents.data : [])
-      .filter((agent) => OWNER_AGENT_NAMES.has(agent.name))
-      .map((agent) => agent.id),
+    agentRows.filter((row) => OWNER_AGENT_NAMES.has(row.name)).map((row) => row.agentId),
   );
   const ownerRuns = items.filter((r) => r.agentDefId && ownerAgentIds.has(r.agentDefId));
   const lastOwnerRun = ownerRuns[0];
 
   const recent = items.slice(0, 8);
   const spendSummary = spend.ok ? summarizeSpend(spend.data) : null;
+  const shipped = allOutcomes.ok
+    ? allOutcomes.data.filter((outcome) => outcome.terminalAt).slice(0, 5)
+    : [];
 
   return (
     <div className="flex flex-col gap-10">
@@ -227,6 +233,32 @@ export default async function ProjectOverviewPage({
         )}
       </section>
 
+      <section className="flex flex-col gap-4">
+        <div className="flex items-baseline justify-between">
+          <Eyebrow>the engine</Eyebrow>
+          <Link
+            href={`/projects/${projectId}/agents`}
+            className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-(--mut) hover:text-(--ink)"
+          >
+            all agents →
+          </Link>
+        </div>
+        {agentRows.length === 0 ? (
+          <p className="text-sm text-(--dim)">
+            No agents configured yet —{" "}
+            <Link
+              href={`/projects/${projectId}/agents/new`}
+              className="text-(--ink) underline underline-offset-4"
+            >
+              create the first one
+            </Link>
+            .
+          </p>
+        ) : (
+          <EngineLoop projectId={projectId} rows={agentRows} compact />
+        )}
+      </section>
+
       <Divider />
 
       <HairlineGrid cols="lg:grid-cols-2">
@@ -334,20 +366,65 @@ export default async function ProjectOverviewPage({
             </div>
           )}
         </div>
-        <div className="flex flex-col gap-4">
-          <Eyebrow>spend · mtd</Eyebrow>
-          <div className="flex flex-col gap-3 border border-(--line) p-5">
-            <Metric
-              label="total"
-              value={spendSummary ? fmtCost(spendSummary.totalCents) : "—"}
-              hint="straight from the gateway"
-            />
-            {spendSummary?.groups.slice(0, 4).map((group) => (
-              <div key={group.key} className="flex justify-between gap-4 font-mono text-[12px]">
-                <span className="truncate text-(--dim)">{group.key}</span>
-                <span className="text-(--code)">{fmtCost(group.cents)}</span>
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-4">
+            <Eyebrow>spend · mtd</Eyebrow>
+            <div className="flex flex-col gap-3 border border-(--line) p-5">
+              <Metric
+                label="total"
+                value={spendSummary ? fmtCost(spendSummary.totalCents) : "—"}
+                hint="straight from the gateway"
+              />
+              {spendSummary?.groups.slice(0, 4).map((group) => (
+                <div key={group.key} className="flex justify-between gap-4 font-mono text-[12px]">
+                  <span className="truncate text-(--dim)">
+                    {agentNameById.get(group.key) ?? group.key}
+                  </span>
+                  <span className="text-(--code)">{fmtCost(group.cents)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-4">
+            <Eyebrow>shipped</Eyebrow>
+            {shipped.length === 0 ? (
+              <p className="text-sm text-(--dim)">No terminal PRs recorded yet.</p>
+            ) : (
+              <div className="flex flex-col border border-(--line)">
+                {shipped.map((outcome) => (
+                  <a
+                    key={outcome.id}
+                    href={`https://github.com/${outcome.repo}/pull/${outcome.prNumber}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 border-b border-(--line) px-4 py-3 transition-colors last:border-b-0 hover:bg-(--card)"
+                  >
+                    <StatusDot tone={outcome.fate === "merged" ? "ok" : "machine"} />
+                    <span className="font-mono text-[11.5px] text-(--ink)">
+                      #{outcome.prNumber}
+                    </span>
+                    <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-(--mut)">
+                      {outcome.fate ?? "open"}
+                    </span>
+                    {outcome.fate === "merged" && outcome.fixupCommits === 0 ? (
+                      <span
+                        className="border border-(--line) px-1.5 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-(--ok)"
+                        title="merged with zero fixup commits"
+                      >
+                        one-shot
+                      </span>
+                    ) : outcome.fixupCommits > 0 ? (
+                      <span className="font-mono text-[10px] text-(--dim)">
+                        {outcome.fixupCommits} fixup{outcome.fixupCommits === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    <span className="ml-auto font-mono text-[10px] text-(--dim)">
+                      {outcome.terminalAt ? fmtAgo(outcome.terminalAt) : ""}
+                    </span>
+                  </a>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         </div>
       </section>
