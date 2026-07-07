@@ -1,6 +1,7 @@
 import { Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
-import { type GhIssue, IssueRow } from "@/components/issues/issue-row";
+import { IssueList } from "@/components/issues/issue-list";
+import type { GhIssue } from "@/components/issues/issue-row";
 import { SyncIssuesButton } from "@/components/issues/sync-button";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -75,11 +76,7 @@ export default async function ProjectIssuesPage({
           connected repository automatically; use sync to backfill.
         </p>
       ) : (
-        <div className="flex flex-col border border-(--line)">
-          {items.map((issue) => (
-            <IssueRow key={issue.id} projectId={projectId} issue={issue} canTrigger={canTrigger} />
-          ))}
-        </div>
+        <IssueList projectId={projectId} items={items} canTrigger={canTrigger} />
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import { Eyebrow, PillTag } from "@facility/ui";
+import { HarnessList } from "@/components/harness/harness-list";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { api } from "@/lib/api";
 
@@ -17,8 +18,8 @@ const KINDS = [
 
 /**
  * The harness defines how well the factory implements, verifies, and
- * researches: skills, rules, contracts, guards. Read view for now — item
- * detail, version diffs, and draft→publish editing land with P4.
+ * researches: skills, rules, contracts, guards — searchable, facetable,
+ * and authorable in product.
  */
 export default async function HarnessPage({
   searchParams,
@@ -26,7 +27,10 @@ export default async function HarnessPage({
   searchParams: Promise<{ kind?: string }>;
 }) {
   const { kind } = await searchParams;
-  const registry = await api.registry(kind ? `?kind=${kind}` : "");
+  const [registry, projects] = await Promise.all([
+    api.registry(kind ? `?kind=${kind}` : ""),
+    api.projects(),
+  ]);
   if (!registry.ok)
     return registry.offline ? <Offline /> : <ErrorNotice message={registry.message} />;
 
@@ -54,29 +58,11 @@ export default async function HarnessPage({
         ))}
       </div>
 
-      {items.length === 0 ? (
-        <p className="text-sm text-(--dim)">Nothing published under this filter yet.</p>
-      ) : (
-        <div className="flex flex-col border border-(--line)">
-          {items.map((item) => (
-            <a
-              key={item.id}
-              href={`/harness/${item.id}`}
-              className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-(--line) px-5 py-4 transition-colors last:border-b-0 hover:bg-(--card)"
-            >
-              <span className="font-mono text-[13px] text-(--ink)">{item.name}</span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-(--dim)">
-                {item.kind} · {item.scope} · v{item.latestVersion}
-              </span>
-              {item.description ? (
-                <span className="w-full text-[12.5px] leading-relaxed text-(--mut) sm:w-auto sm:flex-1">
-                  {item.description}
-                </span>
-              ) : null}
-            </a>
-          ))}
-        </div>
-      )}
+      <HarnessList
+        items={items}
+        projects={projects.ok ? projects.data.map((p) => ({ id: p.id, slug: p.slug })) : []}
+        activeKind={kind}
+      />
     </div>
   );
 }

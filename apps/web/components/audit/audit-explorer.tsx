@@ -15,6 +15,21 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
   const [verifyError, setVerifyError] = useState<string | null>(null);
   const selected = events.find((event) => event.seq === openSeq) ?? null;
 
+  // Decision-grade summary of the loaded window (L2 altitude 1) — labeled as
+  // such: it describes what's on this page, not all history.
+  const families = new Map<string, number>();
+  const actors = new Map<string, number>();
+  for (const event of events) {
+    const family = event.action.split(".")[0] ?? event.action;
+    families.set(family, (families.get(family) ?? 0) + 1);
+    const actor = event.actor.name ?? event.actor.id;
+    actors.set(actor, (actors.get(actor) ?? 0) + 1);
+  }
+  const topFamilies = [...families.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topActors = [...actors.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const newest = events[0]?.createdAt;
+  const oldest = events[events.length - 1]?.createdAt;
+
   async function runVerify() {
     setVerifying(true);
     setVerifyError(null);
@@ -31,6 +46,32 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {events.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border border-(--line) bg-(--bg-subtle) px-5 py-3">
+          <span className="font-mono text-[11.5px] text-(--ink)">
+            {events.length} events on this page
+          </span>
+          {oldest && newest ? (
+            <span className="font-mono text-[10.5px] text-(--dim)">
+              {new Date(oldest).toLocaleString()} → {new Date(newest).toLocaleString()}
+            </span>
+          ) : null}
+          <span className="flex flex-wrap items-center gap-2">
+            {topFamilies.map(([family, count]) => (
+              <span
+                key={family}
+                className="inline-flex items-center gap-1.5 border border-(--line) px-2 py-0.5 font-mono text-[10.5px] text-(--mut)"
+              >
+                {family} <span className="text-(--code)">{count}</span>
+              </span>
+            ))}
+          </span>
+          <span className="ml-auto font-mono text-[10.5px] text-(--dim)">
+            top actors: {topActors.map(([actor, count]) => `${actor} (${count})`).join(" · ")}
+          </span>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" variant="outline" disabled={verifying} onClick={() => void runVerify()}>
           {verifying ? "verifying chain…" : "verify hash chain"}
