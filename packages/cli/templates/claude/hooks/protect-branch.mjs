@@ -22,9 +22,8 @@ if (!command) process.exit(0);
 
 const tokens = command.split(/\s+/);
 const has = (t) => tokens.includes(t);
-const targetsProtectedRef = tokens.some(
-  (t) => PROTECTED.test(t) || /:({{DEFAULT_BRANCH}}|main|master)$/.test(t)
-);
+const targetsProtected = (t) => PROTECTED.test(t) || /:({{DEFAULT_BRANCH}}|main|master)$/.test(t);
+const targetsProtectedRef = tokens.some(targetsProtected);
 const isForce = has("--force") || has("-f") || has("--force-with-lease");
 
 function block(reason) {
@@ -51,7 +50,9 @@ if (has("git") && has("push") && targetsProtectedRef) {
 }
 
 if (/>>?\s*\.?\/?\.env(\.[\w.]+)?\b/.test(command) && !/\.env\.example\b/.test(command)) {
-  block("Refusing to redirect output into a real .env file (secrets). Edit .env.example for placeholders.");
+  block(
+    "Refusing to redirect output into a real .env file (secrets). Edit .env.example for placeholders.",
+  );
 }
 
 process.exit(0);

@@ -28,7 +28,10 @@ export default {
       }
       const crons = (text.match(/- cron:/g) ?? []).length;
       if (crons < minCrons) {
-        violations.push({ file, message: `expected at least ${minCrons} cron schedule(s), found ${crons}` });
+        violations.push({
+          file,
+          message: `expected at least ${minCrons} cron schedule(s), found ${crons}`,
+        });
       }
     }
 
@@ -38,8 +41,12 @@ export default {
       return violations;
     }
     try {
-      const { CANARY_PROBE_BODY } = await import(pathToFileURL(".github/facility/watchtower/canary.mjs").href);
-      const expected = createHash("sha256").update(CANARY_PROBE_BODY.replace(/\r/g, ""), "utf8").digest("hex");
+      const { CANARY_PROBE_BODY } = await import(
+        pathToFileURL(".github/facility/watchtower/canary.mjs").href
+      );
+      const expected = createHash("sha256")
+        .update(CANARY_PROBE_BODY.replace(/\r/g, ""), "utf8")
+        .digest("hex");
       if (!crew.includes(expected)) {
         violations.push({
           file: ".github/workflows/facility-crew.yml",

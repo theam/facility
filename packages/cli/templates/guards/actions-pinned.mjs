@@ -4,7 +4,7 @@
 // Tags and branches are mutable: a compromised action repo can re-point
 // `v4` at malicious code and your CI — which holds secrets and write
 // tokens — runs it on the next push. A 40-hex SHA cannot be re-pointed.
-import { listFiles, readText, applyAllowlist } from "./_kit.mjs";
+import { applyAllowlist, listFiles, readText } from "./_kit.mjs";
 
 // key: "<file>:<uses-ref>", value: written reason. Keep this empty unless a
 // pin is truly impossible; document why.

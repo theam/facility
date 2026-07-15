@@ -39,6 +39,10 @@ environment is unavailable — verify by running the checks.
 <output_contract>
 - Conventional Commits; semantic branches (feature/…, fix/…, chore/…, ci/…);
   no agent/tool prefix in branch names.
+- Signed bot authorship is the complete attribution. Never add a
+  `Co-authored-by` trailer for the requester or any other person.
+- For issue-triggered work, open the non-draft PR yourself. A link that asks a
+  human to create it is not delivery.
 - Finish with one concise, team-lead-ready summary: what changed and why, the
   checks you ran plus results, and any genuinely out-of-scope follow-ups
   (never deferred parts of the requested task). No implementation diary.
@@ -47,7 +51,9 @@ environment is unavailable — verify by running the checks.
 <completion_criteria>
 Done only when the change is implemented (not proposed), the right checks were
 run and pass (or a failure is explicitly reported with what ran), and the
-completion checklist in `STANDARD.md` is satisfied.
+completion checklist in `STANDARD.md` is satisfied. The workflow independently
+re-runs the configured checks and fails closed unless a semantic branch, verified
+commit, bot-authored PR, and machine-readable delivery receipt all exist.
 </completion_criteria>
 
 <safety_rules>

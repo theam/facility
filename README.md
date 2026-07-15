@@ -59,7 +59,7 @@ platform owns what has to be centralized to govern an operation:
 | **Projects & governance** | many projects per org; kickstart a repo to a working factory in minutes; repo **fingerprints** detect drift/corruption; **upgrades** arrive as PRs; the whole method is versioned |
 | **Sandboxes & sessions** | isolated cloud sandboxes for Claude Code / Codex / BYO; **watch any run live and steer a stuck agent**, on the record; driver-based (Docker local, Fargate cloud) |
 | **Gateway & cost** | every model call routes through the LLM proxy — project **virtual keys**, hard **budgets**, cost by model/agent/task, and optional full request/response **envelope capture** (when object storage is configured) |
-| **Registry** | skills, rules, agent contracts, harnesses, guards, templates — versioned, bundled, immutable once published; define project-specific agents declaratively via the API/CLI/MCP |
+| **Harness** | skills, rules, agent contracts, guards, templates — versioned, bundled, immutable once published; define project-specific agents declaratively via the web, API, CLI, or MCP |
 | **Watchtower** | outcomes, health, the canary — per project, monitor-independent, live numbers never curated |
 | **Inbox** | one place for every decision an agent needs — plan gates, learning validations, budget overrides — approve/reject/steer, fully audited |
 | **Knowledge & the Project Owner** | a Limina-style agent owns the project domain, maintains a validated knowledge base, and turns needs into implementation tasks; **learning mode** proposes new skills and guards nightly, human-validated |
@@ -105,6 +105,38 @@ docker compose up -d
 
 Full guide, production notes, and the AWS Terraform module:
 [docs/platform/](docs/platform/) and the docs site (`pnpm --filter @facility/docs dev`).
+
+## Repository automation authentication
+
+`facility init --auth=<mode>` renders one authentication mode consistently into
+every generated workflow and records it in `.facility.json`. The default is
+`api-key`; enterprises should prefer short-lived WIF or cloud OIDC when their
+provider setup supports it.
+
+| mode | GitHub configuration | intended use |
+|---|---|---|
+| `wif` | `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID` variables | Preferred direct-Anthropic enterprise path; short-lived GitHub OIDC exchange |
+| `bedrock` | `AWS_ROLE_TO_ASSUME` secret, `AWS_REGION` variable | Amazon Bedrock through an AWS GitHub OIDC role |
+| `vertex` | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` variables | Vertex AI through Google Workload Identity Federation |
+| `api-key` | `ANTHROPIC_API_KEY` secret | Simple default; use a dedicated, spend-capped test-tier key |
+| `oauth` | `CLAUDE_CODE_OAUTH_TOKEN` secret | Compatibility path for a Claude subscription token |
+
+`facility doctor` reads the manifest/workflows, checks the selected mode, and
+reports the three configured model tiers. Do not configure multiple modes in the
+same workflow; static credentials take precedence over WIF and defeat its purpose.
+For `bedrock` and `vertex`, pass provider-compatible model identifiers through the
+three `--*-model` flags rather than relying on direct-Anthropic defaults.
+
+## Verification
+
+`pnpm verify` is the release-shaped local acceptance command: lint, typecheck,
+output removal plus a cache-disabled build, direct uncached critical integration tests against isolated
+test databases, remaining uncached tests, guards, and the high-severity dependency
+gate. Clean `docker compose build` is an independent required CI job.
+
+The Docker-backed sandbox E2E is intentionally a separate acceptance tier. Its
+required/allowed-skip policy and local command are defined in
+[docs/testing.md](docs/testing.md).
 
 ## The method
 

@@ -4,7 +4,7 @@ if (/(^|\/)(supabase\/|db\/|prisma\/)?migrations\/[^/]+\.(sql|js|ts|rb|py)$/.tes
   const isEdit = tool === "Edit" || tool === "MultiEdit";
   if (isEdit) {
     block(
-      "Migration files are immutable once written. Create a NEW timestamped migration instead."
+      "Migration files are immutable once written. Create a NEW timestamped migration instead.",
     );
   }
 }

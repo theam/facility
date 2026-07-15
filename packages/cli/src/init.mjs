@@ -16,6 +16,9 @@ import { accent, banner, bold, dim, heading, item, ok, skip, warn } from "./ui.m
 const CHECKOUT_SHA = "34e114876b0b11c390a56381ad16ebd13914f8d5"; // actions/checkout v4
 const SETUP_NODE_SHA = "49933ea5288caeca8642d1e84afbd3f7d6820020"; // actions/setup-node v4
 const PNPM_SHA = "b906affcce14559ad1aafd4ab0e942779e9f58b1"; // pnpm/action-setup v4
+const AWS_AUTH_SHA = "517a711dbcd0e402f90c77e7e2f81e849156e31d"; // aws-actions/configure-aws-credentials v6.2.2
+const GOOGLE_AUTH_SHA = "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093"; // google-github-actions/auth v3
+const AUTH_MODES = new Set(["api-key", "oauth", "wif", "bedrock", "vertex"]);
 
 function toolchainSteps(packageManager, { conditional = false } = {}) {
   const guard = conditional ? "\n        if: steps.workflow-change.outputs.changed != 'true'" : "";
@@ -90,7 +93,7 @@ function doctorWatch(workflowNames) {
 
 function checksAllowJson(checks) {
   if (!checks.length) return "";
-  return checks.map((c) => `"Bash(${c})",`).join("\n      ");
+  return checks.map((c) => `      "Bash(${c})",`).join("\n");
 }
 
 function checksList(checks) {
@@ -103,6 +106,120 @@ function checksList(checks) {
     "Escalate beyond this list when the change touches data, auth, or critical user flows — and say which extra checks ran."
   );
   return lines.join("\n");
+}
+
+function checksRun(checks) {
+  if (checks.length) return checks.map((command) => `          ${command}`).join("\n");
+  return [
+    '          echo "::error::No verification commands are configured in .facility.json."',
+    "          exit 1",
+  ].join("\n");
+}
+
+function anthropicAuthSetup(mode, condition = "") {
+  const conditional = condition ? [`        if: ${condition}`] : [];
+  if (mode === "oauth") {
+    return [
+      "      - name: Prepare Claude Code OAuth token",
+      "        id: claude-auth",
+      ...conditional,
+      "        shell: bash",
+      "        env:",
+      "          RAW_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+      "        run: |",
+      '          token="$RAW_CLAUDE_CODE_OAUTH_TOKEN"',
+      "          token=\"${token//$'\\r'/}\"",
+      "          token=\"${token//$'\\n'/}\"",
+      '          token="${token#"${token%%[![:space:]]*}"}"',
+      '          token="${token%"${token##*[![:space:]]}"}"',
+      "          token=\"${token#export CLAUDE_CODE_OAUTH_TOKEN=}\"",
+      "          token=\"${token#CLAUDE_CODE_OAUTH_TOKEN=}\"",
+      '          token="${token#\\\"}"',
+      '          token="${token%\\\"}"',
+      "          token=\"${token#\\'}\"",
+      "          token=\"${token%\\'}\"",
+      "",
+      '          if [ -z "$token" ]; then',
+      '            echo "::error::CLAUDE_CODE_OAUTH_TOKEN is empty. Generate it with \'claude setup-token\' and store it as a repository or organization secret."',
+      "            exit 1",
+      "          fi",
+      `          if printf '%s' "$token" | grep -q '[[:cntrl:]]'; then`,
+      '            echo "::error::CLAUDE_CODE_OAUTH_TOKEN contains control characters after normalization."',
+      "            exit 1",
+      "          fi",
+      "",
+      '          echo "::add-mask::$token"',
+      '          echo "token=$token" >> "$GITHUB_OUTPUT"',
+    ].join("\n");
+  }
+  if (mode === "bedrock") {
+    return [
+      "      - name: Authenticate to AWS for Amazon Bedrock",
+      ...conditional,
+      `        uses: aws-actions/configure-aws-credentials@${AWS_AUTH_SHA} # v6.2.2`,
+      "        with:",
+      "          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}",
+      "          aws-region: ${{ vars.AWS_REGION }}",
+    ].join("\n");
+  }
+  if (mode === "vertex") {
+    return [
+      "      - name: Authenticate to Google Cloud for Vertex AI",
+      ...conditional,
+      `        uses: google-github-actions/auth@${GOOGLE_AUTH_SHA} # v3`,
+      "        with:",
+      "          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
+      "          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}",
+    ].join("\n");
+  }
+  return "";
+}
+
+function anthropicAuthInputs(mode) {
+  if (mode === "api-key") {
+    return "          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}";
+  }
+  if (mode === "oauth") {
+    return "          claude_code_oauth_token: ${{ steps.claude-auth.outputs.token }}";
+  }
+  if (mode === "wif") {
+    return [
+      "          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}",
+      "          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}",
+      "          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}",
+      "          anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}",
+    ].join("\n");
+  }
+  if (mode === "bedrock") return '          use_bedrock: "true"';
+  return '          use_vertex: "true"';
+}
+
+function authOnboardingStep(mode) {
+  if (mode === "api-key") {
+    return "Add a dedicated, spend-capped Anthropic key:  gh secret set ANTHROPIC_API_KEY";
+  }
+  if (mode === "oauth") {
+    return "Create the agent token:  claude setup-token  then  gh secret set CLAUDE_CODE_OAUTH_TOKEN";
+  }
+  if (mode === "wif") {
+    return "Configure Anthropic WIF and set ANTHROPIC_FEDERATION_RULE_ID + ANTHROPIC_ORGANIZATION_ID as GitHub variables (service account/workspace are optional).";
+  }
+  if (mode === "bedrock") {
+    return "Configure GitHub OIDC for AWS, then set AWS_ROLE_TO_ASSUME as a secret and AWS_REGION as a variable.";
+  }
+  return "Configure Google Workload Identity Federation, then set GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT as GitHub variables.";
+}
+
+function formatManifest(manifest) {
+  const text = JSON.stringify(manifest, null, 2);
+  const compactChecks = `  \"checks\": [${manifest.checks.map((check) => JSON.stringify(check)).join(", ")}],`;
+  if (compactChecks.length > 100 || manifest.checks.length === 0) return `${text}\n`;
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line === '  "checks": [');
+  const end = lines.findIndex((line, index) => index > start && line === "  ],");
+  if (start < 0 || end < 0) return `${text}\n`;
+  lines.splice(start, end - start + 1, compactChecks);
+  return `${lines.join("\n")}\n`;
 }
 
 export async function init(flags, pkgRoot, version) {
@@ -149,6 +266,11 @@ export async function init(flags, pkgRoot, version) {
     plan: flags["plan-model"] || "claude-opus-4-8",
   };
   item(dim(`model tiering: ${models.build} build · ${models.review} review · ${models.plan} plan/repair/sweep`));
+  const anthropicAuth = String(flags.auth || "api-key").toLowerCase();
+  if (!AUTH_MODES.has(anthropicAuth)) {
+    throw new Error(`Unsupported --auth=${anthropicAuth}. Use api-key, oauth, wif, bedrock, or vertex.`);
+  }
+  item(dim(`Anthropic auth: ${anthropicAuth}`));
   const canaryBot = flags["canary-bot"] || "facility-canary[bot]";
   const project =
     flags.project ??
@@ -184,6 +306,7 @@ export async function init(flags, pkgRoot, version) {
     PLAN_MODEL: models.plan,
     PROVISION_CMD: provisionCmd,
     CHECKS_INLINE: checksInline,
+    CHECKS_RUN: checksRun(checks),
     CHECKS_LIST: checksList(checks),
     ALLOW_CHECKS_JSON: checksAllowJson(checks),
     TOOLCHAIN_STEPS: toolchainSteps(detected.packageManager),
@@ -192,6 +315,16 @@ export async function init(flags, pkgRoot, version) {
     CANARY_BOT: canaryBot,
     CANARY_SHA256: canarySha256,
     DOCTOR_WATCH: doctorWatch(detected.workflowNames),
+    ANTHROPIC_AUTH_SETUP: anthropicAuthSetup(anthropicAuth),
+    ANTHROPIC_AUTH_SETUP_CREW: anthropicAuthSetup(
+      anthropicAuth,
+      "steps.requested-agent.outputs.run == 'true'",
+    ),
+    ANTHROPIC_AUTH_SETUP_CONDITIONAL: anthropicAuthSetup(
+      anthropicAuth,
+      "steps.workflow-change.outputs.changed != 'true'",
+    ),
+    ANTHROPIC_AUTH_INPUTS: anthropicAuthInputs(anthropicAuth),
   };
 
   const template = (relPath) => readFileSync(join(pkgRoot, "templates", relPath), "utf8");
@@ -208,6 +341,8 @@ export async function init(flags, pkgRoot, version) {
     { to: ".github/facility/doctor.md", content: render(template("prompts/doctor.md"), vars) },
     { to: ".github/facility/sweep.md", content: render(template("prompts/sweep.md"), vars) },
     { to: ".github/facility/doctor/resolve.mjs", content: template("doctor/resolve.mjs") },
+    { to: ".github/facility/delivery/verify.mjs", content: template("delivery/verify.mjs") },
+    { to: ".github/facility/review/finalize.mjs", content: template("review/finalize.mjs") },
     { to: ".github/facility/watchtower/outcomes.mjs", content: template("watchtower/outcomes.mjs") },
     { to: ".github/facility/watchtower/health.mjs", content: template("watchtower/health.mjs") },
     { to: ".github/facility/watchtower/canary.mjs", content: template("watchtower/canary.mjs") },
@@ -280,7 +415,8 @@ export async function init(flags, pkgRoot, version) {
 
   const manifest = {
     facility: version,
-    engine: "claude",
+    engine: "claude-code",
+    auth: { provider: "anthropic", mode: anthropicAuth },
     defaultBranch,
     provision: provision || null,
     checks,
@@ -289,7 +425,7 @@ export async function init(flags, pkgRoot, version) {
     board: project ? { org, project: Number(project) } : null,
     modules: [],
   };
-  writeFileSync(join(dir, ".facility.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(join(dir, ".facility.json"), formatManifest(manifest));
   ok(".facility.json");
 
   for (const moduleName of modules) {
@@ -298,7 +434,7 @@ export async function init(flags, pkgRoot, version) {
 
   heading("Done. The steps only you can do:");
   const steps = [
-    `Create the agent token:  ${accent("claude setup-token")}  then  ${accent("gh secret set CLAUDE_CODE_OAUTH_TOKEN")}`,
+    authOnboardingStep(anthropicAuth),
     `Install the Claude GitHub App on the repo (github.com/apps/claude) so crew pushes re-trigger CI.`,
     `Protect ${bold(defaultBranch)}: require a PR and one human review. The crew never merges; this makes it structural.`,
   ];

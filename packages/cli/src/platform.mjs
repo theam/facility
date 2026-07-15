@@ -35,8 +35,9 @@ export async function runPlatformCommand(command, args, options = {}) {
         return await status(authed, flags);
       case "projects":
         return await projects(rest, authed, flags);
-      case "runs":
-        return await runs(rest, authed, flags);
+      case "sessions":
+      case "runs": // Compatibility alias; API/storage keep /runs and runs.* permissions.
+        return await sessions(rest, authed, flags);
       case "inbox":
         return await inbox(rest, authed, flags);
       case "issues":
@@ -116,14 +117,24 @@ async function status(ctx) {
   );
   const runs = runResults.flatMap((result) => result.runs);
   const failedProjects = runResults.filter((result) => !result.ok).length;
-  const payload = { projects, liveRuns: runs, liveRunsPartial: failedProjects > 0, inbox, issues, spend };
+  const payload = {
+    projects,
+    liveSessions: runs,
+    liveSessionsPartial: failedProjects > 0,
+    // Deprecated JSON aliases for existing automation; human-facing terminology is Sessions.
+    liveRuns: runs,
+    liveRunsPartial: failedProjects > 0,
+    inbox,
+    issues,
+    spend,
+  };
   if (ctx.json) writeJson(ctx, payload);
   else {
     ctx.stdout.write(`\n${bold("Facility status")}\n`);
     ctx.stdout.write(row("projects", asArray(projects).length));
     ctx.stdout.write(
       row(
-        "live runs",
+        "live sessions",
         failedProjects
           ? `${runs.length} ${yellow(`(partial — ${failedProjects} project(s) failed to load)`)}`
           : runs.length,
@@ -154,7 +165,7 @@ async function projects(args, ctx) {
   throw new CliError("Usage: facility projects list|get <slug>");
 }
 
-async function runs(args, ctx, flags) {
+async function sessions(args, ctx, flags) {
   const sub = args[0];
   if (sub === "list") {
     let runs;
@@ -166,7 +177,14 @@ async function runs(args, ctx, flags) {
     } else {
       ({ runs, failedProjects } = await runsForAllProjects(ctx, flags.status));
     }
-    if (ctx.json) writeJson(ctx, flags.project ? runs : { runs, failedProjects });
+    if (ctx.json) {
+      writeJson(
+        ctx,
+        flags.project
+          ? runs
+          : { sessions: runs, runs, failedProjects }, // `runs` is a deprecated JSON alias.
+      );
+    }
     else {
       if (failedProjects) ctx.stdout.write(`  ${yellow("!")} ${dim(`${failedProjects} project(s) failed to load — inventory is partial`)}\n`);
       table(ctx, ["id", "project", "status", "mode"], asArray(runs).map((r) => [r.id, r.projectId, r.status, r.mode]), { live: true });
@@ -176,7 +194,7 @@ async function runs(args, ctx, flags) {
   if (sub === "trigger") {
     const project = await resolveProject(ctx, args[1]);
     const agent = args[2];
-    if (!agent) throw new CliError("Usage: facility runs trigger <project> <agent> [--input]");
+    if (!agent) throw new CliError("Usage: facility sessions trigger <project> <agent> [--input]");
     const input = parseInput(flags.input);
     const result = await api(ctx, "POST", `/v1/projects/${project.id}/runs`, {
       body: { mode: "manual", engine: "codex", agent, trigger: { source: "cli", agentName: agent, input } },
@@ -187,13 +205,13 @@ async function runs(args, ctx, flags) {
   if (sub === "steer") {
     const runId = args[1];
     const message = args.slice(2).join(" ");
-    if (!runId || !message) throw new CliError("Usage: facility runs steer <id> <message>");
+    if (!runId || !message) throw new CliError("Usage: facility sessions steer <id> <message>");
     const result = await api(ctx, "POST", `/v1/runs/${runId}/steer`, { body: { body: message } });
     output(ctx, result, () => `  ${accent("steer")} ${runId}\n`);
     return 0;
   }
   if (sub === "watch") return watchRun(ctx, args[1]);
-  throw new CliError("Usage: facility runs list|watch|trigger|steer");
+  throw new CliError("Usage: facility sessions list|watch|trigger|steer");
 }
 
 async function inbox(args, ctx, flags) {
@@ -397,7 +415,7 @@ async function runsForAllProjects(ctx, status) {
 }
 
 async function watchRun(ctx, runId) {
-  if (!runId) throw new CliError("Usage: facility runs watch <id>");
+  if (!runId) throw new CliError("Usage: facility sessions watch <id>");
   const response = await ctx.fetch(new URL(`${stripSlash(ctx.url)}/v1/runs/${runId}/stream`), {
     headers: { authorization: `Bearer ${ctx.key}` },
   });

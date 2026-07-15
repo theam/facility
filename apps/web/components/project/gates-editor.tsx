@@ -11,7 +11,7 @@ type Settings = Record<string, unknown> & {
 };
 
 /**
- * The project's acceptance gates — what the platform lane runs after the agent
+ * The project's acceptance gates — what the control-plane lane runs after the agent
  * finishes and what kickstart detected. One command per line.
  */
 export function GatesEditor({ projectId, settings }: { projectId: string; settings: Settings }) {
@@ -65,7 +65,7 @@ export function GatesEditor({ projectId, settings }: { projectId: string; settin
       </Field>
       <Field
         label="acceptance gates"
-        hint="One command per line. The platform runs these after the agent finishes; failures mark the session."
+        hint="One command per line. The control plane runs these after the agent finishes; failures mark the session."
       >
         <textarea
           value={checks}

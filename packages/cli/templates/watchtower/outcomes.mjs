@@ -27,7 +27,9 @@ const api = (path) => JSON.parse(gh(["api", path]));
 const isBot = (login) => typeof login === "string" && login.endsWith("[bot]");
 const AGENT_BRANCH_PREFIXES = ["claude/", "codex/", "copilot/"];
 
-const closed = api(`repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${Math.min(prLimit, 100)}`);
+const closed = api(
+  `repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${Math.min(prLimit, 100)}`,
+);
 const terminal = closed.filter((pr) => Date.parse(pr.closed_at) >= since);
 
 function isAgentPr(pr, commits) {
@@ -46,7 +48,8 @@ for (const pr of terminal) {
   const humanFixups =
     firstBotIndex === -1
       ? 0
-      : commits.slice(firstBotIndex + 1).filter((c) => c.author?.login && !isBot(c.author.login)).length;
+      : commits.slice(firstBotIndex + 1).filter((c) => c.author?.login && !isBot(c.author.login))
+          .length;
   const reviewRounds = reviews.filter((r) => r.state === "CHANGES_REQUESTED").length;
   const merged = Boolean(pr.merged_at);
   outcomes.push({
@@ -97,9 +100,31 @@ const latest = [
 ].join("\n");
 
 try {
-  gh(["label", "create", "facility-watchtower", "--force", "--color", "FFD923", "--description", "the SDLC watching itself"]);
+  gh([
+    "label",
+    "create",
+    "facility-watchtower",
+    "--force",
+    "--color",
+    "FFD923",
+    "--description",
+    "the SDLC watching itself",
+  ]);
 } catch {}
-const open = JSON.parse(gh(["issue", "list", "--label", "facility-watchtower", "--state", "open", "--json", "number,body", "--limit", "1"]));
+const open = JSON.parse(
+  gh([
+    "issue",
+    "list",
+    "--label",
+    "facility-watchtower",
+    "--state",
+    "open",
+    "--json",
+    "number,body",
+    "--limit",
+    "1",
+  ]),
+);
 if (open.length === 0) {
   const body = [
     "The watchtower's rolling record of agent outcomes. Updated nightly by `facility-watchtower.yml` — nobody curates these for a slide.",
@@ -110,12 +135,22 @@ if (open.length === 0) {
     "|---|---|---|---|---|---|",
     line,
   ].join("\n");
-  gh(["issue", "create", "--title", "Watchtower — agent outcomes", "--label", "facility-watchtower", "--body", body]);
+  gh([
+    "issue",
+    "create",
+    "--title",
+    "Watchtower — agent outcomes",
+    "--label",
+    "facility-watchtower",
+    "--body",
+    body,
+  ]);
 } else {
   let body = open[0].body ?? "";
   const start = body.indexOf(MARK_START);
   const end = body.indexOf(MARK_END);
-  if (start !== -1 && end !== -1) body = body.slice(0, start) + latest + body.slice(end + MARK_END.length);
+  if (start !== -1 && end !== -1)
+    body = body.slice(0, start) + latest + body.slice(end + MARK_END.length);
   const rows = body.split("\n");
   const headerIndex = rows.findIndex((r) => r.startsWith("|---"));
   if (headerIndex !== -1) rows.splice(headerIndex + 1, 0, line);
@@ -123,4 +158,10 @@ if (open.length === 0) {
   gh(["issue", "edit", String(open[0].number), "--body", body]);
 }
 
-console.log(JSON.stringify({ agentPrs: summary.agentPrs, acceptance: summary.acceptance, oneShot: summary.oneShot }));
+console.log(
+  JSON.stringify({
+    agentPrs: summary.agentPrs,
+    acceptance: summary.acceptance,
+    oneShot: summary.oneShot,
+  }),
+);

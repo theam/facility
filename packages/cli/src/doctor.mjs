@@ -20,6 +20,8 @@ const REQUIRED = [
   ".github/facility/doctor.md",
   ".github/facility/sweep.md",
   ".github/facility/doctor/resolve.mjs",
+  ".github/facility/delivery/verify.mjs",
+  ".github/facility/review/finalize.mjs",
   ".github/facility/watchtower/outcomes.mjs",
   ".github/facility/watchtower/health.mjs",
   ".github/facility/watchtower/canary.mjs",
@@ -64,7 +66,21 @@ export async function doctor(flags, version, options = {}) {
     problems += 1;
   } else {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    ok(`engine ${manifest.engine}, model ${manifest.model}`);
+    const models = manifest.models;
+    if (models?.build && models?.review && models?.plan) {
+      ok(
+        `engine ${manifest.engine || "claude-code"} · models build=${models.build}, review=${models.review}, plan=${models.plan}`,
+      );
+    } else {
+      fail("models.build, models.review, and models.plan must all be configured");
+      problems += 1;
+    }
+    const mode = detectAnthropicAuthMode(manifest, dir);
+    if (mode) ok(`Anthropic auth: ${mode}`);
+    else {
+      fail("Anthropic auth mode is missing or unsupported — run init with --auth=<mode>");
+      problems += 1;
+    }
     if (!manifest.provision) {
       warn("no provision command configured — the crew runs on a bare checkout and WILL under-verify. Set one.");
       problems += 1;
@@ -91,17 +107,35 @@ export async function doctor(flags, version, options = {}) {
     }
   }
 
-  heading("GitHub side (verify by hand or with gh)");
-  const gh = spawnSync("gh", ["secret", "list"], { cwd: dir, encoding: "utf8" });
-  if (gh.status === 0) {
-    if (gh.stdout.includes("CLAUDE_CODE_OAUTH_TOKEN")) ok("CLAUDE_CODE_OAUTH_TOKEN secret exists");
-    else {
-      fail("CLAUDE_CODE_OAUTH_TOKEN secret not found — `claude setup-token`, then `gh secret set CLAUDE_CODE_OAUTH_TOKEN`");
-      problems += 1;
+  heading("GitHub automation (verify by hand or with gh)");
+  const manifest = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, "utf8"))
+    : {};
+  const mode = detectAnthropicAuthMode(manifest, dir);
+  const requirements = authRequirements(mode);
+  const ghSecrets = spawnSync("gh", ["secret", "list"], { cwd: dir, encoding: "utf8" });
+  const ghVariables = spawnSync("gh", ["variable", "list"], { cwd: dir, encoding: "utf8" });
+  if (ghSecrets.status === 0 && ghVariables.status === 0) {
+    const secrets = namesFromGhList(ghSecrets.stdout);
+    const variables = namesFromGhList(ghVariables.stdout);
+    for (const name of requirements.secrets) {
+      if (secrets.has(name)) ok(`${name} secret exists`);
+      else {
+        fail(`${name} secret not found (${requirements.remediation})`);
+        problems += 1;
+      }
+    }
+    for (const name of requirements.variables) {
+      if (variables.has(name)) ok(`${name} variable exists`);
+      else {
+        fail(`${name} variable not found (${requirements.remediation})`);
+        problems += 1;
+      }
     }
   } else {
-    item(dim("could not query secrets (gh unavailable or not authenticated) — check by hand:"));
-    item(dim("  · CLAUDE_CODE_OAUTH_TOKEN repo/org secret"));
+    item(dim("could not query GitHub secrets/variables — check by hand:"));
+    for (const name of requirements.secrets) item(dim(`  · ${name} repo/org secret`));
+    for (const name of requirements.variables) item(dim(`  · ${name} repository variable`));
   }
   item(dim("  · Claude GitHub App installed on the repo"));
   item(dim("  · default branch protected: PR + 1 human review required"));
@@ -112,6 +146,69 @@ export async function doctor(flags, version, options = {}) {
   else item(`${dim(`${problems} problem${problems === 1 ? "" : "s"} found.`)}`);
   console.log("");
   return problems === 0 ? 0 : 1;
+}
+
+function detectAnthropicAuthMode(manifest, dir) {
+  const configured = manifest.auth?.provider === "anthropic" ? manifest.auth.mode : undefined;
+  if (["api-key", "oauth", "wif", "bedrock", "vertex"].includes(configured)) return configured;
+
+  const workflowPath = join(dir, ".github/workflows/facility-crew.yml");
+  if (!existsSync(workflowPath)) return undefined;
+  const workflow = readFileSync(workflowPath, "utf8");
+  if (workflow.includes("anthropic_federation_rule_id:")) return "wif";
+  if (workflow.includes("use_bedrock:")) return "bedrock";
+  if (workflow.includes("use_vertex:")) return "vertex";
+  if (workflow.includes("anthropic_api_key:")) return "api-key";
+  if (workflow.includes("claude_code_oauth_token:")) return "oauth";
+  return undefined;
+}
+
+function authRequirements(mode) {
+  if (mode === "api-key") {
+    return {
+      secrets: ["ANTHROPIC_API_KEY"],
+      variables: [],
+      remediation: "store a dedicated, spend-capped test key",
+    };
+  }
+  if (mode === "oauth") {
+    return {
+      secrets: ["CLAUDE_CODE_OAUTH_TOKEN"],
+      variables: [],
+      remediation: "run `claude setup-token`, then store the token",
+    };
+  }
+  if (mode === "wif") {
+    return {
+      secrets: [],
+      variables: ["ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"],
+      remediation: "configure Anthropic Workload Identity Federation",
+    };
+  }
+  if (mode === "bedrock") {
+    return {
+      secrets: ["AWS_ROLE_TO_ASSUME"],
+      variables: ["AWS_REGION"],
+      remediation: "configure the AWS GitHub OIDC role and Bedrock region",
+    };
+  }
+  if (mode === "vertex") {
+    return {
+      secrets: [],
+      variables: ["GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_SERVICE_ACCOUNT"],
+      remediation: "configure Google Workload Identity Federation for Vertex AI",
+    };
+  }
+  return { secrets: [], variables: [], remediation: "select a supported auth mode" };
+}
+
+function namesFromGhList(output) {
+  return new Set(
+    output
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/)[0])
+      .filter(Boolean),
+  );
 }
 
 function platformTarget(flags, options) {

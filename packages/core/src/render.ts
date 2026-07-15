@@ -1,3 +1,5 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: This renderer intentionally emits GitHub expression and shell parameter syntax.
+// biome-ignore-all lint/suspicious/noUselessEscapeInString: Backslashes are part of the generated shell token-normalization script.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -6,6 +8,8 @@ import { type Manifest, manifestFor } from "./fingerprints.js";
 
 const SETUP_NODE_SHA = "49933ea5288caeca8642d1e84afbd3f7d6820020";
 const PNPM_SHA = "b906affcce14559ad1aafd4ab0e942779e9f58b1";
+const AWS_AUTH_SHA = "517a711dbcd0e402f90c77e7e2f81e849156e31d";
+const GOOGLE_AUTH_SHA = "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093";
 const DEFAULT_VERSION = "0.3.0";
 
 export type RenderedFile = {
@@ -22,6 +26,7 @@ export type RenderAnswers = {
   modules?: string[];
   modelTier?: string;
   models?: { build?: string; review?: string; plan?: string };
+  authMode?: "api-key" | "oauth" | "wif" | "bedrock" | "vertex";
   board?: { org: string; project: number | string } | null;
   canaryBot?: string;
   packageManager?: "pnpm" | "yarn" | "npm" | "none";
@@ -193,7 +198,7 @@ function doctorWatch(workflowNames: string[]): string {
 
 function checksAllowJson(checks: string[]): string {
   if (!checks.length) return "";
-  return checks.map((check) => `"Bash(${check})",`).join("\n      ");
+  return checks.map((check) => `      "Bash(${check})",`).join("\n");
 }
 
 function checksList(checks: string[]): string {
@@ -206,6 +211,104 @@ function checksList(checks: string[]): string {
     "Escalate beyond this list when the change touches data, auth, or critical user flows — and say which extra checks ran.",
   );
   return lines.join("\n");
+}
+
+function checksRun(checks: string[]): string {
+  if (checks.length) return checks.map((command) => `          ${command}`).join("\n");
+  return [
+    '          echo "::error::No verification commands are configured in .facility.json."',
+    "          exit 1",
+  ].join("\n");
+}
+
+function anthropicAuthSetup(mode: RenderAnswers["authMode"], condition = ""): string {
+  const conditional = condition ? [`        if: ${condition}`] : [];
+  if (mode === "oauth") {
+    return [
+      "      - name: Prepare Claude Code OAuth token",
+      "        id: claude-auth",
+      ...conditional,
+      "        shell: bash",
+      "        env:",
+      "          RAW_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+      "        run: |",
+      '          token="$RAW_CLAUDE_CODE_OAUTH_TOKEN"',
+      "          token=\"${token//$'\\r'/}\"",
+      "          token=\"${token//$'\\n'/}\"",
+      '          token="${token#"${token%%[![:space:]]*}"}"',
+      '          token="${token%"${token##*[![:space:]]}"}"',
+      '          token="${token#export CLAUDE_CODE_OAUTH_TOKEN=}"',
+      '          token="${token#CLAUDE_CODE_OAUTH_TOKEN=}"',
+      '          token="${token#\\\"}"',
+      '          token="${token%\\\"}"',
+      '          token="${token#\\\'}"',
+      '          token="${token%\\\'}"',
+      "",
+      '          if [ -z "$token" ]; then',
+      "            echo \"::error::CLAUDE_CODE_OAUTH_TOKEN is empty. Generate it with 'claude setup-token' and store it as a repository or organization secret.\"",
+      "            exit 1",
+      "          fi",
+      `          if printf '%s' "$token" | grep -q '[[:cntrl:]]'; then`,
+      '            echo "::error::CLAUDE_CODE_OAUTH_TOKEN contains control characters after normalization."',
+      "            exit 1",
+      "          fi",
+      "",
+      '          echo "::add-mask::$token"',
+      '          echo "token=$token" >> "$GITHUB_OUTPUT"',
+    ].join("\n");
+  }
+  if (mode === "bedrock") {
+    return [
+      "      - name: Authenticate to AWS for Amazon Bedrock",
+      ...conditional,
+      `        uses: aws-actions/configure-aws-credentials@${AWS_AUTH_SHA} # v6.2.2`,
+      "        with:",
+      "          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}",
+      "          aws-region: ${{ vars.AWS_REGION }}",
+    ].join("\n");
+  }
+  if (mode === "vertex") {
+    return [
+      "      - name: Authenticate to Google Cloud for Vertex AI",
+      ...conditional,
+      `        uses: google-github-actions/auth@${GOOGLE_AUTH_SHA} # v3`,
+      "        with:",
+      "          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}",
+      "          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}",
+    ].join("\n");
+  }
+  return "";
+}
+
+function anthropicAuthInputs(mode: RenderAnswers["authMode"]): string {
+  if (mode === "api-key") {
+    return "          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}";
+  }
+  if (mode === "oauth") {
+    return "          claude_code_oauth_token: ${{ steps.claude-auth.outputs.token }}";
+  }
+  if (mode === "wif") {
+    return [
+      "          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}",
+      "          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}",
+      "          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}",
+      "          anthropic_workspace_id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}",
+    ].join("\n");
+  }
+  if (mode === "bedrock") return '          use_bedrock: "true"';
+  return '          use_vertex: "true"';
+}
+
+function formatManifest(manifest: Record<string, unknown> & { checks: string[] }): string {
+  const text = JSON.stringify(manifest, null, 2);
+  const compactChecks = `  "checks": [${manifest.checks.map((check) => JSON.stringify(check)).join(", ")}],`;
+  if (compactChecks.length > 100 || manifest.checks.length === 0) return `${text}\n`;
+  const lines = text.split("\n");
+  const start = lines.indexOf('  "checks": [');
+  const end = lines.indexOf("  ],", start + 1);
+  if (start < 0 || end < 0) return `${text}\n`;
+  lines.splice(start, end - start + 1, compactChecks);
+  return `${lines.join("\n")}\n`;
 }
 
 async function canarySha256(templateRoot: string): Promise<string> {
@@ -237,6 +340,7 @@ export async function renderFacilityInit(
     plan: answers.models?.plan ?? "claude-opus-4-8",
   };
   const checks = answers.checkCmds ?? [];
+  const authMode = answers.authMode ?? "api-key";
   const provision =
     answers.provisionCmd ||
     'echo "facility: no provision command configured — the crew runs on a bare checkout. Set one in this workflow + .facility.json."';
@@ -249,6 +353,7 @@ export async function renderFacilityInit(
     PROVISION_CMD: provision,
     CHECKS_INLINE: checks.length ? checks.join(" ; ") : "the checks configured in STANDARD.md",
     CHECKS_LIST: checksList(checks),
+    CHECKS_RUN: checksRun(checks),
     ALLOW_CHECKS_JSON: checksAllowJson(checks),
     TOOLCHAIN_STEPS: toolchainSteps(answers.packageManager ?? "none"),
     TOOLCHAIN_STEPS_CONDITIONAL: toolchainSteps(answers.packageManager ?? "none", {
@@ -258,6 +363,16 @@ export async function renderFacilityInit(
     CANARY_BOT: answers.canaryBot ?? "facility-canary[bot]",
     CANARY_SHA256: await canarySha256(templateRoot),
     DOCTOR_WATCH: doctorWatch(answers.workflowNames ?? []),
+    ANTHROPIC_AUTH_SETUP: anthropicAuthSetup(authMode),
+    ANTHROPIC_AUTH_SETUP_CREW: anthropicAuthSetup(
+      authMode,
+      "steps.requested-agent.outputs.run == 'true'",
+    ),
+    ANTHROPIC_AUTH_SETUP_CONDITIONAL: anthropicAuthSetup(
+      authMode,
+      "steps.workflow-change.outputs.changed != 'true'",
+    ),
+    ANTHROPIC_AUTH_INPUTS: anthropicAuthInputs(authMode),
   };
   const template = (relPath: string) => readFileSync(join(templateRoot, relPath), "utf8");
   const plan: RenderedFile[] = [
@@ -297,6 +412,8 @@ export async function renderFacilityInit(
     { path: ".github/facility/doctor.md", content: render(template("prompts/doctor.md"), vars) },
     { path: ".github/facility/sweep.md", content: render(template("prompts/sweep.md"), vars) },
     { path: ".github/facility/doctor/resolve.mjs", content: template("doctor/resolve.mjs") },
+    { path: ".github/facility/delivery/verify.mjs", content: template("delivery/verify.mjs") },
+    { path: ".github/facility/review/finalize.mjs", content: template("review/finalize.mjs") },
     {
       path: ".github/facility/watchtower/outcomes.mjs",
       content: template("watchtower/outcomes.mjs"),
@@ -387,7 +504,8 @@ export async function renderFacilityInit(
   }
   const manifest = {
     facility: version,
-    engine: "claude",
+    engine: "claude-code",
+    auth: { provider: "anthropic", mode: authMode },
     defaultBranch: answers.defaultBranch,
     provision: answers.provisionCmd || null,
     checks,
@@ -400,7 +518,7 @@ export async function renderFacilityInit(
   };
   addOrReplace(files, {
     path: ".facility.json",
-    content: `${JSON.stringify(manifest, null, 2)}\n`,
+    content: formatManifest(manifest),
   });
   for (const moduleName of answers.modules ?? []) {
     applyModule(files, existing, moduleRoot, moduleName);

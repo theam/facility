@@ -7,14 +7,22 @@
 import { execFileSync } from "node:child_process";
 
 // Directories that hold ordered migration files. Adjust to your stack.
-const MIGRATION_DIRS = ["migrations/", "supabase/migrations/", "db/migrations/", "prisma/migrations/"];
+const MIGRATION_DIRS = [
+  "migrations/",
+  "supabase/migrations/",
+  "db/migrations/",
+  "prisma/migrations/",
+];
 
 // key: "<path>", value: written reason (e.g. "squashed baseline, 2026-01").
 const ALLOWLIST = {};
 
 function git(args) {
   try {
-    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
   } catch {
     return "";
   }

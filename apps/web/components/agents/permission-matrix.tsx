@@ -88,7 +88,7 @@ export function PermissionMatrix({ value, onChange, grantable, resources, specia
         </div>
       ) : null}
       <p className="text-[11.5px] leading-relaxed text-(--dim)">
-        Empty means the harness floor (read-only KB/registry context). At run time grants are
+        Empty means the Harness floor (read-only KB/Harness context). At session time grants are
         clamped to the safe set regardless — an agent can never carry tenant-admin or gate
         decisions.
       </p>

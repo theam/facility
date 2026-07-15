@@ -39,9 +39,9 @@ const budgetFor = (map, name, fallback) => map?.[name] ?? map?.["*"] ?? fallback
 const gh = (args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 const iso = (hoursAgo) => new Date(Date.now() - hoursAgo * 3600_000).toISOString();
 const runsSince = (sinceIso) =>
-  JSON.parse(gh(["api", `repos/${repo}/actions/runs?created=>${sinceIso}&per_page=100`])).workflow_runs.filter((r) =>
-    WATCHLIST.includes(r.name)
-  );
+  JSON.parse(
+    gh(["api", `repos/${repo}/actions/runs?created=>${sinceIso}&per_page=100`]),
+  ).workflow_runs.filter((r) => WATCHLIST.includes(r.name));
 
 const day = runsSince(iso(24));
 const week = runsSince(iso(24 * 7));
@@ -50,15 +50,21 @@ const problems = [];
 const rows = [];
 for (const name of WATCHLIST) {
   const daily = day.filter((r) => r.name === name);
-  const failures = daily.filter((r) => ["failure", "startup_failure", "timed_out"].includes(r.conclusion ?? ""));
+  const failures = daily.filter((r) =>
+    ["failure", "startup_failure", "timed_out"].includes(r.conclusion ?? ""),
+  );
   const weeklyCount = week.filter((r) => r.name === name).length;
   const maxFail = budgetFor(budgets.maxDailyFailures, name, 3);
   const maxWeekly = budgetFor(budgets.maxWeeklyRuns, name, Infinity);
   if (failures.length >= maxFail) {
-    problems.push(`**${name}**: ${failures.length} failures in 24h (budget ${maxFail}) — latest: ${failures[0].html_url}`);
+    problems.push(
+      `**${name}**: ${failures.length} failures in 24h (budget ${maxFail}) — latest: ${failures[0].html_url}`,
+    );
   }
   if (weeklyCount > maxWeekly) {
-    problems.push(`**${name}**: ${weeklyCount} runs this week (budget ${maxWeekly}) — runaway trigger or runaway spend?`);
+    problems.push(
+      `**${name}**: ${weeklyCount} runs this week (budget ${maxWeekly}) — runaway trigger or runaway spend?`,
+    );
   }
   if (daily.length || weeklyCount) {
     rows.push(`| ${name} | ${daily.length} | ${failures.length} | ${weeklyCount} |`);
@@ -67,9 +73,20 @@ for (const name of WATCHLIST) {
 
 const MARKER = "facility-health";
 try {
-  gh(["label", "create", MARKER, "--force", "--color", "D1242F", "--description", "facility health incident"]);
+  gh([
+    "label",
+    "create",
+    MARKER,
+    "--force",
+    "--color",
+    "D1242F",
+    "--description",
+    "facility health incident",
+  ]);
 } catch {}
-const openIncidents = JSON.parse(gh(["issue", "list", "--label", MARKER, "--state", "open", "--json", "number", "--limit", "1"]));
+const openIncidents = JSON.parse(
+  gh(["issue", "list", "--label", MARKER, "--state", "open", "--json", "number", "--limit", "1"]),
+);
 
 const report = [
   `Health check ${new Date().toISOString()} — last 24h / 7d, from the GitHub API.`,
@@ -78,12 +95,23 @@ const report = [
   "|---|---|---|---|",
   ...rows,
   "",
-  problems.length ? `### Problems\n${problems.map((p) => `- ${p}`).join("\n")}` : "All watched workflows within budget.",
+  problems.length
+    ? `### Problems\n${problems.map((p) => `- ${p}`).join("\n")}`
+    : "All watched workflows within budget.",
 ].join("\n");
 
 if (problems.length) {
   if (openIncidents.length === 0) {
-    gh(["issue", "create", "--title", "Facility health incident", "--label", MARKER, "--body", report]);
+    gh([
+      "issue",
+      "create",
+      "--title",
+      "Facility health incident",
+      "--label",
+      MARKER,
+      "--body",
+      report,
+    ]);
   } else {
     gh(["issue", "comment", String(openIncidents[0].number), "--body", report]);
   }

@@ -39,7 +39,9 @@ async function main() {
   if (!repo) throw new Error("GITHUB_REPOSITORY is required");
   const token = process.env.CANARY_COMMENT_TOKEN;
   if (!token) {
-    console.log("::notice::CANARY_COMMENT_TOKEN not configured — canary skipped. Mint it from a GitHub App so the probe comment triggers workflows.");
+    console.log(
+      "::notice::CANARY_COMMENT_TOKEN not configured — canary skipped. Mint it from a GitHub App so the probe comment triggers workflows.",
+    );
     return;
   }
 
@@ -59,12 +61,41 @@ async function main() {
 
   // 1. Find (or create) the pinned canary fixture issue.
   try {
-    gh(["label", "create", "agent-canary", "--force", "--color", "FFD923", "--description", "facility canary fixture"]);
+    gh([
+      "label",
+      "create",
+      "agent-canary",
+      "--force",
+      "--color",
+      "FFD923",
+      "--description",
+      "facility canary fixture",
+    ]);
   } catch {}
-  const issues = JSON.parse(gh(["issue", "list", "--label", "agent-canary", "--state", "open", "--json", "number", "--limit", "1"]));
+  const issues = JSON.parse(
+    gh([
+      "issue",
+      "list",
+      "--label",
+      "agent-canary",
+      "--state",
+      "open",
+      "--json",
+      "number",
+      "--limit",
+      "1",
+    ]),
+  );
   let issueNumber = issues[0]?.number;
   if (!issueNumber) {
-    const createdUrl = gh(["issue", "create", "--title", "Facility canary", "--label", "agent-canary", "--body",
+    const createdUrl = gh([
+      "issue",
+      "create",
+      "--title",
+      "Facility canary",
+      "--label",
+      "agent-canary",
+      "--body",
       "Pinned fixture issue for the weekly synthetic canary. The probe comments below are posted by the canary workflow; do not comment agent commands here yourself.",
     ]).trim();
     issueNumber = Number(createdUrl.split("/").pop());
@@ -73,7 +104,10 @@ async function main() {
 
   // 2. Post the canonical probe with the App token (so it triggers workflows).
   const startedAt = new Date().toISOString();
-  await api(`issues/${issueNumber}/comments`, { method: "POST", body: JSON.stringify({ body: CANARY_PROBE_BODY }) });
+  await api(`issues/${issueNumber}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body: CANARY_PROBE_BODY }),
+  });
   console.log(`probe posted on #${issueNumber} at ${startedAt}`);
 
   // 3. Assert the crew run appears and succeeds.
@@ -81,19 +115,31 @@ async function main() {
   let run = null;
   while (Date.now() < deadline) {
     const { workflow_runs: runs } = JSON.parse(
-      gh(["api", `repos/${repo}/actions/runs?event=issue_comment&created=>${startedAt}&per_page=20`])
+      gh([
+        "api",
+        `repos/${repo}/actions/runs?event=issue_comment&created=>${startedAt}&per_page=20`,
+      ]),
     );
     run = runs.find((r) => r.name === CREW_WORKFLOW) ?? null;
     if (run && run.status === "completed") break;
     await new Promise((resolve) => setTimeout(resolve, POLL_SECONDS * 1000));
   }
-  if (!run) throw new Error(`no ${CREW_WORKFLOW} run appeared within ${TIMEOUT_MINUTES} minutes — the trigger chain is broken`);
-  if (run.conclusion !== "success") throw new Error(`crew run concluded '${run.conclusion}': ${run.html_url}`);
+  if (!run)
+    throw new Error(
+      `no ${CREW_WORKFLOW} run appeared within ${TIMEOUT_MINUTES} minutes — the trigger chain is broken`,
+    );
+  if (run.conclusion !== "success")
+    throw new Error(`crew run concluded '${run.conclusion}': ${run.html_url}`);
 
   // 4. Assert a reply landed on the issue after the probe.
-  const comments = JSON.parse(gh(["api", `repos/${repo}/issues/${issueNumber}/comments?per_page=100`]));
+  const comments = JSON.parse(
+    gh(["api", `repos/${repo}/issues/${issueNumber}/comments?per_page=100`]),
+  );
   const reply = comments.find((c) => c.created_at > startedAt && c.body !== CANARY_PROBE_BODY);
-  if (!reply) throw new Error(`crew run succeeded but no reply landed on #${issueNumber} — the reply chain is broken`);
+  if (!reply)
+    throw new Error(
+      `crew run succeeded but no reply landed on #${issueNumber} — the reply chain is broken`,
+    );
 
   console.log(`canary green: run ${run.html_url} · reply ${reply.html_url}`);
 }

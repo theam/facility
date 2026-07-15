@@ -49,7 +49,11 @@ export function commandGuard({ name, description, command, args = [], requires =
         execFileSync(command, args, { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
         return [];
       } catch (error) {
-        const tail = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim().split("\n").slice(-12).join("\n");
+        const tail = `${error.stdout ?? ""}${error.stderr ?? ""}`
+          .trim()
+          .split("\n")
+          .slice(-12)
+          .join("\n");
         return [{ message: `\`${[command, ...args].join(" ")}\` failed:\n${tail}` }];
       }
     },

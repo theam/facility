@@ -165,6 +165,17 @@ services:
     environment:
       FACILITY_API_URL: http://api:4400
     ports: ["3400:3400"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3400/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     depends_on: [api]
 
 volumes:

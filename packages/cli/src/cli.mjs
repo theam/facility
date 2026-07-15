@@ -40,11 +40,13 @@ function help() {
   item(`${bold("npx @theam/facility add <module>")}    add a quality module (analytics, database, ai-queryability, design-system)`);
   item(`${bold("npx @theam/facility doctor")}          check the install and list what's left`);
   item(`${bold("npx @theam/facility login")}           connect to the Facility platform API`);
-  item(`${bold("npx @theam/facility status")}          show platform runs, inbox, spend, and issues`);
+  item(`${bold("npx @theam/facility status")}          show live sessions, inbox, spend, and issues`);
+  item(`${bold("npx @theam/facility sessions list")}   list or operate governed sessions`);
   item(`${bold("npx @theam/facility llm-requests list")} inspect raw metering rows for data mining`);
   console.log("");
   item(dim("init flags: --yes --force --dir=<path> --branch=<name> --provision=<cmd>"));
-  item(dim('            --checks="cmd1, cmd2" --model=<id> --org=<org> --project=<n> --modules="a, b"'));
+  item(dim('            --checks="cmd1, cmd2" --auth=<api-key|oauth|wif|bedrock|vertex>'));
+  item(dim('            --build-model=<id> --review-model=<id> --plan-model=<id> --org=<org> --project=<n>'));
   console.log("");
   item(dim("Docs: https://github.com/theam/facility"));
   console.log("");
@@ -70,6 +72,7 @@ export async function main(argv) {
     case "login":
     case "status":
     case "projects":
+    case "sessions":
     case "runs":
     case "inbox":
     case "issues":

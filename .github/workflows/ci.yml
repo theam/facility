@@ -1,18 +1,19 @@
-# CI for the facility monorepo: lint, typecheck, tests (including the CLI
-# end-to-end suite against temp repos) and this repo's own guards. Actions
-# pinned to full SHAs — the same rule we generate for everyone
-# (guards/actions-pinned.mjs enforces it here too).
+# CI for the Facility monorepo. Root verification is deliberately release-shaped:
+# uncached builds, direct critical integration suites, guards, and a high-severity
+# dependency gate. Clean Compose and Docker-backed sandbox paths are separate jobs.
+# Actions are pinned to full SHAs (guards/actions-pinned.mjs enforces it here too).
 name: ci
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     permissions:
       contents: read
     steps:
@@ -27,14 +28,95 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
+      - name: Release-shaped verification
+        run: pnpm verify
 
-      - name: Typecheck
-        run: pnpm typecheck
+  self-host-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Tests
-        run: pnpm test
+      - name: Build the documented self-host stack from a clean checkout
+        env:
+          SECRET_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: docker compose build --pull
 
-      - name: Guards (dogfood)
-        run: node guards/run.mjs
+  sandbox-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply the sandbox E2E policy
+        id: policy
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          required=true
+          reason="default-branch/release acceptance"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+              runner/ \
+              services/api/src/sandbox/ \
+              services/api/test/sandbox.e2e.test.ts \
+              Dockerfile \
+              runner/Dockerfile \
+              docker-compose.yml \
+              docker-compose.dev.yml; then
+              required=false
+              reason="PR does not change sandbox execution boundaries"
+            else
+              reason="PR changes sandbox execution boundaries"
+            fi
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "Sandbox E2E required=$required ($reason)"
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.policy.outputs.required == 'true'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.policy.outputs.required == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.policy.outputs.required == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare the isolated sandbox database
+        if: steps.policy.outputs.required == 'true'
+        run: |
+          docker compose -f docker-compose.dev.yml up -d --wait postgres
+          if ! docker compose -f docker-compose.dev.yml exec -T postgres \
+            psql -U facility -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='facility_sbx'" | grep -qx 1; then
+            docker compose -f docker-compose.dev.yml exec -T postgres \
+              createdb -U facility facility_sbx
+          fi
+
+      - name: Build the runner image
+        if: steps.policy.outputs.required == 'true'
+        run: docker build --pull -t facility-runner:dev runner
+
+      - name: Run the Docker-backed sandbox loop
+        if: steps.policy.outputs.required == 'true'
+        env:
+          DATABASE_URL: postgres://facility:facility@127.0.0.1:5461/facility_sbx
+          FACILITY_E2E_DOCKER: "1"
+        run: pnpm test:e2e-sandbox
+
+      - name: Record an allowed skip
+        if: steps.policy.outputs.required != 'true'
+        run: echo "Sandbox E2E skipped by policy — ${{ steps.policy.outputs.reason }}."

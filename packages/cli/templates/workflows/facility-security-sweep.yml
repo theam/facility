@@ -73,41 +73,13 @@ jobs:
           name: facility-sweep-context-${{ github.run_id }}
           path: .facility-sweep/
 
-      - name: Prepare Claude Code OAuth token
-        id: claude-oauth
-        shell: bash
-        env:
-          RAW_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          token="$RAW_CLAUDE_CODE_OAUTH_TOKEN"
-          token="${token//$'\r'/}"
-          token="${token//$'\n'/}"
-          token="${token#"${token%%[![:space:]]*}"}"
-          token="${token%"${token##*[![:space:]]}"}"
-          token="${token#export CLAUDE_CODE_OAUTH_TOKEN=}"
-          token="${token#CLAUDE_CODE_OAUTH_TOKEN=}"
-          token="${token#\"}"
-          token="${token%\"}"
-          token="${token#\'}"
-          token="${token%\'}"
-
-          if [ -z "$token" ]; then
-            echo "::error::CLAUDE_CODE_OAUTH_TOKEN is empty. Generate it with 'claude setup-token' and store it as a repository or organization secret."
-            exit 1
-          fi
-          if printf '%s' "$token" | grep -q '[[:cntrl:]]'; then
-            echo "::error::CLAUDE_CODE_OAUTH_TOKEN contains control characters after normalization."
-            exit 1
-          fi
-
-          echo "::add-mask::$token"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
+{{ANTHROPIC_AUTH_SETUP}}
 
       # Review-only, but the signing invariant is unconditional: unsigned
       # commits carry the squattable default author email.
-      - uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1 # v1
+      - uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251 # v1.0.133
         with:
-          claude_code_oauth_token: ${{ steps.claude-oauth.outputs.token }}
+{{ANTHROPIC_AUTH_INPUTS}}
           use_commit_signing: true
           claude_args: |
             --max-turns 60

@@ -57,6 +57,9 @@ export class DockerSandboxDriver implements SandboxDriver {
         SecurityOpt: ["no-new-privileges"],
         CapDrop: ["ALL"],
         PidsLimit: 512,
+        // Makes the API running on the host reachable from Linux CI as well as
+        // Docker Desktop. It adds no capability beyond an unrestricted profile.
+        ...(network.networkDisabled ? {} : { ExtraHosts: ["host.docker.internal:host-gateway"] }),
       },
       ...(network.networkDisabled ? { NetworkDisabled: true } : {}),
     });

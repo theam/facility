@@ -69,11 +69,12 @@ test("status --json emits parseable output", async () => {
 
   assert.equal(exit, 0);
   const parsed = JSON.parse(stdout.text);
-  assert.equal(parsed.liveRuns[0].id, "run_1");
+  assert.equal(parsed.liveSessions[0].id, "run_1");
+  assert.deepEqual(parsed.liveRuns, parsed.liveSessions, "legacy JSON key remains compatible");
   assert.equal(parsed.spend[0].cost_cents, 125);
 });
 
-test("runs and inbox render stub fetch fixtures", async () => {
+test("sessions and inbox render stub fetch fixtures", async () => {
   const runsOut = sink();
   const inboxOut = sink();
   const fetch = async (url) => {
@@ -84,7 +85,7 @@ test("runs and inbox render stub fetch fixtures", async () => {
     return json({ error: { message: "missing fixture" } }, 404);
   };
 
-  assert.equal(await runPlatformCommand("runs", ["list"], { config: config(), stdout: runsOut, fetch }), 0);
+  assert.equal(await runPlatformCommand("sessions", ["list"], { config: config(), stdout: runsOut, fetch }), 0);
   assert.equal(await runPlatformCommand("inbox", [], { config: config(), stdout: inboxOut, fetch }), 0);
   assert.ok(runsOut.text.includes("run_1"));
   assert.ok(inboxOut.text.includes("prop_1"));
@@ -158,7 +159,7 @@ test("steer and decide send exact request bodies", async () => {
   };
 
   assert.equal(
-    await runPlatformCommand("runs", ["steer", "run_1", "keep", "going"], {
+    await runPlatformCommand("sessions", ["steer", "run_1", "keep", "going"], {
       config: config(),
       stdout: sink(),
       fetch,
@@ -180,7 +181,7 @@ test("steer and decide send exact request bodies", async () => {
   ]);
 });
 
-test("runs trigger sends agent identity for API resolution", async () => {
+test("sessions trigger sends agent identity for API resolution", async () => {
   const calls = [];
   const fetch = async (url, init = {}) => {
     const path = new URL(url).pathname;
@@ -192,7 +193,7 @@ test("runs trigger sends agent identity for API resolution", async () => {
   };
 
   assert.equal(
-    await runPlatformCommand("runs", ["trigger", "demo", "project-owner", "--input", '{"ok":true}'], {
+    await runPlatformCommand("sessions", ["trigger", "demo", "project-owner", "--input", '{"ok":true}'], {
       config: config(),
       stdout: sink(),
       fetch,

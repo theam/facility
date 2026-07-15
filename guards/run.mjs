@@ -28,9 +28,8 @@
 // for engineers and for agents to extend. If a rule in STANDARD.md is
 // repeatedly missed, it belongs here.
 import { readdirSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-import { dirname, join, basename } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -39,7 +38,10 @@ const list = args.includes("--list");
 const only = args.filter((a) => a.startsWith("--only=")).map((a) => a.slice(7));
 
 const guardFiles = readdirSync(here)
-  .filter((f) => f.endsWith(".mjs") && !f.startsWith("_") && f !== basename(fileURLToPath(import.meta.url)))
+  .filter(
+    (f) =>
+      f.endsWith(".mjs") && !f.startsWith("_") && f !== basename(fileURLToPath(import.meta.url)),
+  )
   .sort();
 
 const guards = [];
@@ -69,7 +71,12 @@ const results = [];
 for (const guard of selected) {
   const missing = (guard.requires ?? []).filter((envVar) => !process.env[envVar]);
   if (missing.length) {
-    results.push({ name: guard.name, status: "skipped", reason: `missing env: ${missing.join(", ")}`, violations: [] });
+    results.push({
+      name: guard.name,
+      status: "skipped",
+      reason: `missing env: ${missing.join(", ")}`,
+      violations: [],
+    });
     continue;
   }
   try {
