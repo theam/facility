@@ -22,7 +22,7 @@ export function AuditExplorer({ events }: { events: AuditEvent[] }) {
   for (const event of events) {
     const family = event.action.split(".")[0] ?? event.action;
     families.set(family, (families.get(family) ?? 0) + 1);
-    const actor = event.actor.name ?? event.actor.id;
+    const actor = event.actor.name ?? event.actor.id ?? event.actor.type;
     actors.set(actor, (actors.get(actor) ?? 0) + 1);
   }
   const topFamilies = [...families.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);

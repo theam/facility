@@ -7,7 +7,10 @@ packages:
 # The Docusaurus webpack path still accepts the serialize-javascript API but
 # resolves a vulnerable v6 without this workspace-wide security floor.
 overrides:
+  "esbuild@>=0.27.3 <0.28.1": 0.28.1
+  "postcss@<8.5.10": 8.5.16
   "serialize-javascript@<=7.0.2": 7.0.7
+  "uuid@<11.1.1": 11.1.1
 
 # Postinstall build-script allowlist — nothing builds unless named here
 # (the tam-os supply-chain convention).

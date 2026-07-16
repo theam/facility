@@ -1081,7 +1081,7 @@ function table(ctx, headers, rows, options = {}) {
     values.map((value, index) => truncateCell(value, widths[index])),
   );
   const header = headers
-    .map((cell, index) => bold(truncateCell(cell, widths[index]).padEnd(widths[index])))
+    .map((cell, index) => bold(truncateHeaderCell(cell, widths[index]).padEnd(widths[index])))
     .join("  ")
     .trimEnd();
   ctx.stdout.write(`\n  ${header}\n`);
@@ -1149,6 +1149,11 @@ function normalizeCell(value) {
 
 function truncateCell(value, max = 96) {
   const text = normalizeCell(value);
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function truncateHeaderCell(value, max = 96) {
+  const text = value === null || value === undefined ? "" : String(value).replaceAll(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
@@ -1254,9 +1259,13 @@ function numericFlag(value, name) {
 }
 
 function pageQuery(flags) {
-  const limit = numericFlag(flags.limit, "--limit");
+  const limit = flags.limit === undefined ? undefined : Number(flags.limit);
   const offset = numericFlag(flags.offset, "--offset");
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+  if (
+    flags.limit === true ||
+    flags.limit === "" ||
+    (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200))
+  ) {
     throw new CliError("--limit must be an integer from 1 to 200", 1, {
       code: "invalid_flag",
     });
@@ -1420,7 +1429,7 @@ function assertCoreSubcommandFlags(command, positional, flags) {
   if (!spec || flags.help) return;
   const sub = positional[0] || "__default";
   const allowed = spec[sub];
-  if (!allowed) return;
+  if (!allowed) throw usage(PLATFORM_USAGE[command]);
   assertAllowedFlags(flags, ["profile", "json", "timeout", ...allowed]);
 }
 

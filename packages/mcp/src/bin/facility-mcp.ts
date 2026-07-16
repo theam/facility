@@ -36,6 +36,7 @@ if (command === "serve") {
       .filter(Boolean),
     resourceUrl: process.env.MCP_PUBLIC_URL?.replace(/\/+$/, ""),
     authorizationServer,
+    trustedProxyHops: integerEnv("MCP_TRUST_PROXY_HOPS", 0),
   });
   server.on("listening", () => {
     const address = server.address();
@@ -67,4 +68,15 @@ function flag(args: string[], name: string): string | undefined {
   if (inline) return inline.slice(name.length + 1);
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+function integerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    console.error(`${name} must be a non-negative integer.`);
+    process.exit(2);
+  }
+  return value;
 }

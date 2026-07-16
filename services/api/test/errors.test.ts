@@ -38,4 +38,17 @@ describe("sendError", () => {
     expect(captured.body?.error.code).toBe("not_found");
     expect(captured.body?.error.message).toBe("Project not found");
   });
+
+  it("surfaces explicitly public operational 5xx codes without weakening the default mask", () => {
+    const { reply, captured } = fakeReply();
+    sendError(
+      reply,
+      new ApiError(501, "workos_unconfigured", "WorkOS login is not configured", undefined, true),
+    );
+    expect(captured.status).toBe(501);
+    expect(captured.body?.error).toEqual({
+      code: "workos_unconfigured",
+      message: "WorkOS login is not configured",
+    });
+  });
 });

@@ -31,7 +31,13 @@ export async function registerAuthRoutes(app: FastifyInstance, config: AppConfig
     },
     async (_request, reply) => {
       if (!workos || !config.workosClientId) {
-        throw new ApiError(501, "workos_unconfigured", "WorkOS login is not configured");
+        throw new ApiError(
+          501,
+          "workos_unconfigured",
+          "WorkOS login is not configured",
+          undefined,
+          true,
+        );
       }
       // CSRF: bind the OAuth round-trip to a cookie-held nonce.
       const state = randomBytes(16).toString("hex");
@@ -63,7 +69,7 @@ export async function registerAuthRoutes(app: FastifyInstance, config: AppConfig
     },
     async (request, reply) => {
       if (!workos || !config.workosClientId) {
-        throw new ApiError(501, "workos_unconfigured", "WorkOS is not configured");
+        throw new ApiError(501, "workos_unconfigured", "WorkOS is not configured", undefined, true);
       }
       const { code, state } = request.query as { code?: string; state?: string };
       if (!code) throw new ApiError(401, "missing_code", "Authorization code is required");

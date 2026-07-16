@@ -6,15 +6,21 @@ export class ApiError extends Error {
     public code: string,
     message: string,
     public details?: unknown,
+    /**
+     * Opt-in for operational 5xx responses whose code/message are part of the
+     * external contract (for example, an intentionally unconfigured optional
+     * integration). Unknown and internal failures remain masked by default.
+     */
+    public expose = statusCode < 500,
   ) {
     super(message);
   }
 }
 
 export function sendError(reply: FastifyReply, error: ApiError) {
-  // Never leak internal detail on 5xx, even for an intentional ApiError — log it
-  // and return a generic body. 4xx client errors still surface their message.
-  if (error.statusCode >= 500) {
+  // Unknown/internal 5xx detail stays private. Deliberate operational states
+  // may opt into a stable public machine code and remediation-safe message.
+  if (error.statusCode >= 500 && !error.expose) {
     reply.log.error({ err: error }, "server error");
     return reply
       .status(error.statusCode)

@@ -7,6 +7,7 @@ type OpenApiOperation = Record<string, unknown> & {
 };
 
 export type OpenApiDocument = Record<string, unknown> & {
+  tags?: Array<{ name: string; description: string }>;
   paths?: Record<string, Record<string, OpenApiOperation>>;
   components?: Record<string, unknown> & {
     schemas?: Record<string, unknown>;
@@ -204,8 +205,53 @@ export function enrichOpenApi(
     },
   };
 
+  const tagNames = new Set<string>();
+  for (const pathItem of Object.values(paths)) {
+    for (const [method, operation] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method)) continue;
+      for (const tag of operation.tags ?? []) tagNames.add(tag);
+    }
+  }
+  document.tags = [...tagNames].sort().map((name) => ({ name, description: tagDescription(name) }));
+
   document.paths = paths;
   return document;
+}
+
+function tagDescription(name: string) {
+  const descriptions: Record<string, string> = {
+    Admin: "Deployment readiness and administrative diagnostics.",
+    Agents: "Agent definitions, schedules, health, and execution configuration.",
+    Analytics: "Operational, delivery, reliability, and cost analytics.",
+    Audit: "Tamper-evident organization and project activity history.",
+    Auth: "Browser session authentication and identity bootstrap.",
+    Budgets: "Organization, project, and agent cost guardrails.",
+    Catalog: "Discoverable engines, models, permissions, and trigger capabilities.",
+    Conversations: "Durable multi-turn agent conversations and messages.",
+    "Cost and analytics": "Budgets, spend, model requests, outcomes, and operational analytics.",
+    Facility: "Facility control-plane operations.",
+    GitHub: "GitHub App installations, repositories, issues, and delivery workflows.",
+    "Human approval": "Human approval gates, decisions, action types, and execution.",
+    Integrations: "Signed inbound events and durable outbound webhook deliveries.",
+    Knowledge: "Project knowledge spaces, entries, links, and validation.",
+    "Knowledge base": "Project knowledge spaces, entries, links, and validation.",
+    Operations: "Deployment health, operational issues, and tamper-evident audit history.",
+    Organization: "Organization settings, members, roles, keys, and providers.",
+    "Organization and access": "Identity, organization settings, members, roles, and API keys.",
+    Outcomes: "Pull-request delivery outcomes and terminal-state attribution.",
+    Projects: "Project lifecycle, repositories, health, kickstart, and upgrades.",
+    Proposals: "Human approval gates, decisions, action types, and execution.",
+    "Providers and keys": "Model providers and project-scoped virtual credentials.",
+    Registry: "Versioned contracts, harnesses, policies, and templates.",
+    Repositories: "Connected repositories, fingerprints, and project repository lifecycle.",
+    Runs: "Governed run lifecycle, events, transcripts, streaming, and steering.",
+    Sandboxes: "Execution isolation profiles and project-scoped model credentials.",
+    Spend: "Metered model requests and attributed cost records.",
+    Tasks: "Product-owner task queues and controlled transitions.",
+    Webhooks: "Externally signed GitHub and generic integration event receivers.",
+    Authentication: "Browser session authentication and identity bootstrap.",
+  };
+  return descriptions[name] ?? `${name} operations.`;
 }
 
 function addHeaderParameters(

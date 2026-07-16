@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createFacilityMcpServer } from "./tools.js";
@@ -17,6 +17,8 @@ export type HttpServerOptions = {
   authorizationServer?: string;
   maxBodyBytes?: number;
   maxRequestsPerMinute?: number;
+  /** Trust exactly this many right-most proxy hops when deriving rate-limit identity. */
+  trustedProxyHops?: number;
 };
 
 const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
@@ -25,6 +27,8 @@ export function serveHttp(options: HttpServerOptions) {
   const host = options.host ?? "127.0.0.1";
   const allowedHosts = configuredHosts(options, host);
   const limiter = new FixedWindowLimiter(options.maxRequestsPerMinute ?? 120, 60_000);
+  const credentialValidator = new CredentialValidator(options.apiUrl, options.fetch ?? fetch);
+  const trustedProxyHops = nonNegativeInteger(options.trustedProxyHops ?? 0, "trustedProxyHops");
   const server = createServer(async (request, response) => {
     const path = request.url?.split("?")[0] ?? "";
     response.setHeader("x-request-id", randomUUID());
@@ -86,7 +90,7 @@ export function serveHttp(options: HttpServerOptions) {
       return;
     }
 
-    const admission = limiter.admit(request.socket.remoteAddress ?? "unknown", Date.now());
+    const admission = limiter.admit(clientAddress(request, trustedProxyHops), Date.now());
     if (!admission.allowed) {
       response.writeHead(429, {
         "content-type": "application/json",
@@ -96,12 +100,30 @@ export function serveHttp(options: HttpServerOptions) {
       return;
     }
 
-    if (!isAuthorized(request)) {
+    const bearer = bearerToken(request);
+    if (!bearer) {
       response.writeHead(401, {
         "content-type": "application/json",
         "www-authenticate": wwwAuthenticate(options),
       });
       response.end(JSON.stringify({ error: "missing or invalid bearer token" }));
+      return;
+    }
+    const credential = await credentialValidator.validate(bearer);
+    if (credential === "invalid") {
+      response.writeHead(401, {
+        "content-type": "application/json",
+        "www-authenticate": wwwAuthenticate(options),
+      });
+      response.end(JSON.stringify({ error: "missing or invalid bearer token" }));
+      return;
+    }
+    if (credential === "unavailable") {
+      response.writeHead(503, {
+        "content-type": "application/json",
+        "retry-after": "2",
+      });
+      response.end(JSON.stringify({ error: "credential validation unavailable" }));
       return;
     }
     if (request.method !== "POST" || !["/mcp", "/"].includes(path)) {
@@ -132,7 +154,6 @@ export function serveHttp(options: HttpServerOptions) {
       return;
     }
 
-    const bearer = bearerToken(request);
     const mcp = createFacilityMcpServer({
       apiUrl: options.apiUrl,
       apiKey: bearer,
@@ -193,6 +214,47 @@ class FixedWindowLimiter {
     if (this.windows.size < 1_000) return;
     for (const [key, window] of this.windows) {
       if (window.resetAt <= now) this.windows.delete(key);
+    }
+  }
+}
+
+type CredentialStatus = "valid" | "invalid" | "unavailable";
+
+class CredentialValidator {
+  private readonly validUntil = new Map<string, number>();
+
+  constructor(
+    private readonly apiUrl: string,
+    private readonly fetchImpl: typeof fetch,
+  ) {}
+
+  async validate(token: string): Promise<CredentialStatus> {
+    const fingerprint = createHash("sha256").update(token).digest("hex");
+    const now = Date.now();
+    if ((this.validUntil.get(fingerprint) ?? 0) > now) return "valid";
+    try {
+      const response = await this.fetchImpl(`${this.apiUrl.replace(/\/$/, "")}/v1/me`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+      await response.body?.cancel().catch(() => undefined);
+      // A 403 still proves the control plane authenticated the credential; the
+      // requested MCP operation will enforce its own narrower permission.
+      if (response.ok || response.status === 403) {
+        this.validUntil.set(fingerprint, now + 5_000);
+        this.sweep(now);
+        return "valid";
+      }
+      return response.status === 401 ? "invalid" : "unavailable";
+    } catch {
+      return "unavailable";
+    }
+  }
+
+  private sweep(now: number) {
+    if (this.validUntil.size < 1_000) return;
+    for (const [fingerprint, expiresAt] of this.validUntil) {
+      if (expiresAt <= now) this.validUntil.delete(fingerprint);
     }
   }
 }
@@ -264,17 +326,33 @@ function isLoopback(host: string) {
   return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host.toLowerCase());
 }
 
-// Accept any non-empty Bearer credential — a `fak_` API key OR a WorkOS OAuth
-// 2.1 access token (JWT). The control plane validates which kind it is and
-// rejects invalid ones; the MCP server only forwards the credential.
-function isAuthorized(request: IncomingMessage): boolean {
-  return bearerToken(request).length > 0;
-}
-
 function bearerToken(request: IncomingMessage): string {
   const header = request.headers.authorization;
   if (typeof header !== "string") return "";
   return header.match(/^Bearer\s+(\S+)\s*$/i)?.[1] ?? "";
+}
+
+function clientAddress(request: IncomingMessage, trustedProxyHops: number): string {
+  const socketAddress = request.socket.remoteAddress ?? "unknown";
+  if (trustedProxyHops === 0) return socketAddress;
+  const forwarded = request.headers["x-forwarded-for"];
+  if (typeof forwarded !== "string") return socketAddress;
+  const chain = [
+    ...forwarded
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    socketAddress,
+  ];
+  const index = Math.max(0, chain.length - 1 - trustedProxyHops);
+  return chain[index] ?? socketAddress;
+}
+
+function nonNegativeInteger(value: number, label: string) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`MCP ${label} must be a non-negative integer`);
+  }
+  return value;
 }
 
 function wwwAuthenticate(options: HttpServerOptions): string {

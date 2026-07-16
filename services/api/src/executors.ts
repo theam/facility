@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { newId } from "@facility/core";
+import { can, newId } from "@facility/core";
 import type { createDb } from "@facility/db";
 import {
   actionTypes,
   agentDefs,
+  apiKeys,
   budgets,
   conversationMessages,
   conversations,
@@ -14,6 +15,7 @@ import {
   kbEntries,
   kbLinks,
   kbSpaces,
+  orgMembers,
   platformIssues,
   poTasks,
   projects,
@@ -22,14 +24,16 @@ import {
   registryItems,
   registryVersions,
   repos,
+  roles,
   runEvents,
   runs,
   sandboxProfiles,
   steerMessages,
+  users,
   webhookDeliveries,
 } from "@facility/db";
 import { artifactIdFor, validate } from "@facility/harness";
-import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "./budget-scope.js";
 import {
   createGithubClientFactory,
@@ -51,6 +55,7 @@ import {
   toHarnessEntry,
   toHarnessSpace,
 } from "./harness.js";
+import { MCP_TOOL_PERMISSIONS } from "./mcp-policy.js";
 import { createNextDraftVersion, publishRegistryVersion } from "./registry.js";
 import { cancelRun } from "./sandbox/orchestrator.js";
 import { appendRunEvents, TERMINAL_RUN_STATUSES } from "./sandbox/state.js";
@@ -312,6 +317,7 @@ async function executeMcpToolCall(
   if (proposedTargetProjectId !== undefined && proposedTargetProjectId !== proposalProjectId) {
     throw new Error("mcp_target_project_changed");
   }
+  await assertMcpRequesterStillAuthorized(db, proposal.orgId, payload, toolName, targetProjectId);
   const result = await executeKnownMcpTool(
     db,
     proposal.orgId,
@@ -330,6 +336,82 @@ async function executeMcpToolCall(
     target: { type: "proposal", id: proposal.id },
     payload: { toolName, result },
   });
+}
+
+async function assertMcpRequesterStillAuthorized(
+  db: Db,
+  orgId: string,
+  payload: Record<string, unknown>,
+  toolName: string,
+  targetProjectId: string | null,
+) {
+  const expectedPermission = MCP_TOOL_PERMISSIONS[toolName];
+  const storedPermission = stringField(payload.permission);
+  if (!expectedPermission || storedPermission !== expectedPermission) {
+    throw new Error("mcp_permission_policy_changed");
+  }
+  const requestedBy = objectOrEmpty(payload.requestedBy);
+  const requesterType = stringField(requestedBy.type);
+  const requesterId = stringField(requestedBy.id);
+  if (!requesterType || !requesterId) throw new Error("mcp_requester_missing");
+
+  if (requesterType === "key") {
+    const key = (
+      await db
+        .select({ permissions: roles.permissions, projectId: apiKeys.projectId })
+        .from(apiKeys)
+        .innerJoin(roles, eq(apiKeys.roleId, roles.id))
+        .where(
+          and(
+            eq(apiKeys.orgId, orgId),
+            eq(apiKeys.id, requesterId),
+            isNull(apiKeys.revokedAt),
+            or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date())),
+          ),
+        )
+        .limit(1)
+    )[0];
+    assertCurrentMcpAuthority(
+      key?.permissions,
+      key?.projectId ?? null,
+      expectedPermission,
+      targetProjectId,
+    );
+    return;
+  }
+
+  if (requesterType === "user") {
+    const member = (
+      await db
+        .select({ permissions: roles.permissions, status: users.status })
+        .from(orgMembers)
+        .innerJoin(roles, eq(orgMembers.roleId, roles.id))
+        .innerJoin(users, eq(orgMembers.userId, users.id))
+        .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, requesterId)))
+        .limit(1)
+    )[0];
+    if (member?.status !== "active") throw new Error("mcp_requester_no_longer_authorized");
+    assertCurrentMcpAuthority(member.permissions, null, expectedPermission, targetProjectId);
+    return;
+  }
+
+  throw new Error("mcp_requester_no_longer_authorized");
+}
+
+function assertCurrentMcpAuthority(
+  permissions: string[] | undefined,
+  scopedProjectId: string | null,
+  expectedPermission: string,
+  targetProjectId: string | null,
+) {
+  if (
+    !permissions ||
+    !can(permissions, expectedPermission) ||
+    can(permissions, "hitl:decide") ||
+    (scopedProjectId !== null && scopedProjectId !== targetProjectId)
+  ) {
+    throw new Error("mcp_requester_no_longer_authorized");
+  }
 }
 
 async function executeKnownMcpTool(

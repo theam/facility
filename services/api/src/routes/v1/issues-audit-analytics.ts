@@ -8,13 +8,13 @@ import { analyticsOverview, queryAnalytics } from "../../watchtower/analytics.js
 import {
   AnalyticsOverviewSchema,
   AnalyticsRowSchema,
-  AnyObject,
   AuditEventSchema,
   assertBareRowProjectScope,
   assertProjectScope,
   IsoDateTime,
   IssueIdParams,
   LlmRequestSchema,
+  OutcomeSchema,
   PageQuery,
   type PageQueryValue,
   PlatformIssueSchema,
@@ -253,7 +253,7 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
           state: z.enum(["open", "terminal", "all"]).default("open"),
           limit: z.coerce.number().int().min(1).max(200).default(50),
         }),
-        response: { 200: z.array(AnyObject) },
+        response: { 200: z.array(OutcomeSchema) },
       },
     },
     async (request) => {
@@ -269,12 +269,16 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
       if (projectId) clauses.push(eq(outcomes.projectId, projectId));
       if (q.state === "open") clauses.push(sql`${outcomes.terminalAt} is null`);
       if (q.state === "terminal") clauses.push(sql`${outcomes.terminalAt} is not null`);
-      return db
+      const rows = await db
         .select()
         .from(outcomes)
         .where(and(...clauses))
         .orderBy(desc(outcomes.openedAt))
         .limit(q.limit);
+      return rows.map((row) => ({
+        ...row,
+        hoursToTerminal: row.hoursToTerminal === null ? null : Number(row.hoursToTerminal),
+      }));
     },
   );
 

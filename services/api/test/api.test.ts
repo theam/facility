@@ -215,6 +215,7 @@ describe("api", async () => {
           }
         >
       >;
+      tags?: Array<{ name: string; description: string }>;
       components?: { schemas?: Record<string, unknown>; securitySchemes?: Record<string, unknown> };
     };
     expect(Object.keys(document.paths).some((path) => path.startsWith("/internal/"))).toBe(false);
@@ -263,6 +264,13 @@ describe("api", async () => {
       { sessionCookie: [] },
     ]);
     expect(document.paths["/v1/projects"]?.get?.["x-facility-permission"]).toBe("projects:read");
+    expect(document.tags).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Projects", description: expect.any(String) }),
+        expect.objectContaining({ name: "Runs", description: expect.any(String) }),
+        expect.objectContaining({ name: "Webhooks", description: expect.any(String) }),
+      ]),
+    );
     expect(document.paths["/v1/projects"]?.post?.parameters).toContainEqual(
       expect.objectContaining({ name: "Idempotency-Key", in: "header" }),
     );
@@ -342,6 +350,17 @@ describe("api", async () => {
     const response = await app.inject({ method: "GET", url: "/v1/me", headers: { cookie } });
     expect(response.statusCode).toBe(200);
     expect(response.json().org.slug).toBe("the-agile-monkeys");
+  });
+
+  it("preserves the machine code for an intentionally unconfigured production integration", async () => {
+    const response = await app.inject({ method: "GET", url: "/auth/login" });
+    expect(response.statusCode).toBe(501);
+    expect(response.json()).toEqual({
+      error: {
+        code: "workos_unconfigured",
+        message: "WorkOS login is not configured",
+      },
+    });
   });
 
   it("bootstraps the first WorkOS user as owner when no orgs exist", async () => {
@@ -2409,6 +2428,27 @@ describe("api", async () => {
         .limit(1)
     )[0];
     if (!actionType) throw new Error("mcp_tool_call action type missing");
+    const requesterRole = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: {
+        name: `mcp-budget-requester-${suffix}`,
+        permissions: ["org:read", "budgets:write"],
+      },
+    });
+    expect(requesterRole.statusCode).toBe(200);
+    const requesterKey = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: {
+        name: `mcp-budget-requester-${suffix}`,
+        roleId: requesterRole.json().id,
+        projectId,
+      },
+    });
+    expect(requesterKey.statusCode).toBe(200);
     const proposal = (
       await db
         .insert(proposals)
@@ -2430,7 +2470,7 @@ describe("api", async () => {
               mode: "soft",
             },
             targetProjectId: projectId,
-            requestedBy: { type: "key", id: "mover" },
+            requestedBy: { type: "key", id: requesterKey.json().id },
           },
           contextMd: "set_budget across projects",
           expiresAt: new Date(Date.now() + 3600_000),
@@ -2482,6 +2522,61 @@ describe("api", async () => {
     });
     expect(proposed.statusCode).toBe(403);
     expect(proposed.json().error.code).toBe("mcp_key_can_decide");
+  });
+
+  it("revalidates MCP requester authority immediately before an approved side effect", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const role = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: {
+        name: `mcp-revalidation-${suffix}`,
+        permissions: ["org:read", "projects:write"],
+      },
+    });
+    expect(role.statusCode).toBe(200);
+    const issued = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: { name: `mcp-revalidation-${suffix}`, roleId: role.json().id },
+    });
+    expect(issued.statusCode).toBe(200);
+    const slug = `revoked-mcp-${suffix}`;
+    const proposed = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/tool-proposals",
+      headers: { authorization: `Bearer ${issued.json().secret}` },
+      payload: {
+        toolName: "facility_create_project",
+        permission: "projects:write",
+        args: { name: "Must remain absent", slug },
+        summary: "Verify delayed authority revalidation",
+      },
+    });
+    expect(proposed.statusCode, proposed.body).toBe(200);
+    const revoked = await app.inject({
+      method: "DELETE",
+      url: `/v1/keys/${issued.json().id}`,
+      headers: { cookie },
+    });
+    expect(revoked.statusCode).toBe(200);
+
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${proposed.json().id}/decide`,
+      headers: { cookie: approverCookie },
+      payload: { decision: "approve" },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.json().state).toBe("execution_failed");
+    expect(
+      await db
+        .select()
+        .from(projects)
+        .where(and(eq(projects.orgId, orgId), eq(projects.slug, slug))),
+    ).toHaveLength(0);
   });
 
   it("enforces four-eyes approval for every proposal action type", async () => {
@@ -2688,6 +2783,23 @@ describe("api", async () => {
       payload: { type: "E", slug: "experiment", bodyMd: "body", links: [parent.json().id] },
     });
     expect(child.statusCode).toBe(200);
+  });
+
+  it("returns null for a project whose KB space has not been created", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Empty KB", slug: `empty-kb-${Date.now()}` },
+    });
+    expect(project.statusCode).toBe(200);
+    const space = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${project.json().id}/kb/space`,
+      headers: { cookie },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    expect(space.json()).toBeNull();
   });
 
   it("aggregates spend over llm request fixtures", async () => {

@@ -67,9 +67,11 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           .where(and(eq(kbSpaces.orgId, p.orgId), eq(kbSpaces.projectId, projectId)))
           .limit(1)
       )[0];
-      // A project without a KB yet is an empty space, not a serialization crash
-      // (the response schema is a record — `null` used to 500 here).
-      return space ?? { projectId, charterMd: "", activeMd: "", config: {}, exists: false };
+      // Absence is represented explicitly. The OpenAPI/SDK contract is
+      // nullable, so callers can distinguish "not created" from an empty but
+      // persisted KB space without receiving an object that violates the
+      // declared response schema.
+      return space ?? null;
     },
   );
 

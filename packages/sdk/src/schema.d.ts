@@ -12372,7 +12372,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        id: string;
+                        orgId: string;
+                        runId: string | null;
+                        projectId: string;
+                        repo: string;
+                        prNumber: number;
+                        agentLane: string;
+                        /** Format: date-time */
+                        openedAt: string;
+                        /** Format: date-time */
+                        terminalAt: string | null;
+                        fate: string | null;
+                        reviewRounds: number;
+                        fixupCommits: number;
+                        hoursToTerminal: number | null;
+                        /** Format: date-time */
+                        createdAt: string;
+                        /** Format: date-time */
+                        updatedAt: string;
                     }[];
                 };
             };

@@ -9,6 +9,12 @@ import { describe, expect, test } from "vitest";
 import { serveHttp } from "../src/http.js";
 import { createFacilityMcpServer, toolDefinitions } from "../src/tools.js";
 
+const acceptCredential: typeof fetch = async () =>
+  new Response(JSON.stringify({ principal: { type: "key" } }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
 class MemoryTransport implements Transport {
   peer?: MemoryTransport;
   onmessage?: (message: JSONRPCMessage) => void;
@@ -64,6 +70,7 @@ describe("@facility/mcp", () => {
     expect(result.tools).toHaveLength(79);
     expect(new Set(result.tools.map((tool) => tool.name)).size).toBe(result.tools.length);
     expect(result.tools.map((tool) => tool.name)).toEqual(toolDefinitions.map((tool) => tool.name));
+    expect(client.getServerCapabilities()?.tools?.listChanged).toBe(false);
     const trigger = result.tools.find((tool) => tool.name === "facility_trigger_run");
     expect(trigger?.description).toContain("Needs runs:trigger");
     expect(trigger?.inputSchema.properties).not.toHaveProperty("confirm_token");
@@ -521,8 +528,35 @@ describe("@facility/mcp", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  test("streamable HTTP fails closed when credential validation is unavailable", async () => {
+    const server = serveHttp({
+      apiUrl: "http://facility.test",
+      port: 0,
+      fetch: async () => new Response("unavailable", { status: 503 }),
+    });
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer fak_uncached",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect(await response.json()).toEqual({ error: "credential validation unavailable" });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
   test("streamable HTTP bounds and validates request bodies before protocol parsing", async () => {
-    const server = serveHttp({ apiUrl: "http://facility.test", port: 0, maxBodyBytes: 32 });
+    const server = serveHttp({
+      apiUrl: "http://facility.test",
+      port: 0,
+      maxBodyBytes: 32,
+      fetch: acceptCredential,
+    });
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
     const tooLarge = await fetch(`http://127.0.0.1:${port}/mcp`, {
@@ -545,6 +579,7 @@ describe("@facility/mcp", () => {
       apiUrl: "http://facility.test",
       port: 0,
       maxRequestsPerMinute: 1,
+      fetch: acceptCredential,
     });
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
@@ -569,6 +604,32 @@ describe("@facility/mcp", () => {
     expect(() => serveHttp({ apiUrl: "http://facility.test", port: 0, host: "0.0.0.0" })).toThrow(
       /allowedHosts or resourceUrl/,
     );
+  });
+
+  test("trusted proxy hops isolate rate limits by the forwarded client address", async () => {
+    const server = serveHttp({
+      apiUrl: "http://facility.test",
+      port: 0,
+      maxRequestsPerMinute: 1,
+      trustedProxyHops: 1,
+      fetch: acceptCredential,
+    });
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const request = (address: string) =>
+      fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer fak_test",
+          "content-type": "application/json",
+          "x-forwarded-for": address,
+        },
+        body: "{}",
+      });
+    expect((await request("192.0.2.10")).status).not.toBe(429);
+    expect((await request("192.0.2.10")).status).toBe(429);
+    expect((await request("192.0.2.11")).status).not.toBe(429);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   test("serves OAuth protected-resource metadata when configured", async () => {
@@ -616,8 +677,21 @@ describe("@facility/mcp", () => {
     await new Promise<void>((resolve) => bare.close(() => resolve()));
   });
 
-  test("accepts any non-empty bearer (JWT) and does not 401 at the gate", async () => {
-    const server = serveHttp({ apiUrl: "http://facility.test", port: 0 });
+  test("validates API-key and OAuth bearers with the control plane before protocol admission", async () => {
+    const seen: string[] = [];
+    const server = serveHttp({
+      apiUrl: "http://facility.test",
+      port: 0,
+      fetch: async (_input, init) => {
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        seen.push(authorization);
+        return new Response(null, {
+          status: ["Bearer fak_valid", "Bearer header.payload.signature"].includes(authorization)
+            ? 200
+            : 401,
+        });
+      },
+    });
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
     const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
@@ -628,19 +702,32 @@ describe("@facility/mcp", () => {
       },
       body: "{}",
     });
-    // The bearer clears the auth gate; the control plane (not the MCP proxy)
-    // decides token validity, so the response is anything but 401.
     assert.notEqual(response.status, 401);
 
-    const lowercase = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const apiKey = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
       headers: {
-        authorization: "bearer lowercase.token",
+        authorization: "bearer fak_valid",
         "content-type": "application/json",
       },
       body: "{}",
     });
-    assert.notEqual(lowercase.status, 401);
+    assert.notEqual(apiKey.status, 401);
+
+    const invalid = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer totally-bogus",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    assert.equal(invalid.status, 401);
+    assert.deepEqual(seen, [
+      "Bearer header.payload.signature",
+      "Bearer fak_valid",
+      "Bearer totally-bogus",
+    ]);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 });

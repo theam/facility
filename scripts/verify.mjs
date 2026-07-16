@@ -7,6 +7,7 @@ let startedPostgres = false;
 
 try {
   step("Lint", "pnpm", ["lint"]);
+  step("Clean generated build outputs", "pnpm", ["clean:outputs"]);
   step("Typecheck", "pnpm", ["typecheck"]);
   step("Clean workspace build (Turbo cache disabled)", "pnpm", ["build:clean"]);
 
@@ -19,7 +20,7 @@ try {
   step("Critical integration tests (direct, uncached, skips forbidden)", "pnpm", ["test:critical"]);
   step("Remaining tests (Turbo cache disabled)", "pnpm", ["test:uncached"]);
   step("Repository guards", "pnpm", ["guards"]);
-  step("High-severity dependency audit", "pnpm", ["audit", "--audit-level", "high"]);
+  step("All-severity dependency audit", "pnpm", ["audit", "--audit-level", "low"]);
 } finally {
   if (startedPostgres) run("docker", [...compose, "stop", "postgres"], { allowFailure: true });
 }

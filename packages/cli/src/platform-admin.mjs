@@ -317,7 +317,10 @@ export function validateAdminSubcommandFlags(group, args, flags) {
   let spec = ADMIN_SUBCOMMAND_FLAGS[group];
   if (!spec) return;
   let sub = args[0] || "__default";
-  if (group === "kb") {
+  if (group === "health") {
+    // `facility health <project>` has a positional resource, not a subcommand.
+    sub = "__default";
+  } else if (group === "kb") {
     const area = args[0];
     sub = area === "validate" ? "validate" : `${area || ""}:${args[1] || (area === "space" ? "get" : "list")}`;
     spec = {
@@ -331,7 +334,12 @@ export function validateAdminSubcommandFlags(group, args, flags) {
     };
   }
   const allowed = spec[sub];
-  if (!allowed) return;
+  if (!allowed) {
+    throw cliError(
+      `Unknown subcommand ${JSON.stringify(args.join(" ") || sub)} for ${group}. Run facility ${group} --help.`,
+      "usage",
+    );
+  }
   const permitted = new Set(["profile", "json", "timeout", ...allowed]);
   const irrelevant = Object.keys(flags).filter((flag) => !permitted.has(flag));
   if (irrelevant.length) {
@@ -340,6 +348,9 @@ export function validateAdminSubcommandFlags(group, args, flags) {
       "invalid_flag",
     );
   }
+  // Validate pagination while the command is still in the local, pre-auth
+  // phase. Malformed input must not trigger project resolution or a request.
+  if (flags.limit !== undefined || flags.offset !== undefined) pageQuery(flags);
 }
 
 async function org(args, ctx, flags) {
@@ -1469,9 +1480,13 @@ function integerArgument(value, name) {
 }
 
 function pageQuery(flags) {
-  const limit = numberFlag(flags.limit, "--limit");
+  const limit = flags.limit === undefined ? undefined : Number(flags.limit);
   const offset = numberFlag(flags.offset, "--offset");
-  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
+  if (
+    flags.limit === true ||
+    flags.limit === "" ||
+    (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200))
+  ) {
     throw cliError("--limit must be an integer from 1 to 200", "invalid_flag");
   }
   if (offset !== undefined && !Number.isInteger(offset)) {

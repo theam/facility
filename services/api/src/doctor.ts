@@ -1,4 +1,5 @@
 import { readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_ROLES } from "@facility/core";
@@ -50,6 +51,7 @@ const ESSENTIAL_ACTION_TYPES = [
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 export async function runReadinessDoctor(input: {
   db: Db;
@@ -126,6 +128,11 @@ async function checkWorkerHeartbeat(db: Db, now: Date): Promise<DoctorCheck> {
 
 async function expectedMigrationNames(): Promise<string[]> {
   const candidates = [
+    // Production `pnpm deploy` installs @facility/db in node_modules rather
+    // than preserving the monorepo layout. Resolve its public entrypoint and
+    // walk back from dist/ so doctor observes the same migration assets the
+    // one-shot migrator actually used.
+    join(dirname(require.resolve("@facility/db")), "..", "migrations"),
     join(here, "../../../packages/db/migrations"),
     join(here, "../../packages/db/migrations"),
   ];

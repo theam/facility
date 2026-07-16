@@ -202,6 +202,7 @@ services:
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4420}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,mcp}
       MCP_AUTHORIZATION_SERVER: ${MCP_AUTHORIZATION_SERVER:-}
+      MCP_TRUST_PROXY_HOPS: ${MCP_TRUST_PROXY_HOPS:-0}
     command:
       [
         "node",

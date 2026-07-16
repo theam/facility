@@ -727,6 +727,27 @@ test("command help is available without a configured profile", async () => {
   );
 });
 
+test("unknown subcommands fail with usage before authentication", async () => {
+  for (const [command, args] of [
+    ["projects", ["lst", "--json"]],
+    ["roles", ["lst", "--json"]],
+  ]) {
+    const stdout = sink();
+    let requested = false;
+    const exit = await runPlatformCommand(command, args, {
+      config: { currentProfile: "default", profiles: {} },
+      stdout,
+      fetch: async () => {
+        requested = true;
+        return json({});
+      },
+    });
+    assert.equal(exit, 1);
+    assert.equal(JSON.parse(stdout.text).error.code, "usage");
+    assert.equal(requested, false);
+  }
+});
+
 test("profiles can be listed and switched without authenticating", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "facility-platform-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -760,6 +781,17 @@ test("profiles can be listed and switched without authenticating", async (t) => 
   );
   assert.equal(JSON.parse(readFileSync(path, "utf8")).currentProfile, "staging");
   assert.equal((statSync(path).mode & 0o777).toString(8), "600");
+
+  const human = sink();
+  assert.equal(
+    await runPlatformCommand("profiles", ["list"], {
+      config: configured,
+      configPath: path,
+      stdout: human,
+    }),
+    0,
+  );
+  assert.doesNotMatch(human.text, /\n\s+—\s+profile/);
 });
 
 test("doctor calls platform readiness endpoint and renders remediation", async () => {
@@ -1119,6 +1151,38 @@ test("bounded list pagination is exposed consistently and validated locally", as
   });
   assert.equal(invalid, 1);
   assert.equal(JSON.parse(stdout.text).error.code, "invalid_flag");
+  assert.equal(
+    JSON.parse(stdout.text).error.message,
+    "--limit must be an integer from 1 to 200",
+  );
+  for (const command of ["projects", "roles"]) {
+    const malformedOut = sink();
+    assert.equal(
+      await runPlatformCommand(command, ["list", "--limit", "abc", "--json"], {
+        config: config(),
+        stdout: malformedOut,
+        fetch,
+      }),
+      1,
+    );
+    assert.equal(
+      JSON.parse(malformedOut.text).error.message,
+      "--limit must be an integer from 1 to 200",
+    );
+  }
+  const missingProjectOut = sink();
+  assert.equal(
+    await runPlatformCommand("agents", ["list", "--limit", "abc", "--json"], {
+      config: config(),
+      stdout: missingProjectOut,
+      fetch,
+    }),
+    1,
+  );
+  assert.equal(
+    JSON.parse(missingProjectOut.text).error.message,
+    "--limit must be an integer from 1 to 200",
+  );
   assert.equal(calls.length, 2, "invalid pagination must fail before a request");
 });
 

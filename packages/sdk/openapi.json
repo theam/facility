@@ -18441,7 +18441,85 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "additionalProperties": {}
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "orgId": {
+                        "type": "string"
+                      },
+                      "runId": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "repo": {
+                        "type": "string"
+                      },
+                      "prNumber": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "agentLane": {
+                        "type": "string"
+                      },
+                      "openedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "terminalAt": {
+                        "nullable": true,
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "fate": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "reviewRounds": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "fixupCommits": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "hoursToTerminal": {
+                        "nullable": true,
+                        "type": "number"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "orgId",
+                      "runId",
+                      "projectId",
+                      "repo",
+                      "prNumber",
+                      "agentLane",
+                      "openedAt",
+                      "terminalAt",
+                      "fate",
+                      "reviewRounds",
+                      "fixupCommits",
+                      "hoursToTerminal",
+                      "createdAt",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
                   }
                 }
               }
@@ -25460,6 +25538,88 @@
     {
       "url": "https://facility.example",
       "description": "Replace with the base URL of your Facility deployment."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Agents",
+      "description": "Agent definitions, schedules, health, and execution configuration."
+    },
+    {
+      "name": "Authentication",
+      "description": "Browser session authentication and identity bootstrap."
+    },
+    {
+      "name": "Catalog",
+      "description": "Discoverable engines, models, permissions, and trigger capabilities."
+    },
+    {
+      "name": "Conversations",
+      "description": "Durable multi-turn agent conversations and messages."
+    },
+    {
+      "name": "Cost and analytics",
+      "description": "Budgets, spend, model requests, outcomes, and operational analytics."
+    },
+    {
+      "name": "GitHub",
+      "description": "GitHub App installations, repositories, issues, and delivery workflows."
+    },
+    {
+      "name": "Human approval",
+      "description": "Human approval gates, decisions, action types, and execution."
+    },
+    {
+      "name": "Integrations",
+      "description": "Signed inbound events and durable outbound webhook deliveries."
+    },
+    {
+      "name": "Knowledge base",
+      "description": "Project knowledge spaces, entries, links, and validation."
+    },
+    {
+      "name": "Operations",
+      "description": "Deployment health, operational issues, and tamper-evident audit history."
+    },
+    {
+      "name": "Organization and access",
+      "description": "Identity, organization settings, members, roles, and API keys."
+    },
+    {
+      "name": "Outcomes",
+      "description": "Pull-request delivery outcomes and terminal-state attribution."
+    },
+    {
+      "name": "Projects",
+      "description": "Project lifecycle, repositories, health, kickstart, and upgrades."
+    },
+    {
+      "name": "Providers and keys",
+      "description": "Model providers and project-scoped virtual credentials."
+    },
+    {
+      "name": "Registry",
+      "description": "Versioned contracts, harnesses, policies, and templates."
+    },
+    {
+      "name": "Repositories",
+      "description": "Connected repositories, fingerprints, and project repository lifecycle."
+    },
+    {
+      "name": "Runs",
+      "description": "Governed run lifecycle, events, transcripts, streaming, and steering."
+    },
+    {
+      "name": "Sandboxes",
+      "description": "Execution isolation profiles and project-scoped model credentials."
+    },
+    {
+      "name": "Tasks",
+      "description": "Product-owner task queues and controlled transitions."
+    },
+    {
+      "name": "Webhooks",
+      "description": "Externally signed GitHub and generic integration event receivers."
     }
   ]
 }

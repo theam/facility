@@ -348,6 +348,24 @@ export const AuditEventSchema = z.object({
   createdAt: DateValue,
 });
 
+export const OutcomeSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  runId: z.string().nullable(),
+  projectId: z.string(),
+  repo: z.string(),
+  prNumber: z.number().int(),
+  agentLane: z.string(),
+  openedAt: DateValue,
+  terminalAt: DateValue.nullable(),
+  fate: z.string().nullable(),
+  reviewRounds: z.number().int(),
+  fixupCommits: z.number().int(),
+  hoursToTerminal: z.number().nullable(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
 export const LlmRequestSchema = z.object({
   id: z.string(),
   orgId: z.string(),

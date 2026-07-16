@@ -44,9 +44,17 @@ only when `MCP_OAUTH_AUDIENCE` and `WORKOS_AUTHKIT_DOMAIN` are set on the contro
 Remote binds fail closed unless `MCP_ALLOWED_HOSTS` or `MCP_PUBLIC_URL` names a
 trusted authority. Browser `Origin` is checked against the same set, request
 bodies are bounded, `/healthz` reports the MCP process, and `/readyz` checks the
-upstream API.
+upstream API. Bearers are validated with the control plane before MCP protocol
+admission, so invalid credentials cannot enumerate tools, resources, or prompts.
+If validation is unavailable, admission fails closed with `503` and `Retry-After`.
+When a known reverse proxy terminates TLS, set `MCP_TRUST_PROXY_HOPS` to its
+exact hop count so per-client rate limits use the trusted `X-Forwarded-For`
+address; the default `0` ignores forwarded headers.
 
 ## Tools
+
+The tool catalog is immutable for the lifetime of a server process and does not
+advertise `tools.listChanged`; reconnect after a deployment to discover its catalog.
 
 The 79 tools cover identity, org/members/roles/keys, projects/repos/health,
 agents/status/runs/paged events/transcripts, durable conversations, GitHub App
@@ -73,7 +81,11 @@ decision tool: untrusted model output cannot invoke an approval. MCP write keys 
 bundled `operator` role for an AI client and an owner/admin human principal for
 the decision. Proposal idempotency hashes the tool, JSON-RPC request id, and
 canonical arguments, so retries replay while reused ids with different inputs
-cannot collide.
+cannot collide. Immediately before execution, Facility revalidates that the
+original requester still exists, is active, retains the required permission,
+remains within the target project scope, and still cannot decide HITL. Revoked
+or downgraded requesters therefore produce an explicit failed execution and no
+side effect.
 
 This is deliberately the complete **AI-operable** surface, not a credential
 administration backdoor. Secret issuance/rotation, member and role changes,

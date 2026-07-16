@@ -1186,6 +1186,9 @@ export function createFacilityMcpServer(options: FacilityMcpOptions): McpServer 
       },
     );
   }
+  // Facility's tool catalog is fixed for the lifetime of a server process.
+  // Narrow the high-level SDK's default capability to the contract we keep.
+  server.server.registerCapabilities({ tools: { listChanged: false } });
 
   server.registerResource(
     "facility-me",

@@ -15,8 +15,10 @@ curl --fail http://localhost:4420/healthz
 
 The MCP container listens on `4420`. For a public deployment set
 `MCP_PUBLIC_URL`, `MCP_ALLOWED_HOSTS`, and `MCP_AUTHORIZATION_SERVER`, terminate
-TLS at the edge, and configure the API's WorkOS issuer/audience settings. A
-non-loopback MCP bind fails closed unless a trusted authority is configured.
+TLS at the edge, and configure the API's WorkOS issuer/audience settings. Set
+`MCP_TRUST_PROXY_HOPS` to the exact trusted proxy count when applicable; its
+default `0` ignores spoofable forwarded addresses. A non-loopback MCP bind fails
+closed unless a trusted authority is configured.
 
 ## CLI
 
@@ -136,8 +138,9 @@ For stdio:
 
 For streamable HTTP, connect to `https://mcp.facility.example/mcp`. Send an API
 key as a Bearer credential for service use, or configure the advertised OAuth
-2.1 authorization server for interactive clients. The API validates the token;
-the MCP proxy does not possess an elevated service credential.
+2.1 authorization server for interactive clients. The proxy asks the API to
+validate the token before admitting MCP protocol requests and never possesses
+an elevated service credential.
 
 Tools return both text and protocol-valid structured content. Errors set
 `isError` and retain API status/code/details. Read tools declare read-only and
@@ -146,8 +149,9 @@ side effect until a different human principal with `hitl:decide` approves it.
 The bundled `operator` role can use MCP reads and propose writes but cannot
 decide them.
 Execution revalidates the allowlisted tool, permission, organization/project
-target, and arguments before the side effect. Decisions are intentionally absent
-from MCP and must be made through a separately authenticated CLI or API principal.
+target, arguments, and the original requester's current active authorization
+before the side effect. Decisions are intentionally absent from MCP and must be
+made through a separately authenticated CLI or API principal.
 
 Clients can enumerate `facility://me`, visible projects, and recent runs; run
 resources include a bounded transcript window, while the paged run-events tool
