@@ -13,6 +13,7 @@
     "test": "vitest run --fileParallelism=false",
     "test:e2e-sandbox": "vitest run --fileParallelism=false test/sandbox.e2e.test.ts",
     "dev": "tsx watch src/dev.ts",
+    "dev:worker": "tsx watch src/worker.ts",
     "start": "node dist/start.js",
     "worker": "tsx src/worker.ts",
     "openapi": "tsx src/openapi.ts && pnpm --filter @facility/sdk generate"

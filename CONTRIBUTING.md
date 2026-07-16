@@ -20,12 +20,20 @@ the local platform stack and sandbox end-to-end tests.
 git clone https://github.com/theam/facility.git
 cd facility
 corepack enable
-pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-For a local platform, copy `.env.example` to `.env`, generate the documented
-`SECRET_MASTER_KEY`, and follow the
-[self-host quickstart](apps/docs/docs/self-host/quickstart.md).
+`pnpm dev` owns dependency installation, safe `.env` defaults, development
+infrastructure, shared package builds, migrations, seed data, and every
+foreground process, including the worker and documentation site. It preserves
+existing `.env` values. See the
+[self-host quickstart](apps/docs/docs/self-host/quickstart.md) for details.
+
+To delegate setup to Claude Code or Codex:
+
+> Set up and launch Facility from this repository. Run `pnpm dev`, fix
+> prerequisite errors without replacing existing `.env` values, wait for the
+> services to be ready, then report their local URLs.
 
 ## Make a focused change
 
@@ -50,12 +58,11 @@ Run the repository acceptance command before opening a pull request:
 pnpm verify
 ```
 
-It runs Biome, TypeScript checks, all package tests, and the repository guards.
-Run the relevant build when the change affects a build output:
-
-```bash
-pnpm build
-```
+It runs lint and type checks, a clean cache-disabled build, critical integration
+tests against isolated databases, the remaining uncached tests, repository
+guards, and the high-severity dependency audit. CI separately builds the
+self-host images and applies the Docker-backed sandbox E2E policy documented in
+[docs/testing.md](docs/testing.md).
 
 Useful narrower commands include:
 

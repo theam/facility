@@ -89,29 +89,32 @@ See the [CLI reference](apps/docs/docs/reference/cli.md) and
 
 ## Quick start: self-host the platform
 
-For local evaluation, you need Docker, Node.js 22 or newer, and pnpm 11. The
-development stack uses Postgres and MinIO in containers while the API, gateway,
-and web app run with live reload.
+For local evaluation, you need Docker, Node.js 22 or newer, and pnpm 11.
+One command prepares the repository and runs the complete development stack:
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
 corepack enable
-pnpm install --frozen-lockfile
-cp .env.example .env
-# Set SECRET_MASTER_KEY in .env to the output of: openssl rand -base64 32
-docker compose -f docker-compose.dev.yml up -d
-pnpm --filter @facility/db migrate
-pnpm --filter @facility/db seed
 pnpm dev
 ```
 
-Open `http://localhost:3400` and use the development sign-in. Start the worker
-in another terminal when you want queued jobs or platform-lane runs:
+`pnpm dev` creates `.env` when needed, fills only blank required development
+values, starts Postgres and MinIO, installs dependencies, builds shared
+packages, migrates and seeds the database, then launches the API, worker,
+gateway, web app, and documentation site. Existing `.env` values are never
+replaced. Because the command seeds development data, it refuses a non-local
+`DATABASE_URL`.
 
-```bash
-pnpm --filter @facility/api worker
-```
+Open `http://localhost:3400` and use the development sign-in. Ctrl-C stops the
+foreground development processes; the Docker infrastructure remains available
+for the next `pnpm dev`.
+
+To delegate setup to Claude Code or Codex, paste this prompt:
+
+> Set up and launch Facility from this repository. Run `pnpm dev`, fix
+> prerequisite errors without replacing existing `.env` values, wait for the
+> services to be ready, then report their local URLs.
 
 To run agents in local Docker sandboxes, also build the runner image named in
 `.env`:

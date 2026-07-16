@@ -18,7 +18,8 @@ This command fails unless all of the following execute successfully:
 3. database, API, and gateway integration suites invoked directly (not through
    Turbo), against `facility_test` and `facility_gw`; any reported skip is a
    failure;
-4. all remaining workspace tests with the Turbo cache disabled;
+4. the development-launcher tests and all remaining workspace tests with the
+   Turbo cache disabled;
 5. deterministic repository guards; and
 6. `pnpm audit --audit-level high`.
 

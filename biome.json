@@ -8,6 +8,7 @@
       "packages/**",
       "runner/**",
       "infra/**",
+      "scripts/dev*.mjs",
       "*.json",
       "!packages/cli",
       "!**/dist",

@@ -8,19 +8,30 @@ Facility is containers + Postgres + S3-compatible storage. Nothing else.
 
 ## Development / evaluation
 
+With Node.js 22 or newer, pnpm 11, and Docker running:
+
 ```bash
-git clone https://github.com/theam/facility && cd facility
-cp .env.example .env          # set SECRET_MASTER_KEY: openssl rand -base64 32
-docker compose -f docker-compose.dev.yml up -d    # postgres + minio
-pnpm install
-pnpm --filter @facility/db migrate && pnpm --filter @facility/db seed
-pnpm dev                       # api :4400 · gateway :4410 · web :3400
+git clone https://github.com/theam/facility.git
+cd facility
+corepack enable
+pnpm dev
 ```
 
-`pnpm dev` runs the api, gateway, and web. The **worker** (queue consumers +
-crons: run dispatch, watchtower, learning) is a separate process — start it with
-`node services/api/dist/worker.js` (or its dev script) so platform-lane runs
-actually dispatch. In the docker-compose stack it's the dedicated `worker` service.
+The command creates `.env` when needed and fills only blank required development
+values; it never replaces configured values. It then starts Postgres and MinIO,
+installs the workspace, migrates and seeds the database, and launches every
+development process — including the **worker** for run dispatch, watchtower, and
+learning jobs. Shared runtime packages are built before database setup, so a
+clean clone does not depend on old build artifacts. It is safe to rerun. Ctrl-C
+stops the foreground processes while the Docker infrastructure stays available
+for the next launch. Because the command seeds development data, it refuses a
+non-local `DATABASE_URL`.
+
+To delegate the whole setup to Claude Code or Codex, paste this prompt:
+
+> Set up and launch Facility from this repository. Run `pnpm dev`, fix
+> prerequisite errors without replacing any existing `.env` values, wait for
+> the services to be ready, then report their local URLs.
 
 Open `http://localhost:3400`, sign in with **dev sign in** (enabled by
 `FACILITY_INSECURE_DEV=1` — refused in production builds), and you're in the
@@ -45,6 +56,7 @@ configuration, and audit hash-chain verification.
 | `web` | 3400 | the app |
 | `api` | 4400 | control plane (REST + OpenAPI at `/docs` in dev) |
 | `gateway` | 4410 | LLM proxy — point `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` here |
+| `docs` | 3500 | documentation site |
 | worker | — | queues + crons (same image as api) |
 | postgres | 5461 | the database |
 | minio | 9000 | envelope/transcript storage |
