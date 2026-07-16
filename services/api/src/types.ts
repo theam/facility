@@ -60,6 +60,8 @@ declare module "fastify" {
   }
   interface FastifyRequest {
     principal?: Principal;
+    idempotencyId?: string;
+    idempotencyReplayed?: boolean;
     audit: (
       action: string,
       target: AuditInsert["target"],
@@ -71,5 +73,6 @@ declare module "fastify" {
     auditAction?: string;
     public?: boolean;
     orgAdmin?: boolean;
+    idempotent?: boolean;
   }
 }

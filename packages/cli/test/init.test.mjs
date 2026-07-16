@@ -35,6 +35,19 @@ function runCli(args, cwd) {
   return spawnSync(process.execPath, [cli, ...args], { cwd, encoding: "utf8" });
 }
 
+test("local help and leading global flags are side-effect free", () => {
+  for (const args of [
+    ["init", "--help"],
+    ["add", "--help"],
+    ["doctor", "--help"],
+    ["--profile", "missing", "projects", "--help"],
+  ]) {
+    const result = runCli(args, pkgRoot);
+    assert.equal(result.status, 0, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Usage/);
+  }
+});
+
 test("init installs the method end to end", async (t) => {
   const dir = makeTargetRepo();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -292,4 +305,37 @@ test("doctor reports missing install", async (t) => {
   const result = runCli(["doctor", `--dir=${dir}`], dir);
   assert.equal(result.status, 1);
   assert.ok(result.stdout.includes("missing"));
+});
+
+test("local doctor preserves the JSON contract", async (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const result = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, "");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.mode, "local");
+  assert.equal(payload.ok, false);
+  assert.ok(payload.problems > 0);
+  assert.ok(payload.checks.some((check) => check.label === ".facility.json"));
+});
+
+test("local commands reject unknown, valueless, and conflicting flags", () => {
+  const unknown = runCli(["doctor", "--jsoon"]);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /Unknown option: --jsoon/);
+
+  const valueless = runCli(["doctor", "--dir"]);
+  assert.equal(valueless.status, 1);
+  assert.match(valueless.stderr, /--dir requires a value/);
+  assert.doesNotMatch(valueless.stderr, /TypeError| at /);
+
+  const conflict = runCli(["doctor", "--local", "--platform", "--json"]);
+  assert.equal(conflict.status, 1);
+  assert.equal(conflict.stderr, "");
+  assert.equal(
+    JSON.parse(conflict.stdout).error.message,
+    "--local cannot be combined with platform target options",
+  );
 });

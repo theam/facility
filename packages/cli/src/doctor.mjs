@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getProfile, loadConfig } from "./platform-config.mjs";
-import { banner, fail, heading, item, ok, warn, dim } from "./ui.mjs";
+import { banner, bold, dim, fail, green, heading, item, ok, red, warn, yellow } from "./ui.mjs";
 
 const REQUIRED = [
   ".github/workflows/facility-crew.yml",
@@ -40,112 +40,261 @@ const REQUIRED = [
 export async function doctor(flags, version, options = {}) {
   const platform = platformTarget(flags, options);
   if (!flags.local && platform) return platformDoctor(flags, version, platform, options);
-  if ((flags.url || flags.key || flags.profile) && !platform) {
-    console.log("facility doctor needs both --url and --key, or a saved login profile.");
+  if ((flags.platform || flags.url || flags.key || flags.profile) && !platform) {
+    const message = "facility doctor needs both --url and --key, or a saved login profile.";
+    if (flags.json) {
+      (options.stdout || process.stdout).write(
+        `${JSON.stringify({
+          mode: "platform",
+          target: null,
+          ok: false,
+          checks: [],
+          error: { code: "doctor_target_required", message },
+        })}\n`,
+      );
+    }
+    else console.log(message);
     return 2;
   }
 
   const dir = flags.dir || process.cwd();
-  banner(version);
-
-  let problems = 0;
-
-  heading("Files");
-  for (const file of REQUIRED) {
-    if (existsSync(join(dir, file))) ok(file);
-    else {
-      fail(`${file} missing — run \`npx @theam/facility init\``);
-      problems += 1;
-    }
+  const report = inspectLocalInstall(dir, {
+    runGuards: flags["run-guards"] === true,
+    github: flags.github === true,
+  });
+  if (flags.json) {
+    (options.stdout || process.stdout).write(`${JSON.stringify(report)}\n`);
+    return report.ok ? 0 : 1;
   }
 
-  heading("Manifest");
+  banner(version);
+  renderLocalReport(report);
+  console.log("");
+  if (report.ok) item(`${dim("Everything checkable checks out.")}`);
+  else item(`${dim(`${report.problems} problem${report.problems === 1 ? "" : "s"} found.`)}`);
+  console.log("");
+  return report.ok ? 0 : 1;
+}
+
+function inspectLocalInstall(dir, options = {}) {
+  const checks = [];
+  for (const file of REQUIRED) {
+    checks.push(
+      existsSync(join(dir, file))
+        ? localCheck("Files", file, "pass", "Present")
+        : localCheck("Files", file, "fail", "missing", "Run `npx @theam/facility init`."),
+    );
+  }
+
   const manifestPath = join(dir, ".facility.json");
   if (!existsSync(manifestPath)) {
-    fail(".facility.json missing");
-    problems += 1;
+    checks.push(localCheck("Manifest", ".facility.json", "fail", "missing"));
   } else {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    const models = manifest.models;
-    if (models?.build && models?.review && models?.plan) {
-      ok(
-        `engine ${manifest.engine || "claude-code"} · models build=${models.build}, review=${models.review}, plan=${models.plan}`,
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const models = manifest.models;
+      checks.push(
+        models?.build && models?.review && models?.plan
+          ? localCheck(
+              "Manifest",
+              ".facility.json",
+              "pass",
+              `engine ${manifest.engine || "claude-code"}, models build=${models.build}, review=${models.review}, plan=${models.plan}`,
+            )
+          : localCheck(
+              "Manifest",
+              "models",
+              "fail",
+              "models.build, models.review, and models.plan must all be configured.",
+              "Rerun init with explicit build, review, and plan models.",
+            ),
       );
-    } else {
-      fail("models.build, models.review, and models.plan must all be configured");
-      problems += 1;
+      const mode = detectAnthropicAuthMode(manifest, dir);
+      checks.push(
+        mode
+          ? localCheck("Manifest", "auth", "pass", `Anthropic auth: ${mode}`)
+          : localCheck(
+              "Manifest",
+              "auth",
+              "fail",
+              "Anthropic auth mode is missing or unsupported.",
+              "Rerun init with --auth=<api-key|oauth|wif|bedrock|vertex>.",
+            ),
+      );
+      checks.push(
+        manifest.provision
+          ? localCheck("Manifest", "provision", "pass", String(manifest.provision))
+          : localCheck(
+              "Manifest",
+              "provision",
+              "fail",
+              "No provision command configured; the crew will under-verify.",
+              "Set manifest.provision.",
+            ),
+      );
+      checks.push(
+        manifest.checks?.length
+          ? localCheck("Manifest", "checks", "pass", manifest.checks.join(", "))
+          : localCheck(
+              "Manifest",
+              "checks",
+              "fail",
+              "No check commands configured; verify-before-done has nothing to run.",
+              "Set manifest.checks.",
+            ),
+      );
+    } catch (error) {
+      checks.push(
+        localCheck(
+          "Manifest",
+          ".facility.json",
+          "fail",
+          `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+          "Repair the manifest or rerun `npx @theam/facility init --force`.",
+        ),
+      );
     }
-    const mode = detectAnthropicAuthMode(manifest, dir);
-    if (mode) ok(`Anthropic auth: ${mode}`);
-    else {
-      fail("Anthropic auth mode is missing or unsupported — run init with --auth=<mode>");
-      problems += 1;
-    }
-    if (!manifest.provision) {
-      warn("no provision command configured — the crew runs on a bare checkout and WILL under-verify. Set one.");
-      problems += 1;
-    } else ok(`provision: ${manifest.provision}`);
-    if (!manifest.checks?.length) {
-      warn("no check commands configured — 'verify before done' has nothing to run.");
-      problems += 1;
-    } else ok(`checks: ${manifest.checks.join(", ")}`);
   }
 
-  heading("Guards");
-  if (existsSync(join(dir, "guards/run.mjs"))) {
+  if (existsSync(join(dir, "guards/run.mjs")) && options.runGuards) {
     const result = spawnSync(process.execPath, ["guards/run.mjs"], { cwd: dir, encoding: "utf8" });
-    if (result.status === 0) ok("guards pass");
-    else {
-      fail("guards failing:");
-      console.log(
-        (result.stdout + result.stderr)
-          .split("\n")
-          .map((line) => `      ${line}`)
-          .join("\n")
+    checks.push(
+      result.status === 0
+        ? localCheck("Guards", "guards/run.mjs", "pass", "Guards pass")
+        : localCheck(
+            "Guards",
+            "guards/run.mjs",
+            "fail",
+            "Guards failed",
+            "Run `node guards/run.mjs` and fix every reported violation.",
+            `${result.stdout}${result.stderr}`.trim(),
+          ),
       );
-      problems += 1;
-    }
+  } else if (existsSync(join(dir, "guards/run.mjs"))) {
+    checks.push(
+      localCheck(
+        "Guards",
+        "guards/run.mjs",
+        "warn",
+        "Not executed by the static doctor.",
+        "Pass --run-guards only for a trusted checkout, or run `node guards/run.mjs` directly.",
+      ),
+    );
   }
 
-  heading("GitHub automation (verify by hand or with gh)");
-  const manifest = existsSync(manifestPath)
-    ? JSON.parse(readFileSync(manifestPath, "utf8"))
-    : {};
-  const mode = detectAnthropicAuthMode(manifest, dir);
-  const requirements = authRequirements(mode);
-  const ghSecrets = spawnSync("gh", ["secret", "list"], { cwd: dir, encoding: "utf8" });
-  const ghVariables = spawnSync("gh", ["variable", "list"], { cwd: dir, encoding: "utf8" });
-  if (ghSecrets.status === 0 && ghVariables.status === 0) {
+  let manifest = {};
+  try {
+    manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
+  } catch {
+    // The manifest parse failure is already represented in checks.
+  }
+  const requirements = authRequirements(detectAnthropicAuthMode(manifest, dir));
+  const ghSecrets = options.github
+    ? spawnSync("gh", ["secret", "list"], {
+        cwd: dir,
+        encoding: "utf8",
+        timeout: 10_000,
+      })
+    : undefined;
+  const ghVariables = options.github
+    ? spawnSync("gh", ["variable", "list"], {
+        cwd: dir,
+        encoding: "utf8",
+        timeout: 10_000,
+      })
+    : undefined;
+  if (ghSecrets?.status === 0 && ghVariables?.status === 0) {
     const secrets = namesFromGhList(ghSecrets.stdout);
     const variables = namesFromGhList(ghVariables.stdout);
     for (const name of requirements.secrets) {
-      if (secrets.has(name)) ok(`${name} secret exists`);
-      else {
-        fail(`${name} secret not found (${requirements.remediation})`);
-        problems += 1;
-      }
+      checks.push(
+        secrets.has(name)
+          ? localCheck("GitHub", name, "pass", "Secret exists")
+          : localCheck("GitHub", name, "fail", "Secret not found", requirements.remediation),
+      );
     }
     for (const name of requirements.variables) {
-      if (variables.has(name)) ok(`${name} variable exists`);
-      else {
-        fail(`${name} variable not found (${requirements.remediation})`);
-        problems += 1;
+      checks.push(
+        variables.has(name)
+          ? localCheck("GitHub", name, "pass", "Variable exists")
+          : localCheck("GitHub", name, "fail", "Variable not found", requirements.remediation),
+      );
+    }
+  } else if (options.github) {
+    checks.push(
+      localCheck(
+        "GitHub",
+        "automation credentials",
+        "warn",
+        "Could not query secrets and variables because gh is unavailable or unauthenticated.",
+        "Verify the required repo/org credentials manually.",
+      ),
+    );
+  } else {
+    for (const name of requirements.secrets) {
+      checks.push(
+        localCheck(
+          "GitHub",
+          name,
+          "warn",
+          "Secret not queried by the offline doctor.",
+          "Pass --github to query with gh, or verify it manually.",
+        ),
+      );
+    }
+    for (const name of requirements.variables) {
+      checks.push(
+        localCheck(
+          "GitHub",
+          name,
+          "warn",
+          "Variable not queried by the offline doctor.",
+          "Pass --github to query with gh, or verify it manually.",
+        ),
+      );
+    }
+  }
+  const manual = [
+    "Claude GitHub App installed on the repo",
+    "default branch protected: PR + 1 human review required",
+    "provider TEST keys (if any) live in the facility-crew Environment",
+  ];
+  const problems = checks.filter((check) => check.status === "fail").length;
+  return { ok: problems === 0, mode: "local", directory: dir, problems, checks, manual };
+}
+
+function localCheck(section, label, status, message, remediation, detail) {
+  return {
+    section,
+    label,
+    status,
+    message,
+    ...(remediation ? { remediation } : {}),
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function renderLocalReport(report) {
+  for (const section of ["Files", "Manifest", "Guards", "GitHub"]) {
+    heading(section === "GitHub" ? "GitHub side (verify by hand or with gh)" : section);
+    for (const check of report.checks.filter((candidate) => candidate.section === section)) {
+      const message = `${check.label}${check.message && check.message !== "Present" ? ` — ${check.message}` : ""}${
+        check.remediation ? ` — ${check.remediation}` : ""
+      }`;
+      if (check.status === "pass") ok(message);
+      else if (check.status === "warn") warn(message);
+      else fail(message);
+      if (check.detail) {
+        console.log(
+          check.detail
+            .split("\n")
+            .map((line) => `      ${line}`)
+            .join("\n"),
+        );
       }
     }
-  } else {
-    item(dim("could not query GitHub secrets/variables — check by hand:"));
-    for (const name of requirements.secrets) item(dim(`  · ${name} repo/org secret`));
-    for (const name of requirements.variables) item(dim(`  · ${name} repository variable`));
   }
-  item(dim("  · Claude GitHub App installed on the repo"));
-  item(dim("  · default branch protected: PR + 1 human review required"));
-  item(dim("  · provider TEST keys (if any) live in the facility-crew Environment"));
-
-  console.log("");
-  if (problems === 0) item(`${dim("Everything checkable checks out.")}`);
-  else item(`${dim(`${problems} problem${problems === 1 ? "" : "s"} found.`)}`);
-  console.log("");
-  return problems === 0 ? 0 : 1;
+  for (const line of report.manual) item(dim(`  · ${line}`));
 }
 
 function detectAnthropicAuthMode(manifest, dir) {
@@ -212,14 +361,21 @@ function namesFromGhList(output) {
 }
 
 function platformTarget(flags, options) {
+  if (!flags.platform && !flags.profile && !flags.url && !flags.key) return null;
   if (flags.url || flags.key) {
     if (!flags.url || !flags.key) return null;
     return { url: stripSlash(flags.url), key: flags.key, profileName: flags.profile || "adhoc" };
   }
-  const config = options.config || loadConfig(options.configPath);
+  const configPath = options.configPath || options.env?.FACILITY_CONFIG || process.env.FACILITY_CONFIG;
+  const config = options.config || loadConfig(configPath);
   const { name, value } = getProfile(config, flags.profile);
   if (!value?.url || !value?.key) return null;
-  return { url: stripSlash(value.url), key: value.key, profileName: name };
+  return {
+    url: stripSlash(value.url),
+    key: value.key,
+    profileName: name,
+    allowInsecure: value.allowInsecure === true,
+  };
 }
 
 async function platformDoctor(flags, version, target, options) {
@@ -228,48 +384,107 @@ async function platformDoctor(flags, version, target, options) {
   const write = (line = "") => stdout.write(`${line}\n`);
   if (!flags.json) {
     write("");
-    write(`  facility v${version} — deployment readiness doctor`);
+    write(`  ${bold("facility")} ${dim(`v${version}`)} ${dim("— deployment readiness doctor")}`);
     write("");
-    write(`Profile: ${target.profileName}`);
-    write(`API: ${target.url}`);
+    write(`  ${bold("Profile")}  ${target.profileName}`);
+    write(`  ${bold("API")}      ${target.url}`);
     write("");
   }
   try {
-    const payload = await requestDoctor(fetchImpl, target);
+    assertSafePlatformUrl(target.url, flags, target.allowInsecure);
+    const payload = await requestDoctor(fetchImpl, target, doctorTimeoutMs(flags.timeout));
     if (flags.json) {
-      write(JSON.stringify(payload));
+      write(
+        JSON.stringify({
+          mode: "platform",
+          target: { profile: target.profileName, url: target.url },
+          ...payload,
+        }),
+      );
       return payload.ok ? 0 : 1;
     }
-    write("Readiness");
+    write(bold("Readiness"));
     for (const check of payload.checks || []) {
       const marker =
-        check.status === "pass" ? "PASS" : check.status === "warn" ? "WARN" : "FAIL";
-      write(`  [${marker}] ${check.label}`);
-      write(`         ${check.message}`);
-      if (check.remediation) write(`         Fix: ${check.remediation}`);
+        check.status === "pass" ? green("✓") : check.status === "warn" ? yellow("!") : red("✗");
+      write(`  ${marker} ${check.label}`);
+      write(`    ${dim(check.message)}`);
+      if (check.remediation) write(`    ${bold("Fix:")} ${check.remediation}`);
     }
     write("");
     write(payload.ok ? "Ready for production traffic." : "Not ready for production traffic.");
     write("");
     return payload.ok ? 0 : 1;
   } catch (error) {
-    write(error.message || "facility doctor failed");
+    if (flags.json) {
+      write(JSON.stringify({
+        mode: "platform",
+        target: { profile: target.profileName, url: target.url },
+        ok: false,
+        checks: [],
+        error: {
+          code: error.status === 401 ? "unauthorized" : error.code || "doctor_failed",
+          message: error.message || "facility doctor failed",
+          ...(error.status ? { status: error.status } : {}),
+        },
+      }));
+    } else write(error.message || "facility doctor failed");
     return error.status === 401 ? 2 : 1;
   }
 }
 
-async function requestDoctor(fetchImpl, target) {
+function assertSafePlatformUrl(value, flags, profileAllowsInsecure = false) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("Facility API URL must be a valid absolute URL");
+  }
+  const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(parsed.hostname);
+  if (
+    parsed.protocol !== "https:" &&
+    !local &&
+    !flags["allow-insecure"] &&
+    !profileAllowsInsecure
+  ) {
+    const error = new Error(
+      "Refusing to send an API key over plain HTTP. Use HTTPS or pass --allow-insecure for a trusted development endpoint.",
+    );
+    error.code = "insecure_api_url";
+    throw error;
+  }
+}
+
+async function requestDoctor(fetchImpl, target, timeoutMs) {
   const response = await fetchImpl(new URL(`${target.url}/v1/admin/doctor`), {
     method: "GET",
     headers: { authorization: `Bearer ${target.key}` },
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const payload = await response.json().catch(() => undefined);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Facility API returned an invalid JSON response");
+  }
   if (!response.ok) {
     const error = new Error(payload?.error?.message || `Facility API returned ${response.status}`);
     error.status = response.status;
     throw error;
   }
+  if (typeof payload.ok !== "boolean" || !Array.isArray(payload.checks)) {
+    throw new Error("Facility API returned an invalid doctor response");
+  }
   return payload;
+}
+
+function doctorTimeoutMs(value) {
+  if (value === undefined) return 30_000;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 300) {
+    const error = new Error("--timeout must be greater than 0 and at most 300 seconds");
+    error.code = "invalid_flag";
+    throw error;
+  }
+  return Math.round(seconds * 1_000);
 }
 
 function stripSlash(value) {

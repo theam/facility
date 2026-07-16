@@ -2,7 +2,13 @@ import { readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_ROLES } from "@facility/core";
-import { actionTypes, roles, sandboxProfiles, verifyAuditChain } from "@facility/db";
+import {
+  actionTypes,
+  roles,
+  sandboxProfiles,
+  schedulerWatermarks,
+  verifyAuditChain,
+} from "@facility/db";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -56,6 +62,7 @@ export async function runReadinessDoctor(input: {
     checkDatabase(input.db),
     checkObjectStorage(input.config, input.orgId, now),
     checkSeedEssentials(input.db, input.orgId),
+    checkWorkerHeartbeat(input.db, now),
     checkSandboxRunner(input.db, input.config, input.orgId),
     checkGithubApp(input.config),
     checkAuthConfig(input.config),
@@ -66,6 +73,55 @@ export async function runReadinessDoctor(input: {
     generatedAt: now.toISOString(),
     checks,
   };
+}
+
+async function checkWorkerHeartbeat(db: Db, now: Date): Promise<DoctorCheck> {
+  try {
+    const heartbeat = (
+      await db
+        .select({ lastTick: schedulerWatermarks.lastTick })
+        .from(schedulerWatermarks)
+        .where(eq(schedulerWatermarks.name, "agent.schedules"))
+        .limit(1)
+    )[0];
+    if (!heartbeat) {
+      return fail(
+        "worker_heartbeat",
+        "Worker scheduler heartbeat",
+        "The worker has not recorded a scheduler tick.",
+        "Start the worker service, wait one minute, and rerun facility doctor.",
+      );
+    }
+    const ageMs = now.getTime() - heartbeat.lastTick.getTime();
+    if (ageMs < -5 * 60_000) {
+      return fail(
+        "worker_heartbeat",
+        "Worker scheduler heartbeat",
+        `The worker heartbeat is ${Math.ceil(Math.abs(ageMs) / 60_000)} minute(s) in the future.`,
+        "Synchronize clocks on the API, worker, and database hosts.",
+      );
+    }
+    if (ageMs > 3 * 60_000) {
+      return fail(
+        "worker_heartbeat",
+        "Worker scheduler heartbeat",
+        `The last worker scheduler tick is ${Math.floor(ageMs / 60_000)} minute(s) old.`,
+        "Inspect worker logs and pg-boss connectivity; restart the worker after resolving the fault.",
+      );
+    }
+    return pass(
+      "worker_heartbeat",
+      "Worker scheduler heartbeat",
+      `The worker scheduler ticked at ${heartbeat.lastTick.toISOString()}.`,
+    );
+  } catch (error) {
+    return fail(
+      "worker_heartbeat",
+      "Worker scheduler heartbeat",
+      error instanceof Error ? error.message : "Worker heartbeat check failed.",
+      "Verify migration 0020 is applied and the worker can write scheduler_watermarks.",
+    );
+  }
 }
 
 async function expectedMigrationNames(): Promise<string[]> {
@@ -163,7 +219,7 @@ async function checkObjectStorage(
 async function checkSeedEssentials(db: Db, orgId: string): Promise<DoctorCheck> {
   try {
     const bundledRoleNames = BUNDLED_ROLES.filter((role) =>
-      ["owner", "viewer"].includes(role.name),
+      ["owner", "operator", "viewer"].includes(role.name),
     ).map((role) => role.name);
     const seededRoles = await db
       .select({ name: roles.name })
@@ -200,7 +256,7 @@ async function checkSeedEssentials(db: Db, orgId: string): Promise<DoctorCheck> 
     return pass(
       "seed_essentials",
       "Bundled seed essentials",
-      "Owner/viewer roles, action types, and a sandbox profile are present.",
+      "Owner/operator/viewer roles, action types, and a sandbox profile are present.",
     );
   } catch (error) {
     return fail(

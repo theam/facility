@@ -14,6 +14,10 @@ export async function migrate(connectionString = process.env.DATABASE_URL): Prom
   }
   const client = postgres(connectionString, { max: 1 });
   try {
+    // Deploys commonly start API, gateway, worker, and a migration job together.
+    // Serialize the entire lexical scan on one session so two processes cannot
+    // both observe a migration as missing and execute it concurrently.
+    await client`SELECT pg_advisory_lock(hashtext('facility:migrations'))`;
     await client`CREATE TABLE IF NOT EXISTS _facility_migrations (
       name text PRIMARY KEY,
       applied_at timestamptz NOT NULL DEFAULT now()
@@ -37,13 +41,7 @@ export async function migrate(connectionString = process.env.DATABASE_URL): Prom
       console.log(`applied ${file}`);
     }
   } finally {
+    await client`SELECT pg_advisory_unlock(hashtext('facility:migrations'))`.catch(() => undefined);
     await client.end();
   }
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  migrate().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
 }

@@ -34,7 +34,7 @@ describe("db", async () => {
   const { db, client } = createDb(databaseUrl);
 
   beforeAll(async () => {
-    await migrate(databaseUrl);
+    await Promise.all([migrate(databaseUrl), migrate(databaseUrl), migrate(databaseUrl)]);
   });
 
   afterAll(async () => {
@@ -299,7 +299,10 @@ describe("db", async () => {
           'virtual_keys_run_live_idx',
           'registry_versions_one_active_uidx',
           'runs_plan_acceptance_proposal_uidx',
-          'runs_plan_acceptance_architect_run_uidx'
+          'runs_plan_acceptance_architect_run_uidx',
+          'webhook_deliveries_pending_idx',
+          'webhook_deliveries_org_created_idx',
+          'idempotency_records_expiry_idx'
         )
       `,
     )) as Iterable<{ indexname: string }>;
@@ -329,6 +332,10 @@ describe("db", async () => {
         "runs_plan_acceptance_proposal_uidx",
         // Duplicate proposals for one architect plan cannot double-dispatch (migration 0020).
         "runs_plan_acceptance_architect_run_uidx",
+        // Durable integration outbox and API replay records (migrations 0021-0022).
+        "webhook_deliveries_pending_idx",
+        "webhook_deliveries_org_created_idx",
+        "idempotency_records_expiry_idx",
       ]),
     );
     const applied = (await db.execute(
@@ -342,7 +349,7 @@ describe("db", async () => {
       Array.from(applied)
         .map((row) => row.name)
         .at(-1),
-    ).toBe("0020_plan_acceptance_architect_run_guard.sql");
+    ).toBe("0023_scheduler_watermarks.sql");
     const invalidOutcomeRollups = (await db.execute(
       sql`
         SELECT count(*)::int AS count
@@ -352,6 +359,11 @@ describe("db", async () => {
       `,
     )) as Iterable<{ count: number }>;
     expect(Array.from(invalidOutcomeRollups)[0]?.count).toBe(0);
+
+    const schedulerTable = (await db.execute(
+      sql`SELECT to_regclass('scheduler_watermarks') AS name`,
+    )) as Iterable<{ name: string | null }>;
+    expect(Array.from(schedulerTable)[0]?.name).toBe("scheduler_watermarks");
 
     // Budget enum/limit + scope-coherence CHECK constraints backstop every write
     // path (migrations 0013 + 0014).

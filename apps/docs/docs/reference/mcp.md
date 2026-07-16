@@ -29,9 +29,9 @@ speaks MCP over stdio:
 }
 ```
 
-Remote: run the same binary as an HTTP server with `facility-mcp serve` (it is not
-one of the containers the AWS Terraform stack deploys — host it yourself next to
-the control plane). It exposes streamable HTTP at `https://<mcp-host>/mcp` with
+Remote: run the same binary as an HTTP server with `facility-mcp serve`; the
+bundled compose stack already includes it, while other deployments host it next
+to the control plane. It exposes streamable HTTP at `https://<mcp-host>/mcp` with
 `Authorization: Bearer <credential>`.
 Two credential kinds are accepted: a `fak_…` API key (for non-interactive services) or a WorkOS
 OAuth 2.1 access token (for interactive clients like Claude, Cursor, and ChatGPT). Interactive
@@ -41,20 +41,47 @@ only when `MCP_OAUTH_AUDIENCE` and `WORKOS_AUTHKIT_DOMAIN` are set on the contro
 `facility-mcp serve` advertises discovery when given `MCP_PUBLIC_URL` and `MCP_AUTHORIZATION_SERVER`
 (defaults to `WORKOS_AUTHKIT_DOMAIN`).
 
+Remote binds fail closed unless `MCP_ALLOWED_HOSTS` or `MCP_PUBLIC_URL` names a
+trusted authority. Browser `Origin` is checked against the same set, request
+bodies are bounded, `/healthz` reports the MCP process, and `/readyz` checks the
+upstream API.
+
 ## Tools
 
-Reads: `facility_me`, `facility_list_projects`, `facility_list_runs`,
-`facility_get_run`, `facility_list_inbox`, `facility_spend`,
-`facility_llm_requests`, `facility_llm_request_envelope`,
-`facility_list_registry`, `facility_list_issues`, `facility_audit_tail`, …
+The 79 tools cover identity, org/members/roles/keys, projects/repos/health,
+agents/status/runs/paged events/transcripts, durable conversations, GitHub App
+discovery and issue workflows, outcomes, HITL/action types, issues,
+budgets/spend/raw LLM envelopes, registry, sandboxes/tasks/virtual keys, KB,
+analytics/audit, the capability catalog, kickstart/upgrade, and integration
+event/delivery history. Tool inputs and structured outputs are JSON Schema,
+descriptions name their required permission, and API errors preserve
+status/code/details with MCP `isError` set.
 
-Writes — **all HITL-gated**: `facility_trigger_run`,
-`facility_steer_run`, `facility_decide_proposal`, `facility_kickstart`,
-`facility_set_budget`, `facility_publish_registry_version`, …
+Mutations include run trigger/steer/interrupt/resume/cancel; conversation start
+and send; GitHub issue sync and trigger; project/agent/repo/task/KB/registry
+creation or transition; issue acknowledgement/resolution; webhook retry;
+budgets; kickstart; and upgrade. Every intended mutation is recorded as a
+durable proposal first.
 
 ## The approval pattern
 
 A write tool creates a human-in-the-loop proposal and does nothing else. A
 separate principal with `hitl:decide` reviews the proposal in the HITL inbox
-and approves or rejects it. MCP write keys are refused if they also carry
-`hitl:decide`, so the same key cannot propose and approve its own write.
+and approves or rejects it through the CLI or API. MCP deliberately exposes no
+decision tool: untrusted model output cannot invoke an approval. MCP write keys are refused if they also carry
+`hitl:decide`, so the same key cannot propose and approve its own write. Use the
+bundled `operator` role for an AI client and an owner/admin human principal for
+the decision. Proposal idempotency hashes the tool, JSON-RPC request id, and
+canonical arguments, so retries replay while reused ids with different inputs
+cannot collide.
+
+This is deliberately the complete **AI-operable** surface, not a credential
+administration backdoor. Secret issuance/rotation, member and role changes,
+provider credentials, API keys, proposal decisions, and other human-accountability
+operations stay in the CLI and API. An MCP client can discover those resources
+but cannot bypass the separate human principal required to authorize them.
+
+Clients can enumerate `facility://me`, visible projects, and recent runs;
+project/run URI templates support completion and run resources include recent
+events. Prompts provide org status, cost review, and run triage with an optional
+`runId`.

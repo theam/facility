@@ -15,7 +15,7 @@ import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { and, eq, gt, isNull, or } from "drizzle-orm";
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -27,7 +27,13 @@ import { uuidv7 } from "uuidv7";
 import { z } from "zod";
 import { readConfig } from "./config.js";
 import { ApiError, sendError } from "./errors.js";
+import { beginIdempotentRequest, completeIdempotentRequest } from "./idempotency.js";
 import { looksLikeJwt, oauthConfigFromApp, verifyAccessToken } from "./oauth.js";
+import {
+  enrichOpenApi,
+  type OpenApiDocument,
+  type OpenApiRouteRecord,
+} from "./openapi-contract.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGithubRoutes } from "./routes/github.js";
 import { registerInternalRoutes } from "./routes/internal.js";
@@ -44,23 +50,16 @@ const publicRoutes = new Set([
 ]);
 const publicPrefixes = ["/docs"];
 
-type RouteRecord = {
-  method: string;
-  url: string;
-  permission?: string | string[];
-  public?: boolean;
-};
-
 export async function buildApp(
   config: AppConfig = readConfig(),
-  deps: { oauthJwks?: JWTVerifyGetKey } = {},
+  deps: { oauthJwks?: JWTVerifyGetKey; rateLimitMax?: number } = {},
 ): Promise<FastifyInstance> {
   const oauthConfig = oauthConfigFromApp(config);
   const app = Fastify({
     logger: { level: config.logLevel },
     genReqId: () => uuidv7(),
   });
-  const routeRecords: RouteRecord[] = [];
+  const routeRecords: OpenApiRouteRecord[] = [];
   const { db, client } = createDb(config.databaseUrl);
   app.decorate("facilityDb", db);
   app.decorate("githubClientFactory", undefined);
@@ -89,14 +88,37 @@ export async function buildApp(
         url: route.url,
         permission: route.config?.permission as string | string[] | undefined,
         public: route.config?.public as boolean | undefined,
+        idempotent: route.config?.idempotent as boolean | undefined,
       });
     }
   });
 
   app.setErrorHandler((error, request, reply) => {
-    const err = error as Error & { statusCode?: number };
+    const err = error as Error & {
+      statusCode?: number;
+      code?: string;
+      validation?: unknown;
+      validationContext?: string;
+      cause?: { code?: string };
+    };
     if (error instanceof ApiError) {
       return sendError(reply, error);
+    }
+    const databaseCode = err.code ?? err.cause?.code;
+    if (databaseCode === "23505") {
+      return reply.status(409).send({
+        error: { code: "conflict", message: "A resource with these values already exists" },
+      });
+    }
+    if (databaseCode === "23503") {
+      return reply.status(400).send({
+        error: { code: "invalid_reference", message: "A referenced resource does not exist" },
+      });
+    }
+    if (["23514", "22P02", "22007", "22008"].includes(databaseCode ?? "")) {
+      return reply.status(400).send({
+        error: { code: "bad_request", message: "Request values are invalid" },
+      });
     }
     const status = typeof err.statusCode === "number" ? err.statusCode : 500;
     // Never leak internal error detail on 5xx — log it, return a generic message.
@@ -107,9 +129,24 @@ export async function buildApp(
         .send({ error: { code: "internal_error", message: "Internal server error" } });
     }
     return reply.status(status).send({
-      error: { code: status === 400 ? "bad_request" : "error", message: err.message },
+      error: {
+        code: status === 400 ? (err.validation ? "validation_error" : "bad_request") : "error",
+        message: err.message,
+        ...(err.validation
+          ? {
+              details: {
+                context: err.validationContext,
+                issues: err.validation,
+              },
+            }
+          : {}),
+      },
     });
   });
+
+  app.setNotFoundHandler((_request, reply) =>
+    reply.status(404).send({ error: { code: "not_found", message: "Route not found" } }),
+  );
 
   await app.register(cookie, { secret: config.workosCookiePassword ?? config.secretMasterKey });
   await app.register(cors, {
@@ -119,17 +156,31 @@ export async function buildApp(
   // Insecure-dev already relaxes auth (dev-login); relax the rate limit there too
   // so local/CI test runs aren't throttled. Production keeps the 200/min ceiling.
   await app.register(rateLimit, {
-    max: config.facilityInsecureDev ? 100_000 : 200,
+    max: deps.rateLimitMax ?? (config.facilityInsecureDev ? 100_000 : 200),
     timeWindow: "1 minute",
   });
   await app.register(swagger, {
     openapi: {
-      info: { title: "Facility API", version: "0.3.0" },
+      info: {
+        title: "Facility API",
+        version: "0.3.0",
+        description:
+          "Control-plane API for projects, AI agent runs, human approval gates, knowledge, cost governance, and auditability.",
+        contact: { name: "Facility", url: "https://github.com/theam/facility" },
+        license: { name: "Apache-2.0", url: "https://www.apache.org/licenses/LICENSE-2.0" },
+      },
+      servers: config.publicUrl ? [{ url: config.publicUrl }] : undefined,
     },
     transform: jsonSchemaTransform,
+    transformObject: (document) =>
+      "openapiObject" in document
+        ? enrichOpenApi(document.openapiObject as OpenApiDocument, routeRecords)
+        : document.swaggerObject,
   });
 
   app.decorateRequest("principal", undefined);
+  app.decorateRequest("idempotencyId", undefined);
+  app.decorateRequest("idempotencyReplayed", false);
   app.decorateRequest(
     "audit",
     async function audit(this: FastifyRequest, action: string, target, payload = {}) {
@@ -150,7 +201,8 @@ export async function buildApp(
     },
   );
 
-  app.addHook("preHandler", async (request) => {
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-request-id", request.id);
     request.principal = await resolvePrincipal(request, db, config, oauthConfig, deps.oauthJwks);
     const permission = request.routeOptions.config?.permission as string | string[] | undefined;
     const isPublic = request.routeOptions.config?.public === true;
@@ -194,11 +246,21 @@ export async function buildApp(
     }
   });
 
+  app.addHook("preHandler", async (request, reply) => {
+    return beginIdempotentRequest(db, request, reply);
+  });
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    await completeIdempotentRequest(db, request, reply, payload);
+    return payload;
+  });
+
   app.addHook("onResponse", async (request, reply) => {
     const permission = request.routeOptions.config?.permission;
     const action = request.routeOptions.config?.auditAction as string | undefined;
     if (
       !permission ||
+      request.idempotencyReplayed ||
       request.method === "GET" ||
       reply.statusCode < 200 ||
       reply.statusCode >= 300 ||
@@ -213,25 +275,25 @@ export async function buildApp(
     });
   });
 
-  app.get(
-    "/health",
-    {
-      config: { public: true },
-      schema: {
-        response: {
-          200: z.object({ ok: z.boolean(), version: z.string(), db: z.enum(["ok", "down"]) }),
-        },
+  const healthOptions = {
+    config: { public: true },
+    schema: {
+      response: {
+        200: z.object({ ok: z.boolean(), version: z.string(), db: z.enum(["ok", "down"]) }),
+        503: z.object({ ok: z.boolean(), version: z.string(), db: z.enum(["ok", "down"]) }),
       },
     },
-    async () => {
-      try {
-        await db.execute("select 1" as never);
-        return { ok: true, version: "0.3.0", db: "ok" as const };
-      } catch {
-        return { ok: false, version: "0.3.0", db: "down" as const };
-      }
-    },
-  );
+  };
+  const healthHandler = async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      await db.execute("select 1" as never);
+      return { ok: true, version: "0.3.0", db: "ok" as const };
+    } catch {
+      return reply.status(503).send({ ok: false, version: "0.3.0", db: "down" as const });
+    }
+  };
+  app.get("/health", healthOptions, healthHandler);
+  app.get("/readyz", healthOptions, healthHandler);
 
   await registerAuthRoutes(app, config);
   await registerInternalRoutes(app, config);

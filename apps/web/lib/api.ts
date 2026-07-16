@@ -3,6 +3,7 @@ import type {
   AuditEvent,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
+  FacilityGeneratedQuery,
   FacilityRouteBody,
   FacilityRouteMethod,
   FacilityRoutePath,
@@ -10,7 +11,6 @@ import type {
   Issue,
   KickstartAnswers,
   Proposal,
-  QueryParams,
   SpendRow,
 } from "@facility/sdk";
 import { FacilityClient } from "@facility/sdk";
@@ -63,7 +63,10 @@ export type ApiResult<T> =
 async function apiFetch<Method extends FacilityRouteMethod, Path extends FacilityRoutePath<Method>>(
   method: Method,
   path: Path,
-  options: { body?: FacilityRouteBody<Method, Path>; query?: QueryParams } = {},
+  options: {
+    body?: FacilityRouteBody<Method, Path>;
+    query?: FacilityGeneratedQuery<Method, Path>;
+  } = {},
 ): Promise<ApiResult<FacilityRouteResponse<Method, Path>>> {
   const jar = await cookies();
   const session = jar.get(SESSION_COOKIE);
@@ -92,9 +95,12 @@ async function apiFetch<Method extends FacilityRouteMethod, Path extends Facilit
   }
 }
 
-function queryFromParams(params = ""): QueryParams {
+function queryFromParams<
+  Method extends FacilityRouteMethod,
+  Path extends FacilityRoutePath<Method>,
+>(params = ""): FacilityGeneratedQuery<Method, Path> {
   const query = new URLSearchParams(params.startsWith("?") ? params.slice(1) : params);
-  return Object.fromEntries(query.entries());
+  return Object.fromEntries(query.entries()) as FacilityGeneratedQuery<Method, Path>;
 }
 
 // The control plane returns bare arrays for list endpoints (and {bucket,

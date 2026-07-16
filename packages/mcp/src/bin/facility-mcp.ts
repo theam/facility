@@ -8,6 +8,10 @@ const [command, ...rest] = process.argv.slice(2);
 
 if (command === "serve") {
   const port = Number(flag(rest, "--port") ?? "4420");
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    console.error("--port must be an integer between 0 and 65535.");
+    process.exit(2);
+  }
   const apiUrl = process.env.FACILITY_API_URL;
   if (!apiUrl) {
     console.error("FACILITY_API_URL is required.");
@@ -22,15 +26,28 @@ if (command === "serve") {
       ? authRaw.replace(/\/+$/, "")
       : `https://${authRaw.replace(/\/+$/, "")}`
     : undefined;
-  serveHttp({
+  const host = flag(rest, "--host") ?? process.env.MCP_HOST ?? "127.0.0.1";
+  const server = serveHttp({
     apiUrl,
     port,
-    confirmationSecret:
-      process.env.FACILITY_MCP_CONFIRMATION_SECRET ?? process.env.MCP_CONFIRMATION_SECRET,
+    host,
+    allowedHosts: process.env.MCP_ALLOWED_HOSTS?.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
     resourceUrl: process.env.MCP_PUBLIC_URL?.replace(/\/+$/, ""),
     authorizationServer,
   });
-  console.error(`facility-mcp listening on http://127.0.0.1:${port}/mcp`);
+  server.on("listening", () => {
+    const address = server.address();
+    const actualPort = typeof address === "object" && address ? address.port : port;
+    console.error(`facility-mcp listening on http://${host}:${actualPort}/mcp`);
+  });
+  const shutdown = async (signal: string) => {
+    console.error(`facility-mcp received ${signal}; shutting down`);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 } else {
   const apiUrl = process.env.FACILITY_API_URL;
   const apiKey = process.env.FACILITY_API_KEY;
@@ -41,8 +58,6 @@ if (command === "serve") {
   const server = createFacilityMcpServer({
     apiUrl,
     apiKey,
-    confirmationSecret:
-      process.env.FACILITY_MCP_CONFIRMATION_SECRET ?? process.env.MCP_CONFIRMATION_SECRET,
   });
   await server.connect(new StdioServerTransport());
 }

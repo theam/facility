@@ -56,12 +56,21 @@ services:
       [
         "sh",
         "-c",
-        "node packages/db/dist/migrate.js && FACILITY_SEED_DEMO=0 node packages/db/dist/seed.js",
+        "node node_modules/@facility/db/dist/bin/migrate.js && FACILITY_SEED_DEMO=0 node node_modules/@facility/db/dist/bin/seed.js",
       ]
     environment:
       DATABASE_URL: postgres://facility:${POSTGRES_PASSWORD:-facility}@postgres:5432/facility
     depends_on:
       postgres: { condition: service_healthy }
+    restart: "no"
+
+  # Build the default sandbox runner image before the control plane starts.
+  # This one-shot service never runs an agent; it only makes the image available
+  # to the host Docker daemon used by api/worker.
+  runner-image:
+    build: { context: ./runner }
+    image: ${FACILITY_RUNNER_IMAGE:-facility-runner:dev}
+    entrypoint: ["/bin/true"]
     restart: "no"
 
   api:
@@ -107,10 +116,23 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       createbuckets: { condition: service_completed_successfully }
+      runner-image: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4400/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   worker:
     build: { context: ., target: api }
-    command: ["node", "services/api/dist/worker.js"]
+    command: ["node", "dist/worker.js"]
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://facility:${POSTGRES_PASSWORD:-facility}@postgres:5432/facility
@@ -142,6 +164,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       migrate: { condition: service_completed_successfully }
+      runner-image: { condition: service_completed_successfully }
 
   gateway:
     build: { context: ., target: gateway }
@@ -158,6 +181,51 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       createbuckets: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4410/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mcp:
+    build: { context: ., target: mcp }
+    restart: unless-stopped
+    environment:
+      FACILITY_API_URL: http://api:4400
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4420}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,mcp}
+      MCP_AUTHORIZATION_SERVER: ${MCP_AUTHORIZATION_SERVER:-}
+    command:
+      [
+        "node",
+        "dist/bin/facility-mcp.js",
+        "serve",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "4420",
+      ]
+    ports: ["4420:4420"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4420/readyz').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      api: { condition: service_healthy }
 
   web:
     build: { context: ., dockerfile: apps/web/Dockerfile, target: web }
@@ -176,7 +244,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    depends_on: [api]
+    depends_on:
+      api: { condition: service_healthy }
 
 volumes:
   pg:

@@ -1,11 +1,40 @@
 # Facility Platform — delivery status
 
-**Branch**: `feat/platform-v0.3` (local, unpushed) · **as of** 2026-07-06
+**Branch**: local development · **as of** 2026-07-16
 
 This is the honest state of the platform build against [GOAL.md](../../GOAL.md).
 Nothing here is curated for a slide.
 
 ## Current state (round 28, 2026-07-06)
+
+### Interface completion wave (2026-07-16)
+
+The non-web operating surfaces have since been completed and production-hardened:
+
+- The zero-dependency CLI now covers every v1 operating domain, with per-command
+  help, profiles and environment auth, strict flags, bounded tables, stable
+  JSON/JSONL, deterministic exit codes, resumable SSE, run get/events/cancel,
+  idempotent creation, delivery dead-letter operations, masked secrets, and
+  side-effect-free help/EOF behavior.
+- REST now has concrete response schemas throughout the v1 surface, stable
+  operation ids/tags/permission metadata, replay-safe creation, true run-event
+  tails and resumable streams, durable scheduled catch-up, signed inbound events,
+  an SSRF-hardened at-least-once outbound webhook outbox, graceful shutdown, and
+  clean-schema migration/container entrypoints.
+- The TypeScript SDK exports generated OpenAPI types, strict route/body/response
+  contracts, domain helpers, bounded async pagination, typed resumable run
+  streams, structured errors, deadlines/abort, transient read retry, and POST
+  retry only when protected by an idempotency key. A live-vs-committed OpenAPI
+  equivalence test and exact route-manifest test prevent silent drift.
+- MCP exposes 79 schema-described tools, enumerable/completable resources, and
+  parameterized operator prompts over stdio and hardened streamable HTTP. Every
+  mutation uses a durable separate-human proposal gate; replayed MCP requests are
+  idempotent; the bundled `operator` role can propose but cannot decide. Remote
+  transport validates authority/origin/body size and exposes health/readiness and
+  OAuth 2.1 discovery without holding an elevated credential.
+- The CLI/API/MCP contract, webhook signing and retry semantics, self-host
+  topology, environment variables, and security properties are documented in
+  both the repository guide and the Docusaurus reference.
 
 The platform was driven through twenty-eight independent GPT-5.5 (xhigh)
 verification rounds — six adversarial verifiers per full round, one per aspect —
@@ -51,24 +80,18 @@ resource server** — remote MCP now accepts WorkOS-issued access-token JWTs
 (JWKS/RS256, issuer+expiry+audience validated) alongside `fak_` keys, with RFC
 9728 protected-resource discovery.
 
-**Remaining non-owner-gated work**:
+**Remaining non-owner-gated work outside the interface-completion scope**:
 - **Native live preview environments** are not implemented. Projects must
   use their deployment provider's per-PR previews now; Facility's roadmap adds
   provider adapters, lifecycle/retention, run+PR URLs, and Gate 2 evidence.
-- **SDK route contract** is hand-maintained, but no longer silently drifts: a
-  runtime manifest (`FACILITY_V1_ROUTES`) is diffed against the Fastify OpenAPI
-  document by a route-coverage test, so an added/removed route fails CI until the
-  map is updated. A few non-core v1 endpoints still return loose `AnyObject`
-  response schemas.
 - **Analytics rollup** is incremental (trailing window + time-leading indexes)
   rather than dirty-bucket/watermark incremental — correct and bounded, but a
   watermark design would rebuild only changed buckets.
-- **Web is an operator dashboard**, not yet the full control plane: settings now
-  manages providers, API keys, and budgets in the web UI, but agents, sandbox
-  profiles, virtual keys, and KB/tasks are still managed through the **v1 API**
-  (with partial CLI/MCP coverage — the CLI focuses on
-  status/projects/runs/inbox/issues/keys/kickstart/llm-requests; MCP on
-  run/registry/budget/project tools) and are not yet first-class web surfaces.
+- **Web is an operator dashboard**, not the required management boundary. The
+  **v1 API and CLI** cover agents, schedules, sandbox profiles, virtual keys,
+  knowledge, tasks, integrations, access control, registry, spend, analytics,
+  and audit. MCP exposes the safe AI-operable subset with durable, separate-human
+  approval for mutations plus discoverable resources and operator prompts.
 
 **Owner-gated ceiling**: "tam-os operates 100% on the platform" requires the
 production App install + cutover, which is the owner's decision (see below) — it
@@ -84,8 +107,8 @@ projects.
 | area | package/service | state |
 |---|---|---|
 | Domain logic | `@facility/core` | permissions + wildcard RBAC, price table (dated-model aware), sealed-box crypto + argon2 keys + HMAC confirmations, `facility.run.v1` receipts (tam-os superset), fingerprints, audit hash chain, render/detect ports · **tested** |
-| Data | `@facility/db` | Drizzle schema (30+ tables), migrations through 0020 (glob-ordered runner), org-scoped helpers, hash-chained audit, idempotent seed · **tested** |
-| Control plane | `@facility/api` (Fastify 5) | session + API-key auth, WorkOS AuthKit hooks, RBAC preHandler + startup assertion, auto-audit, 70+ v1 routes, SSE run streams, HITL ledger, KB DAG validation, internal runner API, GitHub webhooks, watchtower + learning workers · **tested** |
+| Data | `@facility/db` | Drizzle schema (30+ tables), migrations through 0023 (glob-ordered runner), webhook outbox, API idempotency, scheduler watermarks, org-scoped helpers, hash-chained audit, idempotent seed · **tested** |
+| Control plane | `@facility/api` (Fastify 5) | session + API-key/OAuth auth, RBAC preHandler + startup assertion, auto-audit, 119 public v1 operations, resumable SSE, scheduled dispatch, durable outbound webhooks, HITL ledger, KB DAG validation, internal runner API, GitHub webhooks, watchtower + learning workers · **tested** |
 | LLM gateway | `@facility/gateway` | Anthropic/OpenAI/BYO proxy, virtual keys, budgets (soft/hard), zero-copy streaming with usage tee, metering, envelopes · **tested + verified live** |
 | Sandboxes | `@facility/api` sandbox + `runner/` | driver seam (Docker + **real AWS Fargate/ECS** driver), race-safe run lifecycle with credential revocation on every terminal path, runner-token internal API, live session streaming + steering, engine parsers (Claude/Codex/BYO) · **tested + docker e2e** |
 | GitHub App | `@facility/api` github | HMAC webhooks, trigger router, server-side kickstart (byte-compatible render), fingerprints + adopt, upgrade PRs, default-branch-refusing octokit wrapper · **tested** |
@@ -229,12 +252,6 @@ Prior versions of this doc overstated a few things; setting the record straight:
 
 ## Known follow-ups (tracked, non-blocking)
 
-- **SDK route contract** — hand-maintained, but a runtime manifest
-  (`FACILITY_V1_ROUTES`) is diffed against the API's OpenAPI document by a
-  route-coverage test, so it can no longer silently drift. (Wrong nested paths
-  resolve to `never`, `@facility/mcp` strict-typechecks clean, behavioural + type
-  tests.) A few non-core v1 endpoints still return loose `AnyObject` response
-  schemas.
 - **tam-os production migration** run end-to-end (owner-gated).
 - `cost_cents` is integer — fine for real runs; sub-cent precision only if
   fine-grained tiny-call attribution is needed.

@@ -9,6 +9,8 @@ import type { Principal } from "../../types.js";
 import {
   assertBareRowProjectScope,
   IdParams,
+  PageQuery,
+  type PageQueryValue,
   principal,
   RegistryItemSchema,
   RegistryItemWithVersionsSchema,
@@ -29,7 +31,7 @@ export async function registerRegistryRoutes(app: FastifyInstance, context: V1Ro
     {
       config: { permission: "registry:read" },
       schema: {
-        querystring: z.object({
+        querystring: PageQuery.extend({
           kind: z.string().optional(),
           scope: z.string().optional(),
           projectId: z.string().optional(),
@@ -39,7 +41,11 @@ export async function registerRegistryRoutes(app: FastifyInstance, context: V1Ro
     },
     async (request) => {
       const p = principal(request);
-      const q = request.query as { kind?: string; scope?: string; projectId?: string };
+      const q = request.query as PageQueryValue & {
+        kind?: string;
+        scope?: string;
+        projectId?: string;
+      };
       const clauses = [eq(registryItems.orgId, p.orgId)];
       if (q.kind) clauses.push(eq(registryItems.kind, q.kind));
       if (q.scope) clauses.push(eq(registryItems.scope, q.scope));
@@ -52,7 +58,10 @@ export async function registerRegistryRoutes(app: FastifyInstance, context: V1Ro
       return db
         .select()
         .from(registryItems)
-        .where(and(...clauses));
+        .where(and(...clauses))
+        .orderBy(asc(registryItems.kind), asc(registryItems.name), asc(registryItems.id))
+        .limit(q.limit)
+        .offset(q.offset);
     },
   );
 
@@ -93,17 +102,24 @@ export async function registerRegistryRoutes(app: FastifyInstance, context: V1Ro
     "/v1/registry/items/:itemId",
     {
       config: { permission: "registry:read" },
-      schema: { params: IdParams, response: { 200: RegistryItemWithVersionsSchema } },
+      schema: {
+        params: IdParams,
+        querystring: PageQuery,
+        response: { 200: RegistryItemWithVersionsSchema },
+      },
     },
     async (request) => {
       const p = principal(request);
       const { itemId } = request.params as { itemId: string };
+      const query = request.query as PageQueryValue;
       const item = await loadRegistryItem(p, itemId);
       const versions = await db
         .select()
         .from(registryVersions)
         .where(and(eq(registryVersions.orgId, p.orgId), eq(registryVersions.itemId, itemId)))
-        .orderBy(asc(registryVersions.version));
+        .orderBy(asc(registryVersions.version))
+        .limit(query.limit)
+        .offset(query.offset);
       return { ...item, versions };
     },
   );
@@ -114,7 +130,7 @@ export async function registerRegistryRoutes(app: FastifyInstance, context: V1Ro
       config: { permission: "registry:write", auditAction: "registry.created" },
       schema: {
         body: z.object({
-          scope: z.string(),
+          scope: z.enum(["org", "project"]),
           projectId: z.string().optional(),
           kind: z.string(),
           name: z.string(),
@@ -127,15 +143,24 @@ export async function registerRegistryRoutes(app: FastifyInstance, context: V1Ro
     async (request) => {
       const p = principal(request);
       const body = request.body as {
-        scope: string;
+        scope: "org" | "project";
         projectId?: string;
         kind: string;
         name: string;
         description?: string;
         content: string;
       };
-      await assertProjectInOrg(p, body.projectId);
-      const projectId = p.projectId ?? body.projectId;
+      if (p.projectId && body.scope !== "project") {
+        throw notFound("Project not found");
+      }
+      const projectId = body.scope === "project" ? (p.projectId ?? body.projectId) : undefined;
+      if (body.scope === "project" && !projectId) {
+        throw new ApiError(400, "project_required", "Project scope requires projectId");
+      }
+      if (body.scope === "org" && body.projectId) {
+        throw new ApiError(400, "scope_mismatch", "Org scope cannot include projectId");
+      }
+      await assertProjectInOrg(p, projectId);
       const item = (
         await db
           .insert(registryItems)

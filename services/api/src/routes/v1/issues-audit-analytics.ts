@@ -6,12 +6,18 @@ import { readEnvelopeObject } from "../../envelopes.js";
 import { ApiError, notFound } from "../../errors.js";
 import { analyticsOverview, queryAnalytics } from "../../watchtower/analytics.js";
 import {
+  AnalyticsOverviewSchema,
+  AnalyticsRowSchema,
   AnyObject,
   AuditEventSchema,
   assertBareRowProjectScope,
   assertProjectScope,
+  IsoDateTime,
   IssueIdParams,
   LlmRequestSchema,
+  PageQuery,
+  type PageQueryValue,
+  PlatformIssueSchema,
   principal,
   type V1RouteContext,
 } from "./shared.js";
@@ -23,13 +29,13 @@ export async function registerAnalyticsRoutes(app: FastifyInstance, context: V1R
     {
       config: { permission: "analytics:read" },
       schema: {
-        querystring: z.object({
+        querystring: PageQuery.extend({
           projectId: z.string().optional(),
-          from: z.string().optional(),
-          to: z.string().optional(),
+          from: IsoDateTime.optional(),
+          to: IsoDateTime.optional(),
           groupBy: z.enum(["day", "agent", "model"]).default("day"),
         }),
-        response: { 200: z.array(AnyObject) },
+        response: { 200: z.array(AnalyticsRowSchema) },
       },
     },
     async (request) => {
@@ -39,7 +45,7 @@ export async function registerAnalyticsRoutes(app: FastifyInstance, context: V1R
         from?: string;
         to?: string;
         groupBy: "day" | "agent" | "model";
-      };
+      } & PageQueryValue;
       assertProjectScope(p, q.projectId);
       return queryAnalytics(db, p.orgId, { ...q, projectId: p.projectId ?? q.projectId });
     },
@@ -49,11 +55,12 @@ export async function registerAnalyticsRoutes(app: FastifyInstance, context: V1R
     "/v1/analytics/overview",
     {
       config: { permission: "analytics:read" },
-      schema: { response: { 200: AnyObject } },
+      schema: { querystring: PageQuery, response: { 200: AnalyticsOverviewSchema } },
     },
     async (request) => {
       const p = principal(request);
-      return analyticsOverview(db, p.orgId, p.projectId ?? undefined);
+      const query = request.query as PageQueryValue;
+      return analyticsOverview(db, p.orgId, p.projectId ?? undefined, query);
     },
   );
 }
@@ -65,13 +72,16 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
     {
       config: { permission: "issues:read" },
       schema: {
-        querystring: z.object({ state: z.string().optional(), kind: z.string().optional() }),
-        response: { 200: z.array(AnyObject) },
+        querystring: PageQuery.extend({
+          state: z.string().optional(),
+          kind: z.string().optional(),
+        }),
+        response: { 200: z.array(PlatformIssueSchema) },
       },
     },
     async (request) => {
       const p = principal(request);
-      const q = request.query as { state?: string; kind?: string };
+      const q = request.query as PageQueryValue & { state?: string; kind?: string };
       const clauses = [eq(platformIssues.orgId, p.orgId)];
       if (q.state) clauses.push(eq(platformIssues.state, q.state));
       if (q.kind) clauses.push(eq(platformIssues.kind, q.kind));
@@ -79,7 +89,10 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
       return db
         .select()
         .from(platformIssues)
-        .where(and(...clauses));
+        .where(and(...clauses))
+        .orderBy(desc(platformIssues.lastSeen), desc(platformIssues.id))
+        .limit(q.limit)
+        .offset(q.offset);
     },
   );
 
@@ -91,7 +104,7 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
           permission: "issues:write",
           auditAction: action === "ack" ? "issue.acked" : "issue.resolved",
         },
-        schema: { params: IssueIdParams, response: { 200: AnyObject } },
+        schema: { params: IssueIdParams, response: { 200: PlatformIssueSchema } },
       },
       async (request) => {
         const p = principal(request);
@@ -272,10 +285,10 @@ export async function registerIssuesAuditRoutes(app: FastifyInstance, context: V
       schema: {
         querystring: z.object({
           projectId: z.string().optional(),
-          from: z.string().optional(),
-          to: z.string().optional(),
+          from: IsoDateTime.optional(),
+          to: IsoDateTime.optional(),
           limit: z.coerce.number().int().min(1).max(500).default(100),
-          cursor: z.string().optional(),
+          cursor: IsoDateTime.optional(),
         }),
         response: {
           200: z.object({ items: z.array(LlmRequestSchema), nextCursor: z.string().nullable() }),

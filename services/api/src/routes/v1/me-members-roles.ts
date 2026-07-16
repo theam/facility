@@ -1,6 +1,6 @@
 import { generateApiKey, newId } from "@facility/core";
 import { apiKeys, orgMembers, orgs, roles, users } from "@facility/db";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
@@ -11,12 +11,16 @@ import {
   assertBareRowProjectScope,
   assertPermissionsGrantable,
   assertRoleAssignable,
+  CreatedApiKeySchema,
   definedFields,
   IdParams,
   MemberRowSchema,
   MeSchema,
   Ok,
   OrgMemberSchema,
+  OrgSchema,
+  PageQuery,
+  type PageQueryValue,
   principal,
   publicRow,
   RoleSchema,
@@ -44,7 +48,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     async (request) => {
       const p = principal(request);
       const org = (await db.select().from(orgs).where(eq(orgs.id, p.orgId)).limit(1))[0];
-      return { principal: p, org, permissions: p.permissions };
+      return { principal: p, org: org ?? null, permissions: p.permissions };
     },
   );
 
@@ -52,7 +56,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     "/v1/org",
     {
       config: { permission: "org:read", orgAdmin: true },
-      schema: { response: { 200: AnyObject } },
+      schema: { response: { 200: OrgSchema } },
     },
     async (request) => {
       const p = principal(request);
@@ -66,7 +70,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       config: { permission: "org:write", auditAction: "org.updated", orgAdmin: true },
       schema: {
         body: z.object({ name: z.string().optional(), settings: AnyObject.optional() }),
-        response: { 200: AnyObject },
+        response: { 200: OrgSchema },
       },
     },
     async (request) => {
@@ -86,16 +90,20 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     "/v1/members",
     {
       config: { permission: "members:read", orgAdmin: true },
-      schema: { response: { 200: z.array(MemberRowSchema) } },
+      schema: { querystring: PageQuery, response: { 200: z.array(MemberRowSchema) } },
     },
     async (request) => {
       const p = principal(request);
+      const query = request.query as PageQueryValue;
       return db
         .select({ member: orgMembers, user: users, role: roles })
         .from(orgMembers)
         .innerJoin(users, eq(orgMembers.userId, users.id))
         .innerJoin(roles, eq(orgMembers.roleId, roles.id))
-        .where(eq(orgMembers.orgId, p.orgId));
+        .where(eq(orgMembers.orgId, p.orgId))
+        .orderBy(asc(users.email), asc(orgMembers.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
 
@@ -128,7 +136,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       return (
         await db
           .insert(orgMembers)
-          .values({ id: newId("user"), orgId: p.orgId, userId: user.id, roleId: body.roleId })
+          .values({ id: newId("member"), orgId: p.orgId, userId: user.id, roleId: body.roleId })
           .onConflictDoUpdate({
             target: [orgMembers.orgId, orgMembers.userId],
             set: { roleId: body.roleId, updatedAt: new Date() },
@@ -154,15 +162,40 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       const { roleId } = request.body as { roleId: string };
       // Cannot re-assign a member (incl. self) into a role you cannot grant.
       await assertRoleAssignable(db, p, roleId);
-      const row = (
-        await db
-          .update(orgMembers)
-          .set({ roleId, updatedAt: new Date() })
-          .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)))
-          .returning()
-      )[0];
-      if (!row) throw notFound("Member not found");
-      return row;
+      return db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`facility:last-owner:${p.orgId}`}, 0))`,
+        );
+        const current = (
+          await tx
+            .select({ member: orgMembers, roleName: roles.name })
+            .from(orgMembers)
+            .innerJoin(roles, eq(orgMembers.roleId, roles.id))
+            .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)))
+            .limit(1)
+        )[0];
+        if (!current) throw notFound("Member not found");
+        const nextRole = (
+          await tx
+            .select({ name: roles.name })
+            .from(roles)
+            .where(and(eq(roles.id, roleId), or(isNull(roles.orgId), eq(roles.orgId, p.orgId))))
+            .limit(1)
+        )[0];
+        if (!nextRole) throw notFound("Role not found");
+        if (current.roleName === "owner" && nextRole.name !== "owner") {
+          await assertAnotherOwner(tx, p.orgId, userId);
+        }
+        const row = (
+          await tx
+            .update(orgMembers)
+            .set({ roleId, updatedAt: new Date() })
+            .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)))
+            .returning()
+        )[0];
+        if (!row) throw notFound("Member not found");
+        return row;
+      });
     },
   );
 
@@ -175,10 +208,25 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     async (request) => {
       const p = principal(request);
       const { userId } = request.params as { userId: string };
-      await db
-        .delete(orgMembers)
-        .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)));
-      return { ok: true };
+      return db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`facility:last-owner:${p.orgId}`}, 0))`,
+        );
+        const current = (
+          await tx
+            .select({ roleName: roles.name })
+            .from(orgMembers)
+            .innerJoin(roles, eq(orgMembers.roleId, roles.id))
+            .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)))
+            .limit(1)
+        )[0];
+        if (!current) throw notFound("Member not found");
+        if (current.roleName === "owner") await assertAnotherOwner(tx, p.orgId, userId);
+        await tx
+          .delete(orgMembers)
+          .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)));
+        return { ok: true };
+      });
     },
   );
 
@@ -186,14 +234,18 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     "/v1/roles",
     {
       config: { permission: "roles:read", orgAdmin: true },
-      schema: { response: { 200: z.array(RoleSchema) } },
+      schema: { querystring: PageQuery, response: { 200: z.array(RoleSchema) } },
     },
     async (request) => {
       const p = principal(request);
+      const query = request.query as PageQueryValue;
       return db
         .select()
         .from(roles)
-        .where(or(isNull(roles.orgId), eq(roles.orgId, p.orgId)));
+        .where(or(isNull(roles.orgId), eq(roles.orgId, p.orgId)))
+        .orderBy(asc(roles.name), asc(roles.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
 
@@ -218,7 +270,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
         await db
           .insert(roles)
           .values({
-            id: newId("key"),
+            id: newId("role"),
             orgId: p.orgId,
             name: body.name,
             description: body.description,
@@ -246,7 +298,13 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       const p = principal(request);
       const { roleId } = request.params as { roleId: string };
       const body = request.body as { description?: string; permissions?: string[] };
-      const role = (await db.select().from(roles).where(eq(roles.id, roleId)).limit(1))[0];
+      const role = (
+        await db
+          .select()
+          .from(roles)
+          .where(and(eq(roles.id, roleId), or(eq(roles.orgId, p.orgId), isNull(roles.orgId))))
+          .limit(1)
+      )[0];
       if (!role) throw notFound("Role not found");
       if (!role.orgId) throw new ApiError(400, "bundled_immutable", "Bundled roles are immutable");
       if (body.permissions) assertPermissionsGrantable(p, body.permissions);
@@ -275,7 +333,13 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     async (request) => {
       const p = principal(request);
       const { roleId } = request.params as { roleId: string };
-      const role = (await db.select().from(roles).where(eq(roles.id, roleId)).limit(1))[0];
+      const role = (
+        await db
+          .select()
+          .from(roles)
+          .where(and(eq(roles.id, roleId), or(eq(roles.orgId, p.orgId), isNull(roles.orgId))))
+          .limit(1)
+      )[0];
       if (role && !role.orgId)
         throw new ApiError(400, "bundled_immutable", "Bundled roles are immutable");
       await db.delete(roles).where(and(eq(roles.id, roleId), eq(roles.orgId, p.orgId)));
@@ -287,10 +351,11 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     "/v1/keys",
     {
       config: { permission: "keys:issue" },
-      schema: { response: { 200: z.array(ApiKeyPublicSchema) } },
+      schema: { querystring: PageQuery, response: { 200: z.array(ApiKeyPublicSchema) } },
     },
     async (request) => {
       const p = principal(request);
+      const query = request.query as PageQueryValue;
       const clauses = [eq(apiKeys.orgId, p.orgId)];
       if (p.projectId) clauses.push(eq(apiKeys.projectId, p.projectId));
       return (
@@ -298,6 +363,9 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
           .select()
           .from(apiKeys)
           .where(and(...clauses))
+          .orderBy(desc(apiKeys.createdAt), desc(apiKeys.id))
+          .limit(query.limit)
+          .offset(query.offset)
       ).map(publicRow);
     },
   );
@@ -305,10 +373,10 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
   app.post(
     "/v1/keys",
     {
-      config: { permission: "keys:issue", auditAction: "key.issued" },
+      config: { permission: "keys:issue" },
       schema: {
         body: z.object({ name: z.string(), roleId: z.string(), projectId: z.string().optional() }),
-        response: { 200: ApiKeyPublicSchema },
+        response: { 200: CreatedApiKeySchema },
       },
     },
     async (request) => {
@@ -347,7 +415,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
   app.delete(
     "/v1/keys/:keyId",
     {
-      config: { permission: "keys:issue", auditAction: "key.revoked" },
+      config: { permission: "keys:issue" },
       schema: { params: IdParams, response: { 200: Ok } },
     },
     async (request) => {
@@ -370,4 +438,32 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       return { ok: true };
     },
   );
+}
+
+async function assertAnotherOwner(
+  db: Parameters<Parameters<FastifyInstance["facilityDb"]["transaction"]>[0]>[0],
+  orgId: string,
+  excludedUserId: string,
+) {
+  const other = (
+    await db
+      .select({ id: orgMembers.id })
+      .from(orgMembers)
+      .innerJoin(roles, eq(orgMembers.roleId, roles.id))
+      .where(
+        and(
+          eq(orgMembers.orgId, orgId),
+          sql`${orgMembers.userId} <> ${excludedUserId}`,
+          eq(roles.name, "owner"),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!other) {
+    throw new ApiError(
+      409,
+      "last_owner_required",
+      "The organization must retain at least one owner",
+    );
+  }
 }

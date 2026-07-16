@@ -13,7 +13,6 @@ import {
 } from "../github/kickstart.js";
 import type { AppConfig, Principal } from "../types.js";
 
-const AnyObject = z.record(z.string(), z.unknown());
 const IdParams = z.object({ projectId: z.string(), repoId: z.string().optional() });
 const Answers = z.object({
   defaultBranch: z.string().optional(),
@@ -26,6 +25,71 @@ const Answers = z.object({
     .nullable()
     .optional(),
   execution_lane: z.record(z.string(), z.enum(["repo", "platform"])).optional(),
+});
+
+const DetectionSchema = z.object({
+  isGitRepo: z.boolean(),
+  defaultBranch: z.string(),
+  packageManager: z.enum(["pnpm", "yarn", "npm", "none"]),
+  checks: z.array(z.string()),
+  provision: z.string(),
+  org: z.string(),
+  workflowNames: z.array(z.string()),
+  suggestedModules: z.array(z.string()),
+  existing: z.object({
+    agentsMd: z.boolean(),
+    claudeMd: z.boolean(),
+    claudeSettings: z.boolean(),
+    standard: z.boolean(),
+  }),
+});
+const RenderedFileSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  executable: z.boolean().optional(),
+  mode: z.enum(["100644", "100755", "120000"]).optional(),
+});
+const ManifestSchema = z.object({
+  version: z.literal(1),
+  files: z.array(z.object({ path: z.string(), sha256: z.string() })),
+  manifestHash: z.string(),
+});
+const PullRequestSchema = z.object({ number: z.number().int(), url: z.string().url() });
+const PreviewSchema = z.object({
+  detection: DetectionSchema,
+  files: z.array(
+    z.object({
+      path: z.string(),
+      size: z.number().int().nonnegative(),
+      sha256: z.string(),
+      mode: z.enum(["100644", "100755", "120000"]).optional(),
+      action: z.enum(["create", "update"]),
+    }),
+  ),
+  skipped: z.array(z.string()),
+});
+const KickstartSchema = z.object({
+  branch: z.string(),
+  commitSha: z.string(),
+  pr: PullRequestSchema,
+  files: z.array(RenderedFileSchema),
+  manifest: ManifestSchema.extend({ templateSet: z.string() }),
+});
+const FingerprintVerificationSchema = z.union([
+  z.object({ status: z.literal("unknown") }),
+  z.object({
+    status: z.enum(["ok", "drifted"]),
+    diff: z.object({
+      missing: z.array(z.string()),
+      modified: z.array(z.string()),
+      extra: z.array(z.string()),
+    }),
+  }),
+]);
+const UpgradeSchema = z.object({
+  branch: z.string(),
+  commitSha: z.string(),
+  pr: PullRequestSchema,
 });
 
 function principal(request: { principal?: Principal }) {
@@ -44,7 +108,7 @@ export async function registerGithubRoutes(app: FastifyInstance, config: AppConf
       schema: {
         params: IdParams,
         querystring: z.object({ repoId: z.string() }),
-        response: { 200: AnyObject },
+        response: { 200: PreviewSchema },
       },
     },
     async (request) => {
@@ -67,7 +131,7 @@ export async function registerGithubRoutes(app: FastifyInstance, config: AppConf
           answers: Answers,
           mode: z.literal("pr").default("pr"),
         }),
-        response: { 200: AnyObject },
+        response: { 200: KickstartSchema },
       },
     },
     async (request) => {
@@ -94,7 +158,7 @@ export async function registerGithubRoutes(app: FastifyInstance, config: AppConf
     "/v1/repos/:repoId/fingerprints/adopt",
     {
       config: { permission: "projects:write", auditAction: "fingerprints.adopted" },
-      schema: { params: z.object({ repoId: z.string() }), response: { 200: AnyObject } },
+      schema: { params: z.object({ repoId: z.string() }), response: { 200: ManifestSchema } },
     },
     async (request) => {
       const p = principal(request);
@@ -113,7 +177,10 @@ export async function registerGithubRoutes(app: FastifyInstance, config: AppConf
     "/v1/repos/:repoId/fingerprints/verify",
     {
       config: { permission: "projects:write", auditAction: "fingerprints.verified" },
-      schema: { params: z.object({ repoId: z.string() }), response: { 200: AnyObject } },
+      schema: {
+        params: z.object({ repoId: z.string() }),
+        response: { 200: FingerprintVerificationSchema },
+      },
     },
     async (request) => {
       const p = principal(request);
@@ -133,7 +200,7 @@ export async function registerGithubRoutes(app: FastifyInstance, config: AppConf
       schema: {
         params: IdParams,
         body: z.object({ repoId: z.string(), toVersion: z.string().optional() }),
-        response: { 200: AnyObject },
+        response: { 200: UpgradeSchema },
       },
     },
     async (request) => {

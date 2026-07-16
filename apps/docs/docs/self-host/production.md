@@ -24,12 +24,13 @@ your organization — ECS, Cloud Run, Kubernetes, Nomad, a VM with compose.
 - **Secrets**: `SECRET_MASTER_KEY` (32-byte base64 — everything sealed at
   rest derives from it; store it in your secret manager, rotate = re-seal),
   WorkOS credentials, GitHub App credentials.
-- **TLS + a public URL** for the api (webhooks, OAuth callbacks) and web.
+- **TLS + public URLs** for the API (webhooks, OAuth callbacks) and remote MCP.
+  The web application is optional.
 
 ## Production deploy sequence
 
-1. Build and publish immutable images for `api`, `worker`, `gateway`, and
-   `web`.
+1. Build and publish immutable images for `api`, `worker`, `gateway`, and `mcp`
+   (plus `web` when you deploy the optional operator app).
 2. Provision Postgres and object storage. Set `DATABASE_URL`, `S3_BUCKET`,
    and `AWS_REGION` for AWS S3. Credentials must come from static
    `S3_ACCESS_KEY`/`S3_SECRET_KEY`, standard AWS env credentials
@@ -57,8 +58,8 @@ your organization — ECS, Cloud Run, Kubernetes, Nomad, a VM with compose.
    FACILITY_RUNNER_IMAGE=<your-runner-image> FACILITY_SEED_DEMO=0 pnpm --filter @facility/db seed
    ```
 
-6. Start or roll the services in this order: `api`, `worker`, `gateway`,
-   `web`.
+6. Start or roll the services in this order: `api`, `worker`, `gateway`, `mcp`,
+   then optional `web`.
 7. Issue an owner/admin API key from the web settings page or bootstrap
    channel, then run the go/no-go check:
 
@@ -67,7 +68,8 @@ your organization — ECS, Cloud Run, Kubernetes, Nomad, a VM with compose.
    ```
 
    Production is ready only when the doctor reports no `FAIL` checks. The
-   command verifies database connectivity and migrations, object-store
+   command verifies database connectivity and migrations, a recent worker
+   scheduler heartbeat, object-store
    envelope write/read with SigV4, seed essentials, the `sandbox_runner` profile
    (its driver + runner image match this deployment), production `auth_config`
    (WorkOS configured when dev-login is off), GitHub App env completeness when

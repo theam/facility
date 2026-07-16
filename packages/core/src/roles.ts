@@ -6,6 +6,7 @@ export type BundledRoleName =
   | "maintainer"
   | "engineer"
   | "viewer"
+  | "operator"
   | "agent"
   | "finance";
 
@@ -69,6 +70,27 @@ export const BUNDLED_ROLES = [
     name: "viewer",
     description: "Read-only access.",
     permissions: allReads,
+  },
+  {
+    name: "operator",
+    description:
+      "MCP operator that can propose governed changes but cannot approve its own proposals.",
+    permissions: [
+      ...allReads,
+      "projects:write",
+      "projects:kickstart",
+      "repos:write",
+      "registry:write",
+      "registry:publish",
+      "agents:write",
+      "runs:write",
+      "runs:trigger",
+      "runs:steer",
+      "budgets:write",
+      "kb:write",
+      "tasks:write",
+      "issues:write",
+    ],
   },
   {
     name: "agent",

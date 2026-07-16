@@ -192,7 +192,7 @@ describe("catalog + agents status + integrations", async () => {
         name: "uservoice",
         kind: "feedback",
         config: { projectId, agent: "status-probe", enqueueRun: true },
-        secret: "hook-secret",
+        secret: "hook-secret-strong",
       },
     });
     expect(created.statusCode).toBe(200);

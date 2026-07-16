@@ -26,6 +26,20 @@ Security and privacy are first-class concerns; this page is the contract.
 - Sandboxes receive no provider secrets — only run-scoped virtual keys and
   short-lived repo tokens fetched after boot.
 
+## Webhooks and outbound network safety
+
+- Facility-signed inbound events bind timestamp, delivery id, event type, and
+  exact body bytes into HMAC-SHA256. The receiver enforces a five-minute replay
+  window and integration-scoped delivery deduplication.
+- Outbound webhooks require HTTPS outside insecure development, reject URL
+  credentials and private/reserved IPv4/IPv6 answers, pin the validated address
+  for the connection, disable redirects, and use a ten-second deadline. The
+  durable outbox gives at-least-once delivery with bounded retry and visible dead
+  letters.
+- Remote MCP validates `Host` and browser `Origin`, requires a non-empty Bearer
+  credential, bounds JSON bodies, and forwards the caller credential to the API;
+  it has no privileged service identity.
+
 ## Untrusted text
 
 Issue, PR, review, and comment text is data, never instructions — the rule

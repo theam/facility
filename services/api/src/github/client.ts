@@ -27,6 +27,9 @@ export type Octokit = {
       }>;
     };
     repos: {
+      get?: (args: Record<string, unknown>) => Promise<{
+        data: { name: string; owner?: { login?: string }; default_branch?: string };
+      }>;
       createInOrg?: (args: Record<string, unknown>) => Promise<{
         data: { name: string; owner?: { login?: string }; default_branch?: string };
       }>;

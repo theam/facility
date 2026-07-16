@@ -205,7 +205,14 @@ export async function rollupAnalytics(db: FacilityDb, options: { sinceDays?: num
 export async function queryAnalytics(
   db: FacilityDb,
   orgId: string,
-  query: { projectId?: string; from?: string; to?: string; groupBy: AnalyticsGroupBy },
+  query: {
+    projectId?: string;
+    from?: string;
+    to?: string;
+    groupBy: AnalyticsGroupBy;
+    limit: number;
+    offset: number;
+  },
 ) {
   const clauses = [eq(analyticsDaily.orgId, orgId)];
   if (query.projectId) clauses.push(eq(analyticsDaily.projectId, query.projectId));
@@ -241,7 +248,9 @@ export async function queryAnalytics(
     .from(analyticsDaily)
     .where(and(...clauses))
     .groupBy(bucket)
-    .orderBy(bucket);
+    .orderBy(bucket)
+    .limit(query.limit)
+    .offset(query.offset);
   return rows.map((row) => ({
     ...row,
     runsStarted: Number(row.runsStarted),
@@ -258,7 +267,12 @@ export async function queryAnalytics(
   }));
 }
 
-export async function analyticsOverview(db: FacilityDb, orgId: string, projectId?: string) {
+export async function analyticsOverview(
+  db: FacilityDb,
+  orgId: string,
+  projectId?: string,
+  page: { limit: number; offset: number } = { limit: 100, offset: 0 },
+) {
   const monthStart = new Date();
   monthStart.setUTCDate(1);
   monthStart.setUTCHours(0, 0, 0, 0);
@@ -331,7 +345,9 @@ export async function analyticsOverview(db: FacilityDb, orgId: string, projectId
         : eq(projects.orgId, orgId),
     )
     .groupBy(projects.id, projects.name)
-    .orderBy(projects.name);
+    .orderBy(projects.name, projects.id)
+    .limit(page.limit)
+    .offset(page.offset);
   return {
     liveAgents,
     spendMtdCents: spendMtd,

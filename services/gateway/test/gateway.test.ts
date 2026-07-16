@@ -1,4 +1,5 @@
 import { generateApiKey, newId, seal } from "@facility/core";
+import type { FacilityDb } from "@facility/db";
 import {
   budgets,
   createDb,
@@ -22,7 +23,7 @@ import {
   startKeyRevocationListener,
 } from "../src/auth.js";
 import { applicableBudgets } from "../src/budgets.js";
-import { buildApp, MemoryEnvelopeStore } from "../src/index.js";
+import { buildApp, MemoryEnvelopeStore, readConfig } from "../src/index.js";
 import { writeMetering } from "../src/metering.js";
 import type { GatewayConfig } from "../src/types.js";
 
@@ -30,6 +31,103 @@ const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_gw";
 const orgId = "org_dev_the_agile_monkeys";
 const masterKey = Buffer.alloc(32, 7).toString("base64");
+
+const baseConfig: GatewayConfig = {
+  databaseUrl,
+  secretMasterKey: masterKey,
+  port: 4410,
+  logLevel: "silent",
+  facilityInsecureDev: true,
+};
+
+describe("gateway operational contract", () => {
+  it("reports healthy dependencies and includes a request id", async () => {
+    const app = await buildApp(baseConfig, { db: healthDb(async () => undefined) });
+    try {
+      const response = await app.inject({ method: "GET", url: "/health" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true, db: "ok" });
+      expect(response.headers["x-request-id"]).toMatch(/\S+/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each([
+    "/health",
+    "/readyz",
+  ])("returns 503 from %s when Postgres is unavailable", async (url) => {
+    const app = await buildApp(baseConfig, {
+      db: healthDb(async () => {
+        throw new Error("database unavailable");
+      }),
+    });
+    try {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ ok: false, db: "down" });
+      expect(response.headers["x-request-id"]).toMatch(/\S+/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a stable JSON 404 contract with a request id", async () => {
+    const app = await buildApp(baseConfig, { db: healthDb(async () => undefined) });
+    try {
+      const response = await app.inject({ method: "GET", url: "/missing" });
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({
+        error: { code: "not_found", message: "Route not found" },
+      });
+      expect(response.headers["x-request-id"]).toMatch(/\S+/);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("gateway configuration", () => {
+  const validEnv = {
+    DATABASE_URL: databaseUrl,
+    SECRET_MASTER_KEY: masterKey,
+  };
+
+  it("accepts a master key that decodes to exactly 32 bytes", () => {
+    expect(readConfig(validEnv).secretMasterKey).toBe(masterKey);
+  });
+
+  it("rejects a master key with the wrong decoded length", () => {
+    expect(() => readConfig({ ...validEnv, SECRET_MASTER_KEY: "not-a-32-byte-key" })).toThrow(
+      "SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes",
+    );
+  });
+
+  it("rejects malformed base64 even when Node can permissively decode 32 bytes", () => {
+    expect(() => readConfig({ ...validEnv, SECRET_MASTER_KEY: `${masterKey}!` })).toThrow(
+      "SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes",
+    );
+  });
+
+  it("refuses insecure development mode in production", () => {
+    expect(() =>
+      readConfig({ ...validEnv, NODE_ENV: "production", FACILITY_INSECURE_DEV: "1" }),
+    ).toThrow("FACILITY_INSECURE_DEV is refused in production");
+  });
+
+  it.each([
+    "DEV_ANTHROPIC_API_KEY",
+    "DEV_OPENAI_API_KEY",
+  ] as const)("refuses %s in production", (name) => {
+    expect(() => readConfig({ ...validEnv, NODE_ENV: "production", [name]: "secret" })).toThrow(
+      "development provider keys are refused in production",
+    );
+  });
+});
+
+function healthDb(execute: () => Promise<void>): FacilityDb {
+  return { execute } as unknown as FacilityDb;
+}
 
 type StubState = {
   anthropicCalls: number;
@@ -53,8 +151,11 @@ async function canConnect() {
 describe("gateway", async () => {
   const reachable = await canConnect();
   if (!reachable) {
-    it.skip("Postgres is unreachable at DATABASE_URL; gateway integration tests skipped", () =>
-      undefined);
+    const databaseExpectation = process.env.CI ? it : it.skip;
+    databaseExpectation(
+      "Postgres is reachable at DATABASE_URL for the gateway integration suite",
+      () => expect(reachable).toBe(true),
+    );
     return;
   }
 
@@ -77,14 +178,7 @@ describe("gateway", async () => {
     stub = await buildStub(stubState);
     await stub.listen({ port: 0, host: "127.0.0.1" });
     stubOrigin = `http://127.0.0.1:${(stub.server.address() as { port: number }).port}`;
-    const config: GatewayConfig = {
-      databaseUrl,
-      secretMasterKey: masterKey,
-      port: 4410,
-      logLevel: "silent",
-      facilityInsecureDev: true,
-    };
-    gateway = await buildApp(config, { db, envelopeStore: envelopes });
+    gateway = await buildApp(baseConfig, { db, envelopeStore: envelopes });
     await gateway.listen({ port: 0, host: "127.0.0.1" });
     gatewayOrigin = `http://127.0.0.1:${(gateway.server.address() as { port: number }).port}`;
   });

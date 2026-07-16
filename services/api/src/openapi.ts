@@ -13,7 +13,15 @@ await migrate(config.databaseUrl);
 await seed(config.databaseUrl);
 const app = await buildApp(config);
 await app.ready();
-const document = app.swagger();
+const document = app.swagger() as unknown as {
+  servers: Array<{ url: string; description: string }>;
+};
+document.servers = [
+  {
+    url: "https://facility.example",
+    description: "Replace with the base URL of your Facility deployment.",
+  },
+];
 await mkdir(dirname(out), { recursive: true });
 await writeFile(out, `${JSON.stringify(document, null, 2)}\n`);
 await app.close();

@@ -24,15 +24,34 @@ const EnvSchema = z
     NODE_ENV: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    if (!isExactBase64Key(env.SECRET_MASTER_KEY)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SECRET_MASTER_KEY"],
+        message: "SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes",
+      });
+    }
     const hasDevProviderKey = Boolean(env.DEV_ANTHROPIC_API_KEY || env.DEV_OPENAI_API_KEY);
-    if (env.NODE_ENV === "production" && hasDevProviderKey && env.FACILITY_INSECURE_DEV !== "1") {
+    if (env.NODE_ENV === "production" && env.FACILITY_INSECURE_DEV === "1") {
       ctx.addIssue({
         code: "custom",
         path: ["FACILITY_INSECURE_DEV"],
-        message: "dev provider keys are refused in production without FACILITY_INSECURE_DEV=1",
+        message: "FACILITY_INSECURE_DEV is refused in production",
+      });
+    }
+    if (env.NODE_ENV === "production" && hasDevProviderKey) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DEV_ANTHROPIC_API_KEY"],
+        message: "development provider keys are refused in production",
       });
     }
   });
+
+function isExactBase64Key(value: string) {
+  const decoded = Buffer.from(value, "base64");
+  return decoded.length === 32 && decoded.toString("base64") === value;
+}
 
 export function readConfig(env = process.env): GatewayConfig {
   const parsed = EnvSchema.parse(env);

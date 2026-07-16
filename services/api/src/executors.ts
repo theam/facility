@@ -1,11 +1,16 @@
+import { createHash } from "node:crypto";
 import { newId } from "@facility/core";
 import type { createDb } from "@facility/db";
 import {
   actionTypes,
   agentDefs,
   budgets,
+  conversationMessages,
+  conversations,
+  ghIssues,
   githubInstallations,
   insertAuditEvent,
+  integrations,
   kbEntries,
   kbLinks,
   kbSpaces,
@@ -21,16 +26,22 @@ import {
   runs,
   sandboxProfiles,
   steerMessages,
+  webhookDeliveries,
 } from "@facility/db";
 import { artifactIdFor, validate } from "@facility/harness";
-import { and, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "./budget-scope.js";
 import {
   createGithubClientFactory,
   FacilityGithubClient,
   type GithubClientFactory,
 } from "./github/client.js";
-import { type KickstartAnswers, kickstartRepo, upgradeRepo } from "./github/kickstart.js";
+import {
+  createGithubClientForRepo,
+  type KickstartAnswers,
+  kickstartRepo,
+  upgradeRepo,
+} from "./github/kickstart.js";
 import { findAgentDef, laneFor } from "./github/router.js";
 import {
   ensureActive,
@@ -43,9 +54,14 @@ import {
 import { createNextDraftVersion, publishRegistryVersion } from "./registry.js";
 import { cancelRun } from "./sandbox/orchestrator.js";
 import { appendRunEvents, TERMINAL_RUN_STATUSES } from "./sandbox/state.js";
+import { validateScheduleTrigger } from "./schedules.js";
 import type { AppConfig } from "./types.js";
 
 type Db = ReturnType<typeof createDb>["db"];
+type ProposalExecutionContext = Pick<
+  typeof proposals.$inferSelect,
+  "id" | "orgId" | "projectId" | "payload"
+>;
 
 export type GitHubIssueClient = {
   createIssue(input: {
@@ -66,17 +82,39 @@ type ExecuteApprovedProposalOptions = {
 
 export async function executeApprovedProposal(
   db: Db,
-  proposal: typeof proposals.$inferSelect,
+  candidate: typeof proposals.$inferSelect,
   actor: { type: string; id: string },
   options: ExecuteApprovedProposalOptions | GitHubIssueClient = {},
 ) {
   const executionOptions = isGitHubIssueClient(options) ? { github: options } : options;
-  if (proposal.state !== "approved" && proposal.state !== "execution_failed") return;
+  if (candidate.state !== "approved" && candidate.state !== "execution_failed") return false;
   const actionType = (
-    await db.select().from(actionTypes).where(eq(actionTypes.id, proposal.actionTypeId)).limit(1)
+    await db.select().from(actionTypes).where(eq(actionTypes.id, candidate.actionTypeId)).limit(1)
   )[0];
-  if (!actionType) return;
+  if (!actionType) return false;
+  // `executor.type = none` is a deliberate externally-consumed approval gate.
+  // Approval is terminal for Facility itself, so leave the proposal approved.
+  if (objectOrEmpty(actionType.executor).type === "none") return true;
+  // Claim before performing any database or external side effect. The compare-and-set
+  // makes concurrent /execute calls single-writer even when both loaded the same
+  // approved proposal. Failed executions remain explicitly retryable.
+  const proposal = (
+    await db
+      .update(proposals)
+      .set({ state: "executing", updatedAt: new Date() })
+      .where(
+        and(
+          eq(proposals.orgId, candidate.orgId),
+          eq(proposals.id, candidate.id),
+          inArray(proposals.state, ["approved", "execution_failed"]),
+        ),
+      )
+      .returning()
+  )[0];
+  if (!proposal) return false;
+  let actionTypeName = "unknown";
   try {
+    actionTypeName = actionType.name;
     validatePayload(actionType.payloadSchema, proposal.payload);
     if (actionType.name === "task_creation") {
       await executeTaskCreation(db, proposal, executionOptions);
@@ -96,22 +134,24 @@ export async function executeApprovedProposal(
     } else if (actionType.name === "mcp_tool_call") {
       await executeMcpToolCall(db, proposal, actor, executionOptions);
     } else {
-      return;
+      throw new Error(`unsupported_action_type:${actionType.name}`);
     }
     await db
       .update(proposals)
       .set({ state: "executed", updatedAt: new Date() })
       .where(and(eq(proposals.orgId, proposal.orgId), eq(proposals.id, proposal.id)));
     await appendProposalEvent(db, proposal, "executed", actor, { actionType: actionType.name });
+    return true;
   } catch (error) {
     await db
       .update(proposals)
       .set({ state: "execution_failed", updatedAt: new Date() })
       .where(and(eq(proposals.orgId, proposal.orgId), eq(proposals.id, proposal.id)));
     await appendProposalEvent(db, proposal, "execution_failed", actor, {
-      actionType: actionType.name,
+      actionType: actionTypeName,
       error: error instanceof Error ? error.message : String(error),
     });
+    return true;
   }
 }
 
@@ -280,6 +320,7 @@ async function executeMcpToolCall(
     args,
     options,
     proposalProjectId,
+    proposal.id,
   );
   await insertAuditEvent(db, {
     orgId: proposal.orgId,
@@ -299,6 +340,7 @@ async function executeKnownMcpTool(
   args: Record<string, unknown>,
   options: ExecuteApprovedProposalOptions,
   proposalProjectId: string | null,
+  proposalId: string,
 ) {
   if (toolName === "facility_create_project") {
     const project = (
@@ -317,6 +359,19 @@ async function executeKnownMcpTool(
     return { projectId: project?.id };
   }
 
+  if (toolName === "facility_archive_project") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const project = (
+      await db
+        .update(projects)
+        .set({ status: "archived", updatedAt: new Date() })
+        .where(and(eq(projects.orgId, orgId), eq(projects.id, projectId)))
+        .returning({ id: projects.id, status: projects.status })
+    )[0];
+    if (!project) throw new Error("project_not_found");
+    return { projectId: project.id, status: project.status };
+  }
+
   if (toolName === "facility_trigger_run") {
     const projectId = requiredString(args.projectId, "projectId");
     const agentName = requiredString(args.agentName, "agentName");
@@ -330,7 +385,7 @@ async function executeKnownMcpTool(
           projectId,
           agentDefId: agent.id,
           mode: "manual",
-          engine: "codex",
+          engine: agent.engine,
           trigger: { source: "mcp", agentName, input: args.input },
           createdBy: actor,
         })
@@ -406,6 +461,302 @@ async function executeKnownMcpTool(
     return { messageId: message?.id };
   }
 
+  if (toolName === "facility_interrupt_run") {
+    const runId = requiredString(args.runId, "runId");
+    const run = (
+      await db
+        .select({ status: runs.status })
+        .from(runs)
+        .where(and(eq(runs.orgId, orgId), eq(runs.id, runId)))
+        .limit(1)
+    )[0];
+    if (!run) throw new Error("run_not_found");
+    if (TERMINAL_RUN_STATUSES.includes(run.status as (typeof TERMINAL_RUN_STATUSES)[number])) {
+      throw new Error("run_terminal");
+    }
+    const existing = (
+      await db
+        .select({ id: steerMessages.id })
+        .from(steerMessages)
+        .where(
+          and(
+            eq(steerMessages.orgId, orgId),
+            eq(steerMessages.runId, runId),
+            eq(steerMessages.kind, "interrupt"),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (existing) return { runId, messageId: existing.id };
+    const message = (
+      await db
+        .insert(steerMessages)
+        .values({
+          id: newId("evt"),
+          orgId,
+          runId,
+          kind: "interrupt",
+          body: "human_interrupt",
+        })
+        .returning({ id: steerMessages.id })
+    )[0];
+    await appendRunEvents(db, orgId, runId, [
+      { type: "steer", data: { kind: "interrupt", author: actor.id } },
+    ]);
+    return { runId, messageId: message?.id };
+  }
+
+  if (toolName === "facility_resume_run") {
+    const runId = requiredString(args.runId, "runId");
+    const parent = (
+      await db
+        .select()
+        .from(runs)
+        .where(and(eq(runs.orgId, orgId), eq(runs.id, runId)))
+        .limit(1)
+    )[0];
+    if (!parent) throw new Error("run_not_found");
+    if (!TERMINAL_RUN_STATUSES.includes(parent.status as (typeof TERMINAL_RUN_STATUSES)[number])) {
+      throw new Error("run_not_terminal");
+    }
+    if (parent.engine !== "claude_code" || !parent.engineSessionId) {
+      throw new Error("run_not_resumable");
+    }
+    const message = optionalString(args.message);
+    const resumed = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: parent.projectId,
+          agentDefId: parent.agentDefId,
+          mode: parent.mode,
+          engine: parent.engine,
+          trigger: {
+            type: "resume",
+            resumeOf: parent.id,
+            ...(message ? { message } : {}),
+          },
+          gh: resumableGithubContext(parent.gh),
+          createdBy: actor,
+        })
+        .returning({ id: runs.id })
+    )[0];
+    if (!resumed) throw new Error("run_resume_failed");
+    await db.insert(runEvents).values({
+      orgId,
+      runId: resumed.id,
+      seq: 1,
+      type: "queued",
+      data: { queue: "runs.dispatch" },
+    });
+    await options.enqueue?.("runs.dispatch", { runId: resumed.id, orgId });
+    return { runId: resumed.id, resumeOf: parent.id };
+  }
+
+  if (toolName === "facility_start_conversation") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const agentDefId = optionalString(args.agentDefId);
+    const agent = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(
+          and(
+            eq(agentDefs.orgId, orgId),
+            eq(agentDefs.projectId, projectId),
+            eq(agentDefs.enabled, true),
+            agentDefId ? eq(agentDefs.id, agentDefId) : eq(agentDefs.name, "project-owner"),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!agent) throw new Error("conversation_agent_not_found");
+    if (agent.engine !== "claude_code") throw new Error("conversation_engine_unsupported");
+    const conversation = (
+      await db
+        .insert(conversations)
+        .values({
+          id: newId("evt"),
+          orgId,
+          projectId,
+          agentDefId: agent.id,
+          title: optionalString(args.title),
+          createdBy: actor,
+        })
+        .returning({ id: conversations.id })
+    )[0];
+    if (!conversation) throw new Error("conversation_create_failed");
+    return { conversationId: conversation.id };
+  }
+
+  if (toolName === "facility_send_conversation_message") {
+    const conversationId = requiredString(args.conversationId, "conversationId");
+    const body = requiredString(args.body, "body");
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+      const conversation = (
+        await tx
+          .update(conversations)
+          .set({ status: "running", updatedAt: new Date() })
+          .where(
+            and(
+              eq(conversations.orgId, orgId),
+              eq(conversations.id, conversationId),
+              eq(conversations.status, "idle"),
+            ),
+          )
+          .returning()
+      )[0];
+      if (!conversation) throw new Error("conversation_turn_in_flight");
+      const rows = await tx
+        .select({ max: sql<number>`coalesce(max(${conversationMessages.seq}), 0)` })
+        .from(conversationMessages)
+        .where(eq(conversationMessages.conversationId, conversationId));
+      const message = (
+        await tx
+          .insert(conversationMessages)
+          .values({
+            id: newId("evt"),
+            orgId,
+            conversationId,
+            seq: Number(rows[0]?.max ?? 0) + 1,
+            role: "user",
+            body,
+          })
+          .returning({ id: conversationMessages.id })
+      )[0];
+      const run = (
+        await tx
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: conversation.projectId,
+            agentDefId: conversation.agentDefId,
+            mode: "conversation",
+            engine: "claude_code",
+            trigger: {
+              type: "conversation",
+              conversationId,
+              message: body,
+              ...(conversation.engineSessionId && conversation.lastRunId
+                ? { resumeOf: conversation.lastRunId }
+                : {}),
+            },
+            createdBy: actor,
+          })
+          .returning({ id: runs.id })
+      )[0];
+      if (!message || !run) throw new Error("conversation_turn_create_failed");
+      await tx
+        .update(conversations)
+        .set({ lastRunId: run.id, updatedAt: new Date() })
+        .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)));
+      await tx.insert(runEvents).values({
+        orgId,
+        runId: run.id,
+        seq: 1,
+        type: "queued",
+        data: { queue: "runs.dispatch" },
+      });
+      return { messageId: message.id, runId: run.id };
+    });
+    await options.enqueue?.("runs.dispatch", { runId: result.runId, orgId });
+    return { conversationId, ...result };
+  }
+
+  if (toolName === "facility_sync_github_issues") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const projectRepos = await db
+      .select({ id: repos.id })
+      .from(repos)
+      .where(and(eq(repos.orgId, orgId), eq(repos.projectId, projectId)));
+    for (const repo of projectRepos) {
+      await options.enqueue?.("github.issues-sync", { repoId: repo.id, orgId });
+    }
+    return { queued: projectRepos.length };
+  }
+
+  if (toolName === "facility_trigger_github_issue") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const number = requiredNumber(args.number, "number");
+    const agentName = requiredString(args.agentName, "agentName");
+    const issue = (
+      await db
+        .select()
+        .from(ghIssues)
+        .where(
+          and(
+            eq(ghIssues.orgId, orgId),
+            eq(ghIssues.projectId, projectId),
+            eq(ghIssues.number, number),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!issue) throw new Error("github_issue_not_found");
+    const repo = (
+      await db
+        .select()
+        .from(repos)
+        .where(
+          and(eq(repos.orgId, orgId), eq(repos.projectId, projectId), eq(repos.id, issue.repoId)),
+        )
+        .limit(1)
+    )[0];
+    if (!repo) throw new Error("repo_not_found");
+    const agent = await resolveAgentForMcpRun(db, orgId, projectId, agentName);
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId,
+          agentDefId: agent.id,
+          mode: agentName,
+          engine: agent.engine,
+          trigger: {
+            type: "mcp_issue",
+            repo: { id: repo.id, owner: repo.owner, name: repo.name },
+            issue: { number },
+          },
+          gh: { owner: repo.owner, repo: repo.name, issueNumber: number },
+          createdBy: actor,
+        })
+        .returning({ id: runs.id })
+    )[0];
+    if (!run) throw new Error("run_create_failed");
+    await db.insert(runEvents).values({
+      orgId,
+      runId: run.id,
+      seq: 1,
+      type: "queued",
+      data: { queue: "runs.dispatch" },
+    });
+    await options.enqueue?.("runs.dispatch", { runId: run.id, orgId });
+    const factory =
+      options.githubFactory ??
+      (options.config?.githubAppId && options.config.githubAppPrivateKey
+        ? createGithubClientFactory(options.config)
+        : undefined);
+    if (factory) {
+      try {
+        const github = await createGithubClientForRepo(db, factory, repo);
+        await github.createIssueComment(
+          number,
+          `Facility queued ${agentName} run ${run.id} (triggered through an approved MCP proposal).`,
+        );
+      } catch {
+        // Queueing is authoritative; the acknowledgement is best-effort parity
+        // with the direct API trigger and must not roll back an approved run.
+      }
+    }
+    return { runId: run.id, issueNumber: number };
+  }
+
   if (toolName === "facility_set_budget") {
     const budgetId = optionalString(args.budgetId);
     // Same centralized scope coherence + authorization as the HTTP routes, keyed on
@@ -460,15 +811,23 @@ async function executeKnownMcpTool(
     return { versionId: version.id };
   }
 
+  if (toolName === "facility_deprecate_registry_version") {
+    const versionId = requiredString(args.versionId, "versionId");
+    const version = (
+      await db
+        .update(registryVersions)
+        .set({ status: "deprecated", updatedAt: new Date() })
+        .where(and(eq(registryVersions.orgId, orgId), eq(registryVersions.id, versionId)))
+        .returning({ id: registryVersions.id, status: registryVersions.status })
+    )[0];
+    if (!version) throw new Error("registry_version_not_found");
+    return { versionId: version.id, status: version.status };
+  }
+
   if (toolName === "facility_create_agent") {
     const projectId = requiredString(args.projectId, "projectId");
     await assertMcpProjectInOrg(db, orgId, projectId);
-    await assertMcpRegistryReference(
-      db,
-      orgId,
-      projectId,
-      requiredString(args.contractItemId, "contractItemId"),
-    );
+    const contractItemId = await resolveMcpAgentContract(db, orgId, projectId, args, actor.id);
     await assertMcpRegistryReference(db, orgId, projectId, optionalString(args.harnessItemId));
     await assertMcpSandboxReference(db, orgId, projectId, optionalString(args.sandboxProfileId));
     const agent = (
@@ -481,7 +840,7 @@ async function executeKnownMcpTool(
           name: requiredString(args.name, "name"),
           engine: requiredString(args.engine, "engine"),
           model: args.model ?? {},
-          contractItemId: requiredString(args.contractItemId, "contractItemId"),
+          contractItemId,
           harnessItemId: optionalString(args.harnessItemId),
           triggers: Array.isArray(args.triggers) ? args.triggers : [],
           sandboxProfileId: optionalString(args.sandboxProfileId),
@@ -489,7 +848,214 @@ async function executeKnownMcpTool(
         })
         .returning()
     )[0];
-    return { agentId: agent?.id };
+    return { agentId: agent?.id, contractItemId };
+  }
+
+  if (toolName === "facility_update_agent") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const agentId = requiredString(args.agentId, "agentId");
+    const current = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(
+          and(
+            eq(agentDefs.orgId, orgId),
+            eq(agentDefs.projectId, projectId),
+            eq(agentDefs.id, agentId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!current) throw new Error("agent_not_found");
+    const contractItemId = optionalString(args.contractItemId);
+    const harnessItemId = optionalString(args.harnessItemId);
+    const sandboxProfileId = optionalString(args.sandboxProfileId);
+    await assertMcpRegistryReference(db, orgId, projectId, contractItemId);
+    await assertMcpRegistryReference(db, orgId, projectId, harnessItemId);
+    await assertMcpSandboxReference(db, orgId, projectId, sandboxProfileId);
+    if (args.triggers !== undefined) {
+      if (!Array.isArray(args.triggers)) throw new Error("mcp_tool_invalid_triggers");
+      for (const trigger of args.triggers) validateScheduleTrigger(trigger);
+    }
+    const values = {
+      ...(optionalString(args.name) ? { name: optionalString(args.name) } : {}),
+      ...(optionalString(args.engine) ? { engine: optionalString(args.engine) } : {}),
+      ...(args.model !== undefined ? { model: objectOrEmpty(args.model) } : {}),
+      ...(contractItemId ? { contractItemId } : {}),
+      ...(harnessItemId ? { harnessItemId } : {}),
+      ...(Array.isArray(args.triggers) ? { triggers: args.triggers } : {}),
+      ...(sandboxProfileId ? { sandboxProfileId } : {}),
+      ...(typeof args.enabled === "boolean" ? { enabled: args.enabled } : {}),
+      updatedAt: new Date(),
+    };
+    if (Object.keys(values).length === 1) throw new Error("mcp_tool_no_changes");
+    const updated = (
+      await db
+        .update(agentDefs)
+        .set(values)
+        .where(
+          and(
+            eq(agentDefs.orgId, orgId),
+            eq(agentDefs.projectId, projectId),
+            eq(agentDefs.id, agentId),
+          ),
+        )
+        .returning({ id: agentDefs.id })
+    )[0];
+    if (!updated) throw new Error("agent_not_found");
+    return { agentId: updated.id };
+  }
+
+  if (toolName === "facility_retire_agent") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const agentId = requiredString(args.agentId, "agentId");
+    const retired = (
+      await db
+        .delete(agentDefs)
+        .where(
+          and(
+            eq(agentDefs.orgId, orgId),
+            eq(agentDefs.projectId, projectId),
+            eq(agentDefs.id, agentId),
+          ),
+        )
+        .returning({ id: agentDefs.id })
+    )[0];
+    if (!retired) throw new Error("agent_not_found");
+    return { agentId: retired.id, retired: true };
+  }
+
+  if (toolName === "facility_ack_issue" || toolName === "facility_resolve_issue") {
+    const issueId = requiredString(args.issueId, "issueId");
+    const issue = (
+      await db
+        .select()
+        .from(platformIssues)
+        .where(and(eq(platformIssues.orgId, orgId), eq(platformIssues.id, issueId)))
+        .limit(1)
+    )[0];
+    if (!issue) throw new Error("issue_not_found");
+    const targetState = toolName === "facility_ack_issue" ? "acked" : "resolved";
+    const allowedStates = toolName === "facility_ack_issue" ? ["open"] : ["open", "acked"];
+    if (issue.state === targetState) return { issueId, state: targetState };
+    if (!allowedStates.includes(issue.state)) throw new Error("issue_invalid_transition");
+    const updated = (
+      await db
+        .update(platformIssues)
+        .set({ state: targetState, updatedAt: new Date() })
+        .where(
+          and(
+            eq(platformIssues.orgId, orgId),
+            eq(platformIssues.id, issueId),
+            inArray(platformIssues.state, allowedStates),
+          ),
+        )
+        .returning()
+    )[0];
+    if (!updated) throw new Error("issue_changed_concurrently");
+    return { issueId, state: updated.state };
+  }
+
+  if (toolName === "facility_retry_webhook_delivery") {
+    const deliveryId = requiredString(args.deliveryId, "deliveryId");
+    const row = (
+      await db
+        .select({ delivery: webhookDeliveries })
+        .from(webhookDeliveries)
+        .innerJoin(integrations, eq(integrations.id, webhookDeliveries.integrationId))
+        .where(and(eq(webhookDeliveries.orgId, orgId), eq(webhookDeliveries.id, deliveryId)))
+        .limit(1)
+    )[0];
+    if (!row) throw new Error("webhook_delivery_not_found");
+    if (row.delivery.status === "pending") return { deliveryId, status: "pending" };
+    if (!["failed", "dead"].includes(row.delivery.status)) {
+      throw new Error("webhook_delivery_not_retryable");
+    }
+    const delivery = (
+      await db
+        .update(webhookDeliveries)
+        .set({
+          status: "pending",
+          attempts: 0,
+          nextAttemptAt: new Date(),
+          responseStatus: null,
+          error: null,
+          deliveredAt: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(webhookDeliveries.orgId, orgId), eq(webhookDeliveries.id, deliveryId)))
+        .returning({ id: webhookDeliveries.id, status: webhookDeliveries.status })
+    )[0];
+    if (!delivery) throw new Error("webhook_delivery_not_found");
+    return { deliveryId: delivery.id, status: delivery.status };
+  }
+
+  if (toolName === "facility_create_task") {
+    const projectId = requiredString(args.projectId, "projectId");
+    const kbEntryId = optionalString(args.kbEntryId);
+    if (kbEntryId) await assertMcpKbEntryInProject(db, orgId, projectId, kbEntryId);
+    const task = (
+      await db
+        .insert(poTasks)
+        .values({
+          id: newId("task"),
+          orgId,
+          projectId,
+          kbEntryId,
+          title: requiredString(args.title, "title"),
+          bodyMd: requiredString(args.bodyMd, "bodyMd"),
+          status: optionalString(args.status) ?? "draft",
+          wsjf: objectOrEmpty(args.wsjf),
+        })
+        .returning()
+    )[0];
+    if (!task) throw new Error("task_create_failed");
+    return { taskId: task.id };
+  }
+
+  if (toolName === "facility_transition_task") {
+    const taskId = requiredString(args.taskId, "taskId");
+    const task = (
+      await db
+        .update(poTasks)
+        .set({ status: requiredString(args.status, "status"), updatedAt: new Date() })
+        .where(and(eq(poTasks.orgId, orgId), eq(poTasks.id, taskId)))
+        .returning()
+    )[0];
+    if (!task) throw new Error("task_not_found");
+    return { taskId, status: task.status };
+  }
+
+  if (toolName === "facility_propose_task") {
+    const taskId = requiredString(args.taskId, "taskId");
+    return createTaskCreationProposal(db, orgId, taskId, actor);
+  }
+
+  if (toolName === "facility_amend_kb") {
+    if (!proposalProjectId) throw new Error("kb_amendment_missing_project");
+    const entryId = await executeKbAmendment(db, {
+      id: proposalId,
+      orgId,
+      projectId: proposalProjectId,
+      payload: args,
+    });
+    return { entryId };
+  }
+
+  if (toolName === "facility_create_registry_draft") {
+    const item = await executeRegistryDraft(
+      db,
+      { id: proposalId, orgId, projectId: proposalProjectId, payload: args },
+      requiredString(args.kind, "kind"),
+      actor.id,
+    );
+    return item;
+  }
+
+  if (toolName === "facility_connect_repo") {
+    if (!proposalProjectId) throw new Error("repo_project_required");
+    return connectMcpRepo(db, orgId, proposalProjectId, args, options);
   }
 
   if (toolName === "facility_kickstart") {
@@ -531,16 +1097,37 @@ export async function resolveMcpToolTargetProject(
 ): Promise<string | null> {
   if (toolName === "facility_create_project") return null;
   if (
+    toolName === "facility_archive_project" ||
     toolName === "facility_trigger_run" ||
+    toolName === "facility_start_conversation" ||
+    toolName === "facility_sync_github_issues" ||
+    toolName === "facility_trigger_github_issue" ||
     toolName === "facility_create_agent" ||
+    toolName === "facility_update_agent" ||
+    toolName === "facility_retire_agent" ||
     toolName === "facility_kickstart" ||
-    toolName === "facility_upgrade_project"
+    toolName === "facility_upgrade_project" ||
+    toolName === "facility_create_task" ||
+    toolName === "facility_amend_kb" ||
+    toolName === "facility_connect_repo"
   ) {
     const projectId = requiredString(args.projectId, "projectId");
     await assertMcpProjectInOrg(db, orgId, projectId);
     return projectId;
   }
-  if (toolName === "facility_cancel_run" || toolName === "facility_steer_run") {
+  if (toolName === "facility_create_registry_draft") {
+    const scope = requiredString(args.scope, "scope");
+    if (scope !== "org" && scope !== "project") throw new Error("registry_scope_invalid");
+    const projectId = scope === "project" ? requiredString(args.projectId, "projectId") : null;
+    await assertMcpProjectInOrg(db, orgId, projectId);
+    return projectId;
+  }
+  if (
+    toolName === "facility_cancel_run" ||
+    toolName === "facility_steer_run" ||
+    toolName === "facility_interrupt_run" ||
+    toolName === "facility_resume_run"
+  ) {
     const runId = requiredString(args.runId, "runId");
     const run = (
       await db
@@ -551,6 +1138,42 @@ export async function resolveMcpToolTargetProject(
     )[0];
     if (!run) throw new Error("run_not_found");
     return run.projectId;
+  }
+  if (toolName === "facility_send_conversation_message") {
+    const conversationId = requiredString(args.conversationId, "conversationId");
+    const conversation = (
+      await db
+        .select({ projectId: conversations.projectId })
+        .from(conversations)
+        .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)))
+        .limit(1)
+    )[0];
+    if (!conversation) throw new Error("conversation_not_found");
+    return conversation.projectId;
+  }
+  if (toolName === "facility_transition_task" || toolName === "facility_propose_task") {
+    const taskId = requiredString(args.taskId, "taskId");
+    const task = (
+      await db
+        .select({ projectId: poTasks.projectId })
+        .from(poTasks)
+        .where(and(eq(poTasks.orgId, orgId), eq(poTasks.id, taskId)))
+        .limit(1)
+    )[0];
+    if (!task) throw new Error("task_not_found");
+    return task.projectId;
+  }
+  if (toolName === "facility_ack_issue" || toolName === "facility_resolve_issue") {
+    const issueId = requiredString(args.issueId, "issueId");
+    const issue = (
+      await db
+        .select({ projectId: platformIssues.projectId })
+        .from(platformIssues)
+        .where(and(eq(platformIssues.orgId, orgId), eq(platformIssues.id, issueId)))
+        .limit(1)
+    )[0];
+    if (!issue) throw new Error("issue_not_found");
+    return issue.projectId;
   }
   if (toolName === "facility_set_budget") {
     const budgetId = optionalString(args.budgetId);
@@ -569,7 +1192,10 @@ export async function resolveMcpToolTargetProject(
     if (!budget) throw new Error("budget_not_found");
     return budget.projectId;
   }
-  if (toolName === "facility_publish_registry_version") {
+  if (
+    toolName === "facility_publish_registry_version" ||
+    toolName === "facility_deprecate_registry_version"
+  ) {
     const versionId = requiredString(args.versionId, "versionId");
     const version = (
       await db
@@ -582,6 +1208,19 @@ export async function resolveMcpToolTargetProject(
     if (!version) throw new Error("registry_version_not_found");
     return version.projectId;
   }
+  if (toolName === "facility_retry_webhook_delivery") {
+    const deliveryId = requiredString(args.deliveryId, "deliveryId");
+    const delivery = (
+      await db
+        .select({ projectId: integrations.projectId })
+        .from(webhookDeliveries)
+        .innerJoin(integrations, eq(integrations.id, webhookDeliveries.integrationId))
+        .where(and(eq(webhookDeliveries.orgId, orgId), eq(webhookDeliveries.id, deliveryId)))
+        .limit(1)
+    )[0];
+    if (!delivery) throw new Error("webhook_delivery_not_found");
+    return delivery.projectId;
+  }
   throw new Error(`mcp_tool_not_allowed:${toolName}`);
 }
 
@@ -592,6 +1231,15 @@ function requiredString(value: unknown, field: string) {
 
 function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function resumableGithubContext(value: unknown) {
+  const source = objectOrEmpty(value);
+  return {
+    ...(typeof source.owner === "string" ? { owner: source.owner } : {}),
+    ...(typeof source.repo === "string" ? { repo: source.repo } : {}),
+    ...(typeof source.branch === "string" ? { branch: source.branch } : {}),
+  };
 }
 
 function requiredNumber(value: unknown, field: string) {
@@ -703,6 +1351,100 @@ async function assertMcpRegistryReference(
   }
 }
 
+async function resolveMcpAgentContract(
+  db: Db,
+  orgId: string,
+  projectId: string,
+  args: Record<string, unknown>,
+  actorId: string,
+) {
+  const referencedItemId = optionalString(args.contractItemId);
+  const inlineContent = optionalString(args.contractContent);
+  if (referencedItemId && inlineContent) {
+    throw new Error("mcp_agent_contract_ambiguous");
+  }
+  if (referencedItemId) {
+    await assertMcpRegistryReference(db, orgId, projectId, referencedItemId);
+    return referencedItemId;
+  }
+  if (!inlineContent) throw new Error("mcp_tool_missing_contractItemId_or_contractContent");
+
+  const agentName = requiredString(args.name, "name");
+  const contentHash = createHash("sha256").update(inlineContent).digest("hex");
+  const itemName = `${agentName}-contract-${contentHash.slice(0, 8)}`;
+  return db.transaction(async (tx) => {
+    const inserted = (
+      await tx
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          projectId,
+          scope: "project",
+          kind: "contract",
+          name: itemName,
+          description: `Inline contract for agent ${agentName}`,
+          latestVersion: 1,
+        })
+        .onConflictDoNothing()
+        .returning()
+    )[0];
+    const item =
+      inserted ??
+      (
+        await tx
+          .select()
+          .from(registryItems)
+          .where(
+            and(
+              eq(registryItems.orgId, orgId),
+              eq(registryItems.projectId, projectId),
+              eq(registryItems.kind, "contract"),
+              eq(registryItems.name, itemName),
+            ),
+          )
+          .limit(1)
+      )[0];
+    if (!item) throw new Error("mcp_agent_contract_create_failed");
+
+    await tx
+      .insert(registryVersions)
+      .values({
+        id: newId("ver"),
+        orgId,
+        itemId: item.id,
+        version: 1,
+        content: inlineContent,
+        contentHash,
+        changelog: "Created with MCP agent definition",
+        status: "active",
+        createdBy: actorId,
+      })
+      .onConflictDoNothing();
+    const version = (
+      await tx
+        .select({ contentHash: registryVersions.contentHash })
+        .from(registryVersions)
+        .where(
+          and(
+            eq(registryVersions.orgId, orgId),
+            eq(registryVersions.itemId, item.id),
+            eq(registryVersions.version, 1),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (version?.contentHash !== contentHash) {
+      throw new Error("mcp_agent_contract_content_mismatch");
+    }
+    await tx
+      .update(registryItems)
+      .set({ latestVersion: 1, updatedAt: new Date() })
+      .where(and(eq(registryItems.orgId, orgId), eq(registryItems.id, item.id)));
+    return item.id;
+  });
+}
+
 async function assertMcpSandboxReference(
   db: Db,
   orgId: string,
@@ -720,6 +1462,159 @@ async function assertMcpSandboxReference(
   if (!profile || (profile.projectId && profile.projectId !== projectId)) {
     throw new Error("sandbox_reference_not_in_project");
   }
+}
+
+async function assertMcpKbEntryInProject(
+  db: Db,
+  orgId: string,
+  projectId: string,
+  entryId: string,
+) {
+  const entry = (
+    await db
+      .select({ id: kbEntries.id })
+      .from(kbEntries)
+      .innerJoin(kbSpaces, eq(kbSpaces.id, kbEntries.spaceId))
+      .where(
+        and(
+          eq(kbEntries.orgId, orgId),
+          eq(kbEntries.id, entryId),
+          eq(kbSpaces.orgId, orgId),
+          eq(kbSpaces.projectId, projectId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!entry) throw new Error("kb_entry_not_in_project");
+}
+
+async function createTaskCreationProposal(
+  db: Db,
+  orgId: string,
+  taskId: string,
+  actor: { type: string; id: string },
+) {
+  const task = (
+    await db
+      .select()
+      .from(poTasks)
+      .where(and(eq(poTasks.orgId, orgId), eq(poTasks.id, taskId)))
+      .limit(1)
+  )[0];
+  if (!task) throw new Error("task_not_found");
+  const actionType = (
+    await db
+      .select()
+      .from(actionTypes)
+      .where(and(eq(actionTypes.orgId, orgId), eq(actionTypes.name, "task_creation")))
+      .limit(1)
+  )[0];
+  if (!actionType) throw new Error("task_creation_action_type_missing");
+  const repo = (
+    await db
+      .select()
+      .from(repos)
+      .where(and(eq(repos.orgId, orgId), eq(repos.projectId, task.projectId)))
+      .limit(1)
+  )[0];
+  const project = (
+    await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.orgId, orgId), eq(projects.id, task.projectId)))
+      .limit(1)
+  )[0];
+  const proposal = (
+    await db
+      .insert(proposals)
+      .values({
+        id: newId("prop"),
+        orgId,
+        projectId: task.projectId,
+        actionTypeId: actionType.id,
+        payload: {
+          taskId: task.id,
+          title: task.title,
+          bodyMd: task.bodyMd,
+          wsjf: task.wsjf,
+          target: {
+            repo: repo ? { owner: repo.owner, name: repo.name } : null,
+            board: objectOrEmpty(project?.settings).board,
+          },
+        },
+        contextMd: `Task creation proposal for ${task.title}`,
+        expiresAt: new Date(Date.now() + actionType.defaultTtlHours * 3_600_000),
+      })
+      .returning()
+  )[0];
+  if (!proposal) throw new Error("task_proposal_create_failed");
+  await db.insert(proposalEvents).values({
+    orgId,
+    proposalId: proposal.id,
+    seq: 1,
+    type: "open",
+    actor,
+    data: { taskId },
+  });
+  return { proposalId: proposal.id };
+}
+
+async function connectMcpRepo(
+  db: Db,
+  orgId: string,
+  projectId: string,
+  args: Record<string, unknown>,
+  options: ExecuteApprovedProposalOptions,
+) {
+  const owner = requiredString(args.owner, "owner");
+  const name = requiredString(args.name, "name");
+  const installation = (
+    await db
+      .select()
+      .from(githubInstallations)
+      .where(
+        and(
+          eq(githubInstallations.orgId, orgId),
+          eq(githubInstallations.accountLogin, owner),
+          isNull(githubInstallations.suspendedAt),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!installation) throw new Error("github_installation_required");
+  const factory = options.githubFactory ?? createGithubClientFactory(requireConfig(options));
+  const octokit = await factory(installation.installationId);
+  const shouldCreate = args.create === true || args.mode === "create";
+  const createRepository = octokit.rest.repos.createInOrg;
+  const getRepository = octokit.rest.repos.get;
+  if (shouldCreate && !createRepository) throw new Error("github_create_unavailable");
+  if (!shouldCreate && !getRepository) throw new Error("github_lookup_unavailable");
+  const response = shouldCreate
+    ? await createRepository?.({
+        org: owner,
+        name,
+        private: args.private !== false,
+        description: optionalString(args.description),
+        auto_init: args.autoInit !== false,
+      })
+    : await getRepository?.({ owner, repo: name });
+  if (!response) throw new Error("github_repo_unavailable");
+  const repo = (
+    await db
+      .insert(repos)
+      .values({
+        id: newId("repo"),
+        orgId,
+        projectId,
+        installationId: installation.id,
+        owner: response.data.owner?.login ?? owner,
+        name: response.data.name,
+        defaultBranch: response.data.default_branch ?? optionalString(args.defaultBranch) ?? "main",
+      })
+      .returning()
+  )[0];
+  if (!repo) throw new Error("repo_connect_failed");
+  return { repoId: repo.id };
 }
 
 async function executeTaskCreation(
@@ -840,7 +1735,12 @@ function isGitHubIssueClient(value: ExecuteApprovedProposalOptions | GitHubIssue
   return "createIssue" in value;
 }
 
-async function executeRegistryDraft(db: Db, proposal: typeof proposals.$inferSelect, kind: string) {
+async function executeRegistryDraft(
+  db: Db,
+  proposal: ProposalExecutionContext,
+  kind: string,
+  createdBy = "learning",
+) {
   const payload = objectOrEmpty(proposal.payload);
   const name = stringField(payload.name);
   const content = stringField(payload.content);
@@ -884,13 +1784,15 @@ async function executeRegistryDraft(db: Db, proposal: typeof proposals.$inferSel
   if (!item) throw new Error("registry_item_create_failed");
   // Advisory-locked next-version allocation (shared with the HTTP route) — no
   // duplicate-key race with a concurrent draft on the same item.
-  await createNextDraftVersion(db, {
+  const version = await createNextDraftVersion(db, {
     orgId: proposal.orgId,
     itemId: item.id,
     content,
     changelog: `Drafted from approved proposal ${proposal.id}`,
-    createdBy: "learning",
+    createdBy,
   });
+  if (!version) throw new Error("registry_draft_create_failed");
+  return { itemId: item.id, versionId: version.id };
 }
 
 async function executeGuardCandidate(db: Db, proposal: typeof proposals.$inferSelect) {
@@ -911,7 +1813,7 @@ async function executeGuardCandidate(db: Db, proposal: typeof proposals.$inferSe
     .onConflictDoNothing();
 }
 
-async function executeKbAmendment(db: Db, proposal: typeof proposals.$inferSelect) {
+async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
   if (!proposal.projectId) throw new Error("kb_amendment_missing_project");
   const payload = objectOrEmpty(proposal.payload);
   const type = stringField(payload.type);
@@ -978,7 +1880,7 @@ async function executeKbAmendment(db: Db, proposal: typeof proposals.$inferSelec
     validateSpecials: false,
   });
   if (!report.ok) throw new Error("kb_validation_failed");
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const inserted = (
       await tx
         .insert(kbEntries)
@@ -1017,6 +1919,7 @@ async function executeKbAmendment(db: Db, proposal: typeof proposals.$inferSelec
       .update(kbSpaces)
       .set({ activeMd: ensureActive(space.activeMd, [childArtifactId]), updatedAt: new Date() })
       .where(and(eq(kbSpaces.orgId, proposal.orgId), eq(kbSpaces.id, space.id)));
+    return inserted.id;
   });
 }
 

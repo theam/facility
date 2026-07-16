@@ -6,6 +6,7 @@ import { registerCatalogIntegrationsRoutes } from "./v1/catalog-integrations.js"
 import { registerConversationsRoutes } from "./v1/conversations.js";
 import { registerGithubV1Routes } from "./v1/github.js";
 import { registerHitlRoutes } from "./v1/hitl.js";
+import { registerIntegrationRoutes } from "./v1/integrations.js";
 import { registerAnalyticsRoutes, registerIssuesAuditRoutes } from "./v1/issues-audit-analytics.js";
 import { registerKbTasksRoutes } from "./v1/kb-tasks.js";
 import { registerMeMembersRolesRoutes } from "./v1/me-members-roles.js";
@@ -34,6 +35,7 @@ export async function registerV1Routes(app: FastifyInstance, config: AppConfig) 
   await registerProvidersBudgetsSpendRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
   await registerHitlRoutes(app, context);
+  await registerIntegrationRoutes(app, context);
   await registerIssuesAuditRoutes(app, context);
   await registerKbTasksRoutes(app, context);
   await registerAgentsSandboxesRoutes(app, context);

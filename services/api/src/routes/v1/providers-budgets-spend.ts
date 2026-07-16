@@ -1,25 +1,29 @@
 import { generateApiKey, newId, seal } from "@facility/core";
 import { budgets, providerCredentials, virtualKeys } from "@facility/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "../../budget-scope.js";
 import { notFound } from "../../errors.js";
 import type { Principal } from "../../types.js";
 import {
-  AnyObject,
   assertBareRowProjectScope,
   assertProjectScope,
   BudgetSchema,
+  CreatedVirtualKeySchema,
   definedFields,
   IdParams,
+  IsoDateTime,
   Ok,
+  PageQuery,
+  type PageQueryValue,
   ProviderPublicSchema,
   principal,
   publicRow,
   SpendRowSchema,
   assertProjectInOrg as sharedAssertProjectInOrg,
   type V1RouteContext,
+  VirtualKeyPublicSchema,
   validateApiProviderBaseUrl,
 } from "./shared.js";
 
@@ -37,12 +41,19 @@ export async function registerProvidersBudgetsSpendRoutes(
     "/v1/providers",
     {
       config: { permission: "providers:read", orgAdmin: true },
-      schema: { response: { 200: z.array(ProviderPublicSchema) } },
+      schema: { querystring: PageQuery, response: { 200: z.array(ProviderPublicSchema) } },
     },
     async (request) => {
       const p = principal(request);
+      const query = request.query as PageQueryValue;
       return (
-        await db.select().from(providerCredentials).where(eq(providerCredentials.orgId, p.orgId))
+        await db
+          .select()
+          .from(providerCredentials)
+          .where(eq(providerCredentials.orgId, p.orgId))
+          .orderBy(asc(providerCredentials.provider), asc(providerCredentials.name))
+          .limit(query.limit)
+          .offset(query.offset)
       ).map((row) => ({
         id: row.id,
         provider: row.provider,
@@ -83,7 +94,7 @@ export async function registerProvidersBudgetsSpendRoutes(
         await db
           .insert(providerCredentials)
           .values({
-            id: newId("key"),
+            id: newId("prov"),
             orgId: p.orgId,
             provider: body.provider,
             name: body.name,
@@ -153,9 +164,9 @@ export async function registerProvidersBudgetsSpendRoutes(
         body: z.object({
           name: z.string(),
           allowedModels: z.array(z.string()).optional(),
-          expiresAt: z.string().optional(),
+          expiresAt: IsoDateTime.optional(),
         }),
-        response: { 200: AnyObject },
+        response: { 200: CreatedVirtualKeySchema },
       },
     },
     async (request) => {
@@ -191,17 +202,25 @@ export async function registerProvidersBudgetsSpendRoutes(
     "/v1/projects/:projectId/virtual-keys",
     {
       config: { permission: "keys:issue" },
-      schema: { params: IdParams, response: { 200: z.array(AnyObject) } },
+      schema: {
+        params: IdParams,
+        querystring: PageQuery,
+        response: { 200: z.array(VirtualKeyPublicSchema) },
+      },
     },
     async (request) => {
       const p = principal(request);
       const { projectId } = request.params as { projectId: string };
+      const query = request.query as PageQueryValue;
       assertProjectScope(p, projectId);
       return (
         await db
           .select()
           .from(virtualKeys)
           .where(and(eq(virtualKeys.orgId, p.orgId), eq(virtualKeys.projectId, projectId)))
+          .orderBy(desc(virtualKeys.createdAt), desc(virtualKeys.id))
+          .limit(query.limit)
+          .offset(query.offset)
       ).map(publicRow);
     },
   );
@@ -247,16 +266,20 @@ export async function registerProvidersBudgetsSpendRoutes(
     "/v1/budgets",
     {
       config: { permission: "budgets:read" },
-      schema: { response: { 200: z.array(BudgetSchema) } },
+      schema: { querystring: PageQuery, response: { 200: z.array(BudgetSchema) } },
     },
     async (request) => {
       const p = principal(request);
+      const query = request.query as PageQueryValue;
       const clauses = [eq(budgets.orgId, p.orgId)];
       if (p.projectId) clauses.push(eq(budgets.projectId, p.projectId));
       return db
         .select()
         .from(budgets)
-        .where(and(...clauses));
+        .where(and(...clauses))
+        .orderBy(desc(budgets.createdAt), desc(budgets.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
   app.post(
@@ -459,10 +482,10 @@ export async function registerProvidersBudgetsSpendRoutes(
     {
       config: { permission: "spend:read" },
       schema: {
-        querystring: z.object({
+        querystring: PageQuery.extend({
           projectId: z.string().optional(),
-          from: z.string().optional(),
-          to: z.string().optional(),
+          from: IsoDateTime.optional(),
+          to: IsoDateTime.optional(),
           groupBy: z.enum(["model", "agent", "task", "day"]).optional(),
         }),
         response: { 200: z.array(SpendRowSchema) },
@@ -475,7 +498,7 @@ export async function registerProvidersBudgetsSpendRoutes(
         from?: string;
         to?: string;
         groupBy?: "model" | "agent" | "task" | "day";
-      };
+      } & PageQueryValue;
       const toDate = q.to ? new Date(q.to) : new Date();
       const fromDate = q.from ? new Date(q.from) : new Date(toDate.getTime() - 30 * 86_400_000);
       const from = fromDate.toISOString();
@@ -492,10 +515,10 @@ export async function registerProvidersBudgetsSpendRoutes(
               : sql`model`;
       const result = projectId
         ? await db.execute(
-            sql`SELECT ${groupExpr} AS bucket, floor(coalesce(sum(cost_cents), 0) + 0.5)::int AS cost_cents FROM llm_requests WHERE org_id = ${p.orgId} AND project_id = ${projectId} AND created_at >= ${from}::timestamptz AND created_at <= ${to}::timestamptz GROUP BY 1 ORDER BY 1`,
+            sql`SELECT ${groupExpr} AS bucket, floor(coalesce(sum(cost_cents), 0) + 0.5)::int AS cost_cents FROM llm_requests WHERE org_id = ${p.orgId} AND project_id = ${projectId} AND created_at >= ${from}::timestamptz AND created_at <= ${to}::timestamptz GROUP BY 1 ORDER BY 1 LIMIT ${q.limit} OFFSET ${q.offset}`,
           )
         : await db.execute(
-            sql`SELECT ${groupExpr} AS bucket, floor(coalesce(sum(cost_cents), 0) + 0.5)::int AS cost_cents FROM llm_requests WHERE org_id = ${p.orgId} AND created_at >= ${from}::timestamptz AND created_at <= ${to}::timestamptz GROUP BY 1 ORDER BY 1`,
+            sql`SELECT ${groupExpr} AS bucket, floor(coalesce(sum(cost_cents), 0) + 0.5)::int AS cost_cents FROM llm_requests WHERE org_id = ${p.orgId} AND created_at >= ${from}::timestamptz AND created_at <= ${to}::timestamptz GROUP BY 1 ORDER BY 1 LIMIT ${q.limit} OFFSET ${q.offset}`,
           );
       return Array.from(result as Iterable<Record<string, unknown>>);
     },

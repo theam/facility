@@ -12,9 +12,17 @@ export type V1RouteContext = {
 };
 
 export const AnyObject = z.record(z.string(), z.unknown());
+export const IsoDateTime = z.string().refine((value) => Number.isFinite(Date.parse(value)), {
+  message: "Expected a valid ISO 8601 date or date-time",
+});
 export const JsonValue = z.unknown();
 export const DateValue = z.date();
 export const Ok = z.object({ ok: z.boolean() });
+export const PageQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type PageQueryValue = z.infer<typeof PageQuery>;
 export const IdParams = z.object({
   projectId: z.string().optional(),
   runId: z.string().optional(),
@@ -49,7 +57,7 @@ export const OrgSchema = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
-  settings: JsonValue,
+  settings: AnyObject,
   createdAt: DateValue,
   updatedAt: DateValue,
 });
@@ -67,7 +75,7 @@ export const PrincipalSchema = z.object({
 
 export const MeSchema = z.object({
   principal: PrincipalSchema,
-  org: OrgSchema.nullable().optional(),
+  org: OrgSchema.nullable(),
   permissions: z.array(z.string()),
 });
 
@@ -78,7 +86,7 @@ export const ProjectSchema = z.object({
   slug: z.string(),
   description: z.string().nullable(),
   systemVersion: z.string(),
-  settings: JsonValue,
+  settings: AnyObject,
   status: z.string(),
   createdAt: DateValue,
   updatedAt: DateValue,
@@ -93,9 +101,9 @@ export const ProjectRepoSchema = z.object({
   name: z.string(),
   defaultBranch: z.string(),
   fingerprintStatus: z.string(),
-  fingerprint: JsonValue.nullable(),
+  fingerprint: AnyObject.nullable(),
   fingerprintVerifiedAt: DateValue.nullable(),
-  renderAnswers: JsonValue.nullable(),
+  renderAnswers: AnyObject.nullable(),
   createdAt: DateValue,
   updatedAt: DateValue,
 });
@@ -108,10 +116,36 @@ export const RunSchema = z.object({
   mode: z.string(),
   engine: z.string(),
   status: z.string(),
-  trigger: JsonValue,
-  sandbox: JsonValue,
-  receipt: JsonValue.nullable(),
-  gh: JsonValue,
+  trigger: AnyObject,
+  sandbox: AnyObject,
+  receipt: z
+    .object({
+      // Every Facility-finished run has gateway-authoritative usage and event
+      // aggregates. Harnesses may add provider-specific receipt fields, so keep
+      // the envelope extensible while publishing the stable fields clients can
+      // safely rely on.
+      usage: z
+        .object({
+          input_tokens: z.number().int().nonnegative(),
+          output_tokens: z.number().int().nonnegative(),
+          cache_read: z.number().int().nonnegative(),
+          cache_write: z.number().int().nonnegative(),
+          cost_cents: z.number().int().nonnegative(),
+          cost_source: z.string(),
+        })
+        .passthrough()
+        .optional(),
+      events: z
+        .object({
+          count: z.number().int().nonnegative(),
+          checks: z.number().int().nonnegative(),
+        })
+        .passthrough()
+        .optional(),
+    })
+    .passthrough()
+    .nullable(),
+  gh: AnyObject,
   engineSessionId: z.string().nullable(),
   transcriptUri: z.string().nullable(),
   sessionStateUri: z.string().nullable(),
@@ -119,7 +153,7 @@ export const RunSchema = z.object({
   queuedAt: DateValue,
   startedAt: DateValue.nullable(),
   endedAt: DateValue.nullable(),
-  createdBy: JsonValue,
+  createdBy: AnyObject,
   createdAt: DateValue,
   updatedAt: DateValue,
 });
@@ -134,7 +168,7 @@ export const RunEventSchema = z.object({
   seq: z.number(),
   ts: DateValue,
   type: z.string(),
-  data: JsonValue,
+  data: AnyObject,
 });
 
 export const ConversationSchema = z.object({
@@ -168,7 +202,9 @@ export const ProposalSchema = z.object({
   projectId: z.string().nullable(),
   runId: z.string().nullable(),
   actionTypeId: z.string(),
-  payload: JsonValue,
+  /** Stable, human-readable action type name resolved from actionTypeId. */
+  actionType: z.string(),
+  payload: AnyObject,
   contextMd: z.string(),
   state: z.string(),
   decidedBy: z.string().nullable(),
@@ -184,8 +220,8 @@ export const ProposalEventSchema = z.object({
   seq: z.number(),
   ts: DateValue,
   type: z.string(),
-  actor: JsonValue,
-  data: JsonValue,
+  actor: AnyObject,
+  data: AnyObject,
 });
 
 export const BudgetSchema = z.object({
@@ -281,8 +317,8 @@ export const ApiKeyPublicSchema = z.object({
   revokedAt: DateValue.nullable(),
   createdAt: DateValue,
   updatedAt: DateValue,
-  secret: z.string().optional(),
 });
+export const CreatedApiKeySchema = ApiKeyPublicSchema.extend({ secret: z.string() });
 
 export const ProviderPublicSchema = z.object({
   id: z.string(),
@@ -297,10 +333,14 @@ export const AuditEventSchema = z.object({
   orgId: z.string(),
   projectId: z.string().nullable().optional(),
   seq: z.number(),
-  actor: JsonValue,
+  actor: z.object({
+    type: z.enum(["user", "key", "agent", "system"]),
+    id: z.string().optional(),
+    name: z.string().optional(),
+  }),
   action: z.string(),
-  target: JsonValue,
-  payload: JsonValue,
+  target: z.object({ type: z.string(), id: z.string().optional() }),
+  payload: AnyObject,
   ip: z.string().nullable(),
   userAgent: z.string().nullable(),
   prevHash: z.string().nullable(),
@@ -335,6 +375,195 @@ export const LlmRequestSchema = z.object({
 export const SpendRowSchema = z.object({
   bucket: z.string(),
   cost_cents: z.number(),
+});
+
+export const AgentDefSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string(),
+  name: z.string(),
+  engine: z.string(),
+  model: AnyObject,
+  contractItemId: z.string(),
+  harnessItemId: z.string().nullable(),
+  triggers: z.array(AnyObject),
+  sandboxProfileId: z.string().nullable(),
+  permissions: z.array(z.string()),
+  enabled: z.boolean(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const SandboxProfileSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string().nullable(),
+  name: z.string(),
+  driver: z.string(),
+  image: z.string(),
+  setup: AnyObject,
+  resources: AnyObject,
+  network: AnyObject,
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const VirtualKeyPublicSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string(),
+  runId: z.string().nullable(),
+  name: z.string(),
+  prefix: z.string(),
+  last4: z.string(),
+  allowedModels: z.array(z.string()).nullable(),
+  budgetId: z.string().nullable(),
+  revokedAt: DateValue.nullable(),
+  expiresAt: DateValue.nullable(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+export const CreatedVirtualKeySchema = VirtualKeyPublicSchema.extend({ secret: z.string() });
+
+export const KbSpaceSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string(),
+  charterMd: z.string(),
+  activeMd: z.string(),
+  config: AnyObject,
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const KbEntrySchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  spaceId: z.string(),
+  type: z.string(),
+  number: z.number().int(),
+  slug: z.string(),
+  frontmatter: AnyObject,
+  bodyMd: z.string(),
+  status: z.string().nullable(),
+  supersedes: z.string().nullable(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const KbEntryDraftSchema = z.object({
+  id: z.literal("__draft__"),
+  type: z.string(),
+  number: z.number().int(),
+  slug: z.string(),
+  frontmatter: AnyObject,
+  bodyMd: z.string(),
+  status: z.string().optional(),
+  supersedes: z.null(),
+});
+
+export const TaskSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string(),
+  kbEntryId: z.string().nullable(),
+  title: z.string(),
+  bodyMd: z.string(),
+  wsjf: AnyObject,
+  gh: AnyObject.nullable(),
+  status: z.string(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const SteerMessageSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  runId: z.string(),
+  authorUserId: z.string().nullable(),
+  body: z.string(),
+  deliveredAt: DateValue.nullable(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const WebhookDeliverySchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  integrationId: z.string(),
+  eventType: z.string(),
+  dedupeKey: z.string(),
+  payload: AnyObject,
+  status: z.string(),
+  attempts: z.number().int(),
+  nextAttemptAt: DateValue,
+  responseStatus: z.number().int().nullable(),
+  error: z.string().nullable(),
+  deliveredAt: DateValue.nullable(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const PlatformIssueSchema = z.object({
+  id: z.string(),
+  orgId: z.string(),
+  projectId: z.string().nullable(),
+  kind: z.string(),
+  severity: z.string(),
+  fingerprint: z.string(),
+  title: z.string(),
+  bodyMd: z.string(),
+  state: z.string(),
+  firstSeen: DateValue,
+  lastSeen: DateValue,
+  count: z.number().int(),
+  createdAt: DateValue,
+  updatedAt: DateValue,
+});
+
+export const ValidationIssueSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+  entryId: z.string().optional(),
+});
+
+export const ValidationReportSchema = z.object({
+  ok: z.boolean(),
+  errors: z.array(ValidationIssueSchema),
+  warnings: z.array(ValidationIssueSchema),
+});
+
+export const AnalyticsRowSchema = z.object({
+  bucket: z.string(),
+  runsStarted: z.number(),
+  runsSucceeded: z.number(),
+  runsFailed: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  costCents: z.number(),
+  outcomesTotal: z.number(),
+  outcomesMerged: z.number(),
+  outcomesOneShot: z.number(),
+  acceptance: z.number().nullable(),
+  oneShot: z.number().nullable(),
+});
+
+export const AnalyticsOverviewSchema = z.object({
+  liveAgents: z.number(),
+  spendMtdCents: z.number(),
+  acceptance30d: z.number().nullable(),
+  oneShot30d: z.number().nullable(),
+  projects: z.array(
+    z.object({
+      projectId: z.string(),
+      projectName: z.string(),
+      spendCents: z.number(),
+      runsStarted: z.number(),
+      outcomesTotal: z.number(),
+      outcomesMerged: z.number(),
+      outcomesOneShot: z.number(),
+    }),
+  ),
 });
 
 export function principal(request: { principal?: Principal }) {

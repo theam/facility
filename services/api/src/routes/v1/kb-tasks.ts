@@ -12,7 +12,7 @@ import {
   runs,
 } from "@facility/db";
 import { artifactIdFor, validate } from "@facility/harness";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
@@ -34,10 +34,18 @@ import {
   bearer,
   definedFields,
   IdParams,
+  KbEntryDraftSchema,
+  KbEntrySchema,
+  KbSpaceSchema,
   Ok,
   objectOrEmpty,
+  PageQuery,
+  type PageQueryValue,
+  ProposalSchema,
   principal,
+  TaskSchema,
   type V1RouteContext,
+  ValidationReportSchema,
 } from "./shared.js";
 
 export async function registerKbTasksRoutes(app: FastifyInstance, context: V1RouteContext) {
@@ -46,7 +54,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
     "/v1/projects/:projectId/kb/space",
     {
       config: { permission: "kb:read" },
-      schema: { params: IdParams, response: { 200: AnyObject } },
+      schema: { params: IdParams, response: { 200: KbSpaceSchema.nullable() } },
     },
     async (request) => {
       const p = principal(request);
@@ -76,7 +84,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           activeMd: z.string().default(""),
           config: AnyObject.default({}),
         }),
-        response: { 200: AnyObject },
+        response: { 200: KbSpaceSchema },
       },
     },
     async (request) => {
@@ -88,7 +96,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         activeMd: string;
         config: Record<string, unknown>;
       };
-      return (
+      const row = (
         await db
           .insert(kbSpaces)
           .values({
@@ -110,6 +118,8 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           })
           .returning()
       )[0];
+      if (!row) throw new ApiError(500, "insert_failed", "Could not update KB space");
+      return row;
     },
   );
 
@@ -119,8 +129,8 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       config: { permission: "kb:read" },
       schema: {
         params: IdParams,
-        querystring: z.object({ type: z.string().optional() }),
-        response: { 200: z.array(AnyObject) },
+        querystring: PageQuery.extend({ type: z.string().optional() }),
+        response: { 200: z.array(KbEntrySchema) },
       },
     },
     async (request) => {
@@ -129,7 +139,8 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       assertProjectScope(p, projectId);
       const space = await spaceFor(p.orgId, projectId);
       if (!space) return [];
-      const type = (request.query as { type?: string }).type;
+      const query = request.query as PageQueryValue & { type?: string };
+      const type = query.type;
       return db
         .select()
         .from(kbEntries)
@@ -141,7 +152,10 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
                 eq(kbEntries.type, type),
               )
             : and(eq(kbEntries.orgId, p.orgId), eq(kbEntries.spaceId, space.id)),
-        );
+        )
+        .orderBy(asc(kbEntries.type), asc(kbEntries.number), asc(kbEntries.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
 
@@ -149,7 +163,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
     "/v1/kb/entries/:entryId",
     {
       config: { permission: "kb:read" },
-      schema: { params: IdParams, response: { 200: AnyObject } },
+      schema: { params: IdParams, response: { 200: KbEntrySchema } },
     },
     async (request) => {
       const p = principal(request);
@@ -176,7 +190,16 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           status: z.string().optional(),
           links: z.array(z.string()).default([]),
         }),
-        response: { 200: AnyObject },
+        response: {
+          200: z.union([
+            KbEntrySchema,
+            z.object({
+              ok: z.literal(true),
+              entry: KbEntryDraftSchema,
+              report: ValidationReportSchema,
+            }),
+          ]),
+        },
       },
     },
     async (request) => {
@@ -315,7 +338,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           status: z.string().optional(),
           supersedes: z.string().nullable().optional(),
         }),
-        response: { 200: AnyObject },
+        response: { 200: KbEntrySchema },
       },
     },
     async (request) => {
@@ -368,13 +391,15 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       if (!report.ok) {
         throw new ApiError(400, "kb_validation_failed", "KB entry failed validation", report);
       }
-      return (
+      const row = (
         await db
           .update(kbEntries)
           .set(patch)
           .where(and(eq(kbEntries.orgId, p.orgId), eq(kbEntries.id, entryId)))
           .returning()
       )[0];
+      if (!row) throw notFound("KB entry not found");
+      return row;
     },
   );
   app.post(
@@ -383,7 +408,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       config: { permission: "kb:write", auditAction: "kb.updated" },
       schema: {
         params: IdParams,
-        response: { 200: AnyObject },
+        response: { 200: ValidationReportSchema },
       },
     },
     async (request) => {
@@ -398,7 +423,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
     "/v1/runs/:runId/kb-checkpoint",
     {
       config: { public: true },
-      schema: { params: IdParams, response: { 200: AnyObject } },
+      schema: { params: IdParams, response: { 200: ValidationReportSchema } },
     },
     async (request) => {
       const { runId } = request.params as { runId: string };
@@ -442,10 +467,15 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
     "/v1/projects/:projectId/tasks",
     {
       config: { permission: "tasks:read" },
-      schema: { params: IdParams, response: { 200: z.array(AnyObject) } },
+      schema: {
+        params: IdParams,
+        querystring: PageQuery,
+        response: { 200: z.array(TaskSchema) },
+      },
     },
-    async (request) =>
-      db
+    async (request) => {
+      const query = request.query as PageQueryValue;
+      return db
         .select()
         .from(poTasks)
         .where(
@@ -453,7 +483,11 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
             eq(poTasks.orgId, principal(request).orgId),
             eq(poTasks.projectId, (request.params as { projectId: string }).projectId),
           ),
-        ),
+        )
+        .orderBy(desc(poTasks.createdAt), desc(poTasks.id))
+        .limit(query.limit)
+        .offset(query.offset);
+    },
   );
   app.post(
     "/v1/projects/:projectId/tasks",
@@ -468,7 +502,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           kbEntryId: z.string().optional(),
           wsjf: AnyObject.default({}),
         }),
-        response: { 200: AnyObject },
+        response: { 200: TaskSchema },
       },
     },
     async (request) => {
@@ -482,7 +516,25 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         kbEntryId?: string;
         wsjf: Record<string, unknown>;
       };
-      return (
+      if (body.kbEntryId) {
+        const entry = (
+          await db
+            .select({ id: kbEntries.id })
+            .from(kbEntries)
+            .innerJoin(kbSpaces, eq(kbSpaces.id, kbEntries.spaceId))
+            .where(
+              and(
+                eq(kbEntries.orgId, p.orgId),
+                eq(kbEntries.id, body.kbEntryId),
+                eq(kbSpaces.orgId, p.orgId),
+                eq(kbSpaces.projectId, projectId),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (!entry) throw notFound("KB entry not found");
+      }
+      const row = (
         await db
           .insert(poTasks)
           .values({
@@ -497,6 +549,8 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           })
           .returning()
       )[0];
+      if (!row) throw new ApiError(500, "insert_failed", "Could not create task");
+      return row;
     },
   );
   app.patch(
@@ -513,7 +567,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           wsjf: AnyObject.optional(),
           gh: AnyObject.optional(),
         }),
-        response: { 200: AnyObject },
+        response: { 200: TaskSchema },
       },
     },
     async (request) => {
@@ -528,7 +582,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         gh?: Record<string, unknown>;
       };
       assertProjectScope(p, projectId);
-      return (
+      const row = (
         await db
           .update(poTasks)
           .set(
@@ -551,6 +605,8 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           )
           .returning()
       )[0];
+      if (!row) throw notFound("Task not found");
+      return row;
     },
   );
   app.delete(
@@ -581,7 +637,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       schema: {
         params: IdParams,
         body: z.object({ status: z.string() }),
-        response: { 200: AnyObject },
+        response: { 200: TaskSchema },
       },
     },
     async (request) => {
@@ -596,7 +652,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       )[0];
       if (!task) throw notFound("Task not found");
       assertBareRowProjectScope(p, task.projectId, "Task not found");
-      return (
+      const transitioned = (
         await db
           .update(poTasks)
           .set({ status: (request.body as { status: string }).status, updatedAt: new Date() })
@@ -609,6 +665,8 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           )
           .returning()
       )[0];
+      if (!transitioned) throw notFound("Task not found");
+      return transitioned;
     },
   );
 
@@ -616,7 +674,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
     "/v1/tasks/:taskId/propose",
     {
       config: { permission: "tasks:write", auditAction: "task.proposed" },
-      schema: { params: IdParams, response: { 200: AnyObject } },
+      schema: { params: IdParams, response: { 200: ProposalSchema } },
     },
     async (request) => {
       const p = principal(request);
@@ -689,7 +747,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
             eq(poTasks.id, task.id),
           ),
         );
-      return proposal;
+      return { ...proposal, actionType: actionType.name };
     },
   );
 

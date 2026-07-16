@@ -1,856 +1,328 @@
-import type {
-  agentDefs,
-  apiKeys,
-  auditEvents,
-  budgets,
-  conversationMessages,
-  conversations,
-  llmRequests,
-  orgMembers,
-  orgs,
-  outcomes,
-  platformIssues,
-  projects,
-  proposalEvents,
-  proposals,
-  providerCredentials,
-  registryItems,
-  registryVersions,
-  repos,
-  roles,
-  runEvents,
-  runs,
-  sandboxProfiles,
-  users,
-} from "@facility/db";
+import type { paths as OpenApiPaths } from "./schema.js";
 
-export type JsonObject = Record<string, unknown>;
-export type QueryValue = string | number | boolean | undefined;
-export type QueryParams = Record<string, QueryValue>;
-export type RunReceipt = {
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cost_cents?: number;
-  };
-} & JsonObject;
-export type RunGithubArtifacts = {
-  issue?: string;
-  pr?: string;
-} & JsonObject;
+type SegmentMatches<Actual extends string, Spec extends string> = Spec extends `{${string}}`
+  ? Actual extends ""
+    ? false
+    : true
+  : Actual extends Spec
+    ? true
+    : false;
 
-type Serialized<T> = T extends Date
-  ? string
-  : T extends Date | null
-    ? string | null
-    : T extends Array<infer U>
-      ? Serialized<U>[]
-      : T extends object
-        ? { [K in keyof T]: Serialized<T[K]> }
-        : T;
+type PathMatches<
+  Actual extends string,
+  Spec extends string,
+> = Actual extends `${infer ActualHead}/${infer ActualTail}`
+  ? Spec extends `${infer SpecHead}/${infer SpecTail}`
+    ? SegmentMatches<ActualHead, SpecHead> extends true
+      ? PathMatches<ActualTail, SpecTail>
+      : false
+    : false
+  : Spec extends `${string}/${string}`
+    ? false
+    : SegmentMatches<Actual, Spec>;
 
-type ProjectRow = typeof projects.$inferSelect;
-type ProjectRepoRow = typeof repos.$inferSelect;
-type RunRow = typeof runs.$inferSelect;
-type RunEventRow = typeof runEvents.$inferSelect;
-type ConversationRow = typeof conversations.$inferSelect;
-type ConversationMessageRow = typeof conversationMessages.$inferSelect;
-type ProposalRow = typeof proposals.$inferSelect;
-type ProposalDecisionRow = typeof proposalEvents.$inferSelect;
-type BudgetRow = typeof budgets.$inferSelect;
-type RegistryItemRow = typeof registryItems.$inferSelect;
-type RegistryVersionRow = typeof registryVersions.$inferSelect;
-type OrgMemberRow = typeof orgMembers.$inferSelect;
-type UserRow = typeof users.$inferSelect;
-type RoleRow = typeof roles.$inferSelect;
-type ApiKeyRow = typeof apiKeys.$inferSelect;
-type ProviderRow = typeof providerCredentials.$inferSelect;
-type AuditEventRow = typeof auditEvents.$inferSelect;
-type LlmRequestRow = typeof llmRequests.$inferSelect;
-type OrgRow = typeof orgs.$inferSelect;
-type AgentDefRow = typeof agentDefs.$inferSelect;
-type SandboxProfileRow = typeof sandboxProfiles.$inferSelect;
-type PlatformIssueRow = typeof platformIssues.$inferSelect;
+type ExpandOpenApiPath<Path extends string> = Path extends `${infer Head}{${string}}${infer Tail}`
+  ? `${Head}${string}${ExpandOpenApiPath<Tail>}`
+  : Path;
 
-export type ProjectStatus = "active" | "archived" | string;
-export type RunStatus =
-  | "queued"
-  | "provisioning"
-  | "running"
-  | "awaiting_human"
-  | "succeeded"
-  | "failed"
-  | "canceled"
-  | string;
-export type ProposalState =
-  | "draft"
-  | "open"
-  | "approved"
-  | "rejected"
-  | "cancelled"
-  | "expired"
-  | string;
+export type FacilityOpenApiPath<Path extends string> = {
+  [Spec in Extract<keyof OpenApiPaths, string>]: PathMatches<Path, Spec> extends true
+    ? Spec
+    : never;
+}[Extract<keyof OpenApiPaths, string>];
 
-export type Org = Serialized<Omit<OrgRow, "settings">> & { settings: unknown };
+type OpenApiOperation<Method extends string, Path extends string> = {
+  [Spec in FacilityOpenApiPath<Path>]: Lowercase<Method> extends keyof OpenApiPaths[Spec]
+    ? NonNullable<OpenApiPaths[Spec][Lowercase<Method> & keyof OpenApiPaths[Spec]]>
+    : never;
+}[FacilityOpenApiPath<Path>];
 
-export type Project = Serialized<Omit<ProjectRow, "settings" | "status">> & {
-  settings: JsonObject;
-  status: ProjectStatus;
-};
+type JsonContent<Value> = Value extends {
+  content: { "application/json": infer Payload };
+}
+  ? Payload
+  : Value extends { content?: never }
+    ? undefined
+    : unknown;
 
-export type ProjectRepo = Serialized<Omit<ProjectRepoRow, "fingerprint" | "renderAnswers">> & {
-  fingerprint: unknown | null;
-  renderAnswers: unknown | null;
-};
-
-export type Run = Serialized<
-  Omit<RunRow, "trigger" | "sandbox" | "receipt" | "gh" | "createdBy" | "status">
-> & {
-  status: RunStatus;
-  trigger: JsonObject;
-  sandbox: JsonObject;
-  receipt: RunReceipt | null;
-  gh: RunGithubArtifacts;
-  createdBy: unknown;
-};
-
-export type RunWithProject = Run & { project: Pick<Project, "id" | "name" | "slug"> };
-
-export type RunEvent = Serialized<Omit<RunEventRow, "data">> & {
-  data: JsonObject;
-};
-
-export type ConversationStatus = "idle" | "running" | string;
-export type Conversation = Serialized<Omit<ConversationRow, "createdBy" | "status">> & {
-  status: ConversationStatus;
-  createdBy: unknown;
-};
-export type ConversationMessageRole = "user" | "agent" | "system" | string;
-export type ConversationMessage = Serialized<Omit<ConversationMessageRow, "role">> & {
-  role: ConversationMessageRole;
-};
-export type ConversationListItem = Conversation & {
-  lastMessage: ConversationMessage | null;
-};
-export type ConversationDetail = {
-  conversation: Conversation;
-  messages: ConversationMessage[];
-};
-
-export type Proposal = Serialized<Omit<ProposalRow, "payload" | "state">> & {
-  payload: JsonObject;
-  state: ProposalState;
-  actionType?: string;
-};
-
-export type ProposalDecision = Serialized<Omit<ProposalDecisionRow, "actor" | "data">> & {
-  actor: unknown;
-  data: unknown;
-};
-
-export type ProposalWithEvents = Proposal & { events: ProposalDecision[] };
-
-export type Budget = Serialized<BudgetRow>;
-
-export type RegistryItem = Serialized<RegistryItemRow>;
-export type RegistryVersion = Serialized<RegistryVersionRow>;
-export type RegistryItemWithVersions = RegistryItem & { versions: RegistryVersion[] };
-
-export type Member = {
-  userId: string;
-  email: string;
-  name?: string | null;
-  roleId: string;
-  roleName?: string;
-};
-export type MemberRow = {
-  member: Serialized<OrgMemberRow>;
-  user: Serialized<UserRow>;
-  role: Role;
-};
-
-export type Role = Serialized<RoleRow>;
-
-export type ApiKey = Serialized<Omit<ApiKeyRow, "hash">> & {
-  secret?: string;
-};
-
-export type Provider = Serialized<
-  Pick<ProviderRow, "id" | "provider" | "name" | "baseUrl" | "createdAt">
->;
-
-export type AgentDef = Serialized<Omit<AgentDefRow, "model" | "triggers" | "permissions">> & {
-  model: JsonObject;
-  triggers: JsonObject[];
-  permissions: string[];
-};
-
-export type SandboxProfile = Serialized<
-  Omit<SandboxProfileRow, "setup" | "resources" | "network">
-> & {
-  setup: JsonObject;
-  resources: JsonObject;
-  network: JsonObject;
-};
-
-export type AuditActor = { type: string; id: string; name?: string };
-export type AuditTarget = { type: string; id: string } | null;
-export type AuditEvent = Serialized<Omit<AuditEventRow, "actor" | "target" | "payload">> & {
-  actor: AuditActor;
-  target: AuditTarget;
-  payload: unknown;
-};
-
-export type SpendRow = { bucket: string; cost_cents: number };
-
-export type LlmRequest = Serialized<LlmRequestRow>;
-
-export type IssueState = "open" | "acked" | "resolved" | string;
-export type IssueSeverity = "info" | "warn" | "error" | string;
-export type Issue = Serialized<Omit<PlatformIssueRow, "state" | "severity">> & {
-  state: IssueState;
-  severity: IssueSeverity;
-};
-
-type OutcomeRow = typeof outcomes.$inferSelect;
-/** PR-level fate row — written at PR-open (platform lane) and PR-close (webhook). */
-export type Outcome = Serialized<OutcomeRow>;
-
-export type GithubInstallation = {
-  id: string;
-  installationId: number;
-  accountLogin: string;
-  targetType: string;
-  suspendedAt: string | null;
-};
-
-export type GithubInstallationRepo = {
-  owner: string;
-  name: string;
-  fullName: string;
-  private: boolean;
-  defaultBranch: string;
-  htmlUrl: string;
-};
-
-export type GithubInstallationReposResponse = {
-  items: GithubInstallationRepo[];
-  truncated: boolean;
-};
-
-export type GithubIssueLinkedRun = Pick<Run, "id" | "mode" | "status" | "engine"> & {
-  pr?: unknown;
-};
-
-export type GithubIssue = {
-  id: string;
-  number: number;
-  title: string;
-  state: "open" | "closed" | string;
-  labels: unknown;
-  assignees: unknown;
-  author: string | null;
-  htmlUrl: string;
-  commentsCount: number;
-  ghUpdatedAt: string | null;
-  linkedRuns: GithubIssueLinkedRun[];
-};
-
-export type GithubIssueDetail = GithubIssue & {
-  bodyMd: string | null;
-  runs: Array<
-    Pick<Run, "id" | "mode" | "engine" | "status" | "startedAt" | "endedAt" | "receipt"> & {
-      pr?: unknown;
-    }
-  >;
-};
-
-export type GithubIssuePage = { items: GithubIssue[]; nextCursor: string | null };
-
-/** Platform vocabulary for semantic pickers — engines, models, permissions, trigger kinds. */
-export type CatalogEngine = { id: string; label: string; note: string };
-export type CatalogModel = {
-  id: string;
-  provider: string;
-  inputPer1M: number;
-  outputPer1M: number;
-};
-export type CatalogTriggerType = { type: string; label: string; note: string };
-export type Catalog = {
-  engines: CatalogEngine[];
-  models: CatalogModel[];
-  permissions: { resources: string[]; special: string[]; all: string[] };
-  triggerTypes: CatalogTriggerType[];
-};
-
-export type AgentStatusRunRef = {
-  id: string;
-  status: string;
-  queuedAt: string;
-  endedAt: string | null;
-  costCents: number | null;
-  prUrl: string | null;
-};
-
-/** Per-agent engine-view feed: schedule truth, next fire, last/live run, 14d counts, event bindings. */
-export type AgentStatus = {
-  agentId: string;
-  name: string;
-  enabled: boolean;
-  engine: string;
-  model: JsonObject;
-  contractItemId: string;
-  contractName: string | null;
-  description: string | null;
-  triggers: JsonObject[];
-  schedule: { cron: string; timezone: string | null; source: string } | null;
-  nextRunAt: string | null;
-  lastRun: AgentStatusRunRef | null;
-  liveRun: { id: string; status: string } | null;
-  counts14d: {
-    total: number;
-    succeeded: number;
-    failed: number;
-    canceled: number;
-    awaitingHuman: number;
-  };
-  prCount14d: number;
-  eventBindings: Array<{
-    integrationId: string;
-    name: string;
-    kind: string;
-    enabled: boolean;
-    dispatchesRuns: boolean;
-  }>;
-};
-
-export type Integration = {
-  id: string;
-  orgId: string;
-  projectId: string | null;
-  kind: string;
-  name: string;
-  config: JsonObject;
-  enabled: boolean;
-  hasSecret: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-export type IntegrationEvent = {
-  id: string;
-  receivedAt: string;
-  verified: boolean;
-  eventType: string;
-  processedAt: string | null;
-  error: string | null;
-};
-export type CreateIntegrationRequest = {
-  name: string;
-  kind: string;
-  config?: JsonObject;
-  secret?: string;
-  projectId?: string;
-  enabled?: boolean;
-};
-export type UpdateIntegrationRequest = {
-  name?: string;
-  kind?: string;
-  config?: JsonObject;
-  secret?: string;
-  projectId?: string | null;
-  enabled?: boolean;
-};
-
-export type Principal = {
-  type: "user" | "key";
-  id: string;
-  orgId: string;
-  userId?: string;
-  email?: string;
-  name?: string;
-  projectId?: string | null;
-  permissions: string[];
-};
-
-export type Me = {
-  principal: Principal;
-  org: Org | null;
-  permissions: string[];
-};
-
-export type CreateProjectRequest = {
-  name: string;
-  slug: string;
-  description?: string;
-  settings?: JsonObject;
-};
-export type UpdateProjectRequest = Partial<
-  Pick<Project, "name" | "description" | "status"> & { settings: JsonObject }
->;
-export type ConnectProjectRepoRequest = {
-  owner: string;
-  name: string;
-  defaultBranch?: string;
-  mode?: "connect" | "create";
-  create?: boolean;
-  private?: boolean;
-  description?: string;
-  autoInit?: boolean;
-};
-
-export type TriggerRunRequest = {
-  mode?: string;
-  engine?: string;
-  trigger?: JsonObject;
-  agentDefId?: string;
-  agent?: string;
-};
-export type SteerRunRequest = { body: string };
-export type ResumeRunRequest = { message?: string };
-export type CreateConversationRequest = { agentDefId?: string; title?: string };
-export type CreateConversationMessageRequest = { body: string };
-export type CreateConversationMessageResponse = {
-  message: ConversationMessage;
-  runId: string;
-};
-
-export type CreateProposalRequest = {
-  projectId?: string;
-  runId?: string;
-  actionTypeId: string;
-  payload: JsonObject;
-  contextMd: string;
-  expiresAt?: string;
-};
-export type DecideProposalRequest = { decision: "approve" | "reject"; note?: string };
-export type McpToolProposalRequest = {
-  toolName: string;
-  permission: string;
-  args: JsonObject;
-  summary: string;
-  projectId?: string;
-  runId?: string;
-};
-
-export type CreateBudgetRequest = {
-  scope: string;
-  projectId?: string;
-  agentDefId?: string;
-  period: string;
-  limitCents: number;
-  mode: string;
-  enabled?: boolean;
-};
-export type UpdateBudgetRequest = Partial<CreateBudgetRequest>;
-
-export type CreateRegistryItemRequest = {
-  scope: string;
-  projectId?: string;
-  kind: string;
-  name: string;
-  description?: string;
-  content: string;
-};
-export type CreateRegistryVersionRequest = { content: string; changelog?: string };
-
-export type AddMemberRequest = { email: string; roleId: string };
-export type UpdateMemberRequest = { roleId: string };
-export type CreateRoleRequest = { name: string; description?: string; permissions: string[] };
-export type UpdateRoleRequest = { description?: string; permissions?: string[] };
-export type CreateApiKeyRequest = { name: string; roleId: string; projectId?: string };
-export type CreateProviderRequest = {
-  provider: string;
-  name: string;
-  baseUrl?: string;
-  secret: string;
-};
-
-export type InboxResponse = {
-  items: Proposal[];
-  proposals: Proposal[];
-  issues: Issue[];
-};
-export type AuditTail = { items: AuditEvent[]; nextCursor: number | null };
-export type LlmRequestPage = { items: LlmRequest[]; nextCursor: string | null };
-export type LlmRequestEnvelope = { llmRequest: LlmRequest; envelope: unknown };
-export type DoctorCheck = {
-  id: string;
-  label: string;
-  status: "pass" | "warn" | "fail";
-  ok: boolean;
-  message: string;
-  remediation?: string;
-};
-export type DoctorResponse = { ok: boolean; generatedAt: string; checks: DoctorCheck[] };
-export type AnalyticsOverview = {
-  liveAgents: number;
-  spendMtdCents: number;
-  outcomes30d: {
-    total: number;
-    assessed: number;
-    accepted: number;
-    merged: number;
-    oneShot: number;
-  };
-  acceptance30d: number | null;
-  oneShot30d: number | null;
-  projects: Array<{
-    projectId: string;
-    projectName: string;
-    spendCents: number;
-    runsStarted: number;
-    outcomesTotal: number;
-    outcomesAssessed: number;
-    outcomesAccepted: number;
-    outcomesMerged: number;
-    outcomesOneShot: number;
-  }>;
-};
-
-type Route<Response, Body = never> = { response: Response; body: Body };
-
-export type FacilityGetRoutePath =
-  | "/v1/me"
-  | "/v1/org"
-  | "/v1/projects"
-  | `/v1/projects/${string}`
-  | `/v1/projects/${string}/repos`
-  | `/v1/projects/${string}/issues`
-  | `/v1/projects/${string}/issues/${string}`
-  | `/v1/projects/${string}/kickstart/preview`
-  | `/v1/projects/${string}/agents`
-  | `/v1/projects/${string}/agents/status`
-  | `/v1/projects/${string}/conversations`
-  | `/v1/projects/${string}/runs`
-  | "/v1/runs"
-  | `/v1/runs/${string}`
-  | `/v1/runs/${string}/events`
-  | `/v1/conversations/${string}`
-  | "/v1/inbox"
-  | "/v1/issues"
-  | "/v1/outcomes"
-  | "/v1/catalog"
-  | "/v1/integrations"
-  | `/v1/integrations/${string}/events`
-  | "/v1/github/installations"
-  | `/v1/github/installations/${string}/repos`
-  | `/v1/proposals/${string}`
-  | "/v1/audit"
-  | "/v1/audit/verify"
-  | "/v1/admin/doctor"
-  | "/v1/registry/items"
-  | `/v1/registry/items/${string}`
-  | "/v1/spend"
-  | "/v1/members"
-  | "/v1/roles"
-  | "/v1/keys"
-  | "/v1/providers"
-  | "/v1/budgets"
-  | `/v1/budgets/${string}`
-  | "/v1/llm-requests"
-  | `/v1/llm-requests/${string}/envelope`
-  | "/v1/sandbox-profiles"
-  | "/v1/analytics"
-  | "/v1/analytics/overview"
-  | `/v1/projects/${string}/health`
-  | `/v1/projects/${string}/tasks`
-  | `/v1/projects/${string}/virtual-keys`
-  | `/v1/projects/${string}/kb/entries`
-  | `/v1/projects/${string}/kb/space`
-  | `/v1/kb/entries/${string}`;
-
-// A bare `:id` route's `${string}` segment also admits `a/b`, so wrong nested
-// paths (e.g. /v1/projects/x/not-a-route) wrongly resolve to the resource type.
-// Require the captured id to contain no "/" — otherwise the response is `never`.
-type IfLeaf<Id extends string, Then> = Id extends `${string}/${string}` ? never : Then;
-
-export type FacilityGetRouteResponse<Path extends FacilityGetRoutePath> = Path extends "/v1/me"
-  ? Me
-  : Path extends "/v1/org"
-    ? Org | null
-    : Path extends "/v1/projects"
-      ? Project[]
-      : Path extends `/v1/projects/${string}/repos`
-        ? ProjectRepo[]
-        : Path extends `/v1/projects/${string}/issues`
-          ? GithubIssuePage
-          : Path extends `/v1/projects/${string}/issues/${string}`
-            ? GithubIssueDetail
-            : Path extends `/v1/projects/${string}/kickstart/preview`
-              ? KickstartPreview
-              : Path extends `/v1/projects/${string}/agents/status`
-                ? AgentStatus[]
-                : Path extends `/v1/projects/${string}/agents`
-                  ? AgentDef[]
-                  : Path extends `/v1/projects/${string}/runs`
-                    ? Run[]
-                    : Path extends `/v1/projects/${string}/conversations`
-                      ? ConversationListItem[]
-                      : Path extends `/v1/projects/${string}/health`
-                        ? JsonObject
-                        : Path extends `/v1/projects/${string}/tasks`
-                          ? JsonObject[]
-                          : Path extends `/v1/projects/${string}/virtual-keys`
-                            ? JsonObject[]
-                            : Path extends `/v1/projects/${string}/kb/entries`
-                              ? JsonObject[]
-                              : Path extends `/v1/projects/${string}/kb/space`
-                                ? JsonObject
-                                : Path extends `/v1/projects/${infer Id}`
-                                  ? IfLeaf<Id, Project>
-                                  : Path extends "/v1/runs"
-                                    ? RunWithProject[]
-                                    : Path extends `/v1/runs/${string}/events`
-                                      ? RunEvent[]
-                                      : Path extends `/v1/runs/${infer Id}`
-                                        ? IfLeaf<Id, Run>
-                                        : Path extends `/v1/conversations/${infer Id}`
-                                          ? IfLeaf<Id, ConversationDetail>
-                                          : Path extends "/v1/inbox"
-                                            ? InboxResponse
-                                            : Path extends "/v1/catalog"
-                                              ? Catalog
-                                              : Path extends "/v1/integrations"
-                                                ? Integration[]
-                                                : Path extends `/v1/integrations/${string}/events`
-                                                  ? IntegrationEvent[]
-                                                  : Path extends "/v1/issues"
-                                                    ? Issue[]
-                                                    : Path extends "/v1/outcomes"
-                                                      ? Outcome[]
-                                                      : Path extends "/v1/github/installations"
-                                                        ? GithubInstallation[]
-                                                        : Path extends `/v1/github/installations/${string}/repos`
-                                                          ? GithubInstallationReposResponse
-                                                          : Path extends `/v1/proposals/${infer Id}`
-                                                            ? IfLeaf<Id, ProposalWithEvents>
-                                                            : Path extends "/v1/audit"
-                                                              ? AuditTail
-                                                              : Path extends "/v1/audit/verify"
-                                                                ? {
-                                                                    ok: boolean;
-                                                                    firstBreakSeq: number | null;
-                                                                  }
-                                                                : Path extends "/v1/admin/doctor"
-                                                                  ? DoctorResponse
-                                                                  : Path extends "/v1/registry/items"
-                                                                    ? RegistryItem[]
-                                                                    : Path extends `/v1/registry/items/${infer Id}`
-                                                                      ? IfLeaf<
-                                                                          Id,
-                                                                          RegistryItemWithVersions
-                                                                        >
-                                                                      : Path extends "/v1/spend"
-                                                                        ? SpendRow[]
-                                                                        : Path extends "/v1/members"
-                                                                          ? MemberRow[]
-                                                                          : Path extends "/v1/roles"
-                                                                            ? Role[]
-                                                                            : Path extends "/v1/keys"
-                                                                              ? ApiKey[]
-                                                                              : Path extends "/v1/providers"
-                                                                                ? Provider[]
-                                                                                : Path extends "/v1/budgets"
-                                                                                  ? Budget[]
-                                                                                  : Path extends `/v1/budgets/${infer Id}`
-                                                                                    ? IfLeaf<
-                                                                                        Id,
-                                                                                        Budget
-                                                                                      >
-                                                                                    : Path extends "/v1/llm-requests"
-                                                                                      ? LlmRequestPage
-                                                                                      : Path extends `/v1/llm-requests/${string}/envelope`
-                                                                                        ? LlmRequestEnvelope
-                                                                                        : Path extends "/v1/sandbox-profiles"
-                                                                                          ? SandboxProfile[]
-                                                                                          : // Non-core surfaces the API serves as permissive AnyObject; typed
-                                                                                            // here as JsonObject so clients can call them without a cast.
-                                                                                            Path extends "/v1/analytics"
-                                                                                            ? JsonObject[]
-                                                                                            : Path extends "/v1/analytics/overview"
-                                                                                              ? AnalyticsOverview
-                                                                                              : Path extends `/v1/kb/entries/${string}`
-                                                                                                ? JsonObject
-                                                                                                : never;
-
-export type FacilityPostRoutes = {
-  "/v1/projects": Route<Project, CreateProjectRequest>;
-  [path: `/v1/projects/${string}/repos`]: {
-    body: ConnectProjectRepoRequest;
-    response: ProjectRepo;
-  };
-  [path: `/v1/projects/${string}/kickstart`]: Route<
-    KickstartResult,
-    { repoId: string; answers: KickstartAnswers; mode: "pr" }
-  >;
-  [path: `/v1/projects/${string}/upgrade`]: Route<
-    JsonObject,
-    { repoId: string; toVersion?: string }
-  >;
-  [path: `/v1/projects/${string}/runs`]: Route<Run, TriggerRunRequest>;
-  [path: `/v1/projects/${string}/conversations`]: Route<Conversation, CreateConversationRequest>;
-  [path: `/v1/projects/${string}/issues/sync`]: Route<{ queued: number }, undefined>;
-  [path: `/v1/projects/${string}/issues/${string}/trigger`]: Route<Run, { agent: string }>;
-  [path: `/v1/runs/${string}/cancel`]: Route<Run, undefined>;
-  [path: `/v1/runs/${string}/interrupt`]: Route<{ ok: boolean }, undefined>;
-  [path: `/v1/runs/${string}/resume`]: Route<Run, ResumeRunRequest>;
-  [path: `/v1/runs/${string}/steer`]: Route<unknown, SteerRunRequest>;
-  [path: `/v1/conversations/${string}/messages`]: Route<
-    CreateConversationMessageResponse,
-    CreateConversationMessageRequest
-  >;
-  "/v1/proposals": Route<Proposal, CreateProposalRequest>;
-  "/v1/integrations": Route<Integration, CreateIntegrationRequest>;
-  "/v1/mcp/tool-proposals": Route<Proposal, McpToolProposalRequest>;
-  [path: `/v1/proposals/${string}/decide`]: {
-    body: DecideProposalRequest;
-    response: Proposal;
-  };
-  [path: `/v1/issues/${string}/ack`]: Route<Issue, undefined>;
-  [path: `/v1/issues/${string}/resolve`]: Route<Issue, undefined>;
-  "/v1/budgets": Route<Budget, CreateBudgetRequest>;
-  "/v1/registry/items": Route<RegistryItemWithVersions, CreateRegistryItemRequest>;
-  [path: `/v1/registry/items/${string}/versions`]: {
-    body: CreateRegistryVersionRequest;
-    response: RegistryVersion;
-  };
-  [path: `/v1/registry/versions/${string}/publish`]: Route<RegistryVersion, undefined>;
-  [path: `/v1/registry/versions/${string}/deprecate`]: {
-    body: undefined;
-    response: RegistryVersion;
-  };
-  "/v1/members": Route<Serialized<OrgMemberRow>, AddMemberRequest>;
-  "/v1/roles": Route<Role, CreateRoleRequest>;
-  "/v1/keys": Route<ApiKey, CreateApiKeyRequest>;
-  "/v1/providers": Route<Provider | null, CreateProviderRequest>;
-  // Non-core surfaces (KB / tasks / virtual keys / fingerprints / agents /
-  // sandbox profiles). The API validates these as permissive AnyObject, so both
-  // sides are JsonObject here — enough to call them typed without a cast.
-  [path: `/v1/projects/${string}/agents`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/projects/${string}/kb/entries`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/projects/${string}/kb/validate`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/projects/${string}/tasks`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/projects/${string}/virtual-keys`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/proposals/${string}/execute`]: Route<JsonObject, undefined>;
-  [path: `/v1/repos/${string}/fingerprints/adopt`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/repos/${string}/fingerprints/verify`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/runs/${string}/kb-checkpoint`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/tasks/${string}/propose`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/tasks/${string}/transition`]: Route<JsonObject, JsonObject>;
-  "/v1/sandbox-profiles": Route<SandboxProfile, JsonObject>;
-};
-
-export type FacilityPatchRoutes = {
-  [path: `/v1/projects/${string}`]: { body: UpdateProjectRequest; response: Project };
-  [path: `/v1/budgets/${string}`]: { body: UpdateBudgetRequest; response: Budget };
-  [path: `/v1/members/${string}`]: {
-    body: UpdateMemberRequest;
-    response: Serialized<OrgMemberRow>;
-  };
-  [path: `/v1/roles/${string}`]: { body: UpdateRoleRequest; response: Role };
-  [path: `/v1/integrations/${string}`]: { body: UpdateIntegrationRequest; response: Integration };
-  "/v1/org": Route<JsonObject, JsonObject>;
-  [path: `/v1/kb/entries/${string}`]: Route<JsonObject, JsonObject>;
-  [path: `/v1/sandbox-profiles/${string}`]: Route<JsonObject, JsonObject>;
-};
-
-export type FacilityPutRoutes = {
-  [path: `/v1/projects/${string}/kb/space`]: Route<JsonObject, JsonObject>;
-};
-
-export type FacilityDeleteRoutes = {
-  [path: `/v1/projects/${string}`]: Route<{ ok: boolean }>;
-  [path: `/v1/budgets/${string}`]: Route<{ ok: boolean }>;
-  [path: `/v1/members/${string}`]: Route<{ ok: boolean }>;
-  [path: `/v1/roles/${string}`]: Route<{ ok: boolean }>;
-  [path: `/v1/keys/${string}`]: Route<{ ok: boolean }>;
-  [path: `/v1/providers/${string}`]: Route<{ ok: boolean }>;
-  [path: `/v1/sandbox-profiles/${string}`]: Route<{ ok: boolean }>;
-};
-
-export type FacilityRouteMap = {
-  GET: never;
-  POST: FacilityPostRoutes;
-  PATCH: FacilityPatchRoutes;
-  PUT: FacilityPutRoutes;
-  DELETE: FacilityDeleteRoutes;
-};
-
-export type FacilityRouteMethod = keyof FacilityRouteMap;
-export type FacilityRoutePath<Method extends FacilityRouteMethod> = Method extends "GET"
-  ? FacilityGetRoutePath
-  : Extract<keyof FacilityRouteMap[Method], string>;
-
-type FacilityRouteSpec<
-  Method extends FacilityRouteMethod,
-  Path extends FacilityRoutePath<Method>,
-> = Method extends "POST"
-  ? Path extends keyof FacilityPostRoutes
-    ? FacilityPostRoutes[Path]
-    : never
-  : Method extends "PATCH"
-    ? Path extends keyof FacilityPatchRoutes
-      ? FacilityPatchRoutes[Path]
-      : never
-    : Method extends "PUT"
-      ? Path extends keyof FacilityPutRoutes
-        ? FacilityPutRoutes[Path]
-        : never
-      : Method extends "DELETE"
-        ? Path extends keyof FacilityDeleteRoutes
-          ? FacilityDeleteRoutes[Path]
-          : never
+type SuccessfulResponse<Responses> = Responses extends { 200: infer Success }
+  ? Success
+  : Responses extends { 201: infer Success }
+    ? Success
+    : Responses extends { 202: infer Success }
+      ? Success
+      : Responses extends { 204: infer Success }
+        ? Success
         : never;
+
+export type FacilityGeneratedResponse<Method extends string, Path extends string> =
+  OpenApiOperation<Method, Path> extends { responses: infer Responses }
+    ? JsonContent<SuccessfulResponse<Responses>>
+    : never;
+
+export type FacilityGeneratedBody<Method extends string, Path extends string> =
+  OpenApiOperation<Method, Path> extends {
+    requestBody: { content: { "application/json": infer Body } };
+  }
+    ? Body
+    : undefined;
+
+export type FacilityGeneratedQuery<Method extends string, Path extends string> =
+  OpenApiOperation<Method, Path> extends { parameters: { query?: infer Query } }
+    ? NonNullable<Query>
+    : never;
+
+type ArrayItem<Value> = Value extends readonly (infer Item)[] ? Item : never;
+
+export type FacilityRouteMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+export type FacilityRoutePath<Method extends FacilityRouteMethod> = {
+  [Spec in Extract<keyof OpenApiPaths, string>]: Lowercase<Method> extends keyof OpenApiPaths[Spec]
+    ? ExpandOpenApiPath<Spec>
+    : never;
+}[Extract<keyof OpenApiPaths, string>];
 
 export type FacilityRouteResponse<
   Method extends FacilityRouteMethod,
   Path extends FacilityRoutePath<Method>,
-> = Method extends "GET"
-  ? Path extends FacilityGetRoutePath
-    ? FacilityGetRouteResponse<Path>
-    : never
-  : // Extract the response regardless of whether the route carries a body — a
-    // `Route<R, Body>` match against `Route<_, never>` would wrongly resolve
-    // body-carrying write routes to `never`.
-    FacilityRouteSpec<Method, Path> extends { response: infer Response }
-    ? Response
-    : never;
+> = FacilityGeneratedResponse<Method, Path>;
 
 export type FacilityRouteBody<
   Method extends FacilityRouteMethod,
   Path extends FacilityRoutePath<Method>,
-> = Method extends "GET"
-  ? never
-  : FacilityRouteSpec<Method, Path> extends Route<unknown, infer Body>
-    ? Body
-    : never;
+> =
+  FacilityGeneratedBody<Method, Path> extends undefined
+    ? never
+    : FacilityGeneratedBody<Method, Path>;
 
-export type KickstartAnswers = {
-  defaultBranch?: string;
-  provisionCmd?: string;
-  checkCmds?: string[];
-  modules?: string[];
-  modelTier?: string;
-  board?: { org: string; project: string | number } | null;
-  execution_lane?: Record<string, "repo" | "platform">;
-};
+/** Compatibility aliases retained for existing SDK consumers. */
+export type FacilityGetRoutePath = FacilityRoutePath<"GET">;
+export type FacilityGetRouteResponse<Path extends FacilityGetRoutePath> = FacilityRouteResponse<
+  "GET",
+  Path
+>;
 
-export type KickstartPreview = {
-  detection?: JsonObject;
-  files: Array<{
-    path: string;
-    size: number;
-    sha256: string;
-    mode?: string;
-    action?: string;
-  }>;
-  skipped?: string[];
-};
+export type JsonObject = Record<string, unknown>;
+export type QueryValue = string | number | boolean | undefined;
+export type QueryParams = Record<string, QueryValue>;
+export type PageQuery = Pick<FacilityGeneratedQuery<"GET", "/v1/projects">, "limit" | "offset">;
 
-export type KickstartResult = {
-  branch?: string;
-  commitSha?: string;
-  pr?: { number?: number; url?: string; html_url?: string; title?: string };
-  files?: Array<{ path: string; content?: string; mode?: string }>;
-  manifest?: JsonObject;
+export type Me = FacilityGeneratedResponse<"GET", "/v1/me">;
+export type Principal = Me["principal"];
+export type Org = NonNullable<FacilityGeneratedResponse<"GET", "/v1/org">>;
+export type Project = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}">;
+export type ProjectStatus = Project["status"];
+export type ProjectRepo = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/repos">
+>;
+
+export type Run = FacilityGeneratedResponse<"GET", "/v1/runs/{runId}">;
+export type RunStatus = Run["status"];
+export type RunReceipt = NonNullable<Run["receipt"]>;
+export type RunGithubArtifacts = Run["gh"];
+export type RunWithProject = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/runs">>;
+export type RunEvent = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/runs/{runId}/events">>;
+/** The transcript endpoint returns raw application/x-ndjson text. */
+export type RunTranscript = string;
+
+export type Conversation = FacilityGeneratedResponse<
+  "POST",
+  "/v1/projects/{projectId}/conversations"
+>;
+export type ConversationStatus = Conversation["status"];
+export type ConversationListItem = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/conversations">
+>;
+export type ConversationDetail = FacilityGeneratedResponse<
+  "GET",
+  "/v1/conversations/{conversationId}"
+>;
+export type ConversationMessage = ArrayItem<ConversationDetail["messages"]>;
+export type ConversationMessageRole = ConversationMessage["role"];
+export type CreateConversationMessageResponse = FacilityGeneratedResponse<
+  "POST",
+  "/v1/conversations/{conversationId}/messages"
+>;
+
+export type Proposal = FacilityGeneratedResponse<"POST", "/v1/proposals">;
+export type ProposalState = Proposal["state"];
+export type ProposalWithEvents = FacilityGeneratedResponse<"GET", "/v1/proposals/{proposalId}">;
+export type ProposalDecision = ArrayItem<ProposalWithEvents["events"]>;
+export type ActionType = FacilityGeneratedResponse<"GET", "/v1/action-types/{actionTypeId}">;
+
+export type Budget = FacilityGeneratedResponse<"GET", "/v1/budgets/{budgetId}">;
+export type RegistryItem = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/registry/items">>;
+export type RegistryItemWithVersions = FacilityGeneratedResponse<
+  "GET",
+  "/v1/registry/items/{itemId}"
+>;
+export type RegistryVersion = ArrayItem<RegistryItemWithVersions["versions"]>;
+
+export type MemberRow = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/members">>;
+/** User-facing roster projection; writes still return the raw membership row. */
+export type Member = {
+  userId: string;
+  email: string;
+  name: string | null;
+  roleId: string;
+  roleName: string;
 };
+export type Role = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/roles">>;
+export type ApiKey = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/keys">>;
+export type CreatedApiKey = FacilityGeneratedResponse<"POST", "/v1/keys">;
+export type Provider = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/providers">>;
+
+export type AgentDef = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/agents">
+>;
+export type AgentStatus = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/agents/status">
+>;
+export type SandboxProfile = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/sandbox-profiles">>;
+export type Task = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/tasks">>;
+export type VirtualKey = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/virtual-keys">
+>;
+export type CreatedVirtualKey = FacilityGeneratedResponse<
+  "POST",
+  "/v1/projects/{projectId}/virtual-keys"
+>;
+export type KbSpace = NonNullable<
+  FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/kb/space">
+>;
+export type KbEntry = FacilityGeneratedResponse<"GET", "/v1/kb/entries/{entryId}">;
+
+export type Catalog = FacilityGeneratedResponse<"GET", "/v1/catalog">;
+export type CatalogEngine = ArrayItem<Catalog["engines"]>;
+export type CatalogModel = ArrayItem<Catalog["models"]>;
+export type CatalogTriggerType = ArrayItem<Catalog["triggerTypes"]>;
+
+export type Integration = FacilityGeneratedResponse<"GET", "/v1/integrations/{integrationId}">;
+export type IntegrationSecretResult = FacilityGeneratedResponse<"POST", "/v1/integrations">;
+export type IntegrationEvent = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/integrations/{integrationId}/events">
+>;
+export type WebhookDelivery = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/integrations/{integrationId}/deliveries">
+>;
+
+export type AuditTail = FacilityGeneratedResponse<"GET", "/v1/audit">;
+export type AuditEvent = ArrayItem<AuditTail["items"]>;
+export type AuditQuery = FacilityGeneratedQuery<"GET", "/v1/audit">;
+export type AuditActor = AuditEvent["actor"];
+export type AuditTarget = AuditEvent["target"];
+export type SpendRow = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/spend">>;
+export type LlmRequestPage = FacilityGeneratedResponse<"GET", "/v1/llm-requests">;
+export type LlmRequest = ArrayItem<LlmRequestPage["items"]>;
+export type LlmRequestQuery = FacilityGeneratedQuery<"GET", "/v1/llm-requests">;
+export type LlmRequestEnvelope = FacilityGeneratedResponse<
+  "GET",
+  "/v1/llm-requests/{requestId}/envelope"
+>;
+
+export type Issue = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/issues">>;
+export type IssueState = Issue["state"];
+export type IssueSeverity = Issue["severity"];
+export type GithubIssuePage = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/issues">;
+export type GithubIssue = ArrayItem<GithubIssuePage["items"]>;
+export type GithubIssueDetail = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/issues/{number}"
+>;
+export type GithubIssueLinkedRun = ArrayItem<GithubIssue["linkedRuns"]>;
+export type GithubInstallation = ArrayItem<
+  FacilityGeneratedResponse<"GET", "/v1/github/installations">
+>;
+export type GithubInstallationReposResponse = FacilityGeneratedResponse<
+  "GET",
+  "/v1/github/installations/{installationId}/repos"
+>;
+export type GithubInstallationRepo = ArrayItem<GithubInstallationReposResponse["items"]>;
+export type Outcome = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/outcomes">>;
+
+export type AnalyticsRow = ArrayItem<FacilityGeneratedResponse<"GET", "/v1/analytics">>;
+export type AnalyticsOverview = FacilityGeneratedResponse<"GET", "/v1/analytics/overview">;
+export type InboxResponse = FacilityGeneratedResponse<"GET", "/v1/inbox">;
+export type DoctorResponse = FacilityGeneratedResponse<"GET", "/v1/admin/doctor">;
+export type DoctorCheck = ArrayItem<DoctorResponse["checks"]>;
+
+export type CreateProjectRequest = FacilityGeneratedBody<"POST", "/v1/projects">;
+export type UpdateProjectRequest = FacilityGeneratedBody<"PATCH", "/v1/projects/{projectId}">;
+export type ConnectProjectRepoRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/repos"
+>;
+export type TriggerRunRequest = FacilityGeneratedBody<"POST", "/v1/projects/{projectId}/runs">;
+export type SteerRunRequest = FacilityGeneratedBody<"POST", "/v1/runs/{runId}/steer">;
+export type ResumeRunRequest = FacilityGeneratedBody<"POST", "/v1/runs/{runId}/resume">;
+export type CreateConversationRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/conversations"
+>;
+export type CreateConversationMessageRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/conversations/{conversationId}/messages"
+>;
+export type CreateProposalRequest = FacilityGeneratedBody<"POST", "/v1/proposals">;
+export type DecideProposalRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/proposals/{proposalId}/decide"
+>;
+export type McpToolProposalRequest = FacilityGeneratedBody<"POST", "/v1/mcp/tool-proposals">;
+export type CreateBudgetRequest = FacilityGeneratedBody<"POST", "/v1/budgets">;
+export type UpdateBudgetRequest = FacilityGeneratedBody<"PATCH", "/v1/budgets/{budgetId}">;
+export type CreateRegistryItemRequest = FacilityGeneratedBody<"POST", "/v1/registry/items">;
+export type CreateRegistryVersionRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/registry/items/{itemId}/versions"
+>;
+export type AddMemberRequest = FacilityGeneratedBody<"POST", "/v1/members">;
+export type UpdateMemberRequest = FacilityGeneratedBody<"PATCH", "/v1/members/{userId}">;
+export type CreateRoleRequest = FacilityGeneratedBody<"POST", "/v1/roles">;
+export type UpdateRoleRequest = FacilityGeneratedBody<"PATCH", "/v1/roles/{roleId}">;
+export type CreateApiKeyRequest = FacilityGeneratedBody<"POST", "/v1/keys">;
+export type CreateProviderRequest = FacilityGeneratedBody<"POST", "/v1/providers">;
+export type CreateAgentRequest = FacilityGeneratedBody<"POST", "/v1/projects/{projectId}/agents">;
+export type UpdateAgentRequest = FacilityGeneratedBody<
+  "PATCH",
+  "/v1/projects/{projectId}/agents/{id}"
+>;
+export type CreateSandboxProfileRequest = FacilityGeneratedBody<"POST", "/v1/sandbox-profiles">;
+export type UpdateSandboxProfileRequest = FacilityGeneratedBody<
+  "PATCH",
+  "/v1/sandbox-profiles/{id}"
+>;
+export type CreateTaskRequest = FacilityGeneratedBody<"POST", "/v1/projects/{projectId}/tasks">;
+export type UpdateTaskRequest = FacilityGeneratedBody<
+  "PATCH",
+  "/v1/projects/{projectId}/tasks/{taskId}"
+>;
+export type CreateVirtualKeyRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/virtual-keys"
+>;
+export type UpsertKbSpaceRequest = FacilityGeneratedBody<
+  "PUT",
+  "/v1/projects/{projectId}/kb/space"
+>;
+export type CreateKbEntryRequest = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/kb/entries"
+>;
+export type UpdateKbEntryRequest = FacilityGeneratedBody<"PATCH", "/v1/kb/entries/{entryId}">;
+export type CreateIntegrationRequest = FacilityGeneratedBody<"POST", "/v1/integrations">;
+export type UpdateIntegrationRequest = FacilityGeneratedBody<
+  "PATCH",
+  "/v1/integrations/{integrationId}"
+>;
+
+export type KickstartPreview = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/kickstart/preview"
+>;
+export type KickstartResult = FacilityGeneratedResponse<
+  "POST",
+  "/v1/projects/{projectId}/kickstart"
+>;
+export type KickstartAnswers = NonNullable<
+  FacilityGeneratedBody<"POST", "/v1/projects/{projectId}/kickstart">
+>["answers"];

@@ -20,6 +20,8 @@ import {
   definedFields,
   IdParams,
   Ok,
+  PageQuery,
+  type PageQueryValue,
   ProjectRepoSchema,
   ProjectSchema,
   principal,
@@ -33,27 +35,34 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
     {
       config: { permission: "projects:read" },
       schema: {
-        querystring: z.object({ status: z.string().optional() }),
+        querystring: PageQuery.extend({ status: z.string().optional() }),
         response: { 200: z.array(ProjectSchema) },
       },
     },
     async (request) => {
       const p = principal(request);
-      const query = request.query as { status?: string };
+      const query = request.query as PageQueryValue & { status?: string };
       const clauses = [eq(projects.orgId, p.orgId)];
       if (query.status) clauses.push(eq(projects.status, query.status));
       if (p.projectId) clauses.push(eq(projects.id, p.projectId));
       return db
         .select()
         .from(projects)
-        .where(and(...clauses));
+        .where(and(...clauses))
+        .orderBy(asc(projects.name), asc(projects.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
 
   app.post(
     "/v1/projects",
     {
-      config: { permission: "projects:write", auditAction: "project.created" },
+      config: {
+        permission: "projects:write",
+        auditAction: "project.created",
+        idempotent: true,
+      },
       schema: {
         body: z.object({
           name: z.string(),
@@ -185,12 +194,23 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
     "/v1/projects/:projectId/repos",
     {
       config: { permission: "repos:read" },
-      schema: { params: IdParams, response: { 200: z.array(ProjectRepoSchema) } },
+      schema: {
+        params: IdParams,
+        querystring: PageQuery,
+        response: { 200: z.array(ProjectRepoSchema) },
+      },
     },
     async (request) => {
       const p = principal(request);
       const { projectId } = request.params as { projectId: string };
-      return withOrg(db, p.orgId).repos.listForProject(projectId);
+      const query = request.query as PageQueryValue;
+      return db
+        .select()
+        .from(repos)
+        .where(and(eq(repos.orgId, p.orgId), eq(repos.projectId, projectId)))
+        .orderBy(asc(repos.createdAt), asc(repos.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
 
@@ -227,10 +247,8 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         autoInit: boolean;
       };
       const creation = body.create === true || body.mode === "create";
-      const installation = creation
-        ? await loadGithubInstallation(p.orgId, body.owner)
-        : await findGithubInstallation(p.orgId, body.owner);
-      const githubRepo = installation
+      const installation = await loadGithubInstallation(p.orgId, body.owner);
+      const githubRepo = creation
         ? await createGithubRepository({
             installationId: installation.installationId,
             owner: body.owner,
@@ -239,7 +257,11 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
             private: body.private,
             autoInit: body.autoInit,
           })
-        : null;
+        : await loadGithubRepository({
+            installationId: installation.installationId,
+            owner: body.owner,
+            name: body.name,
+          });
       const row = (
         await db
           .insert(repos)
@@ -247,14 +269,14 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
             id: newId("repo"),
             orgId: p.orgId,
             projectId,
-            installationId: installation?.id,
-            owner: body.owner,
-            name: body.name,
-            defaultBranch: githubRepo?.defaultBranch ?? body.defaultBranch,
+            installationId: installation.id,
+            owner: githubRepo.owner,
+            name: githubRepo.name,
+            defaultBranch: githubRepo.defaultBranch ?? body.defaultBranch,
           })
           .returning()
       )[0];
-      if (row?.installationId) {
+      if (row) {
         await app.enqueue("github.issues-sync", { repoId: row.id, orgId: p.orgId });
       }
       return row;
@@ -267,7 +289,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       throw new ApiError(
         400,
         "github_installation_required",
-        "A GitHub App installation for this owner is required to create repositories",
+        "A GitHub App installation for this owner is required to connect or create repositories",
       );
     }
     return installation;
@@ -287,6 +309,40 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         )
         .limit(1)
     )[0];
+  }
+
+  async function loadGithubRepository(input: {
+    installationId: number;
+    owner: string;
+    name: string;
+  }) {
+    const factory = app.githubClientFactory ?? createGithubClientFactory(context.config);
+    const octokit = await factory(input.installationId);
+    if (!octokit.rest.repos.get) {
+      throw new ApiError(500, "github_lookup_unavailable", "GitHub repository lookup unavailable");
+    }
+    try {
+      const response = await octokit.rest.repos.get({ owner: input.owner, repo: input.name });
+      return {
+        owner: response.data.owner?.login ?? input.owner,
+        name: response.data.name,
+        defaultBranch: response.data.default_branch ?? "main",
+      };
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        (error as { status?: unknown }).status === 404
+      ) {
+        throw new ApiError(
+          400,
+          "github_repo_not_found",
+          `GitHub repository ${input.owner}/${input.name} was not found in the App installation`,
+        );
+      }
+      throw error;
+    }
   }
 
   async function createGithubRepository(input: {

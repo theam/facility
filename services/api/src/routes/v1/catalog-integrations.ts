@@ -1,37 +1,31 @@
 import {
   ALL_PERMISSIONS,
   MODEL_PRICES_USD_PER_1M,
-  newId,
   PERMISSION_RESOURCES,
   SPECIAL_PERMISSIONS,
-  seal,
 } from "@facility/core";
-import { agentDefs, inboundEvents, integrations, registryItems, runs } from "@facility/db";
+import { agentDefs, integrations, registryItems, runs } from "@facility/db";
 // Default-import: cron-parser is CJS and its named exports aren't statically
 // visible to Node's ESM loader (tsx runs the openapi script in real ESM mode).
 import cronParser from "cron-parser";
 import { and, desc, eq, gte, inArray, isNotNull, notInArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ApiError } from "../../errors.js";
 import { TERMINAL_RUN_STATUSES } from "../../sandbox/state.js";
 import {
   AnyObject,
   assertProjectScope,
   DateValue,
-  definedFields,
   IdParams,
   principal,
-  publicRow,
-  assertProjectInOrg as sharedAssertProjectInOrg,
   type V1RouteContext,
 } from "./shared.js";
 
 /**
  * The semantic backbone of the control plane UI: what the platform knows
- * (catalog), how the engine is doing (per-agent status), and where events
- * come from (integrations). Everything a picker or status glyph renders
- * comes from here instead of free-text convention.
+ * (catalog) and how the engine is doing (per-agent status). Integration
+ * lifecycle routes live in integrations.ts so the API has one authoritative
+ * implementation for secrets, project scope, delivery history, and events.
  */
 
 const CatalogSchema = z.object({
@@ -94,28 +88,6 @@ const AgentStatusSchema = z.object({
       dispatchesRuns: z.boolean(),
     }),
   ),
-});
-
-const IntegrationPublicSchema = z.object({
-  id: z.string(),
-  orgId: z.string(),
-  projectId: z.string().nullable(),
-  kind: z.string(),
-  name: z.string(),
-  config: AnyObject,
-  enabled: z.boolean(),
-  hasSecret: z.boolean(),
-  createdAt: DateValue,
-  updatedAt: DateValue,
-});
-
-const InboundEventPublicSchema = z.object({
-  id: z.string(),
-  receivedAt: DateValue,
-  verified: z.boolean(),
-  eventType: z.string(),
-  processedAt: DateValue.nullable(),
-  error: z.string().nullable(),
 });
 
 const ENGINES = [
@@ -216,7 +188,7 @@ export async function registerCatalogIntegrationsRoutes(
   app: FastifyInstance,
   context: V1RouteContext,
 ) {
-  const { db, config } = context;
+  const { db } = context;
 
   app.get(
     "/v1/catalog",
@@ -410,169 +382,6 @@ export async function registerCatalogIntegrationsRoutes(
           eventBindings,
         };
       });
-    },
-  );
-
-  const integrationCreateBody = z.object({
-    name: z.string().min(1),
-    kind: z.string().min(1),
-    config: AnyObject.default({}),
-    secret: z.string().optional(),
-    projectId: z.string().optional(),
-    enabled: z.boolean().default(true),
-  });
-  const integrationPatchBody = z.object({
-    name: z.string().min(1).optional(),
-    kind: z.string().min(1).optional(),
-    config: AnyObject.optional(),
-    secret: z.string().optional(),
-    projectId: z.string().nullable().optional(),
-    enabled: z.boolean().optional(),
-  });
-
-  function integrationPublic(row: typeof integrations.$inferSelect) {
-    return { ...publicRow(row), hasSecret: !!row.sealedSecret };
-  }
-
-  async function loadIntegration(orgId: string, id: string) {
-    const row = (
-      await db
-        .select()
-        .from(integrations)
-        .where(and(eq(integrations.orgId, orgId), eq(integrations.id, id)))
-        .limit(1)
-    )[0];
-    if (!row) throw new ApiError(404, "not_found", "Integration not found");
-    return row;
-  }
-
-  app.get(
-    "/v1/integrations",
-    {
-      config: { permission: "integrations:read", orgAdmin: true },
-      schema: { response: { 200: z.array(IntegrationPublicSchema) } },
-    },
-    async (request) => {
-      const p = principal(request);
-      const rows = await db
-        .select()
-        .from(integrations)
-        .where(eq(integrations.orgId, p.orgId))
-        .orderBy(desc(integrations.createdAt));
-      return rows.map(integrationPublic);
-    },
-  );
-
-  app.post(
-    "/v1/integrations",
-    {
-      config: {
-        permission: "integrations:write",
-        auditAction: "integration.created",
-        orgAdmin: true,
-      },
-      schema: { body: integrationCreateBody, response: { 200: IntegrationPublicSchema } },
-    },
-    async (request) => {
-      const p = principal(request);
-      const body = request.body as z.infer<typeof integrationCreateBody>;
-      if (body.projectId) await sharedAssertProjectInOrg(db, p, body.projectId, 400);
-      const sealedSecret = body.secret ? await seal(body.secret, config.secretMasterKey) : null;
-      const row = (
-        await db
-          .insert(integrations)
-          .values({
-            id: newId("int"),
-            orgId: p.orgId,
-            projectId: body.projectId ?? null,
-            kind: body.kind,
-            name: body.name,
-            config: body.config,
-            sealedSecret,
-            enabled: body.enabled,
-          })
-          .returning()
-      )[0];
-      if (!row) throw new ApiError(500, "insert_failed", "Integration insert failed");
-      return integrationPublic(row);
-    },
-  );
-
-  app.patch(
-    "/v1/integrations/:integrationId",
-    {
-      config: {
-        permission: "integrations:write",
-        auditAction: "integration.updated",
-        orgAdmin: true,
-      },
-      schema: {
-        params: z.object({ integrationId: z.string() }),
-        body: integrationPatchBody,
-        response: { 200: IntegrationPublicSchema },
-      },
-    },
-    async (request) => {
-      const p = principal(request);
-      const { integrationId } = request.params as { integrationId: string };
-      const body = request.body as z.infer<typeof integrationPatchBody>;
-      await loadIntegration(p.orgId, integrationId);
-      if (body.projectId) await sharedAssertProjectInOrg(db, p, body.projectId, 400);
-      const sealedSecret =
-        body.secret !== undefined ? await seal(body.secret, config.secretMasterKey) : undefined;
-      const row = (
-        await db
-          .update(integrations)
-          .set(
-            definedFields({
-              name: body.name,
-              kind: body.kind,
-              config: body.config,
-              projectId: body.projectId,
-              enabled: body.enabled,
-              sealedSecret,
-              updatedAt: new Date(),
-            }),
-          )
-          .where(and(eq(integrations.orgId, p.orgId), eq(integrations.id, integrationId)))
-          .returning()
-      )[0];
-      if (!row) throw new ApiError(404, "not_found", "Integration not found");
-      return integrationPublic(row);
-    },
-  );
-
-  // No DELETE: inbound_events reference integrations and the audit posture is
-  // store-everything. Retirement = PATCH {enabled:false}.
-
-  app.get(
-    "/v1/integrations/:integrationId/events",
-    {
-      config: { permission: "integrations:read", orgAdmin: true },
-      schema: {
-        params: z.object({ integrationId: z.string() }),
-        response: { 200: z.array(InboundEventPublicSchema) },
-      },
-    },
-    async (request) => {
-      const p = principal(request);
-      const { integrationId } = request.params as { integrationId: string };
-      await loadIntegration(p.orgId, integrationId);
-      return db
-        .select({
-          id: inboundEvents.id,
-          receivedAt: inboundEvents.receivedAt,
-          verified: inboundEvents.verified,
-          eventType: inboundEvents.eventType,
-          processedAt: inboundEvents.processedAt,
-          error: inboundEvents.error,
-        })
-        .from(inboundEvents)
-        .where(
-          and(eq(inboundEvents.orgId, p.orgId), eq(inboundEvents.integrationId, integrationId)),
-        )
-        .orderBy(desc(inboundEvents.receivedAt))
-        .limit(20);
     },
   );
 }

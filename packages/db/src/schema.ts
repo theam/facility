@@ -891,6 +891,61 @@ export const integrations = pgTable(
   (table) => [index("integrations_org_idx").on(table.orgId)],
 );
 
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    integrationId: text("integration_id")
+      .notNull()
+      .references(() => integrations.id),
+    eventType: text("event_type").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    payload: jsonb("payload").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    responseStatus: integer("response_status"),
+    error: text("error"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    unique("webhook_deliveries_integration_dedupe_uidx").on(table.integrationId, table.dedupeKey),
+    index("webhook_deliveries_pending_idx").on(table.status, table.nextAttemptAt),
+    index("webhook_deliveries_org_created_idx").on(table.orgId, table.createdAt),
+  ],
+);
+
+export const idempotencyRecords = pgTable(
+  "idempotency_records",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    principalId: text("principal_id").notNull(),
+    method: text("method").notNull(),
+    path: text("path").notNull(),
+    keyHash: text("key_hash").notNull(),
+    requestHash: text("request_hash").notNull(),
+    state: text("state").notNull().default("pending"),
+    statusCode: integer("status_code"),
+    responseBody: jsonb("response_body"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [index("idempotency_records_expiry_idx").on(table.expiresAt)],
+);
+
+export const schedulerWatermarks = pgTable("scheduler_watermarks", {
+  name: text("name").primaryKey(),
+  lastTick: timestamp("last_tick", { withTimezone: true }).notNull(),
+  ...timestamps,
+});
+
 export const inboundEvents = pgTable(
   "inbound_events",
   {

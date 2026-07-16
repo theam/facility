@@ -1,17 +1,22 @@
 import { newId } from "@facility/core";
 import { agentDefs, projects, registryItems, sandboxProfiles } from "@facility/db";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError } from "../../errors.js";
+import { validateScheduleTrigger } from "../../schedules.js";
 import type { Principal } from "../../types.js";
 import {
+  AgentDefSchema,
   AnyObject,
   assertBareRowProjectScope,
   assertPermissionsGrantable,
   IdParams,
   Ok,
+  PageQuery,
+  type PageQueryValue,
   principal,
+  SandboxProfileSchema,
   type V1RouteContext,
 } from "./shared.js";
 
@@ -81,6 +86,7 @@ function registerCrud(
           resources: AnyObject.optional(),
           network: AnyObject.optional(),
         });
+  const responseSchema = prefix === "agent" ? AgentDefSchema : SandboxProfileSchema;
 
   async function assertCrudProject(p: Principal, projectId: string | undefined) {
     if (!projectId) return;
@@ -168,11 +174,16 @@ function registerCrud(
     base,
     {
       config: { permission: `${permissionResource}:read` },
-      schema: { params: IdParams, response: { 200: z.array(AnyObject) } },
+      schema: {
+        params: IdParams,
+        querystring: PageQuery,
+        response: { 200: z.array(responseSchema) },
+      },
     },
     async (request) => {
       const p = principal(request);
       const params = request.params as { projectId?: string };
+      const query = request.query as PageQueryValue;
       const clauses = [eq(table.orgId, p.orgId)];
       await assertCrudProject(p, params.projectId);
       if (params.projectId && table.projectId) clauses.push(eq(table.projectId, params.projectId));
@@ -182,7 +193,10 @@ function registerCrud(
       return app.facilityDb
         .select()
         .from(table)
-        .where(and(...clauses));
+        .where(and(...clauses))
+        .orderBy(asc(table.createdAt), asc(table.id))
+        .limit(query.limit)
+        .offset(query.offset);
     },
   );
   app.post(
@@ -192,7 +206,7 @@ function registerCrud(
         permission: `${permissionResource}:write`,
         auditAction: `${permissionResource}.updated`,
       },
-      schema: { params: IdParams, body: createBody, response: { 200: AnyObject } },
+      schema: { params: IdParams, body: createBody, response: { 200: responseSchema } },
     },
     async (request) => {
       const p = principal(request);
@@ -212,6 +226,7 @@ function registerCrud(
           permissions?: string[];
           enabled: boolean;
         };
+        validateAgentSchedules(body.triggers);
         await assertAgentReferences(p, params.projectId, body);
         if (body.permissions) assertPermissionsGrantable(p, body.permissions);
         return (
@@ -270,7 +285,7 @@ function registerCrud(
       schema: {
         params: z.object({ projectId: z.string().optional(), id: z.string() }),
         body: patchBody,
-        response: { 200: AnyObject },
+        response: { 200: responseSchema },
       },
     },
     async (request) => {
@@ -284,6 +299,7 @@ function registerCrud(
       const clauses = [eq(table.orgId, p.orgId), eq(table.id, id)];
       if (projectId && table.projectId) clauses.push(eq(table.projectId, projectId));
       if (prefix === "agent") {
+        validateAgentSchedules((request.body as { triggers?: unknown[] }).triggers ?? []);
         await assertAgentReferences(
           p,
           projectId,
@@ -356,6 +372,18 @@ function registerCrud(
       return { ok: true };
     },
   );
+}
+
+function validateAgentSchedules(triggers: unknown[]) {
+  try {
+    for (const trigger of triggers) validateScheduleTrigger(trigger);
+  } catch (error) {
+    throw new ApiError(
+      400,
+      "invalid_schedule",
+      error instanceof Error ? error.message : "Invalid schedule trigger",
+    );
+  }
 }
 
 function crudDefinedFields<T extends Record<string, unknown>>(fields: T) {

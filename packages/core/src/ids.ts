@@ -3,6 +3,8 @@ import { uuidv7 } from "uuidv7";
 export const ID_PREFIXES = {
   org: "org",
   user: "user",
+  member: "member",
+  role: "role",
   proj: "proj",
   repo: "repo",
   run: "run",
@@ -10,6 +12,7 @@ export const ID_PREFIXES = {
   agent: "agent",
   sbx: "sbx",
   key: "key",
+  prov: "prov",
   vkey: "vkey",
   bud: "bud",
   prop: "prop",

@@ -7,6 +7,7 @@
 // silently drift out of sync with the real surface.
 export const FACILITY_V1_ROUTES = [
   "DELETE /v1/budgets/:budgetId",
+  "DELETE /v1/integrations/:integrationId",
   "DELETE /v1/keys/:keyId",
   "DELETE /v1/members/:userId",
   "DELETE /v1/projects/:projectId",
@@ -17,6 +18,8 @@ export const FACILITY_V1_ROUTES = [
   "DELETE /v1/providers/:providerId",
   "DELETE /v1/roles/:roleId",
   "DELETE /v1/sandbox-profiles/:id",
+  "GET /v1/action-types",
+  "GET /v1/action-types/:actionTypeId",
   "GET /v1/admin/doctor",
   "GET /v1/analytics",
   "GET /v1/analytics/overview",
@@ -30,6 +33,8 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/github/installations/:installationId/repos",
   "GET /v1/inbox",
   "GET /v1/integrations",
+  "GET /v1/integrations/:integrationId",
+  "GET /v1/integrations/:integrationId/deliveries",
   "GET /v1/integrations/:integrationId/events",
   "GET /v1/issues",
   "GET /v1/kb/entries/:entryId",
@@ -80,6 +85,7 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/budgets",
   "POST /v1/conversations/:conversationId/messages",
   "POST /v1/integrations",
+  "POST /v1/integrations/:integrationId/rotate-secret",
   "POST /v1/issues/:issueId/ack",
   "POST /v1/issues/:issueId/resolve",
   "POST /v1/keys",
@@ -117,6 +123,7 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/sandbox-profiles",
   "POST /v1/tasks/:taskId/propose",
   "POST /v1/tasks/:taskId/transition",
+  "POST /v1/webhook-deliveries/:deliveryId/retry",
   "PUT /v1/projects/:projectId/kb/space",
 ] as const;
 

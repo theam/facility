@@ -15,7 +15,7 @@ function flattenMembers(rows: MemberRow[]): Member[] {
     email: r.user.email,
     name: r.user.name,
     roleId: r.member.roleId,
-    roleName: r.role?.name,
+    roleName: r.role.name,
   }));
 }
 

@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { hashKey, newId, seal } from "@facility/core";
 import {
@@ -11,6 +12,7 @@ import {
   conversationMessages,
   conversations,
   createDb,
+  ghIssues,
   githubInstallations,
   inboundEvents,
   insertAuditEvent,
@@ -32,17 +34,21 @@ import {
   runEvents,
   runs,
   sandboxProfiles,
+  schedulerWatermarks,
   seed,
   steerMessages,
   users,
   verifyAuditChain,
+  webhookDeliveries,
 } from "@facility/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildApp } from "../src/app.js";
+import { buildApp, mintSessionCookie } from "../src/app.js";
 import type { GithubClientFactory } from "../src/github/client.js";
+import { deliverPendingWebhooks } from "../src/integrations/outbound.js";
 import { ensureWorkosUser } from "../src/routes/auth.js";
+import { runAgentSchedules } from "../src/schedules.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
@@ -78,13 +84,16 @@ function sourceFilesContaining(root: URL, text: string): string[] {
 // A stand-in GitHub App factory so task_creation executions can be exercised
 // end-to-end without a real installation. Production has no such factory unless
 // GitHub is configured, so unconfigured deployments still fail closed.
-function fakeGithubFactory(): GithubClientFactory {
+function fakeGithubFactory(onCreate?: () => Promise<void> | void): GithubClientFactory {
   const octokit = {
     rest: {
       issues: {
-        create: async () => ({
-          data: { number: 1, html_url: "https://github.com/facility/repo/issues/1" },
-        }),
+        create: async () => {
+          await onCreate?.();
+          return {
+            data: { number: 1, html_url: "https://github.com/facility/repo/issues/1" },
+          };
+        },
       },
     },
   };
@@ -94,8 +103,10 @@ function fakeGithubFactory(): GithubClientFactory {
 describe("api", async () => {
   const reachable = await canConnect();
   if (!reachable) {
-    it.skip("Postgres is unreachable at DATABASE_URL; API integration tests skipped", () =>
-      undefined);
+    const databaseExpectation = process.env.CI ? it : it.skip;
+    databaseExpectation("Postgres is reachable at DATABASE_URL for the API integration suite", () =>
+      expect(reachable).toBe(true),
+    );
     return;
   }
 
@@ -110,16 +121,46 @@ describe("api", async () => {
     sandboxDriver: "docker",
     webUrl: "http://localhost:3000",
     facilityInsecureDev: true,
-    logLevel: "silent",
+    logLevel: process.env.FACILITY_TEST_LOG_LEVEL ?? "silent",
   };
   const { db, client } = createDb(databaseUrl);
-  const app = await buildApp(config);
+  // The suite exercises hundreds of authenticated calls through one injected
+  // client/IP. Rate limiting has isolated plugin coverage; keep integration
+  // scenarios independent from one another here.
+  const app = await buildApp(config, { rateLimitMax: 10_000 });
   let cookie = "";
   let approverCookie = "";
   let orgId = "";
   const ownerRole = "role_bundled_owner";
   const viewerRole = "role_bundled_viewer";
   let projectId = "";
+
+  it("returns 503 when the health dependency check fails", async () => {
+    const unavailable = await buildApp({
+      ...config,
+      databaseUrl: "postgres://facility:facility@127.0.0.1:1/facility",
+    });
+    try {
+      await unavailable.ready();
+      const response = await unavailable.inject({ method: "GET", url: "/health" });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ ok: false, version: "0.3.0", db: "down" });
+    } finally {
+      await unavailable.close();
+    }
+  });
+
+  it("enforces the configured production rate limit", async () => {
+    const limited = await buildApp(config, { rateLimitMax: 1 });
+    try {
+      await limited.ready();
+      expect((await limited.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+      const blocked = await limited.inject({ method: "GET", url: "/health" });
+      expect(blocked.statusCode).toBe(429);
+    } finally {
+      await limited.close();
+    }
+  });
 
   beforeAll(async () => {
     await migrate(databaseUrl);
@@ -156,6 +197,122 @@ describe("api", async () => {
     projectId = setupProject?.id ?? "";
   });
 
+  it("publishes a complete external OpenAPI contract", () => {
+    const document = app.swagger() as unknown as {
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            operationId?: string;
+            summary?: string;
+            tags?: string[];
+            security?: Array<Record<string, string[]>>;
+            requestBody?: unknown;
+            responses?: Record<string, unknown>;
+            parameters?: Array<{ name?: string; in?: string }>;
+            "x-facility-permission"?: string | string[];
+          }
+        >
+      >;
+      components?: { schemas?: Record<string, unknown>; securitySchemes?: Record<string, unknown> };
+    };
+    expect(Object.keys(document.paths).some((path) => path.startsWith("/internal/"))).toBe(false);
+    expect(document.paths["/auth/dev-login"]).toBeUndefined();
+    expect(document.components?.schemas?.ErrorResponse).toBeDefined();
+    expect(document.components?.securitySchemes).toMatchObject({
+      bearerAuth: { type: "http", scheme: "bearer" },
+      sessionCookie: { type: "apiKey", in: "cookie", name: "facility_session" },
+      facilitySignature: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Facility-Signature",
+      },
+    });
+
+    const operationIds: string[] = [];
+    for (const [path, pathItem] of Object.entries(document.paths)) {
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+        expect(operation.operationId, `${method} ${path} operationId`).toBeTruthy();
+        expect(operation.summary, `${method} ${path} summary`).toBeTruthy();
+        expect(operation.tags?.length, `${method} ${path} tags`).toBeGreaterThan(0);
+        expect(operation.responses?.["400"], `${method} ${path} error response`).toBeDefined();
+        expect(
+          Object.keys(operation.responses ?? {}).some((status) => /^[23]/.test(status)),
+          `${method} ${path} success response`,
+        ).toBe(true);
+        operationIds.push(operation.operationId ?? "");
+      }
+    }
+    expect(new Set(operationIds).size).toBe(operationIds.length);
+    expect(
+      Object.entries(document.paths).reduce(
+        (count, [path, item]) =>
+          count +
+          (path.startsWith("/v1/")
+            ? Object.keys(item).filter((method) =>
+                ["get", "post", "put", "patch", "delete"].includes(method),
+              ).length
+            : 0),
+        0,
+      ),
+    ).toBe(119);
+    expect(document.paths["/v1/projects"]?.get?.security).toEqual([
+      { bearerAuth: [] },
+      { sessionCookie: [] },
+    ]);
+    expect(document.paths["/v1/projects"]?.get?.["x-facility-permission"]).toBe("projects:read");
+    expect(document.paths["/v1/projects"]?.post?.parameters).toContainEqual(
+      expect.objectContaining({ name: "Idempotency-Key", in: "header" }),
+    );
+    expect(document.paths["/health"]?.get?.security).toEqual([]);
+    expect(document.paths["/v1/runs/{runId}/kb-checkpoint"]?.post?.security).toEqual([
+      { runnerToken: [] },
+    ]);
+    expect(document.paths["/v1/runs/{runId}/transcript"]?.get?.responses?.["200"]).toMatchObject({
+      content: { "application/x-ndjson": { schema: { type: "string" } } },
+    });
+    expect(document.paths["/v1/runs/{runId}/stream"]?.get?.responses?.["200"]).toMatchObject({
+      content: { "text/event-stream": { schema: { type: "string" } } },
+    });
+    expect(document.paths["/v1/projects/{projectId}/conversations"]?.post?.summary).toBe(
+      "Create conversation",
+    );
+    expect(document.paths["/v1/projects/{projectId}/issues/{number}/trigger"]?.post).toMatchObject({
+      summary: "Trigger issue",
+      tags: ["GitHub"],
+    });
+    expect(document.paths["/v1/webhook-deliveries/{deliveryId}/retry"]?.post?.tags).toEqual([
+      "Integrations",
+    ]);
+    expect(document.paths["/webhooks/inbound/{integrationId}"]?.post).toMatchObject({
+      security: [{ facilitySignature: [] }],
+      requestBody: {
+        required: true,
+        content: { "application/json": { schema: { type: "object" } } },
+      },
+    });
+    expect(document.paths["/webhooks/inbound/{integrationId}"]?.post?.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "X-Facility-Timestamp", in: "header", required: true }),
+        expect.objectContaining({ name: "X-Facility-Delivery", in: "header", required: true }),
+        expect.objectContaining({ name: "X-Facility-Event", in: "header", required: true }),
+      ]),
+    );
+  });
+
+  it("keeps the committed SDK OpenAPI contract equivalent to the live API", () => {
+    const path = fileURLToPath(new URL("../../../packages/sdk/openapi.json", import.meta.url));
+    const committed = JSON.parse(readFileSync(path, "utf8"));
+    const live = app.swagger() as unknown as {
+      paths: unknown;
+      components?: unknown;
+    };
+    expect(committed.paths).toEqual(live.paths);
+    expect(committed.components).toEqual(live.components);
+  });
+
   afterAll(async () => {
     await app.close();
     await client.end();
@@ -170,7 +327,11 @@ describe("api", async () => {
     });
     expect(project.statusCode).toBe(200);
     const agent = (
-      await db.select().from(agentDefs).where(eq(agentDefs.projectId, project.json().id)).limit(1)
+      await db
+        .select()
+        .from(agentDefs)
+        .where(and(eq(agentDefs.projectId, project.json().id), ne(agentDefs.name, "learning")))
+        .limit(1)
     )[0];
     expect(agent).toBeTruthy();
     if (!agent) throw new Error("agent fixture missing");
@@ -323,8 +484,18 @@ describe("api", async () => {
     });
     expect(created.statusCode).toBe(200);
     projectId = created.json().id;
-    const listed = await app.inject({ method: "GET", url: "/v1/projects", headers: { cookie } });
-    expect(listed.json().some((row: { id: string }) => row.id === projectId)).toBe(true);
+    let listedProject = false;
+    for (let offset = 0; !listedProject; offset += 100) {
+      const listed = await app.inject({
+        method: "GET",
+        url: `/v1/projects?limit=100&offset=${offset}`,
+        headers: { cookie },
+      });
+      const page = listed.json() as Array<{ id: string }>;
+      listedProject = page.some((row) => row.id === projectId);
+      if (page.length < 100) break;
+    }
+    expect(listedProject).toBe(true);
     const patched = await app.inject({
       method: "PATCH",
       url: `/v1/projects/${projectId}`,
@@ -332,6 +503,62 @@ describe("api", async () => {
       payload: { description: "updated" },
     });
     expect(patched.json().description).toBe("updated");
+  });
+
+  it("replays idempotent creates and rejects key reuse with different input", async () => {
+    const slug = `idempotent-project-${Date.now()}`;
+    const key = `project-create-${Date.now()}`;
+    const request = {
+      method: "POST" as const,
+      url: "/v1/projects",
+      headers: { cookie, "idempotency-key": key },
+      payload: { name: "Idempotent Project", slug },
+    };
+    const created = await app.inject(request);
+    expect(created.statusCode).toBe(200);
+    expect(created.headers["idempotency-status"]).toBe("created");
+    const replayed = await app.inject(request);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.headers["idempotency-status"]).toBe("replayed");
+    expect(replayed.json()).toEqual(created.json());
+    expect(await db.select().from(projects).where(eq(projects.slug, slug))).toHaveLength(1);
+
+    const reused = await app.inject({
+      ...request,
+      payload: { name: "Different Project", slug: `${slug}-different` },
+    });
+    expect(reused.statusCode).toBe(409);
+    expect(reused.json().error.code).toBe("idempotency_key_reused");
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Duplicate Slug", slug },
+    });
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json().error.code).toBe("conflict");
+  });
+
+  it("replays one-time API-key secrets without creating duplicate credentials", async () => {
+    const name = `idempotent-secret-${Date.now()}`;
+    const idempotencyKey = `key-create-${Date.now()}`;
+    const request = {
+      method: "POST" as const,
+      url: "/v1/keys",
+      headers: { cookie, "idempotency-key": idempotencyKey },
+      payload: { name, roleId: viewerRole },
+    };
+    const created = await app.inject(request);
+    const replayed = await app.inject(request);
+
+    expect(created.statusCode).toBe(200);
+    expect(created.json().secret).toMatch(/^fak_/);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.headers["idempotency-status"]).toBe("replayed");
+    expect(replayed.json()).toEqual(created.json());
+    const listed = await app.inject({ method: "GET", url: "/v1/keys", headers: { cookie } });
+    expect(listed.json().filter((key: { name: string }) => key.name === name)).toHaveLength(1);
   });
 
   it("publishes registry drafts and keeps active content immutable", async () => {
@@ -494,12 +721,29 @@ describe("api", async () => {
         headers: { cookie },
       });
       expect(events.json()[0].type).toBe("queued");
+      await db.insert(runEvents).values(
+        Array.from({ length: 129 }, (_, index) => ({
+          orgId,
+          runId: run.json().id,
+          seq: index + 2,
+          type: "fixture",
+          data: { index },
+        })),
+      );
+      const tail = await app.inject({
+        method: "GET",
+        url: `/v1/runs/${run.json().id}/events?tail=3`,
+        headers: { cookie },
+      });
+      expect(tail.statusCode).toBe(200);
+      expect(tail.json().map((event: { seq: number }) => event.seq)).toEqual([128, 129, 130]);
       const stream = await app.inject({
         method: "GET",
         url: `/v1/runs/${run.json().id}/stream?idleMs=50`,
         headers: { cookie },
       });
       expect(stream.body).toContain("event: heartbeat");
+      expect(stream.body).toContain("id: 130\nevent: run_event");
     } finally {
       app.enqueue = originalEnqueue;
     }
@@ -522,6 +766,39 @@ describe("api", async () => {
       slug: `foreign-project-${suffix}`,
       settings: {},
     });
+    const foreignRole = (
+      await db
+        .insert(roles)
+        .values({
+          id: newId("key"),
+          orgId: foreignOrgId,
+          name: `foreign-role-${suffix}`,
+          permissions: ["org:read"],
+        })
+        .returning()
+    )[0];
+
+    const rolePatch = await app.inject({
+      method: "PATCH",
+      url: `/v1/roles/${foreignRole?.id}`,
+      headers: { cookie },
+      payload: { description: "cross-tenant mutation" },
+    });
+    expect(rolePatch.statusCode).toBe(404);
+    const roleDelete = await app.inject({
+      method: "DELETE",
+      url: `/v1/roles/${foreignRole?.id}`,
+      headers: { cookie },
+    });
+    expect(roleDelete.statusCode).toBe(200);
+    expect(
+      (
+        await db
+          .select()
+          .from(roles)
+          .where(eq(roles.id, foreignRole?.id ?? ""))
+      ).length,
+    ).toBe(1);
 
     const key = await app.inject({
       method: "POST",
@@ -794,6 +1071,15 @@ describe("api", async () => {
     });
     expect(created.statusCode).toBe(200);
 
+    const invalidSchedule = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectA.id}/agents/${created.json().id}`,
+      headers: { cookie },
+      payload: { triggers: [{ type: "schedule", config: { cron: "not a cron" } }] },
+    });
+    expect(invalidSchedule.statusCode).toBe(400);
+    expect(invalidSchedule.json().error.code).toBe("invalid_schedule");
+
     const crossSandbox = await app.inject({
       method: "PATCH",
       url: `/v1/projects/${projectA.id}/agents/${created.json().id}`,
@@ -907,7 +1193,7 @@ describe("api", async () => {
     const decided = await app.inject({
       method: "POST",
       url: `/v1/proposals/${proposal.json().id}/decide`,
-      headers: { cookie },
+      headers: { cookie: approverCookie },
       payload: { decision: "approve", note: "ok" },
     });
     expect(decided.json().state).toBe("approved");
@@ -1213,6 +1499,84 @@ describe("api", async () => {
     expect(forged.statusCode).toBe(403);
   });
 
+  it("discovers action types and rejects invalid proposal dates and run/project mismatches", async () => {
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/action-types",
+      headers: { cookie },
+    });
+    expect(listed.statusCode).toBe(200);
+    const actionType = listed.json().find((row: { name: string }) => row.name === "task_creation");
+    expect(actionType?.id).toBeTruthy();
+    const loaded = await app.inject({
+      method: "GET",
+      url: `/v1/action-types/${actionType.id}`,
+      headers: { cookie },
+    });
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json().payloadSchema).toMatchObject({ type: "object" });
+
+    const invalidDate = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        actionTypeId: actionType.id,
+        payload: {},
+        contextMd: "invalid expiry",
+        expiresAt: "not-a-date",
+      },
+    });
+    expect(invalidDate.statusCode).toBe(400);
+    expect(invalidDate.json().error.code).toBe("validation_error");
+
+    const other = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Proposal run project", slug: `proposal-run-${Date.now()}` },
+    });
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: other.json().id,
+          mode: "manual",
+          engine: "codex",
+          trigger: {},
+          createdBy: { type: "user", id: "fixture" },
+        })
+        .returning()
+    )[0];
+    const mismatch = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        projectId,
+        runId: run?.id,
+        actionTypeId: actionType.id,
+        payload: {},
+        contextMd: "cross-project run",
+      },
+    });
+    expect(mismatch.statusCode).toBe(400);
+    expect(mismatch.json().error.code).toBe("proposal_run_project_mismatch");
+  });
+
+  it("returns a stable 404 when updating a missing task", async () => {
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}/tasks/task_missing`,
+      headers: { cookie },
+      payload: { title: "still missing" },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("not_found");
+  });
+
   it("fails closed when executing task creation without a GitHub installation", async () => {
     const actionType = (
       await db
@@ -1479,6 +1843,449 @@ describe("api", async () => {
     expect(otherAuditItems.some((row) => row.target.id === proposed.json().id)).toBe(false);
   });
 
+  it("creates an MCP agent from inline contract content after separate approval", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Inline Agent", slug: `inline-agent-${Date.now()}` },
+    });
+    expect(project.statusCode).toBe(200);
+    const role = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: {
+        name: `mcp-agent-${Date.now()}`,
+        permissions: ["org:read", "agents:write"],
+      },
+    });
+    const issued = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: { name: "mcp-agent", roleId: role.json().id, projectId: project.json().id },
+    });
+    const proposed = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/tool-proposals",
+      headers: { authorization: `Bearer ${issued.json().secret}` },
+      payload: {
+        toolName: "facility_create_agent",
+        permission: "agents:write",
+        projectId: project.json().id,
+        summary: "Create inline agent",
+        args: {
+          projectId: project.json().id,
+          name: "incident-responder",
+          engine: "claude_code",
+          model: { primary: "claude-fable-5" },
+          contractContent: "Investigate incidents and leave an evidence-backed report.",
+          triggers: [{ type: "manual", config: {} }],
+        },
+      },
+    });
+    expect(proposed.statusCode).toBe(200);
+
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${proposed.json().id}/decide`,
+      headers: { cookie: approverCookie },
+      payload: { decision: "approve" },
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json().state).toBe("executed");
+
+    const agent = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(
+          sql`${agentDefs.projectId} = ${project.json().id} and ${agentDefs.name} = 'incident-responder'`,
+        )
+        .limit(1)
+    )[0];
+    expect(agent?.engine).toBe("claude_code");
+    const contract = (
+      await db
+        .select()
+        .from(registryVersions)
+        .where(eq(registryVersions.itemId, agent?.contractItemId ?? ""))
+        .limit(1)
+    )[0];
+    expect(contract).toMatchObject({
+      status: "active",
+      content: "Investigate incidents and leave an evidence-backed report.",
+    });
+  });
+
+  it("executes the complete expanded MCP lifecycle surface after separate approval", async () => {
+    const target = await createProjectWithAgent("MCP Lifecycle");
+    const role = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: {
+        name: `mcp-lifecycle-${Date.now()}`,
+        permissions: [
+          "org:read",
+          "projects:write",
+          "registry:publish",
+          "agents:write",
+          "integrations:write",
+        ],
+      },
+    });
+    expect(role.statusCode).toBe(200);
+    const issued = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: {
+        name: `mcp-lifecycle-${Date.now()}`,
+        roleId: role.json().id,
+        projectId: target.projectId,
+      },
+    });
+    expect(issued.statusCode).toBe(200);
+
+    const registry = await app.inject({
+      method: "POST",
+      url: "/v1/registry/items",
+      headers: { cookie },
+      payload: {
+        scope: "project",
+        projectId: target.projectId,
+        kind: "skill",
+        name: `mcp-deprecate-${Date.now()}`,
+        content: "draft content",
+      },
+    });
+    expect(registry.statusCode).toBe(200);
+    const versionId = registry.json().versions[0].id as string;
+
+    const integration = await app.inject({
+      method: "POST",
+      url: "/v1/integrations",
+      headers: { cookie },
+      payload: {
+        projectId: target.projectId,
+        kind: "webhook",
+        name: `mcp-retry-${Date.now()}`,
+        config: { url: "https://hooks.example.test/facility" },
+      },
+    });
+    expect(integration.statusCode).toBe(200);
+    const deliveryId = newId("evt");
+    await db.insert(webhookDeliveries).values({
+      id: deliveryId,
+      orgId,
+      integrationId: integration.json().id,
+      eventType: "run.finished",
+      dedupeKey: `mcp-lifecycle-${Date.now()}`,
+      payload: { runId: "run_fixture" },
+      status: "dead",
+      attempts: 8,
+      error: "upstream unavailable",
+    });
+
+    const execute = async (toolName: string, permission: string, args: Record<string, unknown>) => {
+      const proposed = await app.inject({
+        method: "POST",
+        url: "/v1/mcp/tool-proposals",
+        headers: { authorization: `Bearer ${issued.json().secret}` },
+        payload: {
+          toolName,
+          permission,
+          projectId: target.projectId,
+          summary: `Execute ${toolName}`,
+          args,
+        },
+      });
+      expect(proposed.statusCode).toBe(200);
+      const approved = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposed.json().id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: { decision: "approve" },
+      });
+      expect(approved.statusCode).toBe(200);
+      expect(approved.json().state).toBe("executed");
+    };
+
+    await execute("facility_update_agent", "agents:write", {
+      projectId: target.projectId,
+      agentId: target.agent.id,
+      name: "renamed-by-mcp",
+      enabled: false,
+    });
+    const updatedAgent = (
+      await db.select().from(agentDefs).where(eq(agentDefs.id, target.agent.id)).limit(1)
+    )[0];
+    expect(updatedAgent).toMatchObject({ name: "renamed-by-mcp", enabled: false });
+
+    await execute("facility_retire_agent", "agents:write", {
+      projectId: target.projectId,
+      agentId: target.agent.id,
+    });
+    expect(await db.select().from(agentDefs).where(eq(agentDefs.id, target.agent.id))).toHaveLength(
+      0,
+    );
+
+    await execute("facility_deprecate_registry_version", "registry:publish", { versionId });
+    const version = (
+      await db.select().from(registryVersions).where(eq(registryVersions.id, versionId)).limit(1)
+    )[0];
+    expect(version?.status).toBe("deprecated");
+
+    await execute("facility_retry_webhook_delivery", "integrations:write", { deliveryId });
+    const delivery = (
+      await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.id, deliveryId)).limit(1)
+    )[0];
+    expect(delivery).toMatchObject({ status: "pending", attempts: 0, error: null });
+
+    await execute("facility_archive_project", "projects:write", {
+      projectId: target.projectId,
+    });
+    const archived = (
+      await db.select().from(projects).where(eq(projects.id, target.projectId)).limit(1)
+    )[0];
+    expect(archived?.status).toBe("archived");
+  });
+
+  it("executes approved MCP sessions, conversations, and GitHub issue workflows end to end", async () => {
+    const target = await createProjectWithAgent("MCP Interactive Lifecycle");
+    await db
+      .update(agentDefs)
+      .set({ engine: "claude_code", enabled: true })
+      .where(eq(agentDefs.id, target.agent.id));
+    const role = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: {
+        name: `mcp-interactive-${Date.now()}`,
+        permissions: ["org:read", "runs:trigger", "runs:steer", "repos:write"],
+      },
+    });
+    expect(role.statusCode).toBe(200);
+    const issued = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: {
+        name: `mcp-interactive-${Date.now()}`,
+        roleId: role.json().id,
+        projectId: target.projectId,
+      },
+    });
+    expect(issued.statusCode).toBe(200);
+
+    const queues: Array<{ queue: string; data: Record<string, unknown> }> = [];
+    const comments: Array<{ issueNumber: number; body: string }> = [];
+    const originalEnqueue = app.enqueue;
+    const originalFactory = app.githubClientFactory;
+    app.enqueue = async (queue: string, data: Record<string, unknown>) => {
+      queues.push({ queue, data });
+      return `job_${queues.length}`;
+    };
+    app.githubClientFactory = (async () => ({
+      rest: {
+        issues: {
+          createComment: async (args: Record<string, unknown>) => {
+            comments.push({ issueNumber: Number(args.issue_number), body: String(args.body) });
+            return { data: { id: comments.length } };
+          },
+        },
+      },
+    })) as unknown as GithubClientFactory;
+
+    const execute = async (toolName: string, permission: string, args: Record<string, unknown>) => {
+      const proposed = await app.inject({
+        method: "POST",
+        url: "/v1/mcp/tool-proposals",
+        headers: { authorization: `Bearer ${issued.json().secret}` },
+        payload: {
+          toolName,
+          permission,
+          projectId: target.projectId,
+          summary: `Execute ${toolName}`,
+          args,
+        },
+      });
+      expect(proposed.statusCode, proposed.body).toBe(200);
+      const approved = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposed.json().id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: { decision: "approve" },
+      });
+      expect(approved.statusCode, approved.body).toBe(200);
+      expect(approved.json().state).toBe("executed");
+    };
+
+    try {
+      const running = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            status: "running",
+            createdBy: { type: "test", id: "mcp-interactive" },
+          })
+          .returning()
+      )[0];
+      await execute("facility_interrupt_run", "runs:steer", { runId: running?.id });
+      expect(
+        await db
+          .select()
+          .from(steerMessages)
+          .where(eq(steerMessages.runId, running?.id ?? "")),
+      ).toEqual([expect.objectContaining({ kind: "interrupt" })]);
+
+      const terminal = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: target.projectId,
+            agentDefId: target.agent.id,
+            mode: "builder",
+            engine: "claude_code",
+            engineSessionId: "session_mcp_resume",
+            status: "succeeded",
+            createdBy: { type: "test", id: "mcp-interactive" },
+          })
+          .returning()
+      )[0];
+      await execute("facility_resume_run", "runs:trigger", {
+        runId: terminal?.id,
+        message: "Continue from the verified checkpoint",
+      });
+      const resumed = (
+        await db
+          .select()
+          .from(runs)
+          .where(
+            sql`${runs.projectId} = ${target.projectId} and ${runs.trigger}->>'resumeOf' = ${terminal?.id}`,
+          )
+          .limit(1)
+      )[0];
+      expect(resumed?.trigger).toMatchObject({
+        type: "resume",
+        resumeOf: terminal?.id,
+        message: "Continue from the verified checkpoint",
+      });
+
+      const title = `MCP conversation ${Date.now()}`;
+      await execute("facility_start_conversation", "runs:trigger", {
+        projectId: target.projectId,
+        agentDefId: target.agent.id,
+        title,
+      });
+      const conversation = (
+        await db
+          .select()
+          .from(conversations)
+          .where(and(eq(conversations.projectId, target.projectId), eq(conversations.title, title)))
+          .limit(1)
+      )[0];
+      expect(conversation?.status).toBe("idle");
+      await execute("facility_send_conversation_message", "runs:trigger", {
+        conversationId: conversation?.id,
+        body: "Implement the approved plan",
+      });
+      const conversationAfter = (
+        await db
+          .select()
+          .from(conversations)
+          .where(eq(conversations.id, conversation?.id ?? ""))
+          .limit(1)
+      )[0];
+      expect(conversationAfter).toMatchObject({ status: "running" });
+      expect(
+        await db
+          .select()
+          .from(conversationMessages)
+          .where(eq(conversationMessages.conversationId, conversation?.id ?? "")),
+      ).toEqual([expect.objectContaining({ role: "user", body: "Implement the approved plan" })]);
+
+      const installation = (
+        await db
+          .insert(githubInstallations)
+          .values({
+            id: newId("int"),
+            orgId,
+            installationId: Date.now(),
+            accountLogin: `mcp-interactive-${Date.now()}`,
+            targetType: "Organization",
+          })
+          .returning()
+      )[0];
+      const repo = (
+        await db
+          .insert(repos)
+          .values({
+            id: newId("repo"),
+            orgId,
+            projectId: target.projectId,
+            installationId: installation?.id,
+            owner: `mcp-interactive-${Date.now()}`,
+            name: "facility",
+            defaultBranch: "main",
+          })
+          .returning()
+      )[0];
+      await db.insert(ghIssues).values({
+        id: newId("evt"),
+        orgId,
+        projectId: target.projectId,
+        repoId: repo?.id ?? "",
+        number: 41,
+        title: "Exercise the approved MCP issue path",
+        state: "open",
+        htmlUrl: `https://github.com/${repo?.owner}/${repo?.name}/issues/41`,
+      });
+      await execute("facility_sync_github_issues", "repos:write", {
+        projectId: target.projectId,
+      });
+      await execute("facility_trigger_github_issue", "runs:trigger", {
+        projectId: target.projectId,
+        number: 41,
+        agentName: target.agent.name,
+      });
+      const issueRun = (
+        await db
+          .select()
+          .from(runs)
+          .where(sql`${runs.projectId} = ${target.projectId} and ${runs.gh}->>'issueNumber' = '41'`)
+          .limit(1)
+      )[0];
+      expect(issueRun?.trigger).toMatchObject({ type: "mcp_issue", issue: { number: 41 } });
+      expect(queues).toEqual(
+        expect.arrayContaining([
+          { queue: "github.issues-sync", data: { repoId: repo?.id, orgId } },
+          { queue: "runs.dispatch", data: { runId: issueRun?.id, orgId } },
+        ]),
+      );
+      expect(comments).toEqual([
+        expect.objectContaining({
+          issueNumber: 41,
+          body: expect.stringContaining(`run ${issueRun?.id}`),
+        }),
+      ]);
+    } finally {
+      app.enqueue = originalEnqueue;
+      app.githubClientFactory = originalFactory;
+    }
+  });
+
   it("refuses approved MCP execution when the resolved target project differs", async () => {
     const other = await app.inject({
       method: "POST",
@@ -1677,6 +2484,54 @@ describe("api", async () => {
     expect(proposed.json().error.code).toBe("mcp_key_can_decide");
   });
 
+  it("enforces four-eyes approval for every proposal action type", async () => {
+    const actionType = (
+      await db
+        .insert(actionTypes)
+        .values({
+          id: newId("act"),
+          orgId,
+          name: `four-eyes-${Date.now()}`,
+          payloadSchema: { type: "object", additionalProperties: false },
+          resolver: { type: "permission", config: {} },
+          executor: { type: "test_fixture", config: {} },
+          defaultTtlHours: 1,
+        })
+        .returning()
+    )[0];
+    if (!actionType) throw new Error("action type fixture missing");
+    const opened = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        projectId,
+        actionTypeId: actionType.id,
+        payload: {},
+        contextMd: "Independent approval regression",
+      },
+    });
+    expect(opened.statusCode).toBe(200);
+
+    const selfDecision = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${opened.json().id}/decide`,
+      headers: { cookie },
+      payload: { decision: "reject" },
+    });
+    expect(selfDecision.statusCode).toBe(403);
+    expect(selfDecision.json().error.code).toBe("same_principal_approval_denied");
+
+    const independentDecision = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${opened.json().id}/decide`,
+      headers: { cookie: approverCookie },
+      payload: { decision: "reject", note: "Independently reviewed" },
+    });
+    expect(independentDecision.statusCode).toBe(200);
+    expect(independentDecision.json().state).toBe("rejected");
+  });
+
   it("marks failed HITL execution explicitly and can retry it", async () => {
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const project = await app.inject({
@@ -1703,7 +2558,7 @@ describe("api", async () => {
     const failed = await app.inject({
       method: "POST",
       url: `/v1/proposals/${proposed.json().id}/decide`,
-      headers: { cookie },
+      headers: { cookie: approverCookie },
       payload: { decision: "approve" },
     });
     expect(failed.statusCode).toBe(200);
@@ -1739,15 +2594,25 @@ describe("api", async () => {
       defaultBranch: "main",
     });
     const previousFactory = app.githubClientFactory;
-    app.githubClientFactory = fakeGithubFactory();
+    let issueCreates = 0;
+    app.githubClientFactory = fakeGithubFactory(async () => {
+      issueCreates += 1;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
     try {
-      const retried = await app.inject({
-        method: "POST",
-        url: `/v1/proposals/${proposed.json().id}/execute`,
-        headers: { cookie },
-      });
-      expect(retried.statusCode).toBe(200);
-      expect(retried.json().state).toBe("executed");
+      const requests = [1, 2].map(() =>
+        app.inject({
+          method: "POST",
+          url: `/v1/proposals/${proposed.json().id}/execute`,
+          headers: { cookie },
+        }),
+      );
+      const retried = await Promise.all(requests);
+      expect(retried.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+      expect(retried.find((response) => response.statusCode === 200)?.json().state).toBe(
+        "executed",
+      );
+      expect(issueCreates).toBe(1);
       const executed = await db
         .select()
         .from(proposalEvents)
@@ -2396,6 +3261,13 @@ describe("api", async () => {
       target: { type: "org", id: orgId },
     });
     if (!first || !second) throw new Error("audit fixture setup failed");
+    await db
+      .insert(schedulerWatermarks)
+      .values({ name: "agent.schedules", lastTick: new Date() })
+      .onConflictDoUpdate({
+        target: schedulerWatermarks.name,
+        set: { lastTick: new Date(), updatedAt: new Date() },
+      });
     try {
       const healthy = await app.inject({
         method: "GET",
@@ -2406,6 +3278,7 @@ describe("api", async () => {
       expect(healthy.json().ok).toBe(true);
       expect(checkStatus(healthy.json(), "object_storage")).toBe("pass");
       expect(checkStatus(healthy.json(), "audit_hash_chain")).toBe("pass");
+      expect(checkStatus(healthy.json(), "worker_heartbeat")).toBe("pass");
       // The seeded default profile runs the configured runner image on the docker
       // driver (Docker reachable in the test env). Whether that image is present
       // locally is environmental, so the platform-lane check is pass (image
@@ -2424,11 +3297,28 @@ describe("api", async () => {
       expect(broken.statusCode).toBe(200);
       expect(broken.json().ok).toBe(false);
       expect(checkStatus(broken.json(), "audit_hash_chain")).toBe("fail");
+
+      await db
+        .update(auditEvents)
+        .set({ hash: second.hash, prevHash: first.hash })
+        .where(eq(auditEvents.id, second.id));
+      await db
+        .update(schedulerWatermarks)
+        .set({ lastTick: new Date(Date.now() - 10 * 60_000) })
+        .where(eq(schedulerWatermarks.name, "agent.schedules"));
+      const staleWorker = await app.inject({
+        method: "GET",
+        url: "/v1/admin/doctor",
+        headers: { cookie },
+      });
+      expect(staleWorker.json().ok).toBe(false);
+      expect(checkStatus(staleWorker.json(), "worker_heartbeat")).toBe("fail");
     } finally {
       await db
         .update(auditEvents)
         .set({ hash: second.hash, prevHash: first.hash })
         .where(eq(auditEvents.id, second.id));
+      await db.delete(schedulerWatermarks).where(eq(schedulerWatermarks.name, "agent.schedules"));
       Object.assign(config, previous);
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -2802,6 +3692,56 @@ describe("api", async () => {
     expect(denied.json().error.code).toBe("privilege_escalation");
   });
 
+  it("race-safely prevents deleting or demoting the last organization owner", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const isolatedOrgId = newId("org");
+    const isolatedUserId = newId("user");
+    await db.insert(orgs).values({
+      id: isolatedOrgId,
+      name: "Last Owner Fixture",
+      slug: `last-owner-${suffix}`,
+      settings: {},
+    });
+    await db.insert(users).values({
+      id: isolatedUserId,
+      email: `last-owner-${suffix}@example.com`,
+      status: "active",
+    });
+    await db.insert(orgMembers).values({
+      id: newId("member"),
+      orgId: isolatedOrgId,
+      userId: isolatedUserId,
+      roleId: ownerRole,
+    });
+    const isolatedCookie = `facility_session=${await mintSessionCookie(
+      config,
+      isolatedUserId,
+      isolatedOrgId,
+    )}`;
+
+    const demote = await app.inject({
+      method: "PATCH",
+      url: `/v1/members/${isolatedUserId}`,
+      headers: { cookie: isolatedCookie },
+      payload: { roleId: viewerRole },
+    });
+    expect(demote.statusCode).toBe(409);
+    expect(demote.json().error.code).toBe("last_owner_required");
+
+    const remove = await app.inject({
+      method: "DELETE",
+      url: `/v1/members/${isolatedUserId}`,
+      headers: { cookie: isolatedCookie },
+    });
+    expect(remove.statusCode).toBe(409);
+    expect(remove.json().error.code).toBe("last_owner_required");
+    const membership = await db
+      .select()
+      .from(orgMembers)
+      .where(eq(orgMembers.userId, isolatedUserId));
+    expect(membership).toHaveLength(1);
+  });
+
   it("rejects creating a role with permissions the caller does not hold", async () => {
     const rolerRole = await app.inject({
       method: "POST",
@@ -3054,14 +3994,14 @@ describe("api", async () => {
       const approved = await app.inject({
         method: "POST",
         url: `/v1/proposals/${proposed.json().id}/decide`,
-        headers: { cookie },
+        headers: { cookie: approverCookie },
         payload: { decision: "approve" },
       });
       expect(approved.statusCode).toBe(200);
       const repeated = await app.inject({
         method: "POST",
         url: `/v1/proposals/${proposed.json().id}/decide`,
-        headers: { cookie },
+        headers: { cookie: approverCookie },
         payload: { decision: "approve" },
       });
       expect(repeated.statusCode).toBe(409);
@@ -3128,6 +4068,92 @@ describe("api", async () => {
     });
     expect(run.statusCode).toBe(400);
     expect(run.json().error.code).toBe("agent_not_in_project");
+  });
+
+  it("persists the selected agent's effective engine for manually triggered runs", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Engine Truth", slug: `engine-truth-${Date.now()}` },
+    });
+    const agent = (
+      await db.select().from(agentDefs).where(eq(agentDefs.projectId, project.json().id)).limit(1)
+    )[0];
+    if (!agent) throw new Error("seeded agent fixture missing");
+    await db.update(agentDefs).set({ engine: "claude_code" }).where(eq(agentDefs.id, agent.id));
+
+    const run = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.json().id}/runs`,
+      headers: { cookie },
+      payload: { mode: "manual", engine: "codex", agentDefId: agent.id },
+    });
+
+    expect(run.statusCode).toBe(200);
+    expect(run.json().engine).toBe("claude_code");
+  });
+
+  it("creates and dispatches each scheduled run exactly once per UTC minute", async () => {
+    await db.delete(schedulerWatermarks);
+    const target = await createProjectWithAgent("Scheduled Run");
+    await db
+      .update(agentDefs)
+      .set({
+        triggers: [{ type: "schedule", config: { cron: "30 12 * * *", timezone: "UTC" } }],
+      })
+      .where(eq(agentDefs.id, target.agent.id));
+    const jobs: Array<{
+      queue: string;
+      data: Record<string, unknown>;
+      options?: { singletonKey?: string };
+    }> = [];
+    const enqueue = async (
+      queue: string,
+      data: Record<string, unknown>,
+      options?: { singletonKey?: string },
+    ) => {
+      jobs.push({ queue, data, options });
+      return null;
+    };
+    const now = new Date("2026-07-16T12:30:42.000Z");
+    const first = await runAgentSchedules(config, enqueue, now);
+    const second = await runAgentSchedules(config, enqueue, now);
+    // The integration database may contain other due agents from earlier
+    // scenarios; this agent must contribute one new run on the first pass.
+    expect(first.created).toBeGreaterThanOrEqual(1);
+    expect(second.created).toBe(0);
+    const scheduled = await db.select().from(runs).where(eq(runs.agentDefId, target.agent.id));
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]).toMatchObject({
+      mode: "scheduled",
+      engine: target.agent.engine,
+      status: "queued",
+      trigger: {
+        type: "schedule",
+        scheduledFor: "2026-07-16T12:30:00.000Z",
+      },
+    });
+    expect(jobs.filter((job) => job.options?.singletonKey === scheduled[0]?.id)).toHaveLength(2);
+
+    const catchUpTarget = await createProjectWithAgent("Scheduled Catch-up");
+    await db
+      .update(agentDefs)
+      .set({ triggers: [{ type: "schedule", config: { cron: "* * * * *", timezone: "UTC" } }] })
+      .where(eq(agentDefs.id, catchUpTarget.agent.id));
+    await db
+      .update(schedulerWatermarks)
+      .set({ lastTick: new Date("2026-07-16T12:27:00.000Z") })
+      .where(eq(schedulerWatermarks.name, "agent.schedules"));
+    const catchUp = await runAgentSchedules(config, enqueue, now);
+    expect(catchUp.caughtUpMinutes).toBe(2);
+    const caughtUpRuns = await db
+      .select()
+      .from(runs)
+      .where(eq(runs.agentDefId, catchUpTarget.agent.id));
+    expect(
+      caughtUpRuns.map((run) => (run.trigger as { scheduledFor: string }).scheduledFor).sort(),
+    ).toEqual(["2026-07-16T12:28:00.000Z", "2026-07-16T12:29:00.000Z", "2026-07-16T12:30:00.000Z"]);
   });
 
   it("creates a greenfield GitHub repo through the App and connects the repo row", async () => {
@@ -3205,6 +4231,88 @@ describe("api", async () => {
     app.githubClientFactory = undefined;
   });
 
+  it("connects an existing GitHub repo to its App installation and discovers its branch", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Existing Repo", slug: `existing-repo-${Date.now()}` },
+    });
+    const installationId = Date.now() + 1;
+    const owner = `existing-${installationId}`;
+    const installation = (
+      await db
+        .insert(githubInstallations)
+        .values({
+          id: newId("int"),
+          orgId,
+          installationId,
+          accountLogin: owner,
+          targetType: "Organization",
+        })
+        .returning()
+    )[0];
+    if (!installation) throw new Error("installation fixture missing");
+    let lookupArgs: Record<string, unknown> | undefined;
+    app.githubClientFactory = async (actualInstallationId) => {
+      expect(actualInstallationId).toBe(installationId);
+      return {
+        rest: {
+          repos: {
+            get: async (args: Record<string, unknown>) => {
+              lookupArgs = args;
+              return {
+                data: {
+                  name: "existing-repo",
+                  owner: { login: owner },
+                  default_branch: "trunk",
+                },
+              };
+            },
+          },
+        },
+      } as never;
+    };
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${project.json().id}/repos`,
+        headers: { cookie },
+        payload: { owner, name: "existing-repo", mode: "connect" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(lookupArgs).toEqual({ owner, repo: "existing-repo" });
+      expect(response.json()).toMatchObject({
+        installationId: installation.id,
+        owner,
+        name: "existing-repo",
+        defaultBranch: "trunk",
+      });
+    } finally {
+      app.githubClientFactory = undefined;
+    }
+  });
+
+  it("rejects connecting a repo when the GitHub App is not installed for its owner", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Missing Install", slug: `missing-install-${Date.now()}` },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.json().id}/repos`,
+      headers: { cookie },
+      payload: { owner: `uninstalled-${Date.now()}`, name: "repo", mode: "connect" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("github_installation_required");
+  });
+
   it("accepts signed generic inbound payloads and rejects bad signatures", async () => {
     const secret = "generic-inbound-secret";
     const fingerprint = `generic:${Date.now()}`;
@@ -3242,18 +4350,57 @@ describe("api", async () => {
       payload,
     });
     expect(bad.statusCode).toBe(401);
-    const signature = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+    const timestamp = String(Math.floor(Date.now() / 1_000));
+    const delivery = newId("evt");
+    const eventType = "alert";
+    const signature = `sha256=${createHmac("sha256", secret)
+      .update(`${timestamp}.${delivery}.${eventType}.`)
+      .update(payload)
+      .digest("hex")}`;
     const valid = await app.inject({
       method: "POST",
       url: `/webhooks/inbound/${integration.id}`,
       headers: {
         "content-type": "application/json",
-        "x-facility-delivery": newId("evt"),
+        "x-facility-delivery": delivery,
+        "x-facility-event": eventType,
+        "x-facility-timestamp": timestamp,
         "x-facility-signature": signature,
       },
       payload,
     });
     expect(valid.statusCode).toBe(202);
+    const replayWithChangedDelivery = await app.inject({
+      method: "POST",
+      url: `/webhooks/inbound/${integration.id}`,
+      headers: {
+        "content-type": "application/json",
+        "x-facility-delivery": newId("evt"),
+        "x-facility-event": eventType,
+        "x-facility-timestamp": timestamp,
+        "x-facility-signature": signature,
+      },
+      payload,
+    });
+    expect(replayWithChangedDelivery.statusCode).toBe(401);
+    const staleTimestamp = String(Number(timestamp) - 301);
+    const staleSignature = `sha256=${createHmac("sha256", secret)
+      .update(`${staleTimestamp}.${delivery}.${eventType}.`)
+      .update(payload)
+      .digest("hex")}`;
+    const stale = await app.inject({
+      method: "POST",
+      url: `/webhooks/inbound/${integration.id}`,
+      headers: {
+        "content-type": "application/json",
+        "x-facility-delivery": delivery,
+        "x-facility-event": eventType,
+        "x-facility-timestamp": staleTimestamp,
+        "x-facility-signature": staleSignature,
+      },
+      payload,
+    });
+    expect(stale.statusCode).toBe(401);
     const events = await db
       .select()
       .from(inboundEvents)
@@ -3302,13 +4449,20 @@ describe("api", async () => {
       const payload = Buffer.from(
         JSON.stringify({ eventType: "alert", title: fingerprint, bodyMd: "b", fingerprint }),
       );
-      const signature = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+      const timestamp = String(Math.floor(Date.now() / 1_000));
+      const eventType = "alert";
+      const signature = `sha256=${createHmac("sha256", secret)
+        .update(`${timestamp}.${delivery}.${eventType}.`)
+        .update(payload)
+        .digest("hex")}`;
       return app.inject({
         method: "POST",
         url: `/webhooks/inbound/${integrationId}`,
         headers: {
           "content-type": "application/json",
           "x-facility-delivery": delivery,
+          "x-facility-event": eventType,
+          "x-facility-timestamp": timestamp,
           "x-facility-signature": signature,
         },
         payload,
@@ -3341,6 +4495,164 @@ describe("api", async () => {
     ).toHaveLength(1);
   });
 
+  it("manages integrations and rotates one-time webhook secrets", async () => {
+    const managedCatalogRow = (
+      await db
+        .insert(integrations)
+        .values({
+          id: newId("int"),
+          orgId,
+          kind: "github_app",
+          name: "Platform-managed GitHub App",
+          config: {},
+          enabled: false,
+        })
+        .returning()
+    )[0];
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/integrations",
+      headers: { cookie },
+      payload: {
+        projectId,
+        kind: "generic_inbound",
+        name: `Inbound managed ${Date.now()}`,
+        config: { projectId },
+      },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().secret).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(created.json().webhookUrl).toContain(`/webhooks/inbound/${created.json().id}`);
+    expect(created.json()).not.toHaveProperty("sealedSecret");
+
+    const fetched = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/${created.json().id}`,
+      headers: { cookie },
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().hasSecret).toBe(true);
+    expect(fetched.json()).not.toHaveProperty("secret");
+
+    const rotated = await app.inject({
+      method: "POST",
+      url: `/v1/integrations/${created.json().id}/rotate-secret`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.json().secret).not.toBe(created.json().secret);
+
+    const disabled = await app.inject({
+      method: "DELETE",
+      url: `/v1/integrations/${created.json().id}`,
+      headers: { cookie },
+    });
+    expect(disabled.statusCode).toBe(200);
+    const listed = await app.inject({
+      method: "GET",
+      url: "/v1/integrations?enabled=false&limit=200",
+      headers: { cookie },
+    });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.json().some((row: { id: string }) => row.id === created.json().id)).toBe(true);
+    expect(listed.json().some((row: { id: string }) => row.id === managedCatalogRow?.id)).toBe(
+      true,
+    );
+  });
+
+  it("rejects unsupported outbound webhook event subscriptions", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/integrations",
+      headers: { cookie },
+      payload: {
+        projectId,
+        kind: "webhook",
+        name: `Invalid outbound ${Date.now()}`,
+        config: { url: "https://hooks.example.test/facility", events: ["run.started"] },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("invalid_webhook_events");
+  });
+
+  it("queues and signs durable outbound webhook deliveries for terminal runs", async () => {
+    const target = await createProjectWithAgent("Outbound Webhook Run");
+    const secret = "outbound-webhook-secret-at-least-32-bytes";
+    const integration = await app.inject({
+      method: "POST",
+      url: "/v1/integrations",
+      headers: { cookie },
+      payload: {
+        projectId: target.projectId,
+        kind: "webhook",
+        name: `Outbound ${Date.now()}`,
+        config: { url: "https://hooks.example.test/facility", events: ["run.finished"] },
+        secret,
+      },
+    });
+    expect(integration.statusCode).toBe(200);
+    const run = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${target.projectId}/runs`,
+      headers: { cookie },
+      payload: { mode: "manual", agentDefId: target.agent.id },
+    });
+    expect(run.statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/runs/${run.json().id}/cancel`,
+          headers: { cookie },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const pending = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/${integration.json().id}/deliveries`,
+      headers: { cookie },
+    });
+    expect(pending.statusCode).toBe(200);
+    expect(pending.json()).toHaveLength(1);
+    expect(pending.json()[0]).toMatchObject({ eventType: "run.finished", status: "pending" });
+
+    const requests: Array<{ url: string; headers: Headers; body: string }> = [];
+    const now = new Date(new Date(pending.json()[0].createdAt).getTime() + 1_000);
+    const delivered = await deliverPendingWebhooks(config, {
+      now,
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetch: async (url, init) => {
+        requests.push({
+          url: String(url),
+          headers: new Headers(init?.headers),
+          body: String(init?.body),
+        });
+        return new Response(null, { status: 204 });
+      },
+    });
+    expect(delivered).toContainEqual({ id: pending.json()[0].id, status: "delivered" });
+    const request = requests.find(
+      (item) => item.headers.get("x-facility-delivery") === pending.json()[0].id,
+    );
+    expect(request?.url).toBe("https://hooks.example.test/facility");
+    expect(request?.headers.get("x-facility-event")).toBe("run.finished");
+    const timestamp = String(Math.floor(now.getTime() / 1_000));
+    const expectedSignature = `sha256=${createHmac("sha256", secret)
+      .update(`${timestamp}.${pending.json()[0].id}.run.finished.${request?.body}`)
+      .digest("hex")}`;
+    expect(request?.headers.get("x-facility-signature")).toBe(expectedSignature);
+
+    const history = await app.inject({
+      method: "GET",
+      url: `/v1/integrations/${integration.json().id}/deliveries`,
+      headers: { cookie },
+    });
+    expect(history.json()[0]).toMatchObject({ status: "delivered", responseStatus: 204 });
+  });
+
   it("refuses steering a finished run", async () => {
     const target = await createProjectWithAgent("Steering Run");
     const run = await app.inject({
@@ -3349,11 +4661,24 @@ describe("api", async () => {
       headers: { cookie },
       payload: { mode: "builder", engine: "codex", agentDefId: target.agent.id },
     });
-    await app.inject({
+    const canceled = await app.inject({
       method: "POST",
       url: `/v1/runs/${run.json().id}/cancel`,
       headers: { cookie },
     });
+    expect(canceled.statusCode).toBe(200);
+    expect(canceled.json().status).toBe("canceled");
+    const repeated = await app.inject({
+      method: "POST",
+      url: `/v1/runs/${run.json().id}/cancel`,
+      headers: { cookie },
+    });
+    expect(repeated.statusCode).toBe(200);
+    const cancellationEvents = (
+      await db.select().from(runEvents).where(eq(runEvents.runId, run.json().id))
+    ).filter((event) => event.type === "result");
+    expect(cancellationEvents).toHaveLength(1);
+    expect(cancellationEvents[0]?.data).toEqual({ status: "canceled" });
     const steer = await app.inject({
       method: "POST",
       url: `/v1/runs/${run.json().id}/steer`,

@@ -17,27 +17,59 @@ Read first: control-plane.md (routes + permissions), discovery/tam-os.md (§MCP 
   enabled only when `MCP_OAUTH_AUDIENCE` is configured, so `aud` is always validated. API keys stay
   supported forever.
 
-Tools (names `facility_*`; JSON Schema inputs via zod-to-json-schema; every description written for an operator LLM — concise, states permissions needed):
+Tools (names `facility_*`; JSON Schema inputs from Zod; every description is written for an operator LLM and states the permission needed):
 
-Read: `facility_me`, `facility_list_projects`, `facility_get_project`, `facility_list_runs` {projectId?, status?}, `facility_get_run` (+ last N events inline, N≤50), `facility_list_inbox`, `facility_get_proposal`, `facility_spend` {projectId?, groupBy}, `facility_list_registry` {kind?}, `facility_get_registry_item` (+active version content), `facility_list_issues`, `facility_audit_tail` {limit≤100}, `facility_llm_requests` {projectId?, from?, to?, limit?, cursor?}, `facility_llm_request_envelope` {requestId}, `facility_list_budgets`, `facility_kickstart_preview` {projectId, repoId}.
+Read tools cover identity/org/access policy, projects/repos/health,
+agents/status/runs/events/transcripts, conversations, GitHub installations/repos/
+issues, outcomes, HITL/action-type discovery, issues, budgets/spend/raw LLM
+envelopes, registry, sandboxes/tasks/virtual keys, KB, analytics/audit
+verification, integrations and event/delivery history, the capability catalog,
+and kickstart preview. List inputs are bounded and paginated where the API
+supports it; `facility_get_run` can inline up to 200 recent events.
 
 Raw metering corpus: `/v1/llm-requests` lists durable LLM request rows for data mining. `/v1/llm-requests/:requestId/envelope` returns the stored request/response envelope for one row, scoped to the caller's org and project. The envelope endpoint requires `audit:read` (the full transcript is audit-grade, not spend data); project-scoped keys get 404 for another project's request.
 
-Write (ALL create HITL proposals and do not execute directly): `facility_trigger_run` {projectId, agentName, input}, `facility_cancel_run`, `facility_steer_run` {runId, body}, `facility_decide_proposal` {proposalId, decision, note?}, `facility_create_project`, `facility_kickstart` {projectId, repoId, answers}, `facility_upgrade_project`, `facility_set_budget`, `facility_publish_registry_version`, `facility_create_agent` {projectId, name, engine, model, contractItemId|contractContent, triggers, sandboxProfileId?}.
+Writes create HITL proposals and do not execute directly: run trigger/cancel/
+steer/interrupt/resume; conversation start/send; GitHub issue sync/trigger;
+project and agent creation/update/retirement; repo connection; issue
+acknowledge/resolve; webhook retry; task create/transition/propose; KB amendment;
+registry draft/publish/deprecate; budget setting; kickstart; and upgrade. MCP
+exposes no proposal-decision operation: approval always comes from a separate
+human principal through the CLI or API.
 
-HITL proposal flow: a write tool strips any legacy `confirm_token`, stores the intended API call as a proposal, and returns the proposal id, inbox route, and summary. A different principal with `hitl:decide` approves or rejects the proposal from the HITL inbox. MCP callers cannot complete their own destructive writes.
+HITL proposal flow: a write tool strips any legacy `confirm_token`, stores the
+intended API call as a proposal, and returns the proposal id, inbox route, and
+summary. API idempotency is derived from the MCP request id, so transport replay
+cannot create duplicate proposals. A different principal with `hitl:decide`
+approves or rejects the proposal from the HITL inbox. MCP callers cannot
+complete their own destructive writes. The bundled `operator` role is the
+recommended AI-client role.
 
-Resources: `facility://me`, `facility://projects/{id}`, `facility://runs/{id}` (transcript window template). Prompts: `facility-status` (org-wide state brief), `facility-run-triage` (stuck-run diagnosis walkthrough), `facility-cost-review`.
+Resources: `facility://me`, `facility://projects/{id}`, `facility://runs/{id}`
+(transcript window). Projects and recent runs are enumerable and their template
+IDs are completable, so clients do not need to guess URIs. Prompts:
+`facility-status`, `facility-run-triage` (optional `runId`), and
+`facility-cost-review`.
 
 Server never talks to the DB — SDK/HTTP only, so RBAC/audit apply identically (the API is the boundary). Map API errors → MCP tool errors with the `needed` permission surfaced.
 
 ## packages/cli additions
 
 New commands (zero-dep rule stays — use global fetch; no SDK dep here to keep the npx footprint tiny; a small hand-rolled client mirroring sdk paths is fine):
-- `facility login` — prompts for API URL + key (or `--url --key`), verifies via /v1/me, stores in `~/.facility/config.json` (0600) with named profiles (`--profile`).
+- `facility login` — prompts for API URL + masked key (or `--url --key`), refuses remote plaintext HTTP unless explicitly overridden, verifies via /v1/me, and stores `~/.facility/config.json` with mode 0600 and named profiles.
 - `facility status` — org overview: live runs, open inbox, spend MTD, issues (the CLI twin of the web overview).
 - `facility projects list|get <slug>`
-- `facility runs list [--project] [--status]`, `facility runs watch <id>` (SSE tail rendering events as colored lines), `facility runs trigger <project> <agent> [--input]`, `facility runs steer <id> <message>`
+- `facility sessions list [--project] [--status]`, `facility sessions get <id>`,
+  `facility sessions events <id> [--after-seq] [--tail]`, `facility sessions
+  transcript <id>`, `facility sessions watch <id>`
+  (resumable SSE tail rendering events as colored lines), `facility runs trigger
+  <project> <agent> [--input] [--idempotency-key]`, `facility runs steer <id>
+  <message>`, `facility sessions interrupt|resume|cancel <id>` (`runs` remains a
+  compatibility alias)
+- `facility conversations list|get|start|send`
+- `facility github installations|repos|issues|issue|sync|trigger`
+- `facility outcomes`, `facility catalog`, `facility agents status`, and
+  `facility integrations events`
 - `facility inbox` (list) and `facility inbox decide <id> approve|reject [--note]`
 - `facility kickstart <project> --repo owner/name [--yes]` — remote kickstart (answers via flags/prompts, preview table, confirm)
 - `facility upgrade <project> [--to <version>]`
@@ -45,7 +77,12 @@ New commands (zero-dep rule stays — use global fetch; no SDK dep here to keep 
 - `facility llm-requests list [--project <id>] [--from <iso>] [--to <iso>] [--limit <n>] [--cursor <iso>]`
 - `facility llm-requests get <id>` — export the stored request/response envelope; use `--json` to include row metadata and envelope together.
 - Existing `init|add|doctor` untouched (vendored lane).
-Output: human tables by default (respect the existing ui.mjs aesthetic — mono, accent for agent-live rows), `--json` for machines on every command. Exit codes: 0 ok, 1 error, 2 auth.
+The CLI now also covers org/members/roles, repositories, agent definitions and
+schedules, providers, budgets, registry, sandboxes, tasks, virtual keys, KB,
+analytics, audit verification, integrations/events/deliveries, spend, proposals,
+action-type discovery, and project health. Human tables are the default;
+`--json` emits one stable JSON value (or JSONL for a watched stream), with no
+diagnostics mixed into stdout. Exit codes: 0 success, 1 command/API error, 2 auth.
 
 Keep the CLI testable: extract command handlers to functions taking {fetch, config, stdout}; node:test suites with a stub fetch. The e2e init tests keep passing untouched.
 
@@ -55,8 +92,18 @@ Keep the CLI testable: extract command handlers to functions taking {fetch, conf
 pnpm install && pnpm build && pnpm typecheck && pnpm test && pnpm lint && node guards/run.mjs
 ```
 
-Tests: MCP — spin the real server (stdio transport, in-proc) against a stubbed SDK layer: tools/list golden (names+schemas), read tool happy path, write tool without token returns requires_confirmation and performs NOTHING (stub asserts no call), with tampered token rejects, with valid token executes; HTTP transport auth 401 without key. CLI — login writes 0600 config; status/runs/inbox render against stub fetch fixtures; --json emits parseable output; steer/decide send exact bodies; non-2xx maps to exit 1 with the API's error message (not a stack trace).
+Tests: MCP — spin the real server (stdio transport, in-proc) against a stubbed
+SDK layer: exact tool list and schemas, reads, structured errors, proposal-only
+writes, direct human decision, resources, prompts, replay idempotency, HTTP
+Bearer/OAuth discovery, authority/origin validation, body bounds, health and
+readiness. CLI — login and 0600 config, help without side effects, global flags,
+status/runs/inbox/admin workflows, resumable and open-ended SSE, JSON/JSONL,
+prompt EOF, exact request bodies, strict flags, structured failures and exit
+codes.
 
 ## Judgment criteria
 
-Tool descriptions read like a good API doc (an LLM must pick correctly among ~25 tools); no tool bypasses confirmation; CLI stays zero-dep and its existing UX voice; config never logged; every write path lands in the platform audit (verify one in a test via stub assertion of the API call, the API side already audits).
+Tool descriptions read like a good API doc (an LLM must pick correctly among 79
+tools); no tool bypasses confirmation; CLI stays zero-dep and its existing UX
+voice; config never logged; every write path lands in the platform audit (verify
+one in a test via stub assertion of the API call, the API side already audits).

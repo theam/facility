@@ -44,7 +44,7 @@ facility doctor --url http://localhost:4400 --key fak_...
 ```
 
 The command calls `/v1/admin/doctor` and prints the deployment checklist:
-database and migrations, object-store envelope write/read round trip, seed
+database and migrations, worker scheduler heartbeat, object-store envelope write/read round trip, seed
 essentials, the `sandbox_runner` profile (driver + runner image, plus Docker
 daemon reachability for the docker driver), production `auth_config`, GitHub App
 configuration, and audit hash-chain verification.
@@ -53,7 +53,7 @@ configuration, and audit hash-chain verification.
 
 | service | port | role |
 |---|---|---|
-| `web` | 3400 | the app |
+| `web` | 3400 | optional operator app |
 | `api` | 4400 | control plane (REST + OpenAPI at `/docs` in dev) |
 | `gateway` | 4410 | LLM proxy — point `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` here |
 | `docs` | 3500 | documentation site |
@@ -68,9 +68,13 @@ AWS S3, R2, and other S3-compatible endpoints.
 
 ## First real steps
 
-1. **Providers** — add your Anthropic/OpenAI keys (sealed at rest) from the web
-   **Settings → providers** page, or via the v1 API (`POST /v1/providers`); there
-   is not yet a dedicated CLI command.
+1. **Providers** — add your Anthropic/OpenAI keys (sealed at rest) with
+   `facility providers create --provider openai --name primary --secret …` or
+   `POST /v1/providers`.
 2. **GitHub App** — create your own App installation (see
    [Production](production)) so kickstart and triggers work against your org.
 3. **Kickstart** — connect a repo and open the kickstart PR.
+
+The web application is optional. The complete operating surface is available
+through the CLI, REST/OpenAPI + TypeScript SDK, and MCP; see the three reference
+pages for exact commands and contracts.

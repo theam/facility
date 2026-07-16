@@ -7,9 +7,11 @@ import {
   enqueueGithubIssuesSync,
   processGithubWebhook,
 } from "./github/processor.js";
+import { expireIdempotencyRecords } from "./idempotency.js";
+import { deliverPendingWebhooks } from "./integrations/outbound.js";
 import { runLearningNightly } from "./learning.js";
 import { dispatchRun, reconcileSandboxes } from "./sandbox/orchestrator.js";
-import { runScheduledAgents } from "./scheduler.js";
+import { runAgentSchedules } from "./schedules.js";
 import { runAnalyticsRollup } from "./watchtower/analytics.js";
 import { runWatchtowerCanary } from "./watchtower/canary.js";
 import { runWatchtowerHealth } from "./watchtower/health.js";
@@ -29,13 +31,15 @@ export async function startWorker() {
     "watchtower.health",
     "watchtower.canary",
     "analytics.rollup",
-    "agents.schedule",
     "learning.nightly",
     "github.webhook",
     "github.issues-sync",
     "fingerprints.verify",
     "hitl.expire",
     "sandbox.reconcile",
+    "agent.schedules",
+    "webhooks.deliver",
+    "idempotency.expire",
   ];
   for (const queue of queues) {
     await boss.createQueue(queue);
@@ -44,10 +48,21 @@ export async function startWorker() {
     await boss.work(queue, async (job: PgBoss.Job<unknown> | PgBoss.Job<unknown>[]) => {
       const jobId = Array.isArray(job) ? job[0]?.id : job.id;
       const data = Array.isArray(job) ? job[0]?.data : job.data;
+      let result: Record<string, unknown> | undefined;
       if (queue === "runs.dispatch") {
         await dispatchRun(config, data as { runId?: string; orgId?: string });
       } else if (queue === "sandbox.reconcile") {
         await reconcileSandboxes(config, (name, payload) => boss.send(name, payload));
+      } else if (queue === "agent.schedules") {
+        result = await runAgentSchedules(config, (targetQueue, targetData, options) =>
+          options
+            ? boss.send(targetQueue, targetData, options)
+            : boss.send(targetQueue, targetData),
+        );
+      } else if (queue === "webhooks.deliver") {
+        await deliverPendingWebhooks(config);
+      } else if (queue === "idempotency.expire") {
+        await expireIdempotencyRecords(db);
       } else if (queue === "watchtower.outcomes") {
         await runWatchtowerOutcomes(config);
       } else if (queue === "watchtower.health") {
@@ -56,10 +71,6 @@ export async function startWorker() {
         await runWatchtowerCanary(config, (name, payload) => boss.send(name, payload));
       } else if (queue === "analytics.rollup") {
         await runAnalyticsRollup(config);
-      } else if (queue === "agents.schedule") {
-        await runScheduledAgents(config, (targetQueue, targetData) =>
-          boss.send(targetQueue, targetData),
-        );
       } else if (queue === "hitl.expire") {
         await runHitlExpire(config);
       } else if (queue === "learning.nightly") {
@@ -79,16 +90,18 @@ export async function startWorker() {
       } else if (queue === "github.issues-sync") {
         await enqueueGithubIssuesSync(db, config, data as { repoId?: string; orgId?: string });
       }
-      logger.info({ queue, jobId }, "worker completed job");
+      logger.info({ queue, jobId, ...result }, "worker completed job");
     });
   }
   await boss.schedule("sandbox.reconcile", "*/2 * * * *", {});
+  await boss.schedule("agent.schedules", "* * * * *", {});
+  await boss.schedule("webhooks.deliver", "* * * * *", {});
+  await boss.schedule("idempotency.expire", "15 2 * * *", {});
   await boss.schedule("hitl.expire", "0 * * * *", {});
   await boss.schedule("watchtower.outcomes", "0 2 * * *", {});
   await boss.schedule("watchtower.health", "0 3 * * *", {});
   await boss.schedule("watchtower.canary", "0 4 * * 2", {});
   await boss.schedule("analytics.rollup", "5 * * * *", {});
-  await boss.schedule("agents.schedule", "* * * * *", {});
   await boss.schedule("learning.nightly", "0 3 * * *", {});
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());
@@ -96,8 +109,24 @@ export async function startWorker() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  startWorker().catch((error) => {
+  try {
+    const boss = await startWorker();
+    let closing = false;
+    const shutdown = async (signal: NodeJS.Signals) => {
+      if (closing) return;
+      closing = true;
+      console.info(`facility worker received ${signal}; finishing active jobs`);
+      try {
+        await boss.stop({ graceful: true, timeout: 30_000, close: true });
+      } catch (error) {
+        console.error("facility worker shutdown failed", error);
+        process.exitCode = 1;
+      }
+    };
+    process.once("SIGTERM", () => void shutdown("SIGTERM"));
+    process.once("SIGINT", () => void shutdown("SIGINT"));
+  } catch (error) {
     console.error(error);
-    process.exit(1);
-  });
+    process.exitCode = 1;
+  }
 }

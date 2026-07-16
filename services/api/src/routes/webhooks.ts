@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { newId, open } from "@facility/core";
+import { open } from "@facility/core";
 import { inboundEvents, integrations } from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -11,6 +11,7 @@ import { processGenericInboundEvent } from "../integrations/inbound.js";
 import type { AppConfig } from "../types.js";
 
 const Ok = z.object({ ok: z.boolean(), replayed: z.boolean().optional() });
+const INBOUND_SIGNATURE_MAX_AGE_SECONDS = 300;
 
 export async function registerWebhookRoutes(app: FastifyInstance, config: AppConfig) {
   await app.register(async (webhookApp) => {
@@ -98,29 +99,24 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
         )[0];
         if (!integration?.sealedSecret) return reply.status(401).send({ ok: false });
         const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
-        const signature = request.headers["x-facility-signature"];
+        const signature = headerString(request.headers["x-facility-signature"]);
+        const timestamp = headerString(request.headers["x-facility-timestamp"]);
+        const deliveryId = headerString(request.headers["x-facility-delivery"]);
+        const eventType = headerString(request.headers["x-facility-event"]);
+        if (!timestamp || !deliveryId || !eventType) {
+          return reply.status(401).send({ ok: false });
+        }
         const secret = await open(integration.sealedSecret, config.secretMasterKey);
         if (
-          !verifyInboundSignature(
-            rawBody,
-            Array.isArray(signature) ? signature[0] : signature,
-            secret,
-          )
+          !verifyInboundSignature(rawBody, { signature, timestamp, deliveryId, eventType }, secret)
         ) {
           return reply.status(401).send({ ok: false });
         }
         const payload = parseJson(rawBody);
-        const delivery = request.headers["x-facility-delivery"];
-        const deliveryId = Array.isArray(delivery) ? delivery[0] : delivery;
-        const eventType =
-          headerString(request.headers["x-facility-event"]) ??
-          stringField(payload, "eventType") ??
-          stringField(payload, "type") ??
-          "generic";
         // Scope idempotency to the integration: a delivery id is only unique per
         // sender, so a global `in_${deliveryId}` would let one integration's
         // delivery id suppress a different integration's event.
-        const id = deliveryId ? `in_${integration.id}_${deliveryId}` : newId("evt");
+        const id = `in_${integration.id}_${deliveryId}`;
         const inserted = await app.facilityDb
           .insert(inboundEvents)
           .values({
@@ -143,11 +139,33 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
 
 function verifyInboundSignature(
   body: Buffer,
-  signature: string | undefined,
+  headers: {
+    signature?: string;
+    timestamp?: string;
+    deliveryId?: string;
+    eventType?: string;
+  },
   secret: string,
 ): boolean {
-  if (!signature?.startsWith("sha256=")) return false;
-  const expected = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  const { signature, timestamp, deliveryId, eventType } = headers;
+  if (
+    !signature?.startsWith("sha256=") ||
+    !timestamp ||
+    !/^\d{10}$/.test(timestamp) ||
+    !deliveryId ||
+    !eventType
+  ) {
+    return false;
+  }
+  const sentAt = Number(timestamp);
+  const now = Math.floor(Date.now() / 1_000);
+  if (!Number.isSafeInteger(sentAt) || Math.abs(now - sentAt) > INBOUND_SIGNATURE_MAX_AGE_SECONDS) {
+    return false;
+  }
+  const expected = `sha256=${createHmac("sha256", secret)
+    .update(`${timestamp}.${deliveryId}.${eventType}.`)
+    .update(body)
+    .digest("hex")}`;
   const left = Buffer.from(signature);
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
@@ -167,10 +185,5 @@ function parseJson(body: Buffer): Record<string, unknown> {
 
 function headerString(value: string | string[] | undefined): string | undefined {
   const raw = Array.isArray(value) ? value[0] : value;
-  return typeof raw === "string" && raw.trim() ? raw : undefined;
-}
-
-function stringField(value: Record<string, unknown>, key: string): string | undefined {
-  const raw = value[key];
   return typeof raw === "string" && raw.trim() ? raw : undefined;
 }

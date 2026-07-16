@@ -1,5 +1,5 @@
 import { can, newId } from "@facility/core";
-import { actionTypes, platformIssues, proposalEvents, proposals } from "@facility/db";
+import { actionTypes, platformIssues, proposalEvents, proposals, runs } from "@facility/db";
 import { and, asc, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -11,6 +11,10 @@ import {
   AnyObject,
   assertBareRowProjectScope,
   IdParams,
+  IsoDateTime,
+  PageQuery,
+  type PageQueryValue,
+  PlatformIssueSchema,
   ProposalEventSchema,
   ProposalSchema,
   principal,
@@ -25,31 +29,95 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
     projectId: string | null | undefined,
     statusCode?: number,
   ) => sharedAssertProjectInOrg(db, p, projectId, statusCode);
+
+  const ActionTypeSchema = z.object({
+    id: z.string(),
+    orgId: z.string(),
+    name: z.string(),
+    payloadSchema: AnyObject,
+    resolver: AnyObject,
+    executor: AnyObject,
+    defaultTtlHours: z.number().int(),
+    createdAt: z.date(),
+    updatedAt: z.date(),
+  });
+
+  app.get(
+    "/v1/action-types",
+    {
+      config: { permission: "hitl:read" },
+      schema: { querystring: PageQuery, response: { 200: z.array(ActionTypeSchema) } },
+    },
+    async (request) => {
+      const p = principal(request);
+      const query = request.query as PageQueryValue;
+      return db
+        .select()
+        .from(actionTypes)
+        .where(eq(actionTypes.orgId, p.orgId))
+        .orderBy(asc(actionTypes.name), asc(actionTypes.id))
+        .limit(query.limit)
+        .offset(query.offset);
+    },
+  );
+
+  app.get(
+    "/v1/action-types/:actionTypeId",
+    {
+      config: { permission: "hitl:read" },
+      schema: {
+        params: z.object({ actionTypeId: z.string() }),
+        response: { 200: ActionTypeSchema },
+      },
+    },
+    async (request) => {
+      const p = principal(request);
+      const actionTypeId = (request.params as { actionTypeId: string }).actionTypeId;
+      const row = (
+        await db
+          .select()
+          .from(actionTypes)
+          .where(and(eq(actionTypes.orgId, p.orgId), eq(actionTypes.id, actionTypeId)))
+          .limit(1)
+      )[0];
+      if (!row) throw notFound("Action type not found");
+      return row;
+    },
+  );
   app.get(
     "/v1/inbox",
     {
       config: { permission: "hitl:read" },
       schema: {
-        querystring: z.object({ state: z.string().optional() }),
+        querystring: PageQuery.extend({ state: z.string().optional() }),
         response: {
           200: z.object({
             items: z.array(ProposalSchema),
             proposals: z.array(ProposalSchema),
-            issues: z.array(AnyObject),
+            issues: z.array(PlatformIssueSchema),
           }),
         },
       },
     },
     async (request) => {
       const p = principal(request);
-      const state = (request.query as { state?: string }).state;
+      const query = request.query as PageQueryValue & { state?: string };
+      const state = query.state;
       const proposalClauses = [eq(proposals.orgId, p.orgId)];
       if (state) proposalClauses.push(eq(proposals.state, state));
       if (p.projectId) proposalClauses.push(eq(proposals.projectId, p.projectId));
       const proposalRows = await db
-        .select()
+        .select({ proposal: proposals, actionType: actionTypes.name })
         .from(proposals)
-        .where(and(...proposalClauses));
+        .innerJoin(actionTypes, eq(actionTypes.id, proposals.actionTypeId))
+        .where(and(...proposalClauses))
+        .orderBy(desc(proposals.createdAt), desc(proposals.id))
+        .limit(query.limit)
+        .offset(query.offset);
+      const proposalResponses = proposalRows.map(({ proposal, actionType }) => ({
+        ...proposal,
+        actionType,
+      }));
       // Issues are watchtower alerts, not proposals: the `state` query param
       // scopes proposals only. Always surface actionable (error/critical) issues
       // that are still open OR acked, so acknowledging one keeps it visible
@@ -63,8 +131,15 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
       const issueRows = await db
         .select()
         .from(platformIssues)
-        .where(and(...issueClauses));
-      return { items: proposalRows, proposals: proposalRows, issues: issueRows };
+        .where(and(...issueClauses))
+        .orderBy(desc(platformIssues.lastSeen), desc(platformIssues.id))
+        .limit(query.limit)
+        .offset(query.offset);
+      return {
+        items: proposalResponses,
+        proposals: proposalResponses,
+        issues: issueRows,
+      };
     },
   );
 
@@ -80,14 +155,16 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
     async (request) => {
       const p = principal(request);
       const { proposalId } = request.params as { proposalId: string };
-      const proposal = (
+      const proposalRow = (
         await db
-          .select()
+          .select({ proposal: proposals, actionType: actionTypes.name })
           .from(proposals)
+          .innerJoin(actionTypes, eq(actionTypes.id, proposals.actionTypeId))
           .where(and(eq(proposals.orgId, p.orgId), eq(proposals.id, proposalId)))
           .limit(1)
       )[0];
-      if (!proposal) throw notFound("Proposal not found");
+      if (!proposalRow) throw notFound("Proposal not found");
+      const proposal = { ...proposalRow.proposal, actionType: proposalRow.actionType };
       assertBareRowProjectScope(p, proposal.projectId, "Proposal not found");
       const events = await db
         .select()
@@ -101,7 +178,7 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
   app.post(
     "/v1/mcp/tool-proposals",
     {
-      config: { permission: "org:read", auditAction: "hitl.proposed" },
+      config: { permission: "org:read", auditAction: "hitl.proposed", idempotent: true },
       schema: {
         body: z.object({
           toolName: z.string().min(1),
@@ -163,9 +240,18 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         throw new ApiError(404, "not_found", "Project not found");
       }
       await assertProjectInOrg(p, targetProjectId, 404);
+      const runProjectId = await proposalRunProject(p, body.runId);
+      const requestedProjectId = targetProjectId ?? body.projectId ?? p.projectId ?? null;
+      if (runProjectId && requestedProjectId && runProjectId !== requestedProjectId) {
+        throw new ApiError(
+          400,
+          "proposal_run_project_mismatch",
+          "Proposal run does not belong to the proposal project",
+        );
+      }
       const actionType = await ensureMcpActionType(p.orgId);
       if (!actionType) throw new ApiError(500, "insert_failed", "Could not create MCP action type");
-      const projectId = targetProjectId ?? body.projectId;
+      const projectId = requestedProjectId ?? runProjectId;
       const proposal = (
         await db
           .insert(proposals)
@@ -205,14 +291,15 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           data: { source: "mcp", toolName: body.toolName, permission: body.permission },
         });
       }
-      return proposal;
+      if (!proposal) throw new ApiError(500, "insert_failed", "Could not create proposal");
+      return { ...proposal, actionType: actionType.name };
     },
   );
 
   app.post(
     "/v1/proposals",
     {
-      config: { permission: "hitl:write", auditAction: "hitl.proposed" },
+      config: { permission: "hitl:write", auditAction: "hitl.proposed", idempotent: true },
       schema: {
         body: z.object({
           projectId: z.string().optional(),
@@ -220,7 +307,7 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           actionTypeId: z.string(),
           payload: AnyObject,
           contextMd: z.string(),
-          expiresAt: z.string().optional(),
+          expiresAt: IsoDateTime.optional(),
         }),
         response: { 200: ProposalSchema },
       },
@@ -236,7 +323,16 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         expiresAt?: string;
       };
       await assertProjectInOrg(p, body.projectId);
-      const projectId = p.projectId ?? body.projectId;
+      const runProjectId = await proposalRunProject(p, body.runId);
+      const requestedProjectId = p.projectId ?? body.projectId ?? null;
+      if (runProjectId && requestedProjectId && runProjectId !== requestedProjectId) {
+        throw new ApiError(
+          400,
+          "proposal_run_project_mismatch",
+          "Proposal run does not belong to the proposal project",
+        );
+      }
+      const projectId = requestedProjectId ?? runProjectId;
       const actionType = (
         await db
           .select()
@@ -290,7 +386,8 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           actor: { type: p.type, id: p.id },
           data: {},
         });
-      return proposal;
+      if (!proposal) throw new ApiError(500, "insert_failed", "Could not create proposal");
+      return { ...proposal, actionType: actionType.name };
     },
   );
 
@@ -319,27 +416,25 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
             .limit(1)
         )[0];
         if (!proposal) throw new ApiError(409, "not_open", "Proposal is not open");
-        if (proposal.actionType.name === "mcp_tool_call") {
-          const opener = (
-            await tx
-              .select()
-              .from(proposalEvents)
-              .where(
-                and(
-                  eq(proposalEvents.orgId, p.orgId),
-                  eq(proposalEvents.proposalId, proposalId),
-                  eq(proposalEvents.seq, 1),
-                ),
-              )
-              .limit(1)
-          )[0];
-          if (sameActor(opener?.actor, { type: p.type, id: p.id })) {
-            throw new ApiError(
-              403,
-              "same_principal_approval_denied",
-              "MCP write proposals must be approved by a different human principal",
-            );
-          }
+        const opener = (
+          await tx
+            .select()
+            .from(proposalEvents)
+            .where(
+              and(
+                eq(proposalEvents.orgId, p.orgId),
+                eq(proposalEvents.proposalId, proposalId),
+                eq(proposalEvents.seq, 1),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (sameActor(opener?.actor, { type: p.type, id: p.id })) {
+          throw new ApiError(
+            403,
+            "same_principal_approval_denied",
+            "Proposals must be approved by a different principal than the requester",
+          );
         }
         const updated = (
           await tx
@@ -380,15 +475,17 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           { type: p.type, id: p.id },
           { config, enqueue: app.enqueue, githubFactory: app.githubClientFactory },
         );
-        return (
+        const executed = (
           await db
             .select()
             .from(proposals)
             .where(and(eq(proposals.orgId, p.orgId), eq(proposals.id, proposalId)))
             .limit(1)
         )[0];
+        if (!executed) throw notFound("Proposal not found");
+        return proposalResponse(executed);
       }
-      return row;
+      return proposalResponse(row);
     },
   );
 
@@ -396,7 +493,7 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
     "/v1/proposals/:proposalId/execute",
     {
       config: { permission: "hitl:decide", auditAction: "hitl.executed" },
-      schema: { params: IdParams, response: { 200: AnyObject } },
+      schema: { params: IdParams, response: { 200: ProposalSchema } },
     },
     async (request) => {
       const p = principal(request);
@@ -413,7 +510,7 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
       if (proposal.state !== "execution_failed" && proposal.state !== "approved") {
         throw new ApiError(409, "not_executable", "Proposal is not pending execution");
       }
-      await executeApprovedProposal(
+      const claimed = await executeApprovedProposal(
         db,
         proposal,
         { type: p.type, id: p.id },
@@ -423,13 +520,22 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           githubFactory: app.githubClientFactory,
         },
       );
-      return (
+      if (!claimed) {
+        throw new ApiError(
+          409,
+          "execution_in_progress",
+          "Proposal execution is already in progress",
+        );
+      }
+      const executed = (
         await db
           .select()
           .from(proposals)
           .where(and(eq(proposals.orgId, p.orgId), eq(proposals.id, proposalId)))
           .limit(1)
       )[0];
+      if (!executed) throw notFound("Proposal not found");
+      return proposalResponse(executed);
     },
   );
 
@@ -467,6 +573,35 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         .returning()
     )[0];
   }
+
+  async function proposalResponse(proposal: typeof proposals.$inferSelect) {
+    const actionType = (
+      await db
+        .select({ name: actionTypes.name })
+        .from(actionTypes)
+        .where(
+          and(eq(actionTypes.orgId, proposal.orgId), eq(actionTypes.id, proposal.actionTypeId)),
+        )
+        .limit(1)
+    )[0];
+    if (!actionType) {
+      throw new ApiError(500, "invalid_proposal", "Proposal action type is missing");
+    }
+    return { ...proposal, actionType: actionType.name };
+  }
+
+  async function proposalRunProject(p: Principal, runId: string | undefined) {
+    if (!runId) return null;
+    const run = (
+      await db
+        .select({ projectId: runs.projectId })
+        .from(runs)
+        .where(and(eq(runs.orgId, p.orgId), eq(runs.id, runId)))
+        .limit(1)
+    )[0];
+    if (!run || (p.projectId && run.projectId !== p.projectId)) throw notFound("Run not found");
+    return run.projectId;
+  }
 }
 
 function sameActor(left: unknown, right: { type: string; id: string }) {
@@ -482,10 +617,29 @@ const MCP_TOOL_PERMISSIONS: Record<string, string> = {
   facility_trigger_run: "runs:trigger",
   facility_cancel_run: "runs:write",
   facility_steer_run: "runs:steer",
+  facility_interrupt_run: "runs:steer",
+  facility_resume_run: "runs:trigger",
+  facility_start_conversation: "runs:trigger",
+  facility_send_conversation_message: "runs:trigger",
+  facility_sync_github_issues: "repos:write",
+  facility_trigger_github_issue: "runs:trigger",
   facility_create_project: "projects:write",
+  facility_archive_project: "projects:write",
   facility_kickstart: "projects:kickstart",
   facility_upgrade_project: "projects:write",
   facility_set_budget: "budgets:write",
   facility_publish_registry_version: "registry:publish",
+  facility_deprecate_registry_version: "registry:publish",
   facility_create_agent: "agents:write",
+  facility_update_agent: "agents:write",
+  facility_retire_agent: "agents:write",
+  facility_ack_issue: "issues:write",
+  facility_resolve_issue: "issues:write",
+  facility_retry_webhook_delivery: "integrations:write",
+  facility_create_task: "tasks:write",
+  facility_transition_task: "tasks:write",
+  facility_propose_task: "tasks:write",
+  facility_amend_kb: "kb:write",
+  facility_create_registry_draft: "registry:write",
+  facility_connect_repo: "repos:write",
 };

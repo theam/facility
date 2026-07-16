@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createFacilityMcpServer } from "./tools.js";
@@ -5,7 +6,8 @@ import { createFacilityMcpServer } from "./tools.js";
 export type HttpServerOptions = {
   apiUrl: string;
   port: number;
-  confirmationSecret?: string;
+  host?: string;
+  allowedHosts?: string[];
   fetch?: typeof fetch;
   // OAuth 2.1 resource-server discovery (RFC 9728). When set, the server
   // advertises the WorkOS authorization server so interactive MCP clients
@@ -13,13 +15,57 @@ export type HttpServerOptions = {
   // keys continue to work unchanged for non-interactive service use.
   resourceUrl?: string;
   authorizationServer?: string;
+  maxBodyBytes?: number;
+  maxRequestsPerMinute?: number;
 };
 
 const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
 
 export function serveHttp(options: HttpServerOptions) {
+  const host = options.host ?? "127.0.0.1";
+  const allowedHosts = configuredHosts(options, host);
+  const limiter = new FixedWindowLimiter(options.maxRequestsPerMinute ?? 120, 60_000);
   const server = createServer(async (request, response) => {
     const path = request.url?.split("?")[0] ?? "";
+    response.setHeader("x-request-id", randomUUID());
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader("cache-control", "no-store");
+
+    if (!validRequestAuthority(request, allowedHosts)) {
+      response.writeHead(421, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "untrusted request authority" }));
+      return;
+    }
+
+    if (request.method === "GET" && ["/health", "/healthz"].includes(path)) {
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: true, version: "0.3.0", transport: "streamable-http" }));
+      return;
+    }
+    if (request.method === "GET" && path === "/readyz") {
+      try {
+        const upstream = await (options.fetch ?? fetch)(
+          `${options.apiUrl.replace(/\/$/, "")}/health`,
+          {
+            signal: AbortSignal.timeout(2_000),
+          },
+        );
+        const ok = upstream.ok;
+        await upstream.body?.cancel();
+        response.writeHead(ok ? 200 : 503, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        response.end(JSON.stringify({ ok, api: ok ? "up" : "down" }));
+      } catch {
+        response.writeHead(503, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        response.end(JSON.stringify({ ok: false, api: "down" }));
+      }
+      return;
+    }
 
     // Public OAuth discovery document — served without auth so an interactive
     // client can bootstrap the flow before it holds a token.
@@ -40,6 +86,16 @@ export function serveHttp(options: HttpServerOptions) {
       return;
     }
 
+    const admission = limiter.admit(request.socket.remoteAddress ?? "unknown", Date.now());
+    if (!admission.allowed) {
+      response.writeHead(429, {
+        "content-type": "application/json",
+        "retry-after": String(admission.retryAfterSeconds),
+      });
+      response.end(JSON.stringify({ error: "rate limit exceeded" }));
+      return;
+    }
+
     if (!isAuthorized(request)) {
       response.writeHead(401, {
         "content-type": "application/json",
@@ -49,40 +105,176 @@ export function serveHttp(options: HttpServerOptions) {
       return;
     }
     if (request.method !== "POST" || !["/mcp", "/"].includes(path)) {
-      response.writeHead(405, { "content-type": "application/json" });
+      response.writeHead(405, { "content-type": "application/json", allow: "POST" });
       response.end(JSON.stringify({ error: "method not allowed" }));
       return;
     }
 
-    const bearer = request.headers.authorization?.slice("Bearer ".length).trim() ?? "";
+    let parsedBody: unknown;
+    try {
+      parsedBody = await readJsonBody(request, options.maxBodyBytes ?? 1024 * 1024);
+    } catch (error) {
+      const tooLarge = error instanceof HttpBodyError && error.status === 413;
+      response.writeHead(tooLarge ? 413 : 400, {
+        "content-type": "application/json",
+        ...(tooLarge ? { connection: "close" } : {}),
+      });
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: tooLarge ? -32001 : -32700,
+            message: tooLarge ? "Request body too large" : "Invalid JSON request body",
+          },
+          id: null,
+        }),
+      );
+      return;
+    }
+
+    const bearer = bearerToken(request);
     const mcp = createFacilityMcpServer({
       apiUrl: options.apiUrl,
       apiKey: bearer,
-      confirmationSecret: options.confirmationSecret,
       fetch: options.fetch,
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      void transport.close();
+      void mcp.close();
+    };
+    response.once("close", cleanup);
+    request.once("aborted", cleanup);
     try {
       await mcp.connect(transport);
-      await transport.handleRequest(request, response);
-      response.on("close", () => {
-        void transport.close();
-        void mcp.close();
-      });
+      await transport.handleRequest(request, response, parsedBody);
     } catch (error) {
+      cleanup();
       writeError(response, error);
     }
   });
-  server.listen(options.port);
+  server.listen(options.port, host);
   return server;
+}
+
+class FixedWindowLimiter {
+  private readonly windows = new Map<string, { count: number; resetAt: number }>();
+
+  constructor(
+    private readonly maxRequests: number,
+    private readonly windowMs: number,
+  ) {
+    if (!Number.isInteger(maxRequests) || maxRequests < 1) {
+      throw new Error("MCP maxRequestsPerMinute must be a positive integer");
+    }
+  }
+
+  admit(key: string, now: number): { allowed: boolean; retryAfterSeconds: number } {
+    const current = this.windows.get(key);
+    if (!current || current.resetAt <= now) {
+      this.windows.set(key, { count: 1, resetAt: now + this.windowMs });
+      this.sweep(now);
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    if (current.count >= this.maxRequests) {
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - now) / 1_000)),
+      };
+    }
+    current.count += 1;
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  private sweep(now: number) {
+    if (this.windows.size < 1_000) return;
+    for (const [key, window] of this.windows) {
+      if (window.resetAt <= now) this.windows.delete(key);
+    }
+  }
+}
+
+class HttpBodyError extends Error {
+  constructor(readonly status: number) {
+    super(status === 413 ? "request_body_too_large" : "invalid_json");
+  }
+}
+
+async function readJsonBody(request: IncomingMessage, maxBytes: number) {
+  const contentLength = Number(request.headers["content-length"] ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) throw new HttpBodyError(413);
+  const chunks: Buffer[] = [];
+  let received = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    received += buffer.length;
+    if (received > maxBytes) throw new HttpBodyError(413);
+    chunks.push(buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new HttpBodyError(400);
+  }
+}
+
+function configuredHosts(options: HttpServerOptions, bindHost: string) {
+  const hosts = new Set((options.allowedHosts ?? []).map(normalizeAuthority));
+  if (options.resourceUrl) {
+    try {
+      hosts.add(normalizeAuthority(new URL(options.resourceUrl).host));
+    } catch {
+      throw new Error("MCP resourceUrl must be an absolute URL");
+    }
+  }
+  if (isLoopback(bindHost)) {
+    hosts.add("localhost");
+    hosts.add("127.0.0.1");
+    hosts.add("[::1]");
+  } else if (hosts.size === 0) {
+    throw new Error(
+      "MCP allowedHosts or resourceUrl is required when binding to a non-loopback interface",
+    );
+  }
+  return hosts;
+}
+
+function validRequestAuthority(request: IncomingMessage, allowedHosts: Set<string>) {
+  const authority = request.headers.host;
+  if (!authority || !allowedHosts.has(normalizeAuthority(authority))) return false;
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    return allowedHosts.has(normalizeAuthority(new URL(origin).host));
+  } catch {
+    return false;
+  }
+}
+
+function normalizeAuthority(authority: string) {
+  const lower = authority.trim().toLowerCase();
+  if (lower.startsWith("[")) return lower.replace(/\]:\d+$/, "]");
+  return lower.replace(/:\d+$/, "");
+}
+
+function isLoopback(host: string) {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host.toLowerCase());
 }
 
 // Accept any non-empty Bearer credential — a `fak_` API key OR a WorkOS OAuth
 // 2.1 access token (JWT). The control plane validates which kind it is and
 // rejects invalid ones; the MCP server only forwards the credential.
 function isAuthorized(request: IncomingMessage): boolean {
+  return bearerToken(request).length > 0;
+}
+
+function bearerToken(request: IncomingMessage): string {
   const header = request.headers.authorization;
-  return typeof header === "string" && /^Bearer\s+\S+/.test(header);
+  if (typeof header !== "string") return "";
+  return header.match(/^Bearer\s+(\S+)\s*$/i)?.[1] ?? "";
 }
 
 function wwwAuthenticate(options: HttpServerOptions): string {

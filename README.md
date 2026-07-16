@@ -71,6 +71,28 @@ environment and verify a change, then adds:
 - `STANDARD.md`, agent instructions, skills, hooks, and deterministic guards;
 - `.facility.json`, which records the choices needed to reproduce the install.
 
+### Operate without the web application
+
+Every control-plane workflow is available over the versioned REST API and the
+zero-dependency CLI; AI clients use the same permissions through MCP.
+
+```bash
+# REST/OpenAPI
+open http://localhost:4400/docs
+
+# CLI (the API key is hidden when entered interactively)
+facility login --url http://localhost:4400 --key fak_…
+facility status
+facility --help
+
+# MCP streamable HTTP (Bearer credentials are forwarded to the API)
+curl http://localhost:4420/healthz
+```
+
+See the [CLI, API, SDK, and MCP operator guide](docs/platform/INTERFACES.md) for
+authentication, automation-safe output, streaming, write approvals, deployment,
+and troubleshooting.
+
 The installer skips existing generated destinations unless you explicitly use
 `--force`. `AGENTS.md` and `CLAUDE.md` receive a delimited managed block instead
 of being replaced, and the current answers are written to `.facility.json`.

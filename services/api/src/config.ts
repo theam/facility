@@ -48,6 +48,13 @@ const EnvSchema = z
     NODE_ENV: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    if (!isExactBase64Key(env.SECRET_MASTER_KEY)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SECRET_MASTER_KEY"],
+        message: "SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes",
+      });
+    }
     if (env.NODE_ENV === "production" && env.FACILITY_INSECURE_DEV === "1") {
       ctx.addIssue({
         code: "custom",
@@ -56,6 +63,11 @@ const EnvSchema = z
       });
     }
   });
+
+function isExactBase64Key(value: string) {
+  const decoded = Buffer.from(value, "base64");
+  return decoded.length === 32 && decoded.toString("base64") === value;
+}
 
 export function readConfig(env = process.env): AppConfig {
   const parsed = EnvSchema.parse(env);

@@ -52,6 +52,10 @@ export async function buildApp(
   const envelopeStore = deps.envelopeStore ?? createEnvelopeStore(config);
   const now = deps.now ?? (() => new Date());
 
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-request-id", request.id);
+  });
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof GatewayError) return sendProviderError(reply, error);
     // Don't leak internal error detail — log it, return a generic message.
@@ -61,14 +65,20 @@ export async function buildApp(
       .send({ error: { code: "internal_error", message: "Internal server error" } });
   });
 
-  app.get("/health", async () => {
+  app.setNotFoundHandler((_request, reply) =>
+    reply.status(404).send({ error: { code: "not_found", message: "Route not found" } }),
+  );
+
+  const readiness = async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       await db.execute("select 1" as never);
       return { ok: true, db: "ok" as const };
     } catch {
-      return { ok: false, db: "down" as const };
+      return reply.status(503).send({ ok: false, db: "down" as const });
     }
-  });
+  };
+  app.get("/health", readiness);
+  app.get("/readyz", readiness);
 
   app.post("/anthropic/v1/*", (request, reply) =>
     handleProvider(request, reply, "anthropic", config, db, envelopeStore, now),
