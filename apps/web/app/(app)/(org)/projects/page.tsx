@@ -1,4 +1,4 @@
-import { ButtonLink, Cell, Eyebrow, HairlineGrid, PillTag, StatusDot } from "@facility/ui";
+import { ButtonLink, Cell, Eyebrow, HairlineGrid, Metric, PillTag, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -8,13 +8,12 @@ import { fetchAllRuns, fmtCost } from "@/lib/runs";
 export const metadata = { title: "projects" };
 
 const LIVE = new Set(["queued", "provisioning", "running"]);
+const DASH = "—";
 
 export default async function ProjectsPage() {
-  const [{ offline, error: runsError, projects, runs }, spend, inbox] = await Promise.all([
-    fetchAllRuns(),
-    api.spend("?groupBy=day"),
-    api.inboxFull(),
-  ]);
+  const [{ offline, error: runsError, projects, runs }, spend, inbox, overview] = await Promise.all(
+    [fetchAllRuns(), api.spend("?groupBy=day"), api.inboxFull(), api.analyticsOverview()],
+  );
   if (offline) return <Offline />;
 
   const liveByProject = new Map<string, number>();
@@ -32,6 +31,11 @@ export default async function ProjectsPage() {
     (inbox.ok ? inbox.data.proposals.length + inbox.data.issues.length : 0) +
     [...blockedByProject.values()].reduce((a, b) => a + b, 0);
   const monthCents = spend.ok ? summarizeSpend(spend.data).totalCents : null;
+  const outcomeTotals = overview.ok ? overview.data.outcomes30d : null;
+  const evidenceCoverage =
+    outcomeTotals && outcomeTotals.total > 0
+      ? Math.round((100 * outcomeTotals.assessed) / outcomeTotals.total)
+      : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -53,6 +57,63 @@ export default async function ProjectsPage() {
       </div>
 
       {runsError ? <ErrorNotice message={`Couldn't load sessions — ${runsError}`} /> : null}
+      {!overview.ok ? (
+        <ErrorNotice message={`Couldn't load outcomes — ${overview.message}`} />
+      ) : null}
+
+      <section className="flex flex-col gap-4">
+        <Eyebrow>outcomes · 30 days</Eyebrow>
+        <HairlineGrid cols="grid-cols-2 lg:grid-cols-4">
+          <Cell>
+            <Metric
+              label="acceptance"
+              value={
+                overview.ok && overview.data.acceptance30d != null
+                  ? `${overview.data.acceptance30d}%`
+                  : DASH
+              }
+              hint={
+                outcomeTotals
+                  ? `${outcomeTotals.accepted}/${outcomeTotals.assessed} assessed PRs accepted`
+                  : "outcomes didn't load"
+              }
+            />
+          </Cell>
+          <Cell>
+            <Metric
+              label="evidence coverage"
+              value={evidenceCoverage == null ? DASH : `${evidenceCoverage}%`}
+              hint={
+                outcomeTotals
+                  ? `${outcomeTotals.assessed}/${outcomeTotals.total} terminal agent PRs assessed`
+                  : "outcomes didn't load"
+              }
+            />
+          </Cell>
+          <Cell>
+            <Metric
+              label="one-shot"
+              value={
+                overview.ok && overview.data.oneShot30d != null
+                  ? `${overview.data.oneShot30d}%`
+                  : DASH
+              }
+              hint={
+                outcomeTotals
+                  ? `${outcomeTotals.oneShot}/${outcomeTotals.merged} merged PRs`
+                  : "outcomes didn't load"
+              }
+            />
+          </Cell>
+          <Cell>
+            <Metric
+              label="accepted"
+              value={outcomeTotals?.accepted ?? DASH}
+              hint={outcomeTotals ? `${outcomeTotals.merged} merged` : "outcomes didn't load"}
+            />
+          </Cell>
+        </HairlineGrid>
+      </section>
 
       {projects.length === 0 ? (
         <p className="max-w-lg text-sm leading-relaxed text-(--dim)">

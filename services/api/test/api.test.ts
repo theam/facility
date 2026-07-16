@@ -37,7 +37,7 @@ import {
   users,
   verifyAuditChain,
 } from "@facility/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -917,6 +917,257 @@ describe("api", async () => {
       headers: { cookie },
     });
     expect(loaded.json().events.map((event: { seq: number }) => event.seq)).toEqual([1, 2]);
+  });
+
+  it("dispatches an approved platform plan to the linked builder", async () => {
+    const { projectId: planProjectId, agent: baseAgent } =
+      await createProjectWithAgent("Plan Dispatch");
+    const repoOwner = `plan-owner-${Date.now()}`;
+    const planRepo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId: planProjectId,
+          owner: repoOwner,
+          name: "plan-dispatch",
+          defaultBranch: "main",
+          renderAnswers: { execution_lane: { architect: "platform", builder: "platform" } },
+        })
+        .returning()
+    )[0];
+    const builder = (
+      await db
+        .insert(agentDefs)
+        .values({
+          id: newId("agent"),
+          orgId,
+          projectId: planProjectId,
+          name: "builder",
+          engine: baseAgent.engine,
+          model: baseAgent.model,
+          contractItemId: baseAgent.contractItemId,
+          harnessItemId: baseAgent.harnessItemId,
+          triggers: [{ type: "command", command: "builder" }],
+          sandboxProfileId: baseAgent.sandboxProfileId,
+          permissions: baseAgent.permissions,
+        })
+        .returning()
+    )[0];
+    const architectRun = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: planProjectId,
+          mode: "architect",
+          engine: "codex",
+          status: "succeeded",
+          trigger: { type: "github_comment", issue: { number: 42 } },
+          gh: { owner: repoOwner, repo: "plan-dispatch", issueNumber: 42 },
+          createdBy: { type: "user", id: "architect-requester" },
+        })
+        .returning()
+    )[0];
+    const planAcceptance = (
+      await db
+        .select()
+        .from(actionTypes)
+        .where(and(eq(actionTypes.orgId, orgId), eq(actionTypes.name, "plan_acceptance")))
+        .limit(1)
+    )[0];
+    if (!planRepo || !builder || !architectRun || !planAcceptance) {
+      throw new Error("plan fixtures missing");
+    }
+    const forgedPlanRun = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${planProjectId}/runs`,
+      headers: { cookie },
+      payload: {
+        mode: "builder",
+        engine: builder.engine,
+        agentDefId: builder.id,
+        trigger: { source: "plan_acceptance", proposalId: "prop_forged" },
+      },
+    });
+    expect(forgedPlanRun.statusCode).toBe(400);
+    expect(forgedPlanRun.json().error.code).toBe("reserved_trigger_source");
+
+    const proposal = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        projectId: planProjectId,
+        runId: architectRun.id,
+        actionTypeId: planAcceptance.id,
+        payload: {},
+        contextMd: "Approve the implementation plan",
+      },
+    });
+    expect(proposal.statusCode).toBe(200);
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${proposal.json().id}/decide`,
+      headers: { cookie },
+      payload: { decision: "approve" },
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json().state).toBe("executed");
+
+    const builderRuns = await db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, orgId),
+          eq(runs.projectId, planProjectId),
+          eq(runs.mode, "builder"),
+          sql`${runs.trigger} @> ${JSON.stringify({
+            source: "plan_acceptance",
+            proposalId: proposal.json().id,
+          })}::jsonb`,
+        ),
+      );
+    expect(builderRuns).toHaveLength(1);
+    expect(builderRuns[0]).toMatchObject({
+      agentDefId: builder.id,
+      engine: builder.engine,
+      gh: architectRun.gh,
+    });
+    const queued = await db
+      .select()
+      .from(runEvents)
+      .where(eq(runEvents.runId, builderRuns[0]?.id ?? ""));
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      type: "queued",
+      data: { source: "plan_acceptance", architectRunId: architectRun.id },
+    });
+
+    const duplicateProposal = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        projectId: planProjectId,
+        runId: architectRun.id,
+        actionTypeId: planAcceptance.id,
+        payload: {},
+        contextMd: "A duplicate approval for the same architect plan",
+      },
+    });
+    const duplicateApproval = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${duplicateProposal.json().id}/decide`,
+      headers: { cookie },
+      payload: { decision: "approve" },
+    });
+    expect(duplicateApproval.statusCode).toBe(200);
+    expect(duplicateApproval.json().state).toBe("executed");
+    expect(
+      await db
+        .select()
+        .from(runs)
+        .where(
+          sql`${runs.trigger} @> ${JSON.stringify({
+            source: "plan_acceptance",
+            architectRunId: architectRun.id,
+          })}::jsonb`,
+        ),
+    ).toHaveLength(1);
+
+    // A retry must reuse the architect-plan-linked run even if the configured
+    // builder definition changed after the original dispatch.
+    await db.update(agentDefs).set({ enabled: false }).where(eq(agentDefs.id, builder.id));
+    await db.insert(agentDefs).values({
+      id: newId("agent"),
+      orgId,
+      projectId: planProjectId,
+      name: "builder",
+      engine: baseAgent.engine,
+      model: baseAgent.model,
+      contractItemId: baseAgent.contractItemId,
+      harnessItemId: baseAgent.harnessItemId,
+      triggers: [{ type: "command", command: "builder" }],
+      sandboxProfileId: baseAgent.sandboxProfileId,
+      permissions: baseAgent.permissions,
+    });
+    await db
+      .update(proposals)
+      .set({ state: "execution_failed" })
+      .where(eq(proposals.id, proposal.json().id));
+    const retried = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${proposal.json().id}/execute`,
+      headers: { cookie },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().state).toBe("executed");
+    const retriedBuilderRuns = await db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, orgId),
+          sql`${runs.trigger} @> ${JSON.stringify({
+            source: "plan_acceptance",
+            proposalId: proposal.json().id,
+          })}::jsonb`,
+        ),
+      );
+    expect(retriedBuilderRuns).toHaveLength(1);
+    expect(retriedBuilderRuns[0]?.agentDefId).toBe(builder.id);
+
+    await db
+      .update(repos)
+      .set({ renderAnswers: { execution_lane: { architect: "platform", builder: "repo" } } })
+      .where(eq(repos.id, planRepo.id));
+    const repoLaneArchitect = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: planProjectId,
+          mode: "architect",
+          engine: "codex",
+          status: "succeeded",
+          trigger: { type: "github_comment", repo: { id: planRepo.id } },
+          gh: { owner: repoOwner, repo: planRepo.name, issueNumber: 43 },
+          createdBy: { type: "user", id: "architect-requester" },
+        })
+        .returning()
+    )[0];
+    if (!repoLaneArchitect) throw new Error("repo-lane architect fixture missing");
+    const repoLaneProposal = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        projectId: planProjectId,
+        runId: repoLaneArchitect.id,
+        actionTypeId: planAcceptance.id,
+        payload: {},
+        contextMd: "Repo lane must still require /builder",
+      },
+    });
+    const repoLaneApproval = await app.inject({
+      method: "POST",
+      url: `/v1/proposals/${repoLaneProposal.json().id}/decide`,
+      headers: { cookie },
+      payload: { decision: "approve" },
+    });
+    expect(repoLaneApproval.json().state).toBe("execution_failed");
+    const repoLaneEvents = await db
+      .select()
+      .from(proposalEvents)
+      .where(eq(proposalEvents.proposalId, repoLaneProposal.json().id));
+    expect(repoLaneEvents.find((event) => event.type === "execution_failed")?.data).toMatchObject({
+      error: "plan_acceptance_builder_uses_repo_lane",
+    });
   });
 
   it("refuses an mcp_tool_call proposal on the generic route (per-tool perm bypass)", async () => {

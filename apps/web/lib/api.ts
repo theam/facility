@@ -1,4 +1,5 @@
 import type {
+  AnalyticsOverview,
   AuditEvent,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
@@ -177,6 +178,8 @@ export const api = {
   keys: () => apiFetch("GET", "/v1/keys"),
   providers: () => apiFetch("GET", "/v1/providers"),
   budgets: () => apiFetch("GET", "/v1/budgets"),
+  analyticsOverview: (): Promise<ApiResult<AnalyticsOverview>> =>
+    apiFetch("GET", "/v1/analytics/overview"),
 };
 
 /**

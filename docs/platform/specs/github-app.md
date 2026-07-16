@@ -12,7 +12,7 @@ Handled events (idempotent by delivery id):
 - `installation[created|deleted|suspend|unsuspend]`, `installation_repositories` → upsert github_installations; orphaned repos flagged.
 - `push` (default branch): if any managed path changed → enqueue `fingerprints.verify(repoId)`.
 - `issues[opened,labeled]`, `issue_comment[created]` → trigger router (below).
-- `pull_request[closed]` on agent branches (`claude/*`,`codex/*`,`facility/*`) → upsert outcomes row (merged? review rounds via API, fixup commits by author≠agent).
+- `pull_request[closed]` on agent branches (`claude/*`,`codex/*`,`facility/*`) → upsert the raw terminal outcome and review/fixup counts immediately. A merged row remains unassessed until the independent outcome collector obtains merger, enforced merge-method, and linked-issue evidence from GitHub.
 - `workflow_run[completed]` for facility-* workflows → health signal store (platform_issues on failure streaks handled by watchtower chunk).
 
 **Trigger router (compat lane)**: on issue_comment matching start-of-line `/architect|/builder|/codex-architect|/codex-builder` (the hardening-5 regex, ported exactly) AND sender is human (`sender.type != 'Bot'`) AND sender has write permission (check via API) AND the repo's project has a platform-native agent_def bound to that command → create platform run (trigger payload: {repo, issue, comment id — NEVER raw text; the runner fetches text at execution time as data}) and post an ack comment via App. If the repo runs vendored workflows for that command (project setting `execution_lane: repo|platform` per command), do nothing — the repo workflow handles it. Default for migrated repos: `repo` lane (zero behavior change).

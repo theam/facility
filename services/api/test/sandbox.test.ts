@@ -376,6 +376,71 @@ describe("sandbox api", async () => {
     expect(forgedMessages).toHaveLength(0);
   });
 
+  it("stores actual check outcomes and provenance in the run receipt", async () => {
+    const token = "frt_receipt_checks";
+    const run = await insertRunnerRun(token, "running");
+    await appendRunEvents(db, orgId, run.id, [
+      {
+        type: "check",
+        data: {
+          command: "pnpm test",
+          status: "passed",
+          exit_code: 0,
+          self_reported: false,
+        },
+      },
+      {
+        type: "check",
+        data: { name: "agent smoke", status: "skipped", self_reported: true },
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/result`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: "succeeded" },
+    });
+    expect(response.statusCode).toBe(200);
+    const finished = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    expect((finished?.receipt as { checks?: unknown[] })?.checks).toEqual([
+      { name: "pnpm test", status: "passed", source: "platform", exit_code: 0 },
+      { name: "agent smoke", status: "skipped", source: "agent" },
+    ]);
+    expect((finished?.receipt as { checks_truncated?: boolean })?.checks_truncated).toBe(false);
+  });
+
+  it("discloses when a run receipt truncates its check list", async () => {
+    const token = "frt_receipt_checks_truncated";
+    const run = await insertRunnerRun(token, "running");
+    await appendRunEvents(
+      db,
+      orgId,
+      run.id,
+      Array.from({ length: 201 }, (_, index) => ({
+        type: "check",
+        data: { name: `check ${index + 1}`, status: "passed", self_reported: false },
+      })),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/result`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: "succeeded" },
+    });
+    expect(response.statusCode).toBe(200);
+    const finished = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    const receipt = finished?.receipt as {
+      checks?: unknown[];
+      checks_truncated?: boolean;
+      events?: { checks?: number };
+    };
+    expect(receipt.checks).toHaveLength(200);
+    expect(receipt.checks_truncated).toBe(true);
+    expect(receipt.events?.checks).toBe(201);
+  });
+
   it("delivers run events over the NOTIFY-backed SSE path without safety polling", async () => {
     const token = "frt_stream";
     const run = await insertRunnerRun(token, "running");

@@ -5,9 +5,9 @@
 # to health. Two instruments, straight from the GitHub API (never from
 # telemetry the facility itself writes):
 #
-#   outcomes (nightly)  joins every agent PR with its fate — merged/rejected,
-#                       review rounds, human fixup commits — and keeps the
-#                       numbers on the watchtower dashboard issue.
+#   outcomes (nightly)  proves acceptance from a human squash merge, links the
+#                       issue lead time, and reports ambiguous evidence as
+#                       unassessed on the watchtower dashboard issue.
 #   health   (daily)    failure streaks and run budgets per workflow
 #                       (budgets: .github/facility/watchtower/budgets.json);
 #                       maintains a single incident issue and goes RED when

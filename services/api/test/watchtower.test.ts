@@ -24,7 +24,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AppConfig } from "../src/types.js";
-import { rollupAnalytics } from "../src/watchtower/analytics.js";
+import { analyticsOverview, rollupAnalytics } from "../src/watchtower/analytics.js";
 import { CANARY_MESSAGE_HASH, collectCanaries } from "../src/watchtower/canary.js";
 import type { GitHubClient, WorkflowRun } from "../src/watchtower/github.js";
 import { collectGitHubHealth } from "../src/watchtower/github-health.js";
@@ -57,6 +57,7 @@ class FakeGitHub implements GitHubClient {
   closedPulls: Awaited<ReturnType<GitHubClient["listClosedPulls"]>> = [];
   commits = new Map<number, Awaited<ReturnType<GitHubClient["listPullCommits"]>>>();
   reviews = new Map<number, Awaited<ReturnType<GitHubClient["listPullReviews"]>>>();
+  outcomeEvidence = new Map<number, Awaited<ReturnType<GitHubClient["getOutcomeEvidence"]>>>();
   workflowRuns: WorkflowRun[] = [];
   textFiles = new Map<string, string | null>();
 
@@ -70,6 +71,12 @@ class FakeGitHub implements GitHubClient {
 
   async listPullReviews(_repo: unknown, number: number) {
     return this.reviews.get(number) ?? [];
+  }
+
+  async getOutcomeEvidence(_repo: unknown, number: number) {
+    const evidence = this.outcomeEvidence.get(number);
+    if (!evidence) throw new Error(`missing outcome evidence for PR ${number}`);
+    return evidence;
   }
 
   async listWorkflowRuns() {
@@ -146,21 +153,225 @@ describe("watchtower", async () => {
         closed_at: now.toISOString(),
         merged_at: null,
       },
+      {
+        number: 12,
+        user: { login: "human" },
+        head: { ref: "codex/merge-commit" },
+        created_at: new Date(now.getTime() - 3 * 3600_000).toISOString(),
+        closed_at: now.toISOString(),
+        merged_at: now.toISOString(),
+      },
+      {
+        number: 13,
+        user: { login: "human" },
+        head: { ref: "codex/bot-merged" },
+        created_at: new Date(now.getTime() - 3 * 3600_000).toISOString(),
+        closed_at: now.toISOString(),
+        merged_at: now.toISOString(),
+      },
+      {
+        number: 14,
+        user: { login: "human" },
+        head: { ref: "codex/ambiguous-method" },
+        created_at: new Date(now.getTime() - 3 * 3600_000).toISOString(),
+        closed_at: now.toISOString(),
+        merged_at: now.toISOString(),
+      },
     ];
     github.commits.set(10, [{ author: { login: "codex[bot]" } }]);
     github.commits.set(11, [{ author: { login: "codex[bot]" } }, { author: { login: "adrian" } }]);
+    github.commits.set(12, [{ author: { login: "codex[bot]" } }]);
+    github.commits.set(13, [{ author: { login: "codex[bot]" } }]);
+    github.commits.set(14, [{ author: { login: "codex[bot]" } }]);
     github.reviews.set(11, [{ state: "CHANGES_REQUESTED" }]);
+    github.outcomeEvidence.set(10, {
+      mergedBy: { login: "reviewer", type: "User" },
+      mergeCommitParentCount: 1,
+      closingIssues: [
+        { number: 7, createdAt: new Date(now.getTime() - 22 * 3600_000).toISOString() },
+      ],
+      mergePolicy: {
+        mergeCommitAllowed: true,
+        rebaseMergeAllowed: false,
+        squashMergeAllowed: true,
+      },
+    });
+    github.outcomeEvidence.set(12, {
+      mergedBy: { login: "reviewer", type: "User" },
+      mergeCommitParentCount: 2,
+      closingIssues: [],
+      mergePolicy: {
+        mergeCommitAllowed: true,
+        rebaseMergeAllowed: false,
+        squashMergeAllowed: true,
+      },
+    });
+    github.outcomeEvidence.set(13, {
+      mergedBy: { login: "merge-queue[bot]", type: "Bot" },
+      mergeCommitParentCount: 1,
+      closingIssues: [],
+      mergePolicy: {
+        mergeCommitAllowed: true,
+        rebaseMergeAllowed: false,
+        squashMergeAllowed: true,
+      },
+    });
+    github.outcomeEvidence.set(14, {
+      mergedBy: { login: "reviewer", type: "User" },
+      mergeCommitParentCount: 1,
+      closingIssues: [],
+      mergePolicy: {
+        mergeCommitAllowed: false,
+        rebaseMergeAllowed: true,
+        squashMergeAllowed: true,
+      },
+    });
     await collectOutcomes(db, github);
     const rows = await db
       .select()
       .from(outcomes)
       .where(eq(outcomes.projectId, project.id))
       .orderBy(outcomes.prNumber);
-    expect(rows.map((row) => row.fate)).toEqual(["merged", "closed"]);
+    expect(rows.map((row) => row.fate)).toEqual(["merged", "closed", "merged", "merged", "merged"]);
     expect(rows[0]?.reviewRounds).toBe(0);
     expect(rows[0]?.fixupCommits).toBe(0);
+    expect(rows[0]).toMatchObject({
+      accepted: true,
+      issueNumber: 7,
+      mergedBy: "reviewer",
+      mergerType: "User",
+      mergeMethod: "squash",
+    });
+    expect(Number(rows[0]?.hoursIssueToMerge)).toBe(22);
+    expect(rows[1]?.accepted).toBe(false);
     expect(rows[1]?.reviewRounds).toBe(1);
     expect(rows[1]?.fixupCommits).toBe(1);
+    expect(rows[2]).toMatchObject({ accepted: false, mergeMethod: "merge" });
+    expect(rows[3]).toMatchObject({
+      accepted: false,
+      mergeMethod: "squash",
+      mergerType: "Bot",
+    });
+    expect(rows[4]).toMatchObject({ accepted: null, mergeMethod: "unverified" });
+  });
+
+  it("keeps merged outcomes unassessed when GitHub cannot prove acceptance", async () => {
+    const project = await insertProject({ watchtower: { branchPrefixes: ["codex/"] } });
+    await insertRepo(project.id, "unassessed-outcomes");
+    const github = new FakeGitHub();
+    const now = new Date();
+    github.closedPulls = [
+      {
+        number: 12,
+        user: { login: "human" },
+        head: { ref: "codex/ambiguous" },
+        created_at: new Date(now.getTime() - 3600_000).toISOString(),
+        closed_at: now.toISOString(),
+        merged_at: now.toISOString(),
+      },
+    ];
+    github.commits.set(12, [{ author: { login: "codex[bot]" } }]);
+
+    await collectOutcomes(db, github);
+
+    const outcome = (
+      await db.select().from(outcomes).where(eq(outcomes.projectId, project.id)).limit(1)
+    )[0];
+    expect(outcome).toMatchObject({ fate: "merged", accepted: null, mergeMethod: null });
+    const issue = (
+      await db
+        .select()
+        .from(platformIssues)
+        .where(
+          and(
+            eq(platformIssues.projectId, project.id),
+            eq(platformIssues.kind, "integration_error"),
+          ),
+        )
+        .limit(1)
+    )[0];
+    expect(issue?.title).toContain("Outcome evidence unavailable");
+    const afterFailure = (
+      await db.select().from(projects).where(eq(projects.id, project.id)).limit(1)
+    )[0];
+    expect(
+      (afterFailure?.settings as { watchtower?: { outcomesLastRunAt?: string } }).watchtower
+        ?.outcomesLastRunAt,
+    ).toBeUndefined();
+
+    await db
+      .update(outcomes)
+      .set({
+        accepted: true,
+        mergedBy: "prior-reviewer",
+        mergerType: "User",
+        mergeMethod: "squash",
+      })
+      .where(eq(outcomes.id, outcome?.id ?? ""));
+    await collectOutcomes(db, github);
+    const preserved = (
+      await db
+        .select()
+        .from(outcomes)
+        .where(eq(outcomes.id, outcome?.id ?? ""))
+        .limit(1)
+    )[0];
+    expect(preserved).toMatchObject({
+      accepted: true,
+      mergedBy: "prior-reviewer",
+      mergerType: "User",
+      mergeMethod: "squash",
+    });
+  });
+
+  it("clears a stale rejection when a closed PR is reopened and merged without evidence", async () => {
+    const project = await insertProject({ watchtower: { branchPrefixes: ["codex/"] } });
+    await insertRepo(project.id, "reopened-outcome");
+    const github = new FakeGitHub();
+    const openedAt = new Date(Date.now() - 2 * 3600_000).toISOString();
+    github.closedPulls = [
+      {
+        number: 15,
+        user: { login: "human" },
+        head: { ref: "codex/reopened" },
+        created_at: openedAt,
+        closed_at: new Date().toISOString(),
+        merged_at: null,
+      },
+    ];
+    github.commits.set(15, [{ author: { login: "codex[bot]" } }]);
+
+    await collectOutcomes(db, github);
+    expect(
+      (
+        await db
+          .select()
+          .from(outcomes)
+          .where(and(eq(outcomes.projectId, project.id), eq(outcomes.prNumber, 15)))
+          .limit(1)
+      )[0],
+    ).toMatchObject({ fate: "closed", accepted: false });
+
+    const mergedAt = new Date(Date.now() + 60_000).toISOString();
+    const reopenedPr = github.closedPulls[0];
+    if (!reopenedPr) throw new Error("reopened PR fixture missing");
+    github.closedPulls = [
+      {
+        ...reopenedPr,
+        closed_at: mergedAt,
+        merged_at: mergedAt,
+      },
+    ];
+    await collectOutcomes(db, github);
+    expect(
+      (
+        await db
+          .select()
+          .from(outcomes)
+          .where(and(eq(outcomes.projectId, project.id), eq(outcomes.prNumber, 15)))
+          .limit(1)
+      )[0],
+    ).toMatchObject({ fate: "merged", accepted: null });
   });
 
   it("dedupes, resolves, and reopens platform issues by fingerprint", async () => {
@@ -325,6 +536,20 @@ describe("watchtower", async () => {
       openedAt: new Date(Date.now() - 3600_000),
       terminalAt: new Date(),
       fate: "merged",
+      accepted: true,
+    });
+    await db.insert(outcomes).values({
+      id: newId("evt"),
+      orgId,
+      projectId: project.id,
+      repo: "theam/rollup",
+      prNumber: Number(String(Date.now()).slice(-6)) + 1,
+      agentLane: "codex",
+      openedAt: new Date(Date.now() - 3600_000),
+      terminalAt: new Date(),
+      fate: "merged",
+      accepted: false,
+      reviewRounds: 1,
     });
     await rollupAnalytics(db);
     const firstCount = await db
@@ -344,12 +569,24 @@ describe("watchtower", async () => {
     });
     expect(analytics.statusCode).toBe(200);
     expect(analytics.json().some((row: { bucket: string }) => row.bucket === "gpt-5.5")).toBe(true);
+    expect(
+      analytics.json().find((row: { bucket: string }) => row.bucket === "outcomes"),
+    ).toMatchObject({ outcomesAssessed: 2, outcomesAccepted: 1, acceptance: 50 });
+    const projectOverview = await analyticsOverview(db, orgId, project.id);
+    expect(projectOverview.outcomes30d).toMatchObject({ total: 2, assessed: 2, accepted: 1 });
+    expect(projectOverview.oneShot30d).toBe(50);
     const overview = await app.inject({
       method: "GET",
       url: "/v1/analytics/overview",
       headers: { cookie },
     });
     expect(overview.json().spendMtdCents).toBeGreaterThanOrEqual(55);
+    expect(overview.json().outcomes30d).toMatchObject({
+      total: expect.any(Number),
+      assessed: expect.any(Number),
+      accepted: expect.any(Number),
+      merged: expect.any(Number),
+    });
   });
 
   it("incremental rollup rebuilds only the trailing window and preserves older days", async () => {

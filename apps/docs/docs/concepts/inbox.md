@@ -4,9 +4,14 @@ title: The inbox
 
 # The inbox: human-in-the-loop, one place
 
-Every decision an agent needs from a human lands in one inbox: plan
+Every Facility action an agent needs from a human lands in one inbox: plan
 acceptances, learning-mode validations, kickstart reviews, budget overrides,
 task approvals from the Project Owner agent, escalations from blocked runs.
+
+This inbox implements **Gate 1** and other governed platform actions. **Gate
+2** remains the pull-request review, live-preview validation, and squash merge
+in GitHub. Facility surfaces evidence for that decision, but does not replace
+GitHub's protected-branch boundary.
 
 ## How it works
 
@@ -22,6 +27,9 @@ production (the AUTO-202 design):
 - **The ledger** is append-only: draft → open → approved / rejected /
   cancelled / expired, then executed or execution-failed. Who decided, when,
   and why is never reconstructable-only — it's recorded.
+- **Plan acceptance** is executable: approving a platform-lane plan creates
+  and queues the builder run linked to the architect run. In the repo lane,
+  the human invokes `/builder` in GitHub, which is the recorded Gate 1 action.
 
 ## Design intent
 

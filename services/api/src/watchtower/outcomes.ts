@@ -1,10 +1,11 @@
 import { newId } from "@facility/core";
 import { createDb, type FacilityDb, integrations, outcomes, projects, repos } from "@facility/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { AppConfig } from "../types.js";
 import {
   createGitHubClient,
   type GitHubClient,
+  type OutcomeEvidence,
   type PullCommit,
   type PullRequest,
 } from "./github.js";
@@ -63,6 +64,42 @@ function hoursToTerminal(pr: PullRequest) {
   return Math.round((Date.parse(pr.closed_at) - Date.parse(pr.created_at)) / 3600_000);
 }
 
+function mergeMethod(evidence: OutcomeEvidence) {
+  const policy = evidence.mergePolicy;
+  if (evidence.mergeCommitParentCount !== null) {
+    if (evidence.mergeCommitParentCount >= 2) return "merge";
+    if (evidence.mergeCommitParentCount === 1) {
+      if (policy.squashMergeAllowed && !policy.rebaseMergeAllowed) return "squash";
+      if (policy.rebaseMergeAllowed && !policy.squashMergeAllowed) return "rebase";
+      return "unverified";
+    }
+  }
+  const allowed = [
+    policy.mergeCommitAllowed ? "merge" : null,
+    policy.rebaseMergeAllowed ? "rebase" : null,
+    policy.squashMergeAllowed ? "squash" : null,
+  ].filter((value): value is string => Boolean(value));
+  return allowed.length === 1 ? allowed[0] : "unverified";
+}
+
+function acceptedOutcome(method: string, evidence: OutcomeEvidence): boolean | null {
+  if (method === "unverified" || !evidence.mergedBy) return null;
+  return method === "squash" && evidence.mergedBy.type === "User";
+}
+
+function earliestIssue(evidence: OutcomeEvidence) {
+  return [...evidence.closingIssues].sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  )[0];
+}
+
+function issueToMergeHours(issueOpenedAt: string | undefined, mergedAt: string | null) {
+  if (!issueOpenedAt || !mergedAt) return null;
+  const elapsedMs = Date.parse(mergedAt) - Date.parse(issueOpenedAt);
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
+  return (elapsedMs / 3600_000).toFixed(2);
+}
+
 export async function runWatchtowerOutcomes(
   config: AppConfig,
   github: GitHubClient = createGitHubClient(),
@@ -84,8 +121,11 @@ export async function collectOutcomes(db: FacilityDb, github: GitHubClient) {
     const since = cursor(project.settings);
     const prefixes = branchPrefixes(project.settings);
     const collected = [];
+    let projectEvidenceFailure = false;
     for (const repo of projectRepos) {
       const repoName = `${repo.owner}/${repo.name}`;
+      let evidenceAttempted = false;
+      let evidenceFailure: string | null = null;
       const closed = (await github.listClosedPulls({ owner: repo.owner, name: repo.name })).filter(
         (pr) => pr.closed_at && Date.parse(pr.closed_at) >= since.getTime(),
       );
@@ -105,6 +145,27 @@ export async function collectOutcomes(db: FacilityDb, github: GitHubClient) {
         const fixups = fixupCommits(commits);
         const fate = pr.merged_at ? "merged" : "closed";
         const hours = hoursToTerminal(pr);
+        let evidence: OutcomeEvidence | null = null;
+        if (pr.merged_at) {
+          evidenceAttempted = true;
+          try {
+            evidence = await github.getOutcomeEvidence(
+              { owner: repo.owner, name: repo.name },
+              pr.number,
+            );
+          } catch (error) {
+            evidenceFailure = error instanceof Error ? error.message : String(error);
+            projectEvidenceFailure = true;
+          }
+        }
+        const method = evidence ? mergeMethod(evidence) : null;
+        const accepted = pr.merged_at
+          ? evidence
+            ? acceptedOutcome(method ?? "unverified", evidence)
+            : null
+          : false;
+        const issue = evidence ? earliestIssue(evidence) : undefined;
+        const hoursFromIssue = issueToMergeHours(issue?.createdAt, pr.merged_at);
         await db
           .insert(outcomes)
           .values({
@@ -117,9 +178,16 @@ export async function collectOutcomes(db: FacilityDb, github: GitHubClient) {
             openedAt: new Date(pr.created_at),
             terminalAt: pr.closed_at ? new Date(pr.closed_at) : undefined,
             fate,
+            accepted,
+            issueNumber: issue?.number,
+            issueOpenedAt: issue ? new Date(issue.createdAt) : undefined,
+            mergedBy: evidence?.mergedBy?.login,
+            mergerType: evidence?.mergedBy?.type,
+            mergeMethod: method,
             reviewRounds,
             fixupCommits: fixups,
             hoursToTerminal: hours == null ? undefined : String(hours),
+            hoursIssueToMerge: hoursFromIssue ?? undefined,
           })
           .onConflictDoUpdate({
             target: [outcomes.orgId, outcomes.repo, outcomes.prNumber],
@@ -127,9 +195,19 @@ export async function collectOutcomes(db: FacilityDb, github: GitHubClient) {
               agentLane: laneFor(pr),
               terminalAt: pr.closed_at ? new Date(pr.closed_at) : undefined,
               fate,
+              accepted:
+                pr.merged_at && accepted === null
+                  ? sql`case when ${outcomes.fate} = 'merged' then ${outcomes.accepted} else null end`
+                  : accepted,
+              issueNumber: sql`coalesce(excluded.issue_number, ${outcomes.issueNumber})`,
+              issueOpenedAt: sql`coalesce(excluded.issue_opened_at, ${outcomes.issueOpenedAt})`,
+              mergedBy: sql`coalesce(excluded.merged_by, ${outcomes.mergedBy})`,
+              mergerType: sql`coalesce(excluded.merger_type, ${outcomes.mergerType})`,
+              mergeMethod: sql`coalesce(excluded.merge_method, ${outcomes.mergeMethod})`,
               reviewRounds,
               fixupCommits: fixups,
               hoursToTerminal: hours == null ? undefined : String(hours),
+              hoursIssueToMerge: sql`coalesce(excluded.hours_issue_to_merge, ${outcomes.hoursIssueToMerge})`,
               updatedAt: collectedAt,
             },
           });
@@ -137,28 +215,60 @@ export async function collectOutcomes(db: FacilityDb, github: GitHubClient) {
           pr: pr.number,
           repo: repoName,
           merged: Boolean(pr.merged_at),
+          accepted,
+          assessed: accepted !== null,
+          issue: issue?.number ?? null,
+          hoursIssueToMerge: hoursFromIssue == null ? null : Number(hoursFromIssue),
           reviewRounds,
           humanFixups: fixups,
         });
       }
+      const evidenceFingerprint = `integration_error:${repo.id}:outcome_evidence`;
+      if (evidenceFailure) {
+        await raisePlatformIssue(db, {
+          orgId: project.orgId,
+          projectId: project.id,
+          kind: "integration_error",
+          severity: "error",
+          fingerprint: evidenceFingerprint,
+          title: `Outcome evidence unavailable for ${repoName}`,
+          bodyMd: `${evidenceFailure}\n\nMerged PRs remain unassessed until GitHub evidence can be read.`,
+        });
+      } else if (evidenceAttempted) {
+        await resolvePlatformIssue(
+          db,
+          project.orgId,
+          evidenceFingerprint,
+          "GitHub outcome evidence is readable again.",
+        );
+      }
     }
     const merged = collected.filter((item) => item.merged).length;
+    const rejected = collected.length - merged;
+    const assessed = collected.filter((item) => item.assessed).length;
+    const accepted = collected.filter((item) => item.accepted).length;
     const oneShot = collected.filter(
       (item) => item.merged && item.reviewRounds === 0 && item.humanFixups === 0,
     ).length;
     const summary = {
-      schema: "facility.watchtower.outcomes.v1",
+      schema: "facility.watchtower.outcomes.v2",
       collectedAt: collectedAt.toISOString(),
       windowHours: Math.round((collectedAt.getTime() - since.getTime()) / 3600_000),
       agentPrs: collected.length,
       merged,
-      rejected: collected.length - merged,
-      acceptance: collected.length ? Math.round((100 * merged) / collected.length) : null,
+      rejected,
+      assessed,
+      accepted,
+      notAccepted: assessed - accepted,
+      unassessed: collected.length - assessed,
+      acceptance: assessed ? Math.round((100 * accepted) / assessed) : null,
       oneShot,
       outcomes: collected,
     };
     await postOutcomeSinks(db, project.orgId, project.id, summary);
-    await persistCursor(db, project.id, project.settings, collectedAt);
+    if (!projectEvidenceFailure) {
+      await persistCursor(db, project.id, project.settings, collectedAt);
+    }
   }
 }
 

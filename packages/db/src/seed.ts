@@ -57,6 +57,7 @@ function actionTypeExecutor(name: string) {
       "rule_proposal",
       "guard_candidate",
       "kb_amendment",
+      "plan_acceptance",
     ].includes(name)
       ? "internal"
       : name === "mcp_tool_call"
@@ -294,7 +295,12 @@ async function seedOrgEssentialsSql(sql: postgres.Sql, orgId: string): Promise<v
       ON CONFLICT (org_id, name) DO UPDATE SET
         payload_schema = EXCLUDED.payload_schema,
         resolver = EXCLUDED.resolver,
-        executor = EXCLUDED.executor,
+        executor = CASE
+          WHEN action_types.name = 'plan_acceptance'
+            AND coalesce(action_types.executor->>'type', 'none') <> 'none'
+            THEN action_types.executor
+          ELSE EXCLUDED.executor
+        END,
         default_ttl_hours = EXCLUDED.default_ttl_hours,
         updated_at = now()
     `;
@@ -339,7 +345,12 @@ async function seedOrgEssentialsDb(db: RegistryDb, orgId: string): Promise<void>
       ON CONFLICT (org_id, name) DO UPDATE SET
         payload_schema = EXCLUDED.payload_schema,
         resolver = EXCLUDED.resolver,
-        executor = EXCLUDED.executor,
+        executor = CASE
+          WHEN action_types.name = 'plan_acceptance'
+            AND coalesce(action_types.executor->>'type', 'none') <> 'none'
+            THEN action_types.executor
+          ELSE EXCLUDED.executor
+        END,
         default_ttl_hours = EXCLUDED.default_ttl_hours,
         updated_at = now()
     `);

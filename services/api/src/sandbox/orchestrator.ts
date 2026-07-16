@@ -218,6 +218,8 @@ export async function finishRun(
       cost_source: "gateway",
     },
     events: { count: aggregate.eventCount, checks: aggregate.checkCount },
+    checks: aggregate.checks,
+    checks_truncated: aggregate.checkCount > aggregate.checks.length,
   };
   const claimed = (
     await db
@@ -1106,6 +1108,12 @@ async function gatewayAggregate(db: ReturnType<typeof createDb>["db"], runId: st
     from run_events
     where run_id = ${runId}
   `);
+  const checkEvents = await db
+    .select({ data: runEvents.data })
+    .from(runEvents)
+    .where(and(eq(runEvents.runId, runId), eq(runEvents.type, "check")))
+    .orderBy(runEvents.seq)
+    .limit(200);
   const eventRow = (events as unknown as Array<{ event_count: number; check_count: number }>)[0];
   return {
     inputTokens: Number(usage?.inputTokens ?? 0),
@@ -1115,6 +1123,22 @@ async function gatewayAggregate(db: ReturnType<typeof createDb>["db"], runId: st
     costCents: Number(usage?.costCents ?? 0),
     eventCount: Number(eventRow?.event_count ?? 0),
     checkCount: Number(eventRow?.check_count ?? 0),
+    checks: checkEvents.map(({ data }) => receiptCheck(data)),
+  };
+}
+
+function receiptCheck(value: unknown) {
+  const data = objectOrEmpty(value);
+  const rawStatus = typeof data.status === "string" ? data.status : "unknown";
+  const status = ["passed", "failed", "skipped"].includes(rawStatus) ? rawStatus : "unknown";
+  const rawName = typeof data.command === "string" ? data.command : data.name;
+  return {
+    name: typeof rawName === "string" && rawName.trim() ? rawName : "unnamed check",
+    status,
+    source: data.self_reported === false ? "platform" : "agent",
+    ...(typeof data.exit_code === "number" && Number.isInteger(data.exit_code)
+      ? { exit_code: data.exit_code }
+      : {}),
   };
 }
 

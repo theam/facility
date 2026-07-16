@@ -419,6 +419,7 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         { type: p.type, id: p.id },
         {
           config,
+          enqueue: app.enqueue,
           githubFactory: app.githubClientFactory,
         },
       );

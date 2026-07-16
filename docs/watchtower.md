@@ -20,7 +20,7 @@ worse than none: it keeps vouching.
 
 | instrument | cadence | what it does |
 |---|---|---|
-| **outcomes** | nightly | joins every agent PR that reached a terminal state with its fate: merged or rejected, hours to terminal, review rounds, human fixup commits. Keeps acceptance / one-shot / fixup numbers on the `facility-watchtower` dashboard issue — a metric, not an anecdote. |
+| **outcomes** | nightly | joins every terminal agent PR to its linked issue, human merger, merge-commit shape plus allowed methods, review rounds, and human fixup commits. Fate is merged or rejected; accepted means human squash-merged; one-shot means merged with zero change requests and zero human fixup commits; lead time is issue creation → merge. Ambiguous merge-method evidence is reported unassessed, never guessed. Keeps acceptance / coverage / one-shot / fixup numbers on the `facility-watchtower` dashboard issue — a metric, not an anecdote. |
 | **health** | daily | failure streaks and run budgets per facility workflow (budgets: `.github/facility/watchtower/budgets.json`, a *reviewed file*, not a dashboard setting). Manages a single incident issue — opens it, updates it, closes it on recovery — and **goes red itself** when the facility is unhealthy, so the Actions tab is the at-a-glance signal. |
 | **canary** | weekly | a synthetic `/architect` flight through the REAL pipeline: trigger → authorization → crew run → reply. Monitors tell you a workflow ran; only the canary proves the whole chain still works before a human hits the breakage. On the production system its *first* flight caught a real authorization bug. |
 

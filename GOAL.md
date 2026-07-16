@@ -12,6 +12,7 @@ Some of the capabilities we want to support include:
 * Manage different projects
 * Comprehensive analytics, with clear separation and visibility across different projects.
 * Execution sandboxes for Claude agents, Codex agents, and bring-your-own model providers.
+* Live preview environments for every implementation pull request so humans can validate behavior quickly. Require provider-managed per-PR previews now; build native, provider-agnostic preview orchestration as an explicit roadmap capability.
 * Enterprise-wide skill and project knowledge management: rules, harnesses, skills.
 * Creation of new agents for the loop/system for project-specific use cases, with bundled versions of our recommended ones.
 * Versioning and templating of the overall system.

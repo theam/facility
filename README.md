@@ -42,8 +42,9 @@ shared governance or platform-hosted agent runs.
 | Goal | Facility provides | Available with |
 |---|---|---|
 | Take work from an issue to a pull request | `/architect` investigates and proposes a plan; a human invokes `/builder`; the builder implements, runs the repository's checks, pushes a branch, and opens a PR. | Installer or platform |
-| Keep accountability with people | A person accepts the plan and a person reviews and merges the PR. Agents cannot approve, merge, or push to protected branches. | Installer or platform |
+| Keep accountability with people | A person accepts the plan; at Gate 2 a person validates the live preview, reviews the PR, and squash-merges it. Agents cannot approve, merge, or push to protected branches. | Installer or platform |
 | Give agents a usable job site | Each run starts with the repository's provision command, then follows `STANDARD.md`, relevant skills, specialist review, and the configured test/build commands. | Installer or platform |
+| Validate behavior before merge | Every implementation PR must expose a provider-managed live preview today; native provider-agnostic preview orchestration is on the [roadmap](apps/docs/docs/roadmap.md). | Installer or platform |
 | Turn team rules into enforcement | Repository-specific invariants live in zero-dependency guards. Repeated review feedback can graduate from prose into a deterministic check. | Installer or platform |
 | Keep repositories on a known system version | The platform fingerprints managed files, reports drift, and delivers template upgrades as reviewable pull requests. | Platform |
 | Control model access and spend | The gateway issues project-scoped virtual keys, enforces budgets, attributes usage by project/agent/task, and can store request/response envelopes in your object store. | Platform |
@@ -80,9 +81,9 @@ of being replaced, and the current answers are written to `.facility.json`.
 After installation, follow the human-only steps printed by the CLI: configure
 the [selected authentication mode](#repository-automation-authentication),
 install the Claude GitHub App, protect the default branch, and use test-tier
-spend-capped credentials for integration tests. Then commit the generated files,
-open an issue, and comment `/architect` to start the delivery loop described
-below.
+spend-capped credentials for integration tests. Connect a deployment provider
+and require its per-PR live preview check. Then commit the generated files, open
+an issue, and comment `/architect` to start the delivery loop described below.
 
 See the [CLI reference](apps/docs/docs/reference/cli.md) and
 [guards guide](docs/guards.md) for the available commands and extension points.
@@ -161,10 +162,11 @@ Whichever setup you choose, work follows the same reviewed path:
 3. A human accepts that plan by invoking `/builder`.
 4. `/builder` provisions the environment, implements the complete change, runs
    the configured checks, and opens a pull request.
-5. Automated review, deterministic guards, and the repository's CI examine the
+5. The deployment provider creates a live, isolated preview for fast validation.
+6. Automated review, deterministic guards, and the repository's CI examine the
    result.
-6. A human reviews and merges.
-7. The run leaves a receipt; the watchtower joins it with the eventual outcome
+7. At Gate 2, a human validates the preview, reviews the PR, and squash-merges it.
+8. The run leaves a receipt; the watchtower joins it with the eventual outcome
    and reports health over time.
 
 Facility supports two execution lanes. The **repo lane** runs the vendored

@@ -301,6 +301,7 @@ async function processPullRequest(
         ? new Date(payload.pull_request.closed_at)
         : new Date(),
       fate: payload.pull_request?.merged ? "merged" : "closed",
+      accepted: payload.pull_request?.merged ? null : false,
       reviewRounds: metrics.reviewRounds,
       fixupCommits: metrics.fixupCommits,
     })
@@ -311,6 +312,13 @@ async function processPullRequest(
           ? new Date(payload.pull_request.closed_at)
           : new Date(),
         fate: payload.pull_request?.merged ? "merged" : "closed",
+        accepted: payload.pull_request?.merged
+          ? sql`case
+              when ${outcomes.mergeMethod} is not null and ${outcomes.mergedBy} is not null
+                then ${outcomes.accepted}
+              else null
+            end`
+          : false,
         reviewRounds: metrics.reviewRounds,
         fixupCommits: metrics.fixupCommits,
         runId: producingRun?.id,

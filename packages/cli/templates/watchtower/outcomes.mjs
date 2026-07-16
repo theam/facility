@@ -3,10 +3,10 @@
 //
 // Nightly outcome collector. Receipts measure what a run consumed; outcomes
 // measure whether the work was ACCEPTED. This joins every agent PR that
-// reached a terminal state in the lookback window with its fate — merged or
-// rejected, hours to terminal, review rounds, human fixup commits — and
-// keeps the numbers on the watchtower dashboard issue. Acceptance is a
-// metric, not an anecdote.
+// reached a terminal state in the lookback window with acceptance evidence:
+// human merger + enforced squash-only merge policy, linked issue lead time,
+// review rounds, and human fixup commits. Missing evidence is reported as
+// unassessed rather than guessed.
 //
 // Privacy: numbers, enums, and PR numbers only. Never titles, bodies, diffs.
 // Env: GH_TOKEN (rw issues), GITHUB_REPOSITORY, WINDOW_HOURS (26),
@@ -24,6 +24,19 @@ const since = Date.now() - windowHours * 3600_000;
 
 const gh = (args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 const api = (path) => JSON.parse(gh(["api", path]));
+const graphql = (query, fields) =>
+  JSON.parse(
+    gh([
+      "api",
+      "graphql",
+      "-f",
+      `query=${query}`,
+      ...Object.entries(fields).flatMap(([key, value]) => [
+        typeof value === "number" ? "-F" : "-f",
+        `${key}=${value}`,
+      ]),
+    ]),
+  ).data;
 const isBot = (login) => typeof login === "string" && login.endsWith("[bot]");
 const AGENT_BRANCH_PREFIXES = ["claude/", "codex/", "copilot/"];
 
@@ -31,6 +44,60 @@ const closed = api(
   `repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=${Math.min(prLimit, 100)}`,
 );
 const terminal = closed.filter((pr) => Date.parse(pr.closed_at) >= since);
+const [owner, name] = repo.split("/");
+
+const EVIDENCE_QUERY = `query FacilityOutcomeEvidence($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    mergeCommitAllowed
+    rebaseMergeAllowed
+    squashMergeAllowed
+    pullRequest(number: $number) {
+      mergedBy { login __typename }
+      mergeCommit { parents(first: 2) { totalCount } }
+      closingIssuesReferences(
+        first: 1
+        orderBy: { field: CREATED_AT, direction: ASC }
+      ) { nodes { number createdAt } }
+    }
+  }
+}`;
+
+function acceptanceEvidence(pr) {
+  if (!pr.merged_at) return { accepted: false, mergeMethod: null, issue: null };
+  try {
+    const repository = graphql(EVIDENCE_QUERY, { owner, name, number: pr.number }).repository;
+    const parents = repository.pullRequest?.mergeCommit?.parents.totalCount ?? null;
+    let mergeMethod = "unverified";
+    if (parents >= 2) {
+      mergeMethod = "merge";
+    } else if (parents === 1) {
+      if (repository.squashMergeAllowed && !repository.rebaseMergeAllowed) mergeMethod = "squash";
+      if (repository.rebaseMergeAllowed && !repository.squashMergeAllowed) mergeMethod = "rebase";
+    } else {
+      const allowed = [
+        repository.mergeCommitAllowed ? "merge" : null,
+        repository.rebaseMergeAllowed ? "rebase" : null,
+        repository.squashMergeAllowed ? "squash" : null,
+      ].filter(Boolean);
+      mergeMethod = allowed.length === 1 ? allowed[0] : "unverified";
+    }
+    const mergedBy = repository.pullRequest?.mergedBy ?? null;
+    const accepted =
+      mergeMethod === "unverified" || !mergedBy
+        ? null
+        : mergeMethod === "squash" && mergedBy.__typename === "User";
+    const issue = repository.pullRequest?.closingIssuesReferences.nodes?.[0] ?? null;
+    return { accepted, mergeMethod, mergedBy, issue };
+  } catch {
+    return {
+      accepted: null,
+      mergeMethod: "unverified",
+      mergedBy: null,
+      issue: null,
+      evidenceError: true,
+    };
+  }
+}
 
 function isAgentPr(pr, commits) {
   if (isBot(pr.user?.login)) return true;
@@ -52,26 +119,50 @@ for (const pr of terminal) {
           .length;
   const reviewRounds = reviews.filter((r) => r.state === "CHANGES_REQUESTED").length;
   const merged = Boolean(pr.merged_at);
+  const evidence = acceptanceEvidence(pr);
   outcomes.push({
     pr: pr.number,
     lane: pr.head?.ref?.split("/")[0] ?? "unknown",
     merged,
+    accepted: evidence.accepted,
+    assessed: evidence.accepted !== null,
+    mergeMethod: evidence.mergeMethod,
+    mergedBy: evidence.mergedBy?.login ?? null,
+    mergerType: evidence.mergedBy?.__typename ?? null,
+    evidenceError: evidence.evidenceError ?? null,
+    issue: evidence.issue?.number ?? null,
+    hoursIssueToMerge:
+      evidence.issue &&
+      pr.merged_at &&
+      Date.parse(pr.merged_at) >= Date.parse(evidence.issue.createdAt)
+        ? Number(
+            ((Date.parse(pr.merged_at) - Date.parse(evidence.issue.createdAt)) / 3600_000).toFixed(
+              2,
+            ),
+          )
+        : null,
     hoursToTerminal: Math.round((Date.parse(pr.closed_at) - Date.parse(pr.created_at)) / 3600_000),
     reviewRounds,
     humanFixups,
-    oneShot: merged && reviewRounds === 0 && humanFixups === 0,
+    oneShot: Boolean(pr.merged_at) && reviewRounds === 0 && humanFixups === 0,
   });
 }
 
 const mergedCount = outcomes.filter((o) => o.merged).length;
+const assessedCount = outcomes.filter((o) => o.assessed).length;
+const acceptedCount = outcomes.filter((o) => o.accepted).length;
 const summary = {
-  schema: "facility.watchtower.outcomes.v1",
+  schema: "facility.watchtower.outcomes.v2",
   collectedAt: new Date().toISOString(),
   windowHours,
   agentPrs: outcomes.length,
   merged: mergedCount,
   rejected: outcomes.length - mergedCount,
-  acceptance: outcomes.length ? Math.round((100 * mergedCount) / outcomes.length) : null,
+  assessed: assessedCount,
+  accepted: acceptedCount,
+  notAccepted: assessedCount - acceptedCount,
+  unassessed: outcomes.length - assessedCount,
+  acceptance: assessedCount ? Math.round((100 * acceptedCount) / assessedCount) : null,
   oneShot: outcomes.filter((o) => o.oneShot).length,
   outcomes,
 };
@@ -91,11 +182,14 @@ if (process.env.WATCHTOWER_WEBHOOK_URL) {
 // --- Dashboard issue (label: facility-watchtower) ---
 const MARK_START = "<!-- facility-watchtower:latest -->";
 const MARK_END = "<!-- /facility-watchtower:latest -->";
-const line = `| ${summary.collectedAt.slice(0, 10)} | ${summary.agentPrs} | ${summary.merged} | ${summary.rejected} | ${summary.acceptance ?? "—"}% | ${summary.oneShot} |`;
+const TABLE_HEADER =
+  "| date | agent PRs | merged | rejected | assessed | accepted | not accepted | unassessed | acceptance | one-shot |";
+const TABLE_SEPARATOR = "|---|---|---|---|---|---|---|---|---|---|";
+const line = `| ${summary.collectedAt.slice(0, 10)} | ${summary.agentPrs} | ${summary.merged} | ${summary.rejected} | ${summary.assessed} | ${summary.accepted} | ${summary.notAccepted} | ${summary.unassessed} | ${summary.acceptance ?? "—"}% | ${summary.oneShot} |`;
 const latest = [
   MARK_START,
   `**Last ${windowHours}h** (updated ${summary.collectedAt}):`,
-  `${summary.agentPrs} agent PRs terminal · ${summary.merged} merged · ${summary.rejected} rejected · acceptance ${summary.acceptance ?? "—"}% · ${summary.oneShot} one-shot`,
+  `${summary.agentPrs} agent PRs terminal · ${summary.merged} merged / ${summary.rejected} rejected · ${summary.accepted} accepted / ${summary.notAccepted} not accepted / ${summary.unassessed} unassessed · acceptance ${summary.acceptance ?? "—"}% · ${summary.oneShot} one-shot`,
   MARK_END,
 ].join("\n");
 
@@ -131,8 +225,10 @@ if (open.length === 0) {
     "",
     latest,
     "",
-    "| date | agent PRs | merged | rejected | acceptance | one-shot |",
-    "|---|---|---|---|---|---|",
+    "### Evidence-backed outcomes (v2)",
+    "",
+    TABLE_HEADER,
+    TABLE_SEPARATOR,
     line,
   ].join("\n");
   gh([
@@ -152,8 +248,30 @@ if (open.length === 0) {
   if (start !== -1 && end !== -1)
     body = body.slice(0, start) + latest + body.slice(end + MARK_END.length);
   const rows = body.split("\n");
-  const headerIndex = rows.findIndex((r) => r.startsWith("|---"));
-  if (headerIndex !== -1) rows.splice(headerIndex + 1, 0, line);
+  const tableHeaderIndex = rows.findIndex((row) => row.startsWith("| date | agent PRs |"));
+  if (tableHeaderIndex === -1) {
+    rows.push("", "### Evidence-backed outcomes (v2)", "", TABLE_HEADER, TABLE_SEPARATOR, line);
+  } else if (rows[tableHeaderIndex] !== TABLE_HEADER) {
+    // v1 had different columns and treated every merge as accepted. Those rows
+    // cannot be relabeled safely. Preserve them under an explicit legacy
+    // heading and insert a separate evidence-backed table above them.
+    rows.splice(
+      tableHeaderIndex,
+      0,
+      "### Evidence-backed outcomes (v2)",
+      "",
+      TABLE_HEADER,
+      TABLE_SEPARATOR,
+      line,
+      "",
+      "### Legacy outcomes (v1 · merge counted as acceptance)",
+      "",
+    );
+  } else {
+    const separatorIndex = tableHeaderIndex + 1;
+    if (rows[separatorIndex] === TABLE_SEPARATOR) rows.splice(separatorIndex + 1, 0, line);
+    else rows.splice(separatorIndex, 0, TABLE_SEPARATOR, line);
+  }
   body = rows.slice(0, 400).join("\n"); // cap history so the issue never grows unbounded
   gh(["issue", "edit", String(open[0].number), "--body", body]);
 }

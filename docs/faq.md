@@ -69,9 +69,10 @@ you what state you're in.
 ## What is the watchtower, in one paragraph?
 
 The layer that answers "is any of this actually working?" with numbers
-instead of vibes: nightly agent-PR outcomes (acceptance, one-shot rate, human
-fixups) on a dashboard issue, a daily health monitor with per-workflow
-budgets that goes red on breach, and a weekly canary that flies a synthetic
+instead of vibes: nightly agent-PR outcomes (human squash-merge acceptance,
+assessment coverage, issue-to-merge lead time, one-shot rate, human fixups)
+on a dashboard issue, a daily health monitor with per-workflow budgets that
+goes red on breach, and a weekly canary that flies a synthetic
 /architect probe through the real pipeline. It reads only the GitHub API,
 never the facility's own telemetry, and it's pinned by its own guard so it
 can't quietly rot. Full design: [watchtower.md](watchtower.md).

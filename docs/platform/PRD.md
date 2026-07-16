@@ -45,6 +45,7 @@ Deployable by any organization on any cloud (containers + Postgres + object stor
 - Isolated cloud sandboxes for Claude Code agents, Codex agents, and bring-your-own providers; driver-based (local Docker for dev/self-host, AWS driver for cloud; interface open for k8s).
 - Sandbox configuration management: base images, dependencies, runtime config, provision command, resource limits — as reusable, versioned **sandbox profiles** with good defaults.
 - **Live session access**: engineers can open any running (or recorded) agent session from the platform — structured transcript streaming, and steering input to unstick a session. Recorded sessions are replayable.
+- **Live PR previews**: every implementation PR must expose an isolated environment for fast human validation. In the current product this is supplied by the project's deployment provider; native Facility provisioning, lifecycle management, and Gate 2 evidence are a roadmap requirement.
 - All platform-run agents (PO, learning mode, platform-triggered crew) execute in these sandboxes — never on the control plane.
 
 ### P3 — Money: keys, budgets, cost
@@ -61,14 +62,14 @@ Deployable by any organization on any cloud (containers + Postgres + object stor
 - Knowledge base + task management surfaces in the product (browse, edit, approve, trace task → PR → outcome).
 
 ### P5 — Observation: analytics, audit, issues
-- Comprehensive analytics with **per-project separation** and org rollups: acceptance rate, one-shot rate, human fixups, time-to-merge, run outcomes, costs — live numbers, never curated.
+- Comprehensive analytics with **per-project separation** and org rollups: acceptance rate (**human squash-merged / assessed terminal agent PRs**), evidence coverage, one-shot rate (**merged with no change requests or human fixups / merged agent PRs**), human fixups, issue-to-merge lead time, run outcomes, costs — live numbers, never curated.
 - The watchtower, platformized: outcome collection, health monitoring with budgets, canary flights — per project, visible centrally, still independent of the telemetry it monitors.
 - **Issue visibility**: everything that goes wrong across the lifecycle (failed runs, drifted repos, budget breaches, stuck sessions, guard failures) is a first-class platform issue with state.
 - **Audit everything**: append-only audit log of every platform action (human and agent), every LLM request/response envelope, every webhook, every config change. Store by default; the data is an asset for mining.
 
 ### P6 — Humans: gates & inbox
 - **HITL inbox** per engineer: plan acceptances, learning-mode validations, blocked runs, doctor escalations, PO task approvals — approve / reject / steer, fully audited, with notifications.
-- The two gates stay human: plan acceptance and merge. The platform makes gates cheap to exercise, never optional.
+- The two gates stay human: plan acceptance in Facility (or `/builder` in the repo lane), then live-preview validation, PR review, and squash merge in GitHub. The platform makes gates cheap to exercise, never optional.
 
 ### P7 — Access: identity & interfaces
 - AuthN: **WorkOS SSO** (AuthKit, the tam-os approach) for humans; hashed API keys for machines.

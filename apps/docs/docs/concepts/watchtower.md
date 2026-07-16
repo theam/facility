@@ -17,10 +17,13 @@ scripts, per project, with the same non-negotiable design rules:
 
 ## The instruments
 
-- **Outcomes** (nightly) — every agent PR that reached a terminal state,
-  joined with its fate: merged or rejected, review rounds, human fixup
-  commits, hours to terminal. Acceptance and one-shot rates are metrics, not
-  anecdotes.
+- **Outcomes** (nightly) — every terminal agent PR is joined to its linked
+  issue, merger identity, merge-commit shape and policy evidence, review rounds, and human
+  fixup commits. **Accepted** means a human squash-merged it; lead time runs
+  from issue creation to merge. If GitHub cannot prove the merge method,
+  Facility reports the outcome as unassessed instead of guessing. **One-shot**
+  means merged with zero change requests and zero human fixup commits.
+  Acceptance and one-shot rates are metrics, not anecdotes.
 - **Health** (daily) — failure streaks and run budgets per workflow and per
   platform agent; breaches open a single deduped issue and resolve themselves
   on recovery.

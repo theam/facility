@@ -482,6 +482,30 @@ export type DoctorCheck = {
   remediation?: string;
 };
 export type DoctorResponse = { ok: boolean; generatedAt: string; checks: DoctorCheck[] };
+export type AnalyticsOverview = {
+  liveAgents: number;
+  spendMtdCents: number;
+  outcomes30d: {
+    total: number;
+    assessed: number;
+    accepted: number;
+    merged: number;
+    oneShot: number;
+  };
+  acceptance30d: number | null;
+  oneShot30d: number | null;
+  projects: Array<{
+    projectId: string;
+    projectName: string;
+    spendCents: number;
+    runsStarted: number;
+    outcomesTotal: number;
+    outcomesAssessed: number;
+    outcomesAccepted: number;
+    outcomesMerged: number;
+    outcomesOneShot: number;
+  }>;
+};
 
 type Route<Response, Body = never> = { response: Response; body: Body };
 
@@ -644,7 +668,7 @@ export type FacilityGetRouteResponse<Path extends FacilityGetRoutePath> = Path e
                                                                                             Path extends "/v1/analytics"
                                                                                             ? JsonObject[]
                                                                                             : Path extends "/v1/analytics/overview"
-                                                                                              ? JsonObject
+                                                                                              ? AnalyticsOverview
                                                                                               : Path extends `/v1/kb/entries/${string}`
                                                                                                 ? JsonObject
                                                                                                 : never;

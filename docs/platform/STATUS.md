@@ -52,6 +52,9 @@ resource server** — remote MCP now accepts WorkOS-issued access-token JWTs
 9728 protected-resource discovery.
 
 **Remaining non-owner-gated work**:
+- **Native live preview environments** are not implemented. Projects must
+  use their deployment provider's per-PR previews now; Facility's roadmap adds
+  provider adapters, lifecycle/retention, run+PR URLs, and Gate 2 evidence.
 - **SDK route contract** is hand-maintained, but no longer silently drifts: a
   runtime manifest (`FACILITY_V1_ROUTES`) is diffed against the Fastify OpenAPI
   document by a route-coverage test, so an added/removed route fails CI until the
@@ -81,14 +84,14 @@ projects.
 | area | package/service | state |
 |---|---|---|
 | Domain logic | `@facility/core` | permissions + wildcard RBAC, price table (dated-model aware), sealed-box crypto + argon2 keys + HMAC confirmations, `facility.run.v1` receipts (tam-os superset), fingerprints, audit hash chain, render/detect ports · **tested** |
-| Data | `@facility/db` | Drizzle schema (30+ tables), migrations 0001–0014 (glob-ordered runner), org-scoped helpers, hash-chained audit, idempotent seed · **tested** |
+| Data | `@facility/db` | Drizzle schema (30+ tables), migrations through 0020 (glob-ordered runner), org-scoped helpers, hash-chained audit, idempotent seed · **tested** |
 | Control plane | `@facility/api` (Fastify 5) | session + API-key auth, WorkOS AuthKit hooks, RBAC preHandler + startup assertion, auto-audit, 70+ v1 routes, SSE run streams, HITL ledger, KB DAG validation, internal runner API, GitHub webhooks, watchtower + learning workers · **tested** |
 | LLM gateway | `@facility/gateway` | Anthropic/OpenAI/BYO proxy, virtual keys, budgets (soft/hard), zero-copy streaming with usage tee, metering, envelopes · **tested + verified live** |
 | Sandboxes | `@facility/api` sandbox + `runner/` | driver seam (Docker + **real AWS Fargate/ECS** driver), race-safe run lifecycle with credential revocation on every terminal path, runner-token internal API, live session streaming + steering, engine parsers (Claude/Codex/BYO) · **tested + docker e2e** |
 | GitHub App | `@facility/api` github | HMAC webhooks, trigger router, server-side kickstart (byte-compatible render), fingerprints + adopt, upgrade PRs, default-branch-refusing octokit wrapper · **tested** |
 | Registry | control plane | skills/rules/contracts/harnesses/guards/templates, versioned + publish-immutable, bundled seed · **tested** |
-| Watchtower | `@facility/api` watchtower | outcomes/health/canary/analytics, monitor-independent, incident issues · **tested** |
-| HITL inbox | control plane + web | action types + resolvers + append-only ledger (AUTO-202) · **tested** |
+| Watchtower | `@facility/api` watchtower | evidence-backed outcomes (human squash merge, linked issue lead time, assessed coverage), health/canary/analytics, monitor-independent, incident issues · **tested** |
+| HITL inbox | control plane + web | action types + resolvers + append-only ledger (AUTO-202); accepted platform plans dispatch their builder run; Gate 2 remains GitHub review/merge · **tested** |
 | Knowledge / PO / learning | `@facility/harness` | Limina-style chains, write-time validation, PO + learning contracts (bundled), task propose→approve→issue, no auto-apply · **tested** |
 | MCP + CLI | `@facility/mcp`, `@theam/facility` | HITL-gated tools (stdio + HTTP), platform CLI commands · **tested** |
 | Web | `@facility/web` (Next 16) | TAM-50 design system; operator surfaces (overview, projects+kickstart, runs+live steer, inbox, registry, analytics, audit, settings — providers/keys/budgets mgmt), responsive; **not yet a full control plane** (agents/sandbox-profiles/virtual-keys/KB/tasks remain API-managed) · **verified in browser** |

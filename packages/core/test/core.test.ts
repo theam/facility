@@ -281,9 +281,13 @@ describe("receipts", () => {
       activity: { turns: 2, shell_commands: 1, file_changes: 3, mcp_tool_calls: 0, errors: 0 },
       github: { owner: "theam", repo: "tam-os", actor: "octo" },
       timing: { started_at: "2026-01-01T00:00:00Z", duration_ms: 1000 },
+      checks: [{ name: "pnpm test", status: "passed", source: "platform", exit_code: 0 }],
     });
     expect(receipt.schema).toBe("facility.run.v1");
     expect(receipt.usage.cost_cents).toBe(124);
     expect(receipt.github?.actor_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(receipt.checks).toEqual([
+      { name: "pnpm test", status: "passed", source: "platform", exit_code: 0 },
+    ]);
   });
 });

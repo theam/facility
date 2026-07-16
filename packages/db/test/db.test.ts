@@ -183,8 +183,20 @@ describe("db", async () => {
       "task_creation",
     ]);
     expect(seededProfiles.map((profile) => profile.name)).toEqual(["Default runner"]);
+    expect(seededActionTypes.find((action) => action.name === "plan_acceptance")?.executor).toEqual(
+      {
+        type: "internal",
+        config: {},
+      },
+    );
     expect(seededProjects).toHaveLength(0);
 
+    const planAcceptance = seededActionTypes.find((action) => action.name === "plan_acceptance");
+    if (!planAcceptance) throw new Error("plan_acceptance fixture missing");
+    await db
+      .update(schema.actionTypes)
+      .set({ executor: { type: "webhook", config: { url: "https://hooks.invalid/plan" } } })
+      .where(eq(schema.actionTypes.id, planAcceptance.id));
     await seed(databaseUrl, { includeDemoData: false });
     expect(
       await db.select().from(schema.actionTypes).where(eq(schema.actionTypes.orgId, orgId)),
@@ -192,6 +204,56 @@ describe("db", async () => {
     expect(
       await db.select().from(schema.sandboxProfiles).where(eq(schema.sandboxProfiles.orgId, orgId)),
     ).toHaveLength(seededProfiles.length);
+    expect(
+      (
+        await db
+          .select()
+          .from(schema.actionTypes)
+          .where(eq(schema.actionTypes.id, planAcceptance.id))
+          .limit(1)
+      )[0]?.executor,
+    ).toEqual({ type: "webhook", config: { url: "https://hooks.invalid/plan" } });
+  });
+
+  it("allows only one plan-acceptance builder run per architect plan under a race", async () => {
+    const orgId = newId("org");
+    const projectId = newId("proj");
+    const architectRunId = newId("run");
+    await db.insert(schema.orgs).values({
+      id: orgId,
+      name: "Plan Dispatch Race",
+      slug: `plan-dispatch-race-${orgId}`,
+      settings: {},
+    });
+    await db.insert(schema.projects).values({
+      id: projectId,
+      orgId,
+      name: "Plan Dispatch Race",
+      slug: "plan-dispatch-race",
+      settings: {},
+    });
+    const insertRun = (id: string, proposalId: string) =>
+      db.insert(schema.runs).values({
+        id,
+        orgId,
+        projectId,
+        mode: "builder",
+        engine: "codex",
+        trigger: { source: "plan_acceptance", proposalId, architectRunId },
+        createdBy: { type: "system", id: "test" },
+      });
+    const attempts = await Promise.allSettled([
+      insertRun(newId("run"), newId("prop")),
+      insertRun(newId("run"), newId("prop")),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(schema.runs)
+        .where(sql`${schema.runs.trigger} @> ${JSON.stringify({ architectRunId })}::jsonb`),
+    ).toHaveLength(1);
   });
 
   it("applies metering precision and index migrations in order", async () => {
@@ -201,7 +263,7 @@ describe("db", async () => {
         FROM information_schema.columns
         WHERE (table_name = 'llm_requests' AND column_name IN ('task_id', 'agent_def_id', 'priced', 'cost_cents'))
            OR (table_name = 'spend_counters' AND column_name = 'spent_cents')
-           OR (table_name = 'analytics_daily' AND column_name = 'cost_cents')
+           OR (table_name = 'analytics_daily' AND column_name IN ('cost_cents', 'outcomes_assessed', 'outcomes_accepted'))
       `,
     )) as Iterable<{ table_name: string; column_name: string; data_type: string }>;
     const columnTypes = new Map(
@@ -213,6 +275,8 @@ describe("db", async () => {
     expect(columnTypes.get("llm_requests.cost_cents")).toBe("numeric");
     expect(columnTypes.get("spend_counters.spent_cents")).toBe("numeric");
     expect(columnTypes.get("analytics_daily.cost_cents")).toBe("numeric");
+    expect(columnTypes.get("analytics_daily.outcomes_assessed")).toBe("integer");
+    expect(columnTypes.get("analytics_daily.outcomes_accepted")).toBe("integer");
     const indexes = (await db.execute(
       sql`
         SELECT indexname
@@ -233,7 +297,9 @@ describe("db", async () => {
           'llm_requests_run_idx',
           'api_keys_run_live_idx',
           'virtual_keys_run_live_idx',
-          'registry_versions_one_active_uidx'
+          'registry_versions_one_active_uidx',
+          'runs_plan_acceptance_proposal_uidx',
+          'runs_plan_acceptance_architect_run_uidx'
         )
       `,
     )) as Iterable<{ indexname: string }>;
@@ -259,6 +325,10 @@ describe("db", async () => {
         "virtual_keys_run_live_idx",
         // One-active-version-per-item guard (migration 0011).
         "registry_versions_one_active_uidx",
+        // Plan-acceptance retries cannot create duplicate builder runs (migration 0019).
+        "runs_plan_acceptance_proposal_uidx",
+        // Duplicate proposals for one architect plan cannot double-dispatch (migration 0020).
+        "runs_plan_acceptance_architect_run_uidx",
       ]),
     );
     const applied = (await db.execute(
@@ -272,7 +342,16 @@ describe("db", async () => {
       Array.from(applied)
         .map((row) => row.name)
         .at(-1),
-    ).toBe("0017_interactive_sessions.sql");
+    ).toBe("0020_plan_acceptance_architect_run_guard.sql");
+    const invalidOutcomeRollups = (await db.execute(
+      sql`
+        SELECT count(*)::int AS count
+        FROM analytics_daily
+        WHERE outcomes_one_shot > outcomes_merged
+           OR outcomes_accepted > outcomes_assessed
+      `,
+    )) as Iterable<{ count: number }>;
+    expect(Array.from(invalidOutcomeRollups)[0]?.count).toBe(0);
 
     // Budget enum/limit + scope-coherence CHECK constraints backstop every write
     // path (migrations 0013 + 0014).

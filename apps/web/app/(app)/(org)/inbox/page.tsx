@@ -53,6 +53,10 @@ export default async function InboxPage({
           {openPrs.length === 1 ? "" : "s"} to review · {issues.length} issue
           {issues.length === 1 ? "" : "s"}
         </p>
+        <p className="max-w-2xl text-[12.5px] leading-relaxed text-(--mut)">
+          Facility decisions and watchtower issues are handled here. Gate 2 remains human validation
+          of the live preview, pull-request review, and squash merge in GitHub.
+        </p>
       </div>
 
       {projectId ? (

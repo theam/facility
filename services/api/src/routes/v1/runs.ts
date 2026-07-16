@@ -165,6 +165,13 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
         agent?: string;
       };
       assertProjectScope(p, projectId);
+      if (body.trigger?.source === "plan_acceptance") {
+        throw new ApiError(
+          400,
+          "reserved_trigger_source",
+          "plan_acceptance runs can only be created by the approved-plan executor",
+        );
+      }
       const agent = await resolveRunAgentDef(p.orgId, projectId, body);
       const run = (
         await db

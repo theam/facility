@@ -232,6 +232,7 @@ function kickstartPrBody(paths: string[]): string {
     "2. Install the Claude GitHub App on the repo so crew pushes re-trigger CI.",
     "3. Protect the default branch with PR review.",
     "4. Put TEST-tier provider keys in the `facility-crew` Environment when needed.",
+    "5. Connect a deployment provider and require its per-PR live preview check.",
     "",
     "Rendered files:",
     ...paths.map((path) => `- \`${path}\``),

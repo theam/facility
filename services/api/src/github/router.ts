@@ -96,7 +96,7 @@ export async function routeTrigger(
   return { routed: true, runId: run.id };
 }
 
-function laneFor(repo: typeof repos.$inferSelect, command: string): "repo" | "platform" {
+export function laneFor(repo: typeof repos.$inferSelect, command: string): "repo" | "platform" {
   const answers = repo.renderAnswers as { execution_lane?: Record<string, string> } | null;
   const lane = answers?.execution_lane?.[command] ?? answers?.execution_lane?.[`/${command}`];
   return lane === "platform" ? "platform" : "repo";

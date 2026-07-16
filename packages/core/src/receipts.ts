@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
+const ReceiptCheckSchema = z.object({
+  name: z.string(),
+  status: z.enum(["passed", "failed", "skipped", "unknown"]),
+  source: z.enum(["platform", "agent"]),
+  exit_code: z.number().int().optional(),
+});
+
 export const FacilityReceiptSchema = z.object({
   schema: z.literal("facility.run.v1"),
   provider: z.enum(["claude_code", "codex_cli", "byo"]),
@@ -47,6 +54,8 @@ export const FacilityReceiptSchema = z.object({
     ended_at: z.string().optional(),
     duration_ms: z.number().int().nonnegative().optional(),
   }),
+  checks: z.array(ReceiptCheckSchema).optional(),
+  checks_truncated: z.boolean().optional(),
 });
 
 export type FacilityReceipt = z.infer<typeof FacilityReceiptSchema>;
@@ -88,6 +97,7 @@ const TamOsReceiptSchema = z.object({
     ended_at: z.string().optional(),
     duration_ms: z.number().int().nonnegative().optional(),
   }),
+  checks: z.array(ReceiptCheckSchema).optional(),
 });
 
 function hashActor(actor: string): string {
@@ -123,5 +133,6 @@ export function parseTamOsReceipt(json: unknown): FacilityReceipt {
         }
       : undefined,
     timing: receipt.timing,
+    checks: receipt.checks,
   });
 }

@@ -192,6 +192,14 @@ describe("sandbox docker e2e", () => {
     expect(
       (finished.receipt as { events?: { count?: number; checks?: number } })?.events?.checks,
     ).toBeGreaterThanOrEqual(1);
+    expect(
+      (finished.receipt as { checks?: Array<{ name?: string; status?: string; source?: string }> })
+        ?.checks,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "fixture", status: "passed", source: "agent" }),
+      ]),
+    );
     expect(await containersFor(run.id)).toEqual([]);
   }, 120_000);
 

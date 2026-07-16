@@ -23,7 +23,7 @@ import {
   steerMessages,
 } from "@facility/db";
 import { artifactIdFor, validate } from "@facility/harness";
-import { and, desc, eq, isNull, notInArray } from "drizzle-orm";
+import { and, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "./budget-scope.js";
 import {
   createGithubClientFactory,
@@ -31,6 +31,7 @@ import {
   type GithubClientFactory,
 } from "./github/client.js";
 import { type KickstartAnswers, kickstartRepo, upgradeRepo } from "./github/kickstart.js";
+import { findAgentDef, laneFor } from "./github/router.js";
 import {
   ensureActive,
   ensureLinks,
@@ -89,6 +90,9 @@ export async function executeApprovedProposal(
       await executeGuardCandidate(db, proposal);
     } else if (actionType.name === "kb_amendment") {
       await executeKbAmendment(db, proposal);
+    } else if (actionType.name === "plan_acceptance") {
+      if (objectOrEmpty(actionType.executor).type !== "internal") return;
+      await executePlanAcceptance(db, proposal, actor, executionOptions);
     } else if (actionType.name === "mcp_tool_call") {
       await executeMcpToolCall(db, proposal, actor, executionOptions);
     } else {
@@ -108,6 +112,143 @@ export async function executeApprovedProposal(
       actionType: actionType.name,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+async function executePlanAcceptance(
+  db: Db,
+  proposal: typeof proposals.$inferSelect,
+  actor: { type: string; id: string },
+  options: ExecuteApprovedProposalOptions,
+) {
+  if (!proposal.projectId) throw new Error("plan_acceptance_missing_project");
+  if (!proposal.runId) throw new Error("plan_acceptance_missing_architect_run");
+
+  const architectRun = (
+    await db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, proposal.orgId),
+          eq(runs.projectId, proposal.projectId),
+          eq(runs.id, proposal.runId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!architectRun) throw new Error("plan_acceptance_architect_run_not_found");
+  if (architectRun.mode !== "architect") {
+    throw new Error("plan_acceptance_source_not_architect");
+  }
+  if (!["succeeded", "awaiting_human"].includes(architectRun.status)) {
+    throw new Error("plan_acceptance_architect_run_not_ready");
+  }
+
+  await assertPlatformBuilderLane(db, proposal, architectRun);
+
+  // The proposal link, not the currently configured builder definition, is
+  // the durable dispatch identity. Reuse the original run even if an admin
+  // replaces or disables the builder before an execution retry.
+  const existingRun = await loadPlanBuilderRun(db, proposal);
+  if (existingRun) {
+    await options.enqueue?.("runs.dispatch", {
+      runId: existingRun.id,
+      orgId: proposal.orgId,
+    });
+    return;
+  }
+
+  const builder = await findAgentDef(db, proposal.orgId, proposal.projectId, "builder");
+  if (!builder) throw new Error("plan_acceptance_builder_not_configured");
+
+  const createdRun = (
+    await db
+      .insert(runs)
+      .values({
+        id: newId("run"),
+        orgId: proposal.orgId,
+        projectId: proposal.projectId,
+        agentDefId: builder.id,
+        mode: "builder",
+        engine: builder.engine,
+        trigger: {
+          source: "plan_acceptance",
+          proposalId: proposal.id,
+          architectRunId: architectRun.id,
+          architectTrigger: architectRun.trigger,
+        },
+        gh: architectRun.gh,
+        createdBy: { type: actor.type, id: actor.id, proposalId: proposal.id },
+      })
+      .onConflictDoNothing()
+      .returning()
+  )[0];
+  const run = createdRun ?? (await loadPlanBuilderRun(db, proposal));
+  if (!run) throw new Error("plan_acceptance_builder_run_not_created");
+
+  if (createdRun) {
+    await db.insert(runEvents).values({
+      orgId: proposal.orgId,
+      runId: run.id,
+      seq: 1,
+      type: "queued",
+      data: {
+        queue: "runs.dispatch",
+        source: "plan_acceptance",
+        proposalId: proposal.id,
+        architectRunId: architectRun.id,
+      },
+    });
+  }
+  await options.enqueue?.("runs.dispatch", { runId: run.id, orgId: proposal.orgId });
+}
+
+async function loadPlanBuilderRun(db: Db, proposal: typeof proposals.$inferSelect) {
+  return (
+    await db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, proposal.orgId),
+          eq(runs.projectId, proposal.projectId ?? ""),
+          eq(runs.mode, "builder"),
+          sql`${runs.trigger} @> ${JSON.stringify({
+            source: "plan_acceptance",
+            architectRunId: proposal.runId,
+          })}::jsonb`,
+        ),
+      )
+      .limit(1)
+  )[0];
+}
+
+async function assertPlatformBuilderLane(
+  db: Db,
+  proposal: typeof proposals.$inferSelect,
+  architectRun: typeof runs.$inferSelect,
+) {
+  const projectRepos = await db
+    .select()
+    .from(repos)
+    .where(and(eq(repos.orgId, proposal.orgId), eq(repos.projectId, proposal.projectId ?? "")));
+  const gh = objectOrEmpty(architectRun.gh);
+  const triggerRepo = objectOrEmpty(objectOrEmpty(architectRun.trigger).repo);
+  const repoId = stringField(triggerRepo.id);
+  const owner = stringField(gh.owner) ?? stringField(triggerRepo.owner);
+  const name = stringField(gh.repo) ?? stringField(triggerRepo.name);
+  const hasRepoIdentity = Boolean(repoId || (owner && name));
+  const matchedRepo = projectRepos.find(
+    (candidate) =>
+      (repoId && candidate.id === repoId) ||
+      (owner && name && candidate.owner === owner && candidate.name === name),
+  );
+  const repo =
+    matchedRepo ?? (!hasRepoIdentity && projectRepos.length === 1 ? projectRepos[0] : undefined);
+  if (!repo) throw new Error("plan_acceptance_repo_context_ambiguous");
+  if (laneFor(repo, "builder") !== "platform") {
+    throw new Error("plan_acceptance_builder_uses_repo_lane");
   }
 }
 
