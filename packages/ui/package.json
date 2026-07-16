@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "Facility design system — TAM-50 tier: IBM Plex, hairline grids, agent yellow reserved for agent work.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

@@ -18,7 +18,7 @@
     "url": "git+https://github.com/theam/facility.git",
     "directory": "packages/cli"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "The Agile Monkeys (https://theagilemonkeys.com)",
   "type": "module",
   "bin": {

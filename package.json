@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.3.0",
   "description": "Facility — the self-hostable platform that governs your AI SDLC. Monorepo: control plane, gateway, web, docs, CLI, MCP, harnesses.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "The Agile Monkeys (https://theagilemonkeys.com)",
   "type": "module",
   "engines": {

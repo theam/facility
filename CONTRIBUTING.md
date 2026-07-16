@@ -1,38 +1,87 @@
 # Contributing
 
-Facility eats its own cooking: this repo follows the method it ships.
+Facility uses the same operating rules it installs into other repositories:
+one coherent change, explicit verification, and human review before merge.
 
-## Ground rules
+## Before you start
 
-- **Zero runtime dependencies** in the CLI and in everything we vendor into
-  user repos. A dependency you add is a supply chain we hand to every
-  adopter. PRs that add one need a reason that survives review.
-- **Templates are product.** Anything under `templates/` and `modules/` lands
-  in users' repos and gets read by their agents and their engineers. Comments
-  in those files explain *why* (they survive); never narrate *what*.
-- **The hardening doc is evidence-based.** New entries to
-  `docs/hardening.md` describe something that actually happened, with the
-  countermeasure that worked — not something that could conceivably happen.
-- Branch names are semantic (`feature/...`, `fix/...`, `docs/...`); commits
-  follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/);
-  squash and merge.
+- Search the [issue tracker](https://github.com/theam/facility/issues) before
+  reporting a bug or proposing a feature.
+- Open an issue before implementing a substantial or behavior-changing feature
+  so its contract can be agreed on first.
+- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
-## Working on it
+## Set up the repository
 
-```
-git clone https://github.com/theam/facility && cd facility
-npm test                      # node --test — no install step needed
-node bin/facility.mjs init --yes --dir=/tmp/somewhere ...   # try it on a scratch repo
-node guards/run.mjs           # this repo's own guards
+The monorepo requires Node.js 22 or newer and pnpm 11. Docker is required for
+the local platform stack and sandbox end-to-end tests.
+
+```bash
+git clone https://github.com/theam/facility.git
+cd facility
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-Tests live in `test/` and run the real CLI against temp repos — if you change
-templates or the init flow, extend the assertions there. If you change
-generated YAML, validate it parses (`ruby -ryaml -e "YAML.load_file(...)"` or
-your tool of choice) before pushing.
+For a local platform, copy `.env.example` to `.env`, generate the documented
+`SECRET_MASTER_KEY`, and follow the
+[self-host quickstart](apps/docs/docs/self-host/quickstart.md).
+
+## Make a focused change
+
+- Use semantic branch names such as `feature/...`, `fix/...`, or `docs/...`.
+- Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+  when committing; maintainers squash and merge pull requests.
+- Add or update tests for behavior changes. Never relax, skip, or delete a test,
+  guard, or check to make a change pass.
+- Keep the CLI and everything it vendors into user repositories free of runtime
+  dependencies. A new dependency becomes part of every adopter's supply chain.
+- Treat files under `packages/cli/templates/` and `packages/cli/modules/` as
+  product surfaces. Comments should explain why a constraint exists, not
+  narrate the code.
+- Add entries to `docs/hardening.md` only for observed failures and the
+  countermeasure that worked.
+
+## Verify the change
+
+Run the repository acceptance command before opening a pull request:
+
+```bash
+pnpm verify
+```
+
+It runs Biome, TypeScript checks, all package tests, and the repository guards.
+Run the relevant build when the change affects a build output:
+
+```bash
+pnpm build
+```
+
+Useful narrower commands include:
+
+```bash
+pnpm --filter @theam/facility test
+pnpm --filter @facility/api test
+pnpm --filter @facility/gateway test
+pnpm --filter @facility/docs build
+pnpm --filter @facility/web build
+node guards/run.mjs
+```
+
+CLI and template tests run the real installer against temporary repositories.
+When generated YAML changes, ensure the affected test parses and exercises the
+rendered workflow rather than checking text alone.
+
+## Open the pull request
+
+Describe the user-visible behavior, the files or subsystems affected, and the
+verification commands you ran. Keep unrelated cleanup in a separate pull
+request so the change can be reviewed and reverted independently.
 
 ## Releasing (maintainers)
 
-1. Bump `version` in `package.json` (semver; pre-1.0 minor = breaking).
-2. `npm publish --access public` (scoped package).
-3. Tag `vX.Y.Z` and write release notes that name behavior, not commits.
+1. Bump the version in `package.json` and `packages/cli/package.json` according
+   to semver (before 1.0, a minor release may contain breaking changes).
+2. Run `pnpm verify` and the build for every publishable artifact.
+3. Publish `@theam/facility` with public access.
+4. Tag `vX.Y.Z` and write release notes in terms of behavior, not commit titles.

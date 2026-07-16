@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "Facility platform web app.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "next dev --port 3400",

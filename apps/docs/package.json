@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "Facility platform documentation site.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "docusaurus start --port 3500",
     "build": "docusaurus build",
