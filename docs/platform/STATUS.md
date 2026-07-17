@@ -1,6 +1,6 @@
 # Facility Platform — delivery status
 
-**Branch**: local development · **as of** 2026-07-16
+**State**: interface-complete release candidate · **as of** 2026-07-17
 
 This is the honest state of the platform build against [GOAL.md](../../GOAL.md).
 Nothing here is curated for a slide.
@@ -64,9 +64,9 @@ push-invalidated on revoke via NOTIFY/LISTEN, run-scoped platform keys carry an
 expiry, run-read APIs redact sealed envelopes); cross-project isolation hardened
 (run lists, repo fingerprints, skill bundles, and registry drafts are all
 project-scoped); registry publish is atomic + single-active (partial unique
-index); run-event seq allocation is race-free (per-run advisory lock). ~186 tests
-green (real Postgres), Biome clean, web + docs build, and `tsc --noEmit` green
-across **all** packages (including `@facility/mcp`).
+index); run-event seq allocation is race-free (per-run advisory lock). At that
+round, ~186 tests were green (real Postgres), Biome was clean, web + docs built,
+and `tsc --noEmit` was green across **all** packages (including `@facility/mcp`).
 Recent hardening (rounds 4–12): SSRF guard on BYO provider URLs, real MCP
 human-gate (write tools create HITL proposals a *separate* principal approves),
 the `v1.ts` god-router split into per-domain routers, run-steer cockpit + guided
@@ -123,8 +123,10 @@ projects.
 
 ## Verification performed
 
-- **Full test suite green**: ~180 tests across core/db/api/gateway/mcp/runner/
-  harness/cli, real Postgres; lint (Biome) clean; guards pass.
+- **Root acceptance green**: 362 tests across core, database, API, gateway, SDK,
+  MCP, runner, harness, and CLI; critical suites run uncached against real
+  Postgres with skips forbidden. The 15-task typecheck run, all 10 clean-build
+  tasks, lint, repository guards, and the all-severity dependency audit pass.
 - **Money path, live**: minted a project virtual key via the API, proxied a
   real `claude-haiku` completion through the gateway, confirmed it metered into
   `llm_requests` with resolved cost.
@@ -203,8 +205,6 @@ the platform owner, not an agent:
    theam/tam-os without Adrián.
 3. **A live AWS apply** — the Terraform is plan-validated; `terraform apply`
    stands up ~89 billed resources and is a cost decision for the owner.
-4. **Pushing this branch / opening the PR** — the work is committed locally on
-   `feat/platform-v0.3`, awaiting your review.
 
 ## Post-verification hardening (2026-07-04)
 

@@ -36,9 +36,11 @@ Security and privacy are first-class concerns; this page is the contract.
   for the connection, disable redirects, and use a ten-second deadline. The
   durable outbox gives at-least-once delivery with bounded retry and visible dead
   letters.
-- Remote MCP validates `Host` and browser `Origin`, requires a non-empty Bearer
-  credential, bounds JSON bodies, and forwards the caller credential to the API;
-  it has no privileged service identity.
+- Remote MCP validates `Host` and browser `Origin`, bounds JSON bodies, and asks
+  the control plane to authenticate each uncached Bearer credential before MCP
+  protocol admission. Invalid credentials cannot enumerate the catalog;
+  validation outages fail closed with `503` and `Retry-After`. Accepted caller
+  credentials are forwarded to the API, and MCP has no privileged service identity.
 
 ## Untrusted text
 

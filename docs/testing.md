@@ -21,7 +21,7 @@ This command fails unless all of the following execute successfully:
 4. the development-launcher tests and all remaining workspace tests with the
    Turbo cache disabled;
 5. deterministic repository guards; and
-6. `pnpm audit --audit-level high`.
+6. `pnpm audit --audit-level low`, so any known advisory fails acceptance.
 
 The verifier starts the development Postgres container when needed, creates only
 the isolated test databases, and stops the container afterward when it started it.

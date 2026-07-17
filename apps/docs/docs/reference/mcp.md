@@ -29,16 +29,17 @@ speaks MCP over stdio:
 }
 ```
 
-Remote: run the same binary as an HTTP server with `facility-mcp serve`; the
-bundled compose stack already includes it, while other deployments host it next
-to the control plane. It exposes streamable HTTP at `https://<mcp-host>/mcp` with
+Remote: run the same built binary with `node
+/absolute/path/to/facility/packages/mcp/dist/bin/facility-mcp.js serve`; the bundled
+compose stack already includes it, while other deployments host it next to the
+control plane. It exposes streamable HTTP at `https://<mcp-host>/mcp` with
 `Authorization: Bearer <credential>`.
 Two credential kinds are accepted: a `fak_…` API key (for non-interactive services) or a WorkOS
 OAuth 2.1 access token (for interactive clients like Claude, Cursor, and ChatGPT). Interactive
 clients discover the flow from `/.well-known/oauth-protected-resource` (advertised on a `401` via
 `WWW-Authenticate`); the control plane validates the token against WorkOS's JWKS. OAuth is enabled
 only when `MCP_OAUTH_AUDIENCE` and `WORKOS_AUTHKIT_DOMAIN` are set on the control plane, and
-`facility-mcp serve` advertises discovery when given `MCP_PUBLIC_URL` and `MCP_AUTHORIZATION_SERVER`
+the HTTP process advertises discovery when given `MCP_PUBLIC_URL` and `MCP_AUTHORIZATION_SERVER`
 (defaults to `WORKOS_AUTHKIT_DOMAIN`).
 
 Remote binds fail closed unless `MCP_ALLOWED_HOSTS` or `MCP_PUBLIC_URL` names a
@@ -79,7 +80,10 @@ and approves or rejects it through the CLI or API. MCP deliberately exposes no
 decision tool: untrusted model output cannot invoke an approval. MCP write keys are refused if they also carry
 `hitl:decide`, so the same key cannot propose and approve its own write. Use the
 bundled `operator` role for an AI client and an owner/admin human principal for
-the decision. Proposal idempotency hashes the tool, JSON-RPC request id, and
+the decision. The operator grants cover standard project, repository, agent,
+run, registry, budget, KB, task, and issue mutations. Tools outside those grants
+need a custom role that still omits `hitl:decide`; webhook delivery retry, for
+example, additionally requires `integrations:write`. Proposal idempotency hashes the tool, JSON-RPC request id, and
 canonical arguments, so retries replay while reused ids with different inputs
 cannot collide. Immediately before execution, Facility revalidates that the
 original requester still exists, is active, retains the required permission,

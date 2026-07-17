@@ -22,6 +22,13 @@ closed unless a trusted authority is configured.
 
 ## CLI
 
+Until npm distribution, run the CLI from this checkout. The examples below use
+this optional interactive shorthand:
+
+```bash
+alias facility='node /absolute/path/to/facility/packages/cli/bin/facility.mjs'
+```
+
 ```bash
 facility login --url https://facility.example --profile production
 facility profiles use production
@@ -91,6 +98,10 @@ claims older than 15 minutes may be reclaimed after a crashed request.
 
 ## TypeScript SDK
 
+`@facility/sdk` is currently a private workspace package, so this example runs
+inside the Facility monorepo. For an external client, generate against
+`packages/sdk/openapi.json` until the SDK distribution step is completed.
+
 ```ts
 import { FacilityClient } from "@facility/sdk";
 
@@ -126,7 +137,8 @@ For stdio:
 {
   "mcpServers": {
     "facility": {
-      "command": "facility-mcp",
+      "command": "node",
+      "args": ["/absolute/path/to/facility/packages/mcp/dist/bin/facility-mcp.js"],
       "env": {
         "FACILITY_API_URL": "https://facility.example",
         "FACILITY_API_KEY": "fak_…"
@@ -146,8 +158,10 @@ Tools return both text and protocol-valid structured content. Errors set
 `isError` and retain API status/code/details. Read tools declare read-only and
 idempotent annotations. Mutating tools create a durable proposal and perform no
 side effect until a different human principal with `hitl:decide` approves it.
-The bundled `operator` role can use MCP reads and propose writes but cannot
-decide them.
+The bundled `operator` role can use MCP reads and propose its standard
+project/run/repository/knowledge/budget mutations but cannot decide them. Tools
+outside those grants require a custom non-decider role; for example, webhook
+delivery retry additionally requires `integrations:write`.
 Execution revalidates the allowlisted tool, permission, organization/project
 target, arguments, and the original requester's current active authorization
 before the side effect. Decisions are intentionally absent from MCP and must be

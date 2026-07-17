@@ -7,7 +7,9 @@ title: API
 REST, OpenAPI-described, permission-gated per route. In development the
 interactive reference lives at `http://localhost:4400/docs`; the machine
 spec is generated into `packages/sdk/openapi.json` and the typed TypeScript
-client is `@facility/sdk`.
+client is `@facility/sdk`. The SDK is currently a private workspace package,
+not an npm distribution; the examples below run inside this monorepo. External
+clients can generate from the committed OpenAPI document until SDK distribution.
 
 ## Authentication
 

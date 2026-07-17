@@ -39,7 +39,7 @@ for the exact `aws ecs run-task` invocation.
 After the ECS services roll and the migrate+seed task has completed, run:
 
 ```bash
-facility doctor --url https://<api-host> --key fak_...
+node packages/cli/bin/facility.mjs doctor --url https://<api-host> --key fak_...
 ```
 
 Do not send production traffic until the doctor reports no `FAIL` checks — it

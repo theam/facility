@@ -7,8 +7,12 @@ title: CLI
 One binary, two lives: the vendored installer it always was, and a client
 for your platform.
 
+The CLI is not yet distributed through npm. Run it from a Facility checkout:
+
 ```bash
-npx @theam/facility <command>
+node /absolute/path/to/facility/packages/cli/bin/facility.mjs <command>
+# Optional interactive shorthand used throughout this page:
+alias facility='node /absolute/path/to/facility/packages/cli/bin/facility.mjs'
 ```
 
 ## Vendored lane (no platform required)

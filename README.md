@@ -57,10 +57,14 @@ runtime floor is lower than the platform's. It does not require you to deploy
 the Facility platform.
 
 ```bash
+git clone https://github.com/theam/facility.git /absolute/path/to/facility
 cd your-repository
-npx @theam/facility init
-npx @theam/facility doctor
+node /absolute/path/to/facility/packages/cli/bin/facility.mjs init
+node /absolute/path/to/facility/packages/cli/bin/facility.mjs doctor
 ```
+
+The CLI is currently run from a Facility checkout; npm distribution is a later
+release step and is intentionally not part of this release candidate.
 
 The installer detects the repository's package manager, default branch, checks,
 and useful quality modules. It asks for the commands that create a working
@@ -80,10 +84,10 @@ zero-dependency CLI; AI clients use the same permissions through MCP.
 # REST/OpenAPI
 open http://localhost:4400/docs
 
-# CLI (the API key is hidden when entered interactively)
-facility login --url http://localhost:4400 --key fak_…
-facility status
-facility --help
+# CLI from this checkout (the API key is hidden when entered interactively)
+node packages/cli/bin/facility.mjs login --url http://localhost:4400 --key fak_…
+node packages/cli/bin/facility.mjs status
+node packages/cli/bin/facility.mjs --help
 
 # MCP streamable HTTP (Bearer credentials are forwarded to the API)
 curl http://localhost:4420/healthz
@@ -283,7 +287,7 @@ pnpm verify
 `pnpm verify` is the release-shaped local acceptance command: lint, typecheck,
 output cleanup followed by a cache-disabled build, uncached critical integration
 tests against isolated databases, the remaining uncached tests, guards, and the
-high-severity dependency gate. A clean `docker compose build` is a separate
+all-severity dependency gate. A clean `docker compose build` is a separate
 required CI job.
 
 The Docker-backed sandbox E2E is a separate acceptance tier. Its required versus
