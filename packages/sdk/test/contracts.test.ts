@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import openapiTS, { astToString, COMMENT_HEADER } from "openapi-typescript";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
+  AnalyticsOverview,
   AnalyticsRow,
   CreateProjectRequest,
   FacilityGeneratedResponse,
@@ -77,6 +78,26 @@ describe("generated contract integrity", () => {
     const source = JSON.parse(await readFile(fileURLToPath(openApiUrl), "utf8"));
     const generated = `${COMMENT_HEADER}${astToString(await openapiTS(source))}`;
     await expect(readFile(fileURLToPath(declarationUrl), "utf8")).resolves.toBe(generated);
+  });
+
+  it("preserves the complete analytics overview evidence contract", () => {
+    expectTypeOf<AnalyticsRow>().toMatchTypeOf<{
+      outcomesAssessed: number;
+      outcomesAccepted: number;
+    }>();
+    expectTypeOf<AnalyticsOverview>().toMatchTypeOf<{
+      outcomes30d: {
+        total: number;
+        assessed: number;
+        accepted: number;
+        merged: number;
+        oneShot: number;
+      };
+      projects: Array<{
+        outcomesAssessed: number;
+        outcomesAccepted: number;
+      }>;
+    }>();
   });
 });
 

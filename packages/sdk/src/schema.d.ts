@@ -9636,6 +9636,8 @@ export interface operations {
                         outputTokens: number;
                         costCents: number;
                         outcomesTotal: number;
+                        outcomesAssessed: number;
+                        outcomesAccepted: number;
                         outcomesMerged: number;
                         outcomesOneShot: number;
                         acceptance: number | null;
@@ -9738,6 +9740,13 @@ export interface operations {
                     "application/json": {
                         liveAgents: number;
                         spendMtdCents: number;
+                        outcomes30d: {
+                            total: number;
+                            assessed: number;
+                            accepted: number;
+                            merged: number;
+                            oneShot: number;
+                        };
                         acceptance30d: number | null;
                         oneShot30d: number | null;
                         projects: {
@@ -9746,6 +9755,8 @@ export interface operations {
                             spendCents: number;
                             runsStarted: number;
                             outcomesTotal: number;
+                            outcomesAssessed: number;
+                            outcomesAccepted: number;
                             outcomesMerged: number;
                             outcomesOneShot: number;
                         }[];

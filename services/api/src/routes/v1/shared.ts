@@ -560,6 +560,8 @@ export const AnalyticsRowSchema = z.object({
   outputTokens: z.number(),
   costCents: z.number(),
   outcomesTotal: z.number(),
+  outcomesAssessed: z.number(),
+  outcomesAccepted: z.number(),
   outcomesMerged: z.number(),
   outcomesOneShot: z.number(),
   acceptance: z.number().nullable(),
@@ -569,6 +571,13 @@ export const AnalyticsRowSchema = z.object({
 export const AnalyticsOverviewSchema = z.object({
   liveAgents: z.number(),
   spendMtdCents: z.number(),
+  outcomes30d: z.object({
+    total: z.number(),
+    assessed: z.number(),
+    accepted: z.number(),
+    merged: z.number(),
+    oneShot: z.number(),
+  }),
   acceptance30d: z.number().nullable(),
   oneShot30d: z.number().nullable(),
   projects: z.array(
@@ -578,6 +587,8 @@ export const AnalyticsOverviewSchema = z.object({
       spendCents: z.number(),
       runsStarted: z.number(),
       outcomesTotal: z.number(),
+      outcomesAssessed: z.number(),
+      outcomesAccepted: z.number(),
       outcomesMerged: z.number(),
       outcomesOneShot: z.number(),
     }),

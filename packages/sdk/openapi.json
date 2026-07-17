@@ -13547,6 +13547,12 @@
                       "outcomesTotal": {
                         "type": "number"
                       },
+                      "outcomesAssessed": {
+                        "type": "number"
+                      },
+                      "outcomesAccepted": {
+                        "type": "number"
+                      },
                       "outcomesMerged": {
                         "type": "number"
                       },
@@ -13571,6 +13577,8 @@
                       "outputTokens",
                       "costCents",
                       "outcomesTotal",
+                      "outcomesAssessed",
+                      "outcomesAccepted",
                       "outcomesMerged",
                       "outcomesOneShot",
                       "acceptance",
@@ -13719,6 +13727,34 @@
                     "spendMtdCents": {
                       "type": "number"
                     },
+                    "outcomes30d": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "number"
+                        },
+                        "assessed": {
+                          "type": "number"
+                        },
+                        "accepted": {
+                          "type": "number"
+                        },
+                        "merged": {
+                          "type": "number"
+                        },
+                        "oneShot": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "assessed",
+                        "accepted",
+                        "merged",
+                        "oneShot"
+                      ],
+                      "additionalProperties": false
+                    },
                     "acceptance30d": {
                       "nullable": true,
                       "type": "number"
@@ -13747,6 +13783,12 @@
                           "outcomesTotal": {
                             "type": "number"
                           },
+                          "outcomesAssessed": {
+                            "type": "number"
+                          },
+                          "outcomesAccepted": {
+                            "type": "number"
+                          },
                           "outcomesMerged": {
                             "type": "number"
                           },
@@ -13760,6 +13802,8 @@
                           "spendCents",
                           "runsStarted",
                           "outcomesTotal",
+                          "outcomesAssessed",
+                          "outcomesAccepted",
                           "outcomesMerged",
                           "outcomesOneShot"
                         ],
@@ -13770,6 +13814,7 @@
                   "required": [
                     "liveAgents",
                     "spendMtdCents",
+                    "outcomes30d",
                     "acceptance30d",
                     "oneShot30d",
                     "projects"

@@ -1316,7 +1316,7 @@ describe("api", async () => {
     const approved = await app.inject({
       method: "POST",
       url: `/v1/proposals/${proposal.json().id}/decide`,
-      headers: { cookie },
+      headers: { cookie: approverCookie },
       payload: { decision: "approve" },
     });
     expect(approved.statusCode).toBe(200);
@@ -1367,7 +1367,7 @@ describe("api", async () => {
     const duplicateApproval = await app.inject({
       method: "POST",
       url: `/v1/proposals/${duplicateProposal.json().id}/decide`,
-      headers: { cookie },
+      headers: { cookie: approverCookie },
       payload: { decision: "approve" },
     });
     expect(duplicateApproval.statusCode).toBe(200);
@@ -1462,7 +1462,7 @@ describe("api", async () => {
     const repoLaneApproval = await app.inject({
       method: "POST",
       url: `/v1/proposals/${repoLaneProposal.json().id}/decide`,
-      headers: { cookie },
+      headers: { cookie: approverCookie },
       payload: { decision: "approve" },
     });
     expect(repoLaneApproval.json().state).toBe("execution_failed");

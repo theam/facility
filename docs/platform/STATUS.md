@@ -123,10 +123,11 @@ projects.
 
 ## Verification performed
 
-- **Root acceptance green**: 362 tests across core, database, API, gateway, SDK,
-  MCP, runner, harness, and CLI; critical suites run uncached against real
-  Postgres with skips forbidden. The 15-task typecheck run, all 10 clean-build
-  tasks, lint, repository guards, and the all-severity dependency audit pass.
+- **Root acceptance green**: 377 tests across development startup, core,
+  database, API, gateway, SDK, MCP, runner, harness, and CLI; critical suites
+  run uncached against real Postgres with skips forbidden. The 15-task typecheck
+  run, all 10 clean-build tasks, lint, repository guards, and the all-severity
+  dependency audit pass.
 - **Money path, live**: minted a project virtual key via the API, proxied a
   real `claude-haiku` completion through the gateway, confirmed it metered into
   `llm_requests` with resolved cost.
