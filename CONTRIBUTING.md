@@ -149,9 +149,17 @@ npm cannot attach a trusted publisher until the package exists. Bootstrap
 1. Give the token read/write access only to the `@theagilemonkeys` scope, no
    organization-management access, the shortest practical expiry, and bypass
    2FA for the CI publish.
-2. Protect `v*` tag creation with a repository ruleset. Create the GitHub
-   environment named `npm`, require maintainer approval for deployment, and
-   store the token there as the `NPM_BOOTSTRAP_TOKEN` environment secret.
+2. Create the GitHub environment named `npm`, restrict its deployment branches
+   to `main`, require maintainer approval, and store the token there as the
+   `NPM_BOOTSTRAP_TOKEN` environment secret.
+
+   Do **not** add a ruleset restricting `v*` tag creation. `record-release`
+   writes that tag with `GITHUB_TOKEN` after a successful publish, and a
+   ruleset's bypass list accepts roles, teams, GitHub Apps and Dependabot —
+   not a workflow. Restricting tag creation would leave releases published to
+   npm and GHCR with no tag, so the next merge would recompute the same version
+   and npm would reject it as a duplicate. The environment approval is the gate;
+   the tag is a record written afterwards.
 3. Before merging the release-on-merge workflow, establish the inert history
    boundary it will read. For this repository, tag the existing version:
 
