@@ -153,13 +153,20 @@ npm cannot attach a trusted publisher until the package exists. Bootstrap
    to `main`, require maintainer approval, and store the token there as the
    `NPM_BOOTSTRAP_TOKEN` environment secret.
 
-   Do **not** add a ruleset restricting `v*` tag creation. `record-release`
-   writes that tag with `GITHUB_TOKEN` after a successful publish, and a
-   ruleset's bypass list accepts roles, teams, GitHub Apps and Dependabot —
-   not a workflow. Restricting tag creation would leave releases published to
-   npm and GHCR with no tag, so the next merge would recompute the same version
-   and npm would reject it as a duplicate. The environment approval is the gate;
-   the tag is a record written afterwards.
+   Do **not** add a ruleset restricting `v*` tag creation while
+   `record-release` pushes that tag with `GITHUB_TOKEN` after a successful
+   publish. A ruleset's bypass list accepts roles, teams, GitHub Apps and
+   Dependabot; Actions' own token is none of those, so the push is rejected and
+   the release stays on npm and GHCR with no tag recording it. The next merge
+   then recomputes the same version and npm rejects it as a duplicate. The
+   environment approval is the gate; the tag is a record written afterwards.
+
+   The trade-off this accepts: anyone with write access can create a `v*` tag,
+   and `scripts/version.mjs` reads the highest one as the release baseline, so
+   a stray tag can skip a version or wedge a release after it has published.
+   Closing that means `record-release` authenticating as a GitHub App the
+   ruleset lists as a bypass actor — a change to the workflow, not a
+   setting to switch on.
 3. Before merging the release-on-merge workflow, establish the inert history
    boundary it will read. For this repository, tag the existing version:
 
