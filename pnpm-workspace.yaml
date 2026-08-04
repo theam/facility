@@ -8,14 +8,16 @@ packages:
 # resolves a vulnerable v6 without this workspace-wide security floor.
 overrides:
   "esbuild@>=0.27.3 <0.28.1": 0.28.1
-  "postcss@<8.5.18": 8.5.18
+  "postcss@<8.5.23": 8.5.23
   "serialize-javascript@<=7.0.2": 7.0.7
   "uuid@<11.1.1": 11.1.1
-  "brace-expansion@<1.1.16": 1.1.16
-  "brace-expansion@>=2.0.0 <2.1.2": 2.1.2
-  "brace-expansion@>=5.0.0 <5.0.8": 5.0.8
+  "brace-expansion@<1.1.18": 1.1.18
+  "brace-expansion@>=2.0.0 <2.1.4": 2.1.4
+  "brace-expansion@>=5.0.0 <5.0.9": 5.0.9
   "@fastify/static@<10.1.2": 10.1.2
-  "fast-uri@>=3.0.0 <3.1.4": 3.1.4
+  "fast-uri@>=3.0.0 <3.1.5": 3.1.5
+  "ip-address@<=10.3.0": 10.3.1
+  "hono@<4.12.34": 4.12.34
   "find-my-way@<9.6.1": 9.7.0
   "js-yaml@>=4.0.0 <4.3.0": 4.3.0
   "sharp@<0.35.0": 0.35.0
@@ -44,4 +46,3 @@ allowBuilds:
 auditConfig:
   ignoreGhsas:
     - GHSA-mh99-v99m-4gvg
-
