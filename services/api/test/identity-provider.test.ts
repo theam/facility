@@ -32,7 +32,11 @@ describe("GitHub external identity integration", () => {
       }
       expect((init?.headers as Record<string, string>).authorization).toBe("Bearer ghu_secret");
       if (url.endsWith("/user/emails"))
-        return response([{ email: "Owner@Example.com", verified: true, primary: true }]);
+        return response([
+          { email: "Owner@Personal.example", verified: true, primary: true },
+          { email: "Owner@Example.com", verified: true, primary: false },
+          { email: "unverified@example.com", verified: false, primary: false },
+        ]);
       if (url.includes("/user/installations")) {
         if (url.includes("page=2"))
           return response({ installations: [{ id: 457, account: { id: 790 } }] });
@@ -68,8 +72,9 @@ describe("GitHub external identity integration", () => {
       provider: "github",
       githubUserId: "123",
       login: "octocat",
-      email: "owner@example.com",
+      email: "owner@personal.example",
       emailVerified: true,
+      verifiedEmails: ["owner@personal.example", "owner@example.com"],
       name: "Octo Cat",
       avatarUrl: "https://example.com/avatar.png",
       installations: [
@@ -200,6 +205,7 @@ describe("commercial OIDC broker integration", () => {
     );
     await expect(provider.exchange("code", transaction)).resolves.toMatchObject({
       githubUserId: "123",
+      verifiedEmails: ["owner@example.com"],
       installations: [{ installationId: 456, accountId: 789 }],
     });
     idToken = await sign({ facility_instance_id: "another_instance" });

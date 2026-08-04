@@ -39,6 +39,7 @@ describe("direct GitHub browser login", async () => {
   const githubUserId = Date.now();
   const orgId = `org_github_login_${Date.now()}`;
   const ownerEmail = `github-login-${Date.now()}@example.com`;
+  const primaryEmail = `github-primary-${Date.now()}@personal.example`;
   let membershipState: "active" | "missing" = "active";
   let membershipChecks = 0;
   const fakeFetch: typeof fetch = async (input) => {
@@ -46,7 +47,11 @@ describe("direct GitHub browser login", async () => {
     if (url.endsWith("/login/oauth/access_token"))
       return json({ access_token: "ghu_must_not_persist" });
     if (url.endsWith("/user/emails"))
-      return json([{ email: ownerEmail, verified: true, primary: true }]);
+      return json([
+        { email: primaryEmail, verified: true, primary: true },
+        { email: ownerEmail, verified: true, primary: false },
+        { email: "unverified@example.com", verified: false, primary: false },
+      ]);
     if (url.includes("/user/installations"))
       return json({ installations: [{ id: installationId, account: { id: accountId } }] });
     if (url.endsWith("/user/memberships/orgs/theam")) {
@@ -121,7 +126,7 @@ describe("direct GitHub browser login", async () => {
     await client.end();
   });
 
-  it("binds callback state, admits the invited installation member, and creates a Facility session", async () => {
+  it("admits an invitation matching a verified secondary GitHub email", async () => {
     const auditBefore = await db
       .select({ id: auditEvents.id })
       .from(auditEvents)
@@ -157,6 +162,8 @@ describe("direct GitHub browser login", async () => {
     });
     expect(me.statusCode).toBe(200);
     expect(me.json().principal.email).toBe(ownerEmail);
+    const persistedUser = await db.select().from(users).where(eq(users.email, ownerEmail));
+    expect(persistedUser).toHaveLength(1);
     const persistedIdentity = await db
       .select()
       .from(userIdentities)

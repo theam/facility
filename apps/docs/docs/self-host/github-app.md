@@ -6,7 +6,7 @@ title: GitHub App
 
 Self-hosted Facility uses one GitHub App for two jobs: direct GitHub OAuth for
 human sign-in, and an App installation for repository automation. The OAuth
-side verifies a user's stable id and verified email; the installation side
+side verifies a user's stable id and verified emails; the installation side
 discovers repositories, creates governed branches and pull requests, collects
 delivery outcomes, and receives repository events.
 
@@ -55,7 +55,9 @@ For an existing-repository lifecycle, set these **Repository permissions**:
 
 Set **Organization permissions → Members** and **Account permissions → Email
 addresses** to **Read-only**. The latter is required for direct GitHub sign-in;
-without it Facility cannot obtain a verified email and rejects the login. The
+Facility checks every verified address against explicit invitations, including
+a secondary company email. Without this permission Facility cannot obtain the
+verified addresses and rejects the login. The
 Members permission lets direct login enforce `GITHUB_OAUTH_ALLOWED_ORGANIZATION`
 when configured. Leave all other account and user permissions at **No access**.
 

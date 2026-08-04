@@ -398,22 +398,29 @@ describe("api", async () => {
     const rollback = new Error("rollback github admission test");
     await expect(
       db.transaction(async (tx) => {
+        const uninvitedEmail = `uninvited-${Date.now()}@blocked.example`;
         await expect(
           ensureGithubUser(tx as unknown as Parameters<typeof ensureGithubUser>[0], {
             provider: "github",
             githubUserId: `90${Date.now()}`,
             login: "uninvited",
-            email: `uninvited-${Date.now()}@blocked.example`,
+            email: uninvitedEmail,
             emailVerified: true,
+            verifiedEmails: [uninvitedEmail],
             installations: [{ installationId: 900001, accountId: 800001 }],
           }),
         ).rejects.toMatchObject({ statusCode: 403, code: "not_invited" });
 
         const invitedId = newId("user");
         const invitedEmail = `invited-${Date.now()}@example.com`;
+        const personalEmail = `personal-${Date.now()}@example.net`;
+        const inactiveEmail = `inactive-${Date.now()}@example.net`;
         const installationId = 700_000 + Math.floor(Math.random() * 10_000);
         const accountId = 800_000 + Math.floor(Math.random() * 10_000);
-        await tx.insert(users).values({ id: invitedId, email: invitedEmail, status: "active" });
+        await tx.insert(users).values([
+          { id: invitedId, email: invitedEmail, status: "active" },
+          { id: newId("user"), email: inactiveEmail, status: "inactive" },
+        ]);
         await tx
           .insert(orgMembers)
           .values({ id: newId("member"), orgId, userId: invitedId, roleId: viewerRole });
@@ -430,8 +437,9 @@ describe("api", async () => {
             provider: "github",
             githubUserId: String(600_000 + Date.now()),
             login: "invited",
-            email: invitedEmail,
+            email: personalEmail,
             emailVerified: true,
+            verifiedEmails: [personalEmail, inactiveEmail, invitedEmail],
             installations: [{ installationId, accountId: accountId + 1 }],
           }),
         ).rejects.toMatchObject({ statusCode: 403, code: "installation_access_required" });
@@ -445,8 +453,9 @@ describe("api", async () => {
             provider: "github",
             githubUserId: String(600_000 + Date.now()),
             login: "invited",
-            email: invitedEmail,
+            email: personalEmail,
             emailVerified: true,
+            verifiedEmails: [personalEmail, inactiveEmail, invitedEmail],
             installations: [{ installationId, accountId }],
           },
         );
@@ -455,6 +464,9 @@ describe("api", async () => {
           (await tx.select().from(userIdentities).where(eq(userIdentities.userId, invitedId)))
             .length,
         ).toBe(1);
+        expect(
+          (await tx.select().from(users).where(eq(users.id, invitedId)).limit(1))[0]?.email,
+        ).toBe(invitedEmail);
 
         const ambiguousEmail = `ambiguous-${Date.now()}@example.com`;
         await tx.insert(users).values([
@@ -468,9 +480,73 @@ describe("api", async () => {
             login: "ambiguous",
             email: ambiguousEmail,
             emailVerified: true,
+            verifiedEmails: [ambiguousEmail],
             installations: [{ installationId, accountId }],
           }),
         ).rejects.toMatchObject({ statusCode: 403, code: "identity_conflict" });
+        throw rollback;
+      }),
+    ).rejects.toThrow(rollback.message);
+  });
+
+  it("rolls back GitHub identity binding when profile synchronization fails", async () => {
+    const rollback = new Error("rollback github identity atomicity test");
+    await expect(
+      db.transaction(async (tx) => {
+        const invitedId = newId("user");
+        const invitedEmail = `atomic-${Date.now()}@example.com`;
+        const providerSubject = String(800_000 + Date.now());
+        const installationId = 900_000 + Math.floor(Math.random() * 10_000);
+        const accountId = 910_000 + Math.floor(Math.random() * 10_000);
+        await tx.insert(users).values({ id: invitedId, email: invitedEmail, status: "active" });
+        await tx
+          .insert(orgMembers)
+          .values({ id: newId("member"), orgId, userId: invitedId, roleId: viewerRole });
+        await tx.insert(githubInstallations).values({
+          id: newId("int"),
+          orgId,
+          installationId,
+          accountId,
+          accountLogin: "facility-atomicity-test",
+          targetType: "Organization",
+        });
+        await tx.execute(sql`select set_config('facility.test_fail_user_id', ${invitedId}, true)`);
+        await tx.execute(sql`
+          create or replace function pg_temp.fail_facility_profile_sync()
+          returns trigger
+          language plpgsql
+          as $$
+          begin
+            if new.id = current_setting('facility.test_fail_user_id', true) then
+              raise exception 'forced profile sync failure';
+            end if;
+            return new;
+          end;
+          $$
+        `);
+        await tx.execute(sql`
+          create trigger fail_facility_profile_sync
+          before update on users
+          for each row execute function pg_temp.fail_facility_profile_sync()
+        `);
+
+        await expect(
+          ensureGithubUser(tx as unknown as Parameters<typeof ensureGithubUser>[0], {
+            provider: "github",
+            githubUserId: providerSubject,
+            login: "atomicity-test",
+            email: invitedEmail,
+            emailVerified: true,
+            verifiedEmails: [invitedEmail],
+            installations: [{ installationId, accountId }],
+          }),
+        ).rejects.toThrow();
+        expect(
+          await tx
+            .select()
+            .from(userIdentities)
+            .where(eq(userIdentities.providerSubject, providerSubject)),
+        ).toHaveLength(0);
         throw rollback;
       }),
     ).rejects.toThrow(rollback.message);

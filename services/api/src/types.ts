@@ -66,6 +66,7 @@ export type ExternalIdentity = {
   login: string;
   email: string;
   emailVerified: true;
+  verifiedEmails: string[];
   name?: string;
   avatarUrl?: string;
   installations: Array<{ installationId: number; accountId: number }>;

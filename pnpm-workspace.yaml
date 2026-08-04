@@ -40,9 +40,9 @@ allowBuilds:
   protobufjs: false
   ssh2: false
 
-# brace-expansion OOM advisory (GHSA-mh99-v99m-4gvg): only patched in v5; v5's CJS export is
-# an object, incompatible with minimatch@3's callable import (docusaurus dev
-# server chain, dev-only). The 1.x/2.x lines are pinned to their own latest.
+# The advisory database still flags brace-expansion 1.x/2.x for GHSA-mh99-v99m-4gvg,
+# although 1.1.18 and 2.1.4 contain the bounded-expansion backport. Keep this temporary
+# ignore only while those patched legacy lines are required by the current dependency graph.
 auditConfig:
   ignoreGhsas:
     - GHSA-mh99-v99m-4gvg
