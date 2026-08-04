@@ -30,6 +30,12 @@ before resolving their Facility invitation. When blank or unset, any GitHub
 user who satisfies the existing explicit-member and App-installation checks can
 sign in. The setting is available only in direct `github` mode.
 
+For an unlinked account, Facility compares an explicit email invitation with
+every verified email returned by GitHub, not only the primary address. This
+allows a company email to remain secondary. Exactly one Facility user must
+match; ambiguous matches fail closed. After the first successful login,
+Facility binds the member to GitHub's stable numeric user ID.
+
 After migrations and the non-demo seed, run:
 
 ```bash

@@ -138,8 +138,9 @@ GitHub Apps → New GitHub App**.
   | Organization | Members | Read-only |
   | **Account** | **Email addresses** | **Read-only — required for sign-in** |
 
-  Sign-in verifies your GitHub account's verified email; without the Email
-  addresses permission every login fails with a generic
+  Sign-in checks every verified email on your GitHub account against explicit
+  Facility invitations, so a company address may remain secondary on GitHub.
+  Without the Email addresses permission every login fails with a generic
   `auth_failed` error.
 - **Subscribe to events** (only if the webhook is enabled): Installation,
   Push, Issues, Issue comment, Pull request, Pull request review, Workflow
@@ -238,7 +239,7 @@ To delegate all of this to Claude Code or Codex, paste this prompt:
 |---|---|
 | `501 auth_unconfigured` on `/api/auth/login` | `GITHUB_OAUTH_CLIENT_ID`/`SECRET` missing — set both and restart. |
 | GitHub shows a `redirect_uri` mismatch page | The App's Callback URL and `AUTH_CALLBACK_URL` differ — they must match exactly. |
-| `auth_failed: GitHub identity or installation access could not be verified` | The App lacks the **Email addresses: Read-only** account permission, or your verified GitHub email is unavailable. Fix the permission and re-authorize. |
+| `auth_failed: GitHub identity or installation access could not be verified` | The App lacks the **Email addresses: Read-only** account permission, or no verified GitHub email is available. Fix the permission and re-authorize. |
 | `403 not_invited` / `installation_access_required` | Your GitHub user is not provisioned, or the user/account/installation ids in the bootstrap don't match — re-run step 5 with the real ids. |
 | Login succeeds but you land on the wrong host | `WEB_URL` must be the origin your browser uses. |
 | Testing through an HTTPS tunnel: navigation, live updates or hot reload fail | Set `WEB_URL` and `AUTH_CALLBACK_URL` to the tunnel origin (and the App's Callback URL to match), and put the tunnel hostname in `FACILITY_DEV_ORIGINS` — Next blocks cross-origin development requests otherwise. Full walkthrough: [local development](apps/docs/docs/self-host/local-development.md). |

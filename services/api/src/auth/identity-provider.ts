@@ -120,10 +120,12 @@ export class ExternalIdentityProvider {
     const emails = z
       .array(z.object({ email: z.string().email(), verified: z.boolean(), primary: z.boolean() }))
       .safeParse(await json(emailsResponse));
-    const email =
-      emails.success &&
-      (emails.data.find((entry) => entry.primary && entry.verified) ??
-        emails.data.find((entry) => entry.verified));
+    const verifiedEmails = emails.success
+      ? [...new Set(emails.data.filter((entry) => entry.verified).map(normalizedEmail))]
+      : [];
+    const email = emails.success
+      ? (emails.data.find((entry) => entry.primary && entry.verified)?.email ?? verifiedEmails[0])
+      : undefined;
     if (!userResponse.ok || !emailsResponse.ok || !user.success || !email || !installations) {
       throw new ApiError(
         401,
@@ -135,8 +137,9 @@ export class ExternalIdentityProvider {
       provider: "github",
       githubUserId: String(user.data.id),
       login: user.data.login,
-      email: email.email.toLowerCase(),
+      email: normalizedEmail(email),
       emailVerified: true,
+      verifiedEmails,
       name: user.data.name ?? undefined,
       avatarUrl: user.data.avatar_url,
       installations: installations.map((installation) => ({
@@ -270,12 +273,14 @@ export class ExternalIdentityProvider {
         "identity_mismatch",
         "OIDC identity is not valid for this Facility instance",
       );
+    const email = normalizedEmail(claims.data.email);
     return {
       provider: "github",
       githubUserId: claims.data.github_user_id,
       login: claims.data.github_login,
-      email: claims.data.email.toLowerCase(),
+      email,
       emailVerified: true,
+      verifiedEmails: [email],
       name: claims.data.name,
       avatarUrl: claims.data.picture,
       installations: [
@@ -330,6 +335,10 @@ function requiredConfig(value: string | undefined): string {
   if (!value)
     throw new ApiError(501, "auth_unconfigured", "Login is not configured", undefined, true);
   return value;
+}
+
+function normalizedEmail(value: { email: string } | string): string {
+  return (typeof value === "string" ? value : value.email).trim().toLowerCase();
 }
 
 function nextLink(header: string | null): string | undefined {

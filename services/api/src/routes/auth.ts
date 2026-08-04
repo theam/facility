@@ -10,7 +10,7 @@ import {
   userIdentities,
   users,
 } from "@facility/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { mintSessionCookie } from "../app.js";
@@ -153,6 +153,15 @@ export async function ensureGithubUser(
   db: FastifyInstance["facilityDb"],
   identity: ExternalIdentity,
 ): Promise<{ userId: string; orgId: string }> {
+  return db.transaction((tx) =>
+    ensureGithubUserTransaction(tx as unknown as FastifyInstance["facilityDb"], identity),
+  );
+}
+
+async function ensureGithubUserTransaction(
+  db: FastifyInstance["facilityDb"],
+  identity: ExternalIdentity,
+): Promise<{ userId: string; orgId: string }> {
   const linked = (
     await db
       .select({ identity: userIdentities, user: users })
@@ -171,10 +180,19 @@ export async function ensureGithubUser(
     : await db
         .select()
         .from(users)
-        .where(sql`lower(${users.email}) = ${identity.email.toLowerCase()}`)
+        .where(
+          and(
+            eq(users.status, "active"),
+            inArray(sql`lower(${users.email})`, identity.verifiedEmails),
+          ),
+        )
         .limit(2);
   if (!linked && emailMatches.length > 1) {
-    throw new ApiError(403, "identity_conflict", "Multiple Facility users match this GitHub email");
+    throw new ApiError(
+      403,
+      "identity_conflict",
+      "Multiple Facility users match verified GitHub emails",
+    );
   }
   const invited = linked?.user ?? emailMatches[0];
   if (invited?.status !== "active") {
@@ -239,7 +257,6 @@ export async function ensureGithubUser(
   await db
     .update(users)
     .set({
-      email: identity.email,
       name: identity.name ?? invited.name,
       avatarUrl: identity.avatarUrl ?? invited.avatarUrl,
       updatedAt: new Date(),
