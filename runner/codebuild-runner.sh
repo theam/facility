@@ -189,6 +189,19 @@ security_smoke() {
     echo "Security smoke failed: the bind broker retained an environment" >&2
     return 1
   fi
+  echo "Facility smoke: checking metadata egress isolation"
+  local isolated_uid
+  for isolated_uid in "$untrusted_uid" "$(id -u "$docker_user")" "$(id -u "$proxy_user")"; do
+    if ! iptables -C OUTPUT -m owner --uid-owner "$isolated_uid" \
+      -d 169.254.0.0/16 -j REJECT; then
+      echo "Security smoke failed: an untrusted identity can reach IPv4 metadata" >&2
+      return 1
+    fi
+  done
+  if iptables -C OUTPUT -d 169.254.0.0/16 -j REJECT >/dev/null 2>&1; then
+    echo "Security smoke failed: metadata isolation also blocked the CodeBuild agent" >&2
+    return 1
+  fi
   if run_untrusted test -w "$workspace_view" || \
     runuser --user "$docker_user" -- test -w "$workspace_view"; then
     echo "Security smoke failed: an untrusted identity can modify pinned aliases" >&2
@@ -400,13 +413,19 @@ fi
 echo "Facility CodeBuild: host boundary configured"
 
 # Neither the runner nor nested builds need link-local metadata endpoints. Block
-# them before untrusted code starts, including traffic forwarded by rootlesskit.
-iptables -I OUTPUT 1 -d 169.254.0.0/16 -j REJECT
+# the identities that can execute repository-controlled work, including the
+# rootlesskit user that originates nested-container traffic. CodeBuild's root
+# agent must retain its control-plane connection so builds can report completion.
+for isolated_uid in "$untrusted_uid" "$(id -u "$docker_user")" "$(id -u "$proxy_user")"; do
+  iptables -I OUTPUT 1 -m owner --uid-owner "$isolated_uid" -d 169.254.0.0/16 -j REJECT
+done
 iptables -I FORWARD 1 -d 169.254.0.0/16 -j REJECT
 if command -v ip6tables >/dev/null 2>&1; then
-  ip6tables -I OUTPUT 1 -d fe80::/10 -j REJECT || true
+  for isolated_uid in "$untrusted_uid" "$(id -u "$docker_user")" "$(id -u "$proxy_user")"; do
+    ip6tables -I OUTPUT 1 -m owner --uid-owner "$isolated_uid" -d fe80::/10 -j REJECT || true
+    ip6tables -I OUTPUT 1 -m owner --uid-owner "$isolated_uid" -d fd00:ec2::254 -j REJECT || true
+  done
   ip6tables -I FORWARD 1 -d fe80::/10 -j REJECT || true
-  ip6tables -I OUTPUT 1 -d fd00:ec2::254 -j REJECT || true
   ip6tables -I FORWARD 1 -d fd00:ec2::254 -j REJECT || true
 fi
 
