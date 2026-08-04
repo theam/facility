@@ -270,11 +270,44 @@ export async function reconcilePreviews(config: AppConfig) {
           .where(eq(previewSandboxes.id, preview.id));
         changed.push(preview.id);
       } else if (state === "exited" || state === "lost") {
+        let cleanupError: string | null = null;
+        try {
+          await driver.destroy(preview.ref);
+        } catch (error) {
+          cleanupError = error instanceof Error ? error.message : String(error);
+        }
         await db
           .update(previewSandboxes)
-          .set({ status: "failed", error: `preview_${state}`, updatedAt: new Date() })
+          .set({
+            status: "failed",
+            error: `preview_${state}${cleanupError ? `;cleanup_failed:${cleanupError}` : ""}`,
+            ...(cleanupError ? {} : { ref: null }),
+            updatedAt: new Date(),
+          })
           .where(eq(previewSandboxes.id, preview.id));
         changed.push(preview.id);
+      }
+    }
+    // A transient ECS/Docker failure must not make a failed preview immortal.
+    // Retain its ref on failure and retry cleanup on each reconciliation pass;
+    // clear it only after the task/container and its per-preview definition are
+    // gone.
+    const failedWithRefs = await db
+      .select()
+      .from(previewSandboxes)
+      .where(eq(previewSandboxes.status, "failed"));
+    for (const preview of failedWithRefs) {
+      if (!preview.ref) continue;
+      const driver = await previewSandboxDriver(preview.driver as "docker" | "aws");
+      try {
+        await driver.destroy(preview.ref);
+        await db
+          .update(previewSandboxes)
+          .set({ ref: null, updatedAt: new Date() })
+          .where(eq(previewSandboxes.id, preview.id));
+        changed.push(preview.id);
+      } catch {
+        // Keep the ref for the next bounded worker reconciliation.
       }
     }
     return { changed };

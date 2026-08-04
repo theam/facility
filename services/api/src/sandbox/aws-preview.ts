@@ -210,8 +210,18 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
 
   async destroy(ref: string): Promise<void> {
     const parsed = decodeRef(ref);
-    await this.stop(ref, { kill: true });
-    if (parsed.taskDefinitionArn) await this.deregister(parsed.taskDefinitionArn);
+    let failure: unknown;
+    try {
+      await this.stop(ref, { kill: true });
+    } catch (error) {
+      if (!isTaskAlreadyGone(error)) failure = error;
+    }
+    try {
+      if (parsed.taskDefinitionArn) await this.deregister(parsed.taskDefinitionArn);
+    } catch (error) {
+      if (!isTaskDefinitionAlreadyGone(error)) failure ??= error;
+    }
+    if (failure) throw failure;
   }
 
   private async waitForPrivateIp(cluster: string, taskArn: string) {
@@ -343,5 +353,27 @@ function isResourceNotFound(error: unknown) {
     error !== null &&
     ((error as { name?: string }).name === "ResourceNotFoundException" ||
       (error as { Code?: string }).Code === "ResourceNotFoundException")
+  );
+}
+
+function isTaskAlreadyGone(error: unknown) {
+  if (isResourceNotFound(error)) return true;
+  if (typeof error !== "object" || error === null) return false;
+  const name = (error as { name?: string }).name;
+  const message = (error as { message?: string }).message ?? "";
+  return (
+    (name === "ClientException" || name === "InvalidParameterException") &&
+    /task.*(?:not found|does not exist|already (?:stopped|deleted)|is not running)/i.test(message)
+  );
+}
+
+function isTaskDefinitionAlreadyGone(error: unknown) {
+  if (isResourceNotFound(error)) return true;
+  if (typeof error !== "object" || error === null) return false;
+  const name = (error as { name?: string }).name;
+  const message = (error as { message?: string }).message ?? "";
+  return (
+    (name === "ClientException" || name === "InvalidParameterException") &&
+    /task definition.*(?:not found|does not exist|already (?:deregistered|deleted))/i.test(message)
   );
 }

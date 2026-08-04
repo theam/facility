@@ -13,6 +13,7 @@ resource "aws_codebuild_project" "runner" {
     type      = "NO_SOURCE"
     buildspec = <<-YAML
       version: 0.2
+      run-as: root
       phases:
         build:
           commands:

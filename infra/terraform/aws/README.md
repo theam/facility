@@ -169,6 +169,12 @@ Required runtime values:
   it, and the runner deletes its temporary npm config before provisioning. Set
   `enable_package_registry_token = true` only after populating it.
 
+The privileged CodeBuild host does not give repository commands an unrestricted
+Docker socket. The runner uses a separate root lifecycle process, a rootless
+daemon UID, and an allowlisted socket proxy; its production smoke test rejects
+privileged containers, host PID mode, `/proc` mounts, raw-socket access, and
+runner-environment reads before the project is considered ready.
+
 The `dev_anthropic_api_key` and `dev_openai_api_key` secrets exist only for
 local/bootstrap fallback compatibility. Prefer provider credentials stored
 through the Facility API after boot.

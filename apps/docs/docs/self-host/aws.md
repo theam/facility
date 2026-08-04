@@ -20,11 +20,20 @@ subnets with the sandbox security group. Its service role can pull the runner
 image, write its own logs, and manage its VPC network interface; it cannot read
 Facility's Secrets Manager values.
 
+Privileged mode belongs to the outer CodeBuild host, not to repository code.
+The runner starts Docker rootless under a dedicated UID and exposes only a
+policy proxy to agent commands. The proxy denies privileged/host-namespace
+containers, devices, added capabilities, daemon administration, and host binds
+outside `/work` (plus its own restricted socket). The lifecycle runner keeps its
+run token under a different UID, and link-local metadata egress is blocked.
+
 Preview services stay on Fargate because the authenticated Facility proxy needs
 to reach their private port. They use a dedicated task role with no permissions
 and a narrowly scoped execution role for image pull and CloudWatch logs. The API
 registers only the requested immutable preview definition and destroys it with
-the task; this path is separate from the privileged agent runner.
+the task. Failed/lost previews retain their reference until reconciliation has
+also deregistered that definition; this path is separate from the privileged
+agent runner.
 
 Nothing in the services is AWS-specific — this module is a reference, not a
 requirement. The sandbox driver seam (`docker` | `aws`) is where compute

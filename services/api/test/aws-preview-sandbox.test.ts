@@ -122,6 +122,67 @@ describe("AWS preview sandbox driver", () => {
     expect(commands.at(-1)).toBeInstanceOf(DeregisterTaskDefinitionCommand);
   });
 
+  it("still deregisters a preview definition when stopping the task fails", async () => {
+    const commands: unknown[] = [];
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof StopTaskCommand) {
+          throw Object.assign(new Error("The referenced task was not found."), {
+            name: "InvalidParameterException",
+          });
+        }
+        if (command instanceof DeregisterTaskDefinitionCommand) {
+          throw Object.assign(new Error("The task definition does not exist."), {
+            name: "ResourceNotFoundException",
+          });
+        }
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+    );
+    const ref = Buffer.from(
+      JSON.stringify({
+        taskArn: "arn:aws:ecs:eu-west-1:123:task/facility-prod/gone",
+        taskDefinitionArn: "arn:aws:ecs:eu-west-1:123:task-definition/facility-prod-preview:9",
+      }),
+    ).toString("base64url");
+    await expect(driver.destroy(ref)).resolves.toBeUndefined();
+    expect(commands[0]).toBeInstanceOf(StopTaskCommand);
+    expect(commands[1]).toBeInstanceOf(DeregisterTaskDefinitionCommand);
+  });
+
+  it("retains real stop failures after deregistering for a later cleanup retry", async () => {
+    const commands: unknown[] = [];
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof StopTaskCommand) {
+          throw Object.assign(new Error("not authorized"), { name: "AccessDeniedException" });
+        }
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+    );
+    const ref = Buffer.from(
+      JSON.stringify({
+        taskArn: "arn:aws:ecs:eu-west-1:123:task/facility-prod/denied",
+        taskDefinitionArn: "arn:aws:ecs:eu-west-1:123:task-definition/facility-prod-preview:10",
+      }),
+    ).toString("base64url");
+    await expect(driver.destroy(ref)).rejects.toThrow("not authorized");
+    expect(commands[0]).toBeInstanceOf(StopTaskCommand);
+    expect(commands[1]).toBeInstanceOf(DeregisterTaskDefinitionCommand);
+  });
+
   it("fails closed when the dedicated preview role configuration is absent", async () => {
     const driver = new AwsPreviewSandboxDriver(
       { send: async () => ({}) } as never,
