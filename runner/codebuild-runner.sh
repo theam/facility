@@ -301,9 +301,14 @@ if [[ "${FACILITY_CODEBUILD_SMOKE:-}" == "1" ]]; then
   exit 0
 fi
 
-if [[ "$#" -eq 0 ]]; then set -- node /app/dist/index.js; fi
+if [[ "$#" -eq 0 ]]; then
+  # Keep the lifecycle credential in the root runner process. It lowers every
+  # repository, model, provisioning, and check child to the untrusted identity.
+  exec node /app/dist/index.js
+fi
 
-# Keep the lifecycle credential in a root runner process. Every repository,
-# model, provisioning, and check command is spawned as the separate `node`
-# identity, so it cannot inspect the runner's process environment.
-exec "$@"
+# A sandbox profile may replace the Facility lifecycle with a custom command.
+# It must not inherit root or the lifecycle credential merely because CodeBuild
+# needs root for the trusted mount/network setup above.
+exec setpriv --reuid="$untrusted_uid" --regid="$untrusted_gid" --clear-groups -- \
+  env --unset=RUNNER_TOKEN "$@"

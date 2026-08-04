@@ -64,7 +64,6 @@ export class AwsSandboxDriver implements SandboxDriver {
       new StartBuildCommand({
         projectName: config.project,
         idempotencyToken: spec.runId,
-        imageOverride: spec.image,
         computeTypeOverride: codeBuildComputeType(spec.cpu, spec.memoryMb),
         timeoutInMinutesOverride: clamp(Math.round(spec.timeoutMin), 5, 2160),
         environmentVariablesOverride: Object.entries(spec.env)

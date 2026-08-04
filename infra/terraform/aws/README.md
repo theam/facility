@@ -15,7 +15,9 @@ Topology:
   Cloud Map at the `gateway_internal_url` output.
 - Postgres accepts `5432` only from the ECS service security group.
 - CodeBuild sandboxes run in private subnets and can reach the internal gateway.
-  Their least-privilege service role has no Secrets Manager access.
+  Their least-privilege service role has no Secrets Manager access. Runs always
+  use the runner image fixed on the CodeBuild project; database-backed sandbox
+  profiles cannot override that AWS-trusted image.
 - Private preview services use per-image Fargate task definitions, a no-permission
   task role, and a dedicated execution role. Only Facility services can reach
   their private ports through the sandbox security group.

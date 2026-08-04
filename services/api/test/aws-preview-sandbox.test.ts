@@ -122,6 +122,46 @@ describe("AWS preview sandbox driver", () => {
     expect(commands.at(-1)).toBeInstanceOf(DeregisterTaskDefinitionCommand);
   });
 
+  it("stops a launched preview when private-IP discovery fails", async () => {
+    const commands: unknown[] = [];
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof RegisterTaskDefinitionCommand) {
+          return { taskDefinition: { taskDefinitionArn: "arn:aws:ecs:task-definition/preview:9" } };
+        }
+        if (command instanceof RunTaskCommand) {
+          return { tasks: [{ taskArn: "arn:aws:ecs:task/facility-prod/launched" }] };
+        }
+        if (command instanceof DescribeTasksCommand) throw new Error("transient describe failure");
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+      async () => undefined,
+    );
+    await expect(
+      driver.launch({
+        runId: "preview:describe-failure",
+        image: "example.invalid/preview:latest",
+        env: {},
+        cpu: 1,
+        memoryMb: 1024,
+        timeoutMin: 60,
+        servicePort: 3000,
+      }),
+    ).rejects.toThrow("transient describe failure");
+    expect(commands).toHaveLength(5);
+    expect(commands[0]).toBeInstanceOf(RegisterTaskDefinitionCommand);
+    expect(commands[1]).toBeInstanceOf(RunTaskCommand);
+    expect(commands[2]).toBeInstanceOf(DescribeTasksCommand);
+    expect(commands[3]).toBeInstanceOf(StopTaskCommand);
+    expect(commands[4]).toBeInstanceOf(DeregisterTaskDefinitionCommand);
+  });
+
   it("still deregisters a preview definition when stopping the task fails", async () => {
     const commands: unknown[] = [];
     const ecs = {

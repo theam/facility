@@ -18,7 +18,7 @@ describe("AwsSandboxDriver", () => {
     const driver = new AwsSandboxDriver(codebuild, new FakeLogsClient(), env);
     const launched = await driver.launch({
       runId: "run_test",
-      image: "facility-runner:dev",
+      image: "attacker.example/runner:latest",
       env: { RUNNER_TOKEN: "secret", RUN_ID: "run_test" },
       cpu: 8,
       memoryMb: 15_360,
@@ -32,7 +32,6 @@ describe("AwsSandboxDriver", () => {
     expect((command as StartBuildCommand | undefined)?.input).toMatchObject({
       projectName: "facility-test-runner",
       idempotencyToken: "run_test",
-      imageOverride: "facility-runner:dev",
       computeTypeOverride: "BUILD_GENERAL1_LARGE",
       timeoutInMinutesOverride: 30,
       environmentVariablesOverride: [
@@ -40,6 +39,7 @@ describe("AwsSandboxDriver", () => {
         { name: "RUNNER_TOKEN", value: "secret", type: "PLAINTEXT" },
       ],
     });
+    expect((command as StartBuildCommand | undefined)?.input).not.toHaveProperty("imageOverride");
     expect((command as StartBuildCommand | undefined)?.input.buildspecOverride).toBe(
       "version: 0.2\nrun-as: root\nphases:\n  build:\n    commands:\n      - \"'/app/codebuild-runner.sh' 'node' 'runner'\\\"'\\\"'s script.js'\"\n",
     );

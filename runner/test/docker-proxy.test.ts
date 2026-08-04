@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -241,6 +241,13 @@ describe("restricted Docker API", () => {
 test("the CodeBuild runner uses a different identity for untrusted commands", () => {
   expect(untrustedSpawnIdentity(() => 0)).toEqual({ uid: 1000, gid: 1000 });
   expect(untrustedSpawnIdentity(() => 501)).toEqual({});
+});
+
+test("custom CodeBuild commands drop root and the lifecycle credential", async () => {
+  const script = await readFile(new URL("../codebuild-runner.sh", import.meta.url), "utf8");
+  expect(script).toMatch(
+    /exec setpriv --reuid="\$untrusted_uid" --regid="\$untrusted_gid" --clear-groups -- \\\n\s+env --unset=RUNNER_TOKEN "\$@"/,
+  );
 });
 
 function listen(server: http.Server | net.Server, socket: string) {

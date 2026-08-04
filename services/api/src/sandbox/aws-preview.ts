@@ -108,6 +108,7 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
     const taskDefinitionArn = registered.taskDefinition?.taskDefinitionArn;
     if (!taskDefinitionArn) throw new Error("ECS did not register a preview task definition");
 
+    let taskArn: string | undefined;
     try {
       const launched = (await this.ecs.send(
         new RunTaskCommand({
@@ -130,7 +131,7 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
         }),
       )) as RunTaskCommandOutput;
       if (launched.failures?.length) throw new Error(formatFailures(launched.failures));
-      const taskArn = launched.tasks?.[0]?.taskArn;
+      taskArn = launched.tasks?.[0]?.taskArn;
       if (!taskArn) throw new Error("ECS RunTask did not return a preview task ARN");
       const privateIp =
         privateIpv4(launched.tasks?.[0]) ?? (await this.waitForPrivateIp(config.cluster, taskArn));
@@ -139,7 +140,31 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
         ...(privateIp ? { endpoint: `http://${privateIp}:${spec.servicePort}` } : {}),
       };
     } catch (error) {
-      await this.deregister(taskDefinitionArn).catch(() => undefined);
+      let cleanupFailure: unknown;
+      if (taskArn) {
+        try {
+          await this.ecs.send(
+            new StopTaskCommand({
+              cluster: config.cluster,
+              task: taskArn,
+              reason: "Facility preview launch failed",
+            }),
+          );
+        } catch (stopError) {
+          if (!isTaskAlreadyGone(stopError)) cleanupFailure = stopError;
+        }
+      }
+      try {
+        await this.deregister(taskDefinitionArn);
+      } catch (deregisterError) {
+        if (!isTaskDefinitionAlreadyGone(deregisterError)) cleanupFailure ??= deregisterError;
+      }
+      if (cleanupFailure) {
+        throw new AggregateError(
+          [error, cleanupFailure],
+          "AWS preview launch failed and cleanup did not converge",
+        );
+      }
       throw error;
     }
   }
