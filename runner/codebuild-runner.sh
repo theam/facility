@@ -13,6 +13,12 @@ readonly raw_socket="${docker_runtime}/docker.sock"
 readonly public_socket="${proxy_runtime}/docker.sock"
 readonly bind_socket="${bind_runtime}/mounter.sock"
 
+if [[ "${FACILITY_CODEBUILD_SMOKE:-}" == "1" && \
+  "${FACILITY_CODEBUILD_SMOKE_TIMEOUT_INNER:-}" != "1" ]]; then
+  export FACILITY_CODEBUILD_SMOKE_TIMEOUT_INNER=1
+  exec timeout --kill-after=30s 10m "$0" "$@"
+fi
+
 credential_vars=(
   AWS_ACCESS_KEY_ID
   AWS_SECRET_ACCESS_KEY
@@ -42,9 +48,29 @@ stop_process_group() {
   local pid="$1"
   if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
     kill -TERM -- "-$pid" >/dev/null 2>&1 || true
+    for _ in $(seq 1 10); do
+      if ! kill -0 "$pid" >/dev/null 2>&1; then break; fi
+      sleep 1
+    done
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill -KILL -- "-$pid" >/dev/null 2>&1 || true
+    fi
     wait "$pid" >/dev/null 2>&1 || true
   fi
 }
+
+cleanup_runtime() {
+  stop_process_group "$proxy_pid"
+  stop_process_group "$mounter_pid"
+  stop_process_group "$dockerd_pid"
+}
+
+if [[ "${FACILITY_CODEBUILD_SMOKE:-}" == "1" && \
+  "${FACILITY_CODEBUILD_SMOKE_TIMEOUT_INNER:-}" == "1" ]]; then
+  trap cleanup_runtime EXIT
+  trap 'exit 124' TERM
+  trap 'exit 130' INT
+fi
 
 run_untrusted() {
   setpriv --reuid="$untrusted_uid" --regid="$untrusted_gid" --clear-groups -- "$@"
@@ -53,6 +79,7 @@ run_untrusted() {
 start_docker() {
   local storage_driver="$1"
   local data_root="$2"
+  echo "Facility CodeBuild: starting rootless Docker (${storage_driver})"
   echo "Starting rootless Facility Docker with ${storage_driver}" >>/var/log/facility-dockerd.log
   setsid runuser --user "$docker_user" -- env "${dockerd_env[@]}" \
     HOME=/var/lib/facility-docker \
@@ -142,6 +169,7 @@ start_mounter() {
 }
 
 security_smoke() {
+  echo "Facility smoke: checking broker identities and environment"
   local broker_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); const timer=setTimeout(()=>process.exit(1),1000); socket.on("connect",()=>{clearTimeout(timer); socket.destroy(); process.exit(0)}); socket.on("error",()=>{clearTimeout(timer); process.exit(1)});'
   local peer_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); let response=""; const timer=setTimeout(()=>socket.destroy(new Error("timeout")),1000); socket.setEncoding("utf8"); socket.on("data",chunk=>response+=chunk); socket.on("end",()=>{clearTimeout(timer); if(response!=="ERR workspace_bind_peer_denied\n"){console.error(`unexpected broker response: ${JSON.stringify(response)}`);process.exit(1)}}); socket.on("error",error=>{clearTimeout(timer); console.error(`broker peer probe failed: ${error.message}`);process.exit(1)});'
   if ! node -e "$peer_probe" "$bind_socket"; then
@@ -172,6 +200,7 @@ security_smoke() {
     echo "Security smoke failed: the agent user read the runner credential" >&2
     return 1
   fi
+  echo "Facility smoke: building the nested Docker probe"
   if ! run_untrusted env DOCKER_HOST="unix://${public_socket}" docker info \
     >/dev/null 2>&1; then
     echo "Security smoke failed: the agent user cannot reach restricted Docker" >&2
@@ -206,6 +235,7 @@ security_smoke() {
     return 1
   fi
 
+  echo "Facility smoke: checking permitted workspace and socket binds"
   local bind_dir="/work/.facility-security-bind"
   run_untrusted mkdir "$bind_dir"
   run_untrusted sh -c 'printf facility-workspace-bind-ready > "$1/probe"' facility-bind "$bind_dir"
@@ -269,6 +299,7 @@ security_smoke() {
     run_untrusted rmdir "$race_original"
   fi
 
+  echo "Facility smoke: checking denied Docker capabilities and host paths"
   if docker create --privileged facility-security-smoke:local true >/dev/null 2>&1; then
     echo "Security smoke failed: privileged containers reached Docker" >&2
     return 1
@@ -308,6 +339,7 @@ security_smoke() {
   run_untrusted sh -c \
     'printf safe-partial-bind > "$1/probe"' facility-partial /work/.facility-security-partial
   local rollback_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); let response=""; const timer=setTimeout(()=>socket.destroy(new Error("timeout")),1000); socket.setEncoding("utf8"); socket.on("connect",()=>socket.end("BATCH 2\n.facility-security-partial/probe\n.facility-security-partial/missing\n")); socket.on("data",chunk=>response+=chunk); socket.on("end",()=>{clearTimeout(timer); process.exit(response==="ERR workspace_bind_source_denied\n"?0:1)}); socket.on("error",()=>{clearTimeout(timer); process.exit(1)});'
+  echo "Facility smoke: checking transactional bind rollback"
   local aliases_before aliases_after
   aliases_before="$(findmnt -rn -o TARGET | grep -c "^${workspace_view}/" || true)"
   if ! runuser --user "$proxy_user" -- env -i \
@@ -365,6 +397,8 @@ fi
 : >/var/log/facility-docker-proxy.log
 : >/var/log/facility-bind-mounter.log
 
+echo "Facility CodeBuild: host boundary configured"
+
 # Neither the runner nor nested builds need link-local metadata endpoints. Block
 # them before untrusted code starts, including traffic forwarded by rootlesskit.
 iptables -I OUTPUT 1 -d 169.254.0.0/16 -j REJECT
@@ -390,6 +424,7 @@ if ! DOCKER_HOST="unix://${raw_socket}" docker info >/dev/null 2>&1; then
   tail -n 200 /var/log/facility-dockerd.log >&2 || true
   exit 1
 fi
+echo "Facility CodeBuild: rootless Docker is ready"
 chmod 0660 "$raw_socket"
 # Dockerd keeps its listening descriptor open. Reassign the pathname to the
 # proxy identity so even a bind-validation TOCTOU cannot give root inside a
@@ -400,6 +435,7 @@ if ! start_mounter; then
   tail -n 200 /var/log/facility-bind-mounter.log >&2 || true
   exit 1
 fi
+echo "Facility CodeBuild: transactional bind broker is ready"
 start_proxy
 
 export DOCKER_HOST="unix://${public_socket}"
@@ -408,6 +444,7 @@ if ! docker info >/dev/null 2>&1; then
   tail -n 200 /var/log/facility-docker-proxy.log >&2 || true
   exit 1
 fi
+echo "Facility CodeBuild: restricted Docker proxy is ready"
 
 for name in "${credential_vars[@]}"; do unset "$name"; done
 export HOME=/work
