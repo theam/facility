@@ -23,6 +23,15 @@ resource "aws_security_group" "sandbox" {
   description = "Facility ephemeral CodeBuild sandbox environments"
   vpc_id      = aws_vpc.facility.id
 
+  # AWS makes security-group descriptions immutable. Existing ECS-based
+  # installations already have this group wired into cross-group rules and
+  # ENIs, so replacing it only to rename the description creates a dependency
+  # cycle during the CodeBuild migration. New stacks still receive the current
+  # description; existing stacks safely retain the cosmetic legacy value.
+  lifecycle {
+    ignore_changes = [description]
+  }
+
   tags = {
     Name = "${local.name_prefix}-sandbox"
   }

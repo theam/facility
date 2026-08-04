@@ -35,12 +35,10 @@ export function serveHttp(options: HttpServerOptions) {
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("cache-control", "no-store");
 
-    if (!validRequestAuthority(request, allowedHosts)) {
-      response.writeHead(421, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: "untrusted request authority" }));
-      return;
-    }
-
+    // Load balancers address targets by private IP and therefore cannot send
+    // the public authority allowlisted for MCP traffic. These read-only probes
+    // expose no credentials or tenant data; keep every functional endpoint
+    // behind the authority check below.
     if (request.method === "GET" && ["/health", "/healthz"].includes(path)) {
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify({ ok: true, version: "0.3.0", transport: "streamable-http" }));
@@ -68,6 +66,12 @@ export function serveHttp(options: HttpServerOptions) {
         });
         response.end(JSON.stringify({ ok: false, api: "down" }));
       }
+      return;
+    }
+
+    if (!validRequestAuthority(request, allowedHosts)) {
+      response.writeHead(421, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "untrusted request authority" }));
       return;
     }
 

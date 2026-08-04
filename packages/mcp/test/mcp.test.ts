@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { FacilityApiError } from "@facility/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -46,6 +47,39 @@ function textPayload(result: unknown) {
   if (!Array.isArray(content)) return "{}";
   const first = content[0] as { type?: string; text?: string } | undefined;
   return first?.type === "text" ? (first.text ?? "{}") : "{}";
+}
+
+function requestWithAuthority(options: {
+  port: number;
+  path: string;
+  authority: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}) {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port: options.port,
+        path: options.path,
+        method: options.method ?? "GET",
+        headers: { ...options.headers, host: options.authority },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end(options.body);
+  });
 }
 
 async function connect(stub: {
@@ -525,6 +559,61 @@ describe("@facility/mcp", () => {
     const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
     expect(readiness.status).toBe(503);
     expect(await readiness.json()).toEqual({ ok: false, api: "down" });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test("load-balancer probes accept a private authority without exposing MCP traffic", async () => {
+    const server = serveHttp({
+      apiUrl: "http://facility.test",
+      port: 0,
+      allowedHosts: ["mcp.facility.test"],
+      fetch: async () => new Response("ok"),
+    });
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const privateAuthority = "10.0.1.42:4420";
+
+    for (const path of ["/health", "/healthz"]) {
+      const health = await requestWithAuthority({
+        port,
+        path,
+        authority: privateAuthority,
+      });
+      expect(health.status).toBe(200);
+      expect(JSON.parse(health.body)).toEqual({
+        ok: true,
+        version: "0.3.0",
+        transport: "streamable-http",
+      });
+    }
+
+    const readiness = await requestWithAuthority({
+      port,
+      path: "/readyz",
+      authority: privateAuthority,
+    });
+    expect(readiness.status).toBe(200);
+    expect(JSON.parse(readiness.body)).toEqual({ ok: true, api: "up" });
+
+    const protectedResponse = await requestWithAuthority({
+      port,
+      path: "/mcp",
+      authority: privateAuthority,
+      method: "POST",
+      headers: {
+        authorization: "Bearer fak_test",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    expect(protectedResponse.status).toBe(421);
+
+    const oauthDiscovery = await requestWithAuthority({
+      port,
+      path: "/.well-known/oauth-protected-resource",
+      authority: privateAuthority,
+    });
+    expect(oauthDiscovery.status).toBe(421);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
