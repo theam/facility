@@ -335,6 +335,18 @@ test("custom CodeBuild lifecycle commands drop root", async () => {
   );
 });
 
+test("CodeBuild metadata egress is scoped to untrusted identities", async () => {
+  const script = await readFile(new URL("../codebuild-runner.sh", import.meta.url), "utf8");
+  expect(script).toContain(
+    'for isolated_uid in "$untrusted_uid" "$(id -u "$docker_user")" "$(id -u "$proxy_user")"; do',
+  );
+  expect(script).toContain(
+    'iptables -I OUTPUT 1 -m owner --uid-owner "$isolated_uid" -d 169.254.0.0/16 -j REJECT',
+  );
+  expect(script).toContain("iptables -I FORWARD 1 -d 169.254.0.0/16 -j REJECT");
+  expect(script).not.toContain("iptables -I OUTPUT 1 -d 169.254.0.0/16 -j REJECT");
+});
+
 function listen(server: http.Server | net.Server, socket: string) {
   return new Promise<void>((resolve, reject) => {
     server.once("error", reject);
