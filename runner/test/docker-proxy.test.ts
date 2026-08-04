@@ -274,6 +274,53 @@ describe("restricted Docker API", () => {
 
     await expect(upgrade(publicSocket, "/v1.47/exec/abc/start", execBody)).resolves.toBe("ready");
   });
+
+  test("flushes long-lived Docker response headers before the body", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "facility-docker-stream-"));
+    const upstreamSocket = join(dir, "upstream.sock");
+    const publicSocket = join(dir, "public.sock");
+    let finishUpstream = () => {};
+    const upstreamFinished = new Promise<void>((resolve) => {
+      finishUpstream = resolve;
+    });
+    const upstream = http.createServer(async (_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.flushHeaders();
+      await upstreamFinished;
+      response.end("{}");
+    });
+    await listen(upstream, upstreamSocket);
+    const proxy = await startDockerProxy({ publicSocket, upstreamSocket });
+    cleanup.push(async () => {
+      finishUpstream();
+      await close(proxy);
+      await close(upstream);
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    const headersReceived = new Promise<number>((resolve, reject) => {
+      const request = http.request(
+        {
+          socketPath: publicSocket,
+          method: "POST",
+          path: "/v1.47/containers/abc/wait",
+          headers: { connection: "close" },
+        },
+        (response) => {
+          resolve(response.statusCode ?? 0);
+          response.resume();
+        },
+      );
+      request.on("error", reject);
+      request.end();
+    });
+    const result = await Promise.race([
+      headersReceived,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
+    ]);
+    finishUpstream();
+    expect(result).toBe(200);
+  });
 });
 
 test("the CodeBuild runner uses a different identity for untrusted commands", () => {

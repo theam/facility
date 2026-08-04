@@ -274,6 +274,12 @@ async function handleRequest(
   const upstream = http.request({ socketPath: upstreamSocket, method, path: url, headers });
   upstream.on("response", (upstreamResponse) => {
     response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+    // Docker deliberately sends headers before the body for long-lived calls
+    // such as container wait and event streams. Node buffers writeHead() until
+    // body data arrives unless it is flushed explicitly. A foreground
+    // `docker run` waits for the wait subscription before it starts the
+    // container, so buffering these headers deadlocks the whole lifecycle.
+    response.flushHeaders();
     upstreamResponse.pipe(response);
   });
   upstream.on("error", (error) => {
