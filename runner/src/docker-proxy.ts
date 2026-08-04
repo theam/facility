@@ -2,13 +2,21 @@
 import { chmod, chown, realpath, rm } from "node:fs/promises";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import net from "node:net";
+import { isAbsolute, relative, sep } from "node:path";
 import type { Duplex } from "node:stream";
 
 const DEFAULT_PUBLIC_SOCKET = "/run/facility-proxy/docker.sock";
 const DEFAULT_UPSTREAM_SOCKET = "/run/facility-docker/docker.sock";
 const DEFAULT_WORKSPACE_ROOT = "/work";
-const DEFAULT_WORKSPACE_VIEW = "/run/facility-workspace";
+const DEFAULT_BIND_MOUNTER_SOCKET = "/run/facility-binds/mounter.sock";
 const MAX_POLICY_BODY_BYTES = 1024 * 1024;
+const MAX_BATCH_BINDS = 128;
+const MAX_BROKER_RESPONSE_BYTES = 1024 * 1024;
+
+type PinBindSources = (sources: string[], workspaceRoot: string) => Promise<string[]>;
+type SecuredBindSource =
+  | { allowed: true; source: string; pin: boolean }
+  | { allowed: false; reason: string };
 
 type PolicyDecision =
   | { allowed: true; validateBody?: "container" | "exec" | "volume" }
@@ -124,7 +132,7 @@ export function validateDockerBody(
 export async function secureDockerBindSources(
   value: unknown,
   workspaceRoot = DEFAULT_WORKSPACE_ROOT,
-  workspaceView = DEFAULT_WORKSPACE_VIEW,
+  pinBindSources: PinBindSources,
 ): Promise<string | null> {
   const host = object(object(value).HostConfig);
   const hasBind =
@@ -138,27 +146,59 @@ export async function secureDockerBindSources(
   } catch {
     return "workspace_root_unresolved";
   }
-  if (Array.isArray(host.Binds)) {
-    for (let index = 0; index < host.Binds.length; index += 1) {
-      const bind = String(host.Binds[index]);
+  const pending: Array<{ source: string; apply: (secured: string) => void }> = [];
+  const binds = host.Binds;
+  if (Array.isArray(binds)) {
+    for (let index = 0; index < binds.length; index += 1) {
+      const bind = String(binds[index]);
       const source = bind.split(":", 1)[0] ?? "";
-      const secured = await secureBindSource(source, resolvedWorkspaceRoot, workspaceView);
-      if (typeof secured !== "string") return secured.reason;
-      host.Binds[index] = `${secured}${bind.slice(source.length)}`;
+      const secured = await secureBindSource(source, resolvedWorkspaceRoot);
+      if (!secured.allowed) return secured.reason;
+      if (secured.pin) {
+        pending.push({
+          source: secured.source,
+          apply: (pinned) => {
+            binds[index] = `${pinned}${bind.slice(source.length)}`;
+          },
+        });
+      } else {
+        binds[index] = `${secured.source}${bind.slice(source.length)}`;
+      }
     }
   }
   if (Array.isArray(host.Mounts)) {
     for (const value of host.Mounts) {
       const mount = object(value);
       if (String(mount.Type ?? "").toLowerCase() !== "bind") continue;
-      const secured = await secureBindSource(
-        String(mount.Source ?? ""),
-        resolvedWorkspaceRoot,
-        workspaceView,
-      );
-      if (typeof secured !== "string") return secured.reason;
-      mount.Source = secured;
+      const secured = await secureBindSource(String(mount.Source ?? ""), resolvedWorkspaceRoot);
+      if (!secured.allowed) return secured.reason;
+      if (secured.pin) {
+        pending.push({
+          source: secured.source,
+          apply: (pinned) => {
+            mount.Source = pinned;
+          },
+        });
+      } else {
+        mount.Source = secured.source;
+      }
     }
+  }
+  if (pending.length === 0) return null;
+  if (pending.length > MAX_BATCH_BINDS) return "workspace_bind_batch_too_large";
+  try {
+    const pinned = await pinBindSources(
+      pending.map(({ source }) => source),
+      resolvedWorkspaceRoot,
+    );
+    if (pinned.length !== pending.length) return "workspace_bind_source_pin_failed";
+    for (let index = 0; index < pending.length; index += 1) {
+      pending[index]?.apply(pinned[index] ?? "");
+    }
+  } catch (error) {
+    return error instanceof Error && error.message.startsWith("workspace_bind_")
+      ? error.message
+      : "workspace_bind_source_pin_failed";
   }
   return null;
 }
@@ -170,16 +210,21 @@ export async function startDockerProxy(
     socketUid?: number;
     socketGid?: number;
     workspaceRoot?: string;
-    workspaceView?: string;
+    bindMounterSocket?: string;
+    pinBindSources?: PinBindSources;
   } = {},
 ) {
   const publicSocket = options.publicSocket ?? DEFAULT_PUBLIC_SOCKET;
   const upstreamSocket = options.upstreamSocket ?? DEFAULT_UPSTREAM_SOCKET;
   const workspaceRoot = options.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
-  const workspaceView = options.workspaceView ?? DEFAULT_WORKSPACE_VIEW;
+  const bindMounterSocket = options.bindMounterSocket ?? DEFAULT_BIND_MOUNTER_SOCKET;
+  const pinBindSources =
+    options.pinBindSources ??
+    ((sources: string[], resolvedWorkspaceRoot: string) =>
+      requestPinnedSources(bindMounterSocket, sources, resolvedWorkspaceRoot));
   await rm(publicSocket, { force: true });
   const server = http.createServer((request, response) => {
-    void handleRequest(request, response, upstreamSocket, workspaceRoot, workspaceView);
+    void handleRequest(request, response, upstreamSocket, workspaceRoot, pinBindSources);
   });
   server.on("upgrade", (request, client, head) => {
     handleUpgrade(request, client, head, upstreamSocket);
@@ -201,7 +246,7 @@ async function handleRequest(
   response: ServerResponse,
   upstreamSocket: string,
   workspaceRoot: string,
-  workspaceView: string,
+  pinBindSources: PinBindSources,
 ) {
   const method = request.method ?? "GET";
   const url = request.url ?? "/";
@@ -215,7 +260,7 @@ async function handleRequest(
       const reason =
         validateDockerBody(decision.validateBody, parsed, workspaceRoot) ??
         (decision.validateBody === "container"
-          ? await secureDockerBindSources(parsed, workspaceRoot, workspaceView)
+          ? await secureDockerBindSources(parsed, workspaceRoot, pinBindSources)
           : null);
       if (reason) return reject(response, reason);
       body = Buffer.from(JSON.stringify(parsed));
@@ -297,26 +342,75 @@ function safeBindSource(source: string, workspaceRoot = DEFAULT_WORKSPACE_ROOT) 
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(source);
 }
 
-async function secureBindSource(
-  source: string,
-  workspaceRoot: string,
-  workspaceView: string,
-): Promise<string | { reason: string }> {
-  if (!source.startsWith("/")) return source;
+async function secureBindSource(source: string, workspaceRoot: string): Promise<SecuredBindSource> {
+  if (!source.startsWith("/")) return { allowed: true, source, pin: false };
   let resolved: string;
   try {
     resolved = await realpath(source);
   } catch {
-    return { reason: "host_bind_source_unresolved" };
+    return { allowed: false, reason: "host_bind_source_unresolved" };
   }
   if (!safeBindSource(resolved, workspaceRoot)) {
-    return { reason: "host_bind_source_escape_denied" };
+    return { allowed: false, reason: "host_bind_source_escape_denied" };
   }
-  if (resolved === workspaceRoot) return workspaceView;
-  if (resolved.startsWith(`${workspaceRoot}/`)) {
-    return `${workspaceView}${resolved.slice(workspaceRoot.length)}`;
+  if (resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}/`)) {
+    return { allowed: true, source: resolved, pin: true };
   }
-  return resolved;
+  return { allowed: true, source: resolved, pin: false };
+}
+
+async function requestPinnedSources(socketPath: string, sources: string[], workspaceRoot: string) {
+  if (sources.length === 0 || sources.length > MAX_BATCH_BINDS) {
+    throw new Error("workspace_bind_batch_too_large");
+  }
+  const relativeSources = sources.map((source) => {
+    const relativeSource = relative(workspaceRoot, source);
+    if (
+      relativeSource === ".." ||
+      relativeSource.startsWith(`..${sep}`) ||
+      isAbsolute(relativeSource)
+    ) {
+      throw new Error("workspace_bind_source_escape_denied");
+    }
+    const normalized = relativeSource === "" ? "." : relativeSource;
+    if (normalized.includes("\n") || normalized.includes("\r")) {
+      throw new Error("workspace_bind_source_denied");
+    }
+    return normalized;
+  });
+  const requestBody = `BATCH ${relativeSources.length}\n${relativeSources.join("\n")}\n`;
+  return await new Promise<string[]>((resolvePinned, reject) => {
+    const client = net.createConnection(socketPath);
+    let response = "";
+    client.setEncoding("utf8");
+    client.setTimeout(5_000, () => client.destroy(new Error("workspace_bind_broker_timeout")));
+    client.on("connect", () => client.end(requestBody));
+    client.on("data", (chunk) => {
+      response += String(chunk);
+      if (response.length > MAX_BROKER_RESPONSE_BYTES) {
+        client.destroy(new Error("workspace_bind_broker_response_too_large"));
+      }
+    });
+    client.on("end", () => {
+      if (!response.endsWith("\n")) {
+        reject(new Error("workspace_bind_source_pin_failed"));
+        return;
+      }
+      const lines = response.slice(0, -1).split("\n");
+      if (lines[0]?.startsWith("ERR workspace_bind_") && lines.length === 1) {
+        reject(new Error(lines[0].slice(4)));
+        return;
+      }
+      if (lines[0] !== `OK ${sources.length}` || lines.length !== sources.length + 1) {
+        reject(new Error("workspace_bind_source_pin_failed"));
+        return;
+      }
+      resolvePinned(lines.slice(1));
+    });
+    client.on("error", (error) =>
+      reject(new Error("workspace_bind_source_pin_failed", { cause: error })),
+    );
+  });
 }
 
 function reject(response: ServerResponse, reason: string) {
@@ -340,7 +434,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   startDockerProxy({
     publicSocket: process.env.FACILITY_DOCKER_SOCKET,
     upstreamSocket: process.env.FACILITY_DOCKER_UPSTREAM_SOCKET,
-    workspaceView: process.env.FACILITY_DOCKER_WORKSPACE_VIEW,
+    bindMounterSocket: process.env.FACILITY_BIND_MOUNTER_SOCKET,
   }).catch((error) => {
     console.error(error);
     process.exitCode = 1;

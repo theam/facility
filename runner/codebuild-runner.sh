@@ -7,9 +7,11 @@ readonly untrusted_uid="${FACILITY_UNTRUSTED_UID:-1000}"
 readonly untrusted_gid="${FACILITY_UNTRUSTED_GID:-1000}"
 readonly docker_runtime="/run/facility-docker"
 readonly proxy_runtime="/run/facility-proxy"
-readonly workspace_view="/run/facility-workspace"
+readonly bind_runtime="/run/facility-binds"
+readonly workspace_view="/work/.facility-mounts"
 readonly raw_socket="${docker_runtime}/docker.sock"
 readonly public_socket="${proxy_runtime}/docker.sock"
+readonly bind_socket="${bind_runtime}/mounter.sock"
 
 credential_vars=(
   AWS_ACCESS_KEY_ID
@@ -31,11 +33,10 @@ proxy_secret_vars=(
 )
 
 dockerd_env=()
-proxy_env=()
 dockerd_pid=""
 proxy_pid=""
+mounter_pid=""
 for name in "${proxy_secret_vars[@]}"; do dockerd_env+=(--unset="$name"); done
-for name in "${proxy_secret_vars[@]}"; do proxy_env+=(--unset="$name"); done
 
 stop_process_group() {
   local pid="$1"
@@ -74,10 +75,11 @@ start_docker() {
 }
 
 start_proxy() {
-  setsid runuser --user "$proxy_user" -- env "${proxy_env[@]}" \
+  setsid runuser --user "$proxy_user" -- env -i \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     FACILITY_DOCKER_SOCKET="$public_socket" \
     FACILITY_DOCKER_UPSTREAM_SOCKET="$raw_socket" \
-    FACILITY_DOCKER_WORKSPACE_VIEW="$workspace_view" \
+    FACILITY_BIND_MOUNTER_SOCKET="$bind_socket" \
     node /app/dist/docker-proxy.js \
     >>/var/log/facility-docker-proxy.log 2>&1 &
   proxy_pid="$!"
@@ -97,7 +99,73 @@ start_proxy() {
   return 1
 }
 
+start_mounter() {
+  local docker_uid docker_daemon_pid
+  docker_uid="$(id -u "$docker_user")"
+  docker_daemon_pid="$(
+    ps -eo pid=,pgid=,uid=,comm= | awk \
+      -v group="$dockerd_pid" -v uid="$docker_uid" \
+      '$2 == group && $3 == uid && $4 == "dockerd" { print $1 }'
+  )"
+  if [[ -z "$docker_daemon_pid" || "$docker_daemon_pid" == *$'\n'* ]]; then
+    echo "Facility could not identify the rootless Docker mount namespace" >&2
+    return 1
+  fi
+  setsid env -i \
+    /usr/local/bin/facility-bind-broker \
+      "$bind_socket" "/work" "$workspace_view" \
+      "$(id -u "$proxy_user")" "$(id -g "$proxy_user")" \
+    >>/var/log/facility-bind-mounter.log 2>&1 &
+  mounter_pid="$!"
+  local readiness_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); let response=""; const timer=setTimeout(()=>socket.destroy(new Error("timeout")),1000); socket.setEncoding("utf8"); socket.on("connect",()=>socket.end("BATCH 1\n.\n")); socket.on("data",chunk=>response+=chunk); socket.on("end",()=>{clearTimeout(timer); const lines=response.trimEnd().split("\n"); if(lines[0]!=="OK 1"||lines.length!==2)process.exit(1); console.log(lines[1])}); socket.on("error",()=>{clearTimeout(timer); process.exit(1)});'
+  for _ in $(seq 1 30); do
+    if [[ -S "$bind_socket" ]]; then
+      # The broker also verifies SO_PEERCRED; filesystem ownership is the first
+      # independent gate before a client reaches that check.
+      if [[ "$(stat -c '%u:%g:%a' "$bind_socket")" != \
+        "$(id -u "$proxy_user"):$(id -g "$proxy_user"):600" ]]; then
+        return 1
+      fi
+      local readiness_alias
+      if readiness_alias="$(runuser --user "$proxy_user" -- env -i \
+        /usr/local/bin/node -e "$readiness_probe" "$bind_socket")" && \
+        [[ "$readiness_alias" == "${workspace_view}/"* ]] && \
+        nsenter --mount="/proc/${docker_daemon_pid}/ns/mnt" -- \
+          findmnt -rn -T "$readiness_alias" -o TARGET | grep -qx "$readiness_alias"; then
+        return 0
+      fi
+    fi
+    if ! kill -0 "$mounter_pid" >/dev/null 2>&1; then return 1; fi
+    sleep 1
+  done
+  return 1
+}
+
 security_smoke() {
+  local broker_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); const timer=setTimeout(()=>process.exit(1),1000); socket.on("connect",()=>{clearTimeout(timer); socket.destroy(); process.exit(0)}); socket.on("error",()=>{clearTimeout(timer); process.exit(1)});'
+  local peer_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); let response=""; const timer=setTimeout(()=>socket.destroy(new Error("timeout")),1000); socket.setEncoding("utf8"); socket.on("data",chunk=>response+=chunk); socket.on("end",()=>{clearTimeout(timer); if(response!=="ERR workspace_bind_peer_denied\n"){console.error(`unexpected broker response: ${JSON.stringify(response)}`);process.exit(1)}}); socket.on("error",error=>{clearTimeout(timer); console.error(`broker peer probe failed: ${error.message}`);process.exit(1)});'
+  if ! node -e "$peer_probe" "$bind_socket"; then
+    echo "Security smoke failed: the bind broker did not enforce peer credentials" >&2
+    return 1
+  fi
+  if run_untrusted node -e "$broker_probe" "$bind_socket"; then
+    echo "Security smoke failed: the agent user reached the bind broker" >&2
+    return 1
+  fi
+  if setpriv --reuid="$(id -u "$docker_user")" --regid="$(id -g "$docker_user")" \
+    --clear-groups -- node -e "$broker_probe" "$bind_socket"; then
+    echo "Security smoke failed: rootless Docker reached the bind broker" >&2
+    return 1
+  fi
+  if tr '\000' '\n' <"/proc/${mounter_pid}/environ" | grep -q .; then
+    echo "Security smoke failed: the bind broker retained an environment" >&2
+    return 1
+  fi
+  if run_untrusted test -w "$workspace_view" || \
+    runuser --user "$docker_user" -- test -w "$workspace_view"; then
+    echo "Security smoke failed: an untrusted identity can modify pinned aliases" >&2
+    return 1
+  fi
   if run_untrusted env --unset=RUNNER_TOKEN sh -c \
     'tr "\000" "\n" 2>/dev/null < "/proc/$1/environ" | grep -q "^RUNNER_TOKEN="' \
     facility-security-probe "$$"; then
@@ -179,6 +247,26 @@ security_smoke() {
       echo "Security smoke failed: a rootless child cannot use the restricted Docker socket" >&2
       return 1
     fi
+
+    local race_dir="/work/.facility-security-race"
+    local race_original="/work/.facility-security-race-original"
+    run_untrusted mkdir "$race_dir"
+    run_untrusted sh -c 'printf facility-pinned-bind > "$1/docker.sock"' facility-race "$race_dir"
+    container_id="$(docker create \
+      --mount "type=bind,src=${race_dir}/docker.sock,dst=/probe,readonly" \
+      facility-security-smoke:local cat /probe)"
+    run_untrusted mv "$race_dir" "$race_original"
+    run_untrusted ln -s "$docker_runtime" "$race_dir"
+    for _ in 1 2; do
+      if [[ "$(docker start --attach "$container_id")" != "facility-pinned-bind" ]]; then
+        echo "Security smoke failed: a delayed container start escaped its pinned bind" >&2
+        return 1
+      fi
+    done
+    docker rm "$container_id" >/dev/null
+    run_untrusted rm "$race_dir"
+    run_untrusted rm "$race_original/docker.sock"
+    run_untrusted rmdir "$race_original"
   fi
 
   if docker create --privileged facility-security-smoke:local true >/dev/null 2>&1; then
@@ -210,13 +298,42 @@ security_smoke() {
     return 1
   fi
   run_untrusted ln -s "$runtime_socket" /work/.facility-security-runtime-escape
-  if DOCKER_HOST="unix://${raw_socket}" docker create \
-    --mount "type=bind,src=${workspace_view}/.facility-security-runtime-escape,dst=/runtime.sock" \
+  if docker create \
+    --mount "type=bind,src=/work/.facility-security-runtime-escape,dst=/runtime.sock" \
     facility-security-smoke:local true >/dev/null 2>&1; then
     echo "Security smoke failed: a workspace symlink crossed the protected runtime view" >&2
     return 1
   fi
+  run_untrusted mkdir /work/.facility-security-partial
+  run_untrusted sh -c \
+    'printf safe-partial-bind > "$1/probe"' facility-partial /work/.facility-security-partial
+  local rollback_probe='const net=require("node:net"); const socket=net.createConnection(process.argv[1]); let response=""; const timer=setTimeout(()=>socket.destroy(new Error("timeout")),1000); socket.setEncoding("utf8"); socket.on("connect",()=>socket.end("BATCH 2\n.facility-security-partial/probe\n.facility-security-partial/missing\n")); socket.on("data",chunk=>response+=chunk); socket.on("end",()=>{clearTimeout(timer); process.exit(response==="ERR workspace_bind_source_denied\n"?0:1)}); socket.on("error",()=>{clearTimeout(timer); process.exit(1)});'
+  local aliases_before aliases_after
+  aliases_before="$(findmnt -rn -o TARGET | grep -c "^${workspace_view}/" || true)"
+  if ! runuser --user "$proxy_user" -- env -i \
+    /usr/local/bin/node -e "$rollback_probe" "$bind_socket"; then
+    echo "Security smoke failed: the bind broker did not reject a partial batch" >&2
+    return 1
+  fi
+  aliases_after="$(findmnt -rn -o TARGET | grep -c "^${workspace_view}/" || true)"
+  if [[ "$aliases_after" != "$aliases_before" ]]; then
+    echo "Security smoke failed: a rejected broker batch leaked a pinned alias" >&2
+    return 1
+  fi
+  if docker create \
+    --mount type=bind,src=/work/.facility-security-partial/probe,dst=/safe \
+    --mount type=bind,src=/work/.facility-security-runtime-escape,dst=/escape \
+    facility-security-smoke:local true >/dev/null 2>&1; then
+    echo "Security smoke failed: a partially pinned request reached Docker" >&2
+    return 1
+  fi
+  run_untrusted rm /work/.facility-security-partial/probe
+  run_untrusted rmdir /work/.facility-security-partial
   run_untrusted rm /work/.facility-security-runtime-escape
+  if ! findmnt -rn -o TARGET | grep -q "^${workspace_view}/"; then
+    echo "Security smoke failed: workspace binds did not use pinned mount aliases" >&2
+    return 1
+  fi
   if [[ "${FACILITY_CODEBUILD_SMOKE_CREATE_ONLY:-}" == "1" ]]; then
     echo "Facility CodeBuild Docker security boundary passed create-only emulation checks"
   else
@@ -224,26 +341,29 @@ security_smoke() {
   fi
 }
 
-mkdir -p "$docker_runtime" "$proxy_runtime" "$workspace_view" \
+mkdir -p "$docker_runtime" "$proxy_runtime" "$bind_runtime" "$workspace_view" \
   /var/lib/facility-docker/docker-fuse /var/lib/facility-docker/docker-vfs /work
 chown -R "$docker_user:$docker_user" "$docker_runtime" /var/lib/facility-docker
 chown -R "$proxy_user:$untrusted_gid" "$proxy_runtime"
 chown root:"$untrusted_gid" /work
 chmod 3770 /work
 chmod 0710 "$docker_runtime" "$proxy_runtime"
+chown root:root "$bind_runtime"
+chmod 0711 "$bind_runtime"
 chown root:root "$workspace_view"
 chmod 0711 "$workspace_view"
-# Bind requests are rewritten to this trusted alias. Linux's nosymfollow mount
-# flag makes a later workspace symlink swap fail in the kernel, closing the
-# check/use race before dockerd can reach any host runtime socket.
-mount --bind /work "$workspace_view"
-mount -o remount,bind,nosymfollow "$workspace_view"
-if ! findmnt -T "$workspace_view" -no OPTIONS | tr ',' '\n' | grep -qx nosymfollow; then
-  echo "Facility requires a kernel that enforces nosymfollow bind mounts" >&2
+# RootlessKit converts inherited mounts to slaves. A dedicated shared mount
+# here is therefore the deterministic master for aliases created later by the
+# root broker; dockerd receives those aliases without exposing the raw daemon.
+mount --bind "$workspace_view" "$workspace_view"
+mount --make-shared "$workspace_view"
+if ! findmnt -rn -T "$workspace_view" -o PROPAGATION | grep -qx shared; then
+  echo "Facility could not establish shared workspace mount propagation" >&2
   exit 1
 fi
 : >/var/log/facility-dockerd.log
 : >/var/log/facility-docker-proxy.log
+: >/var/log/facility-bind-mounter.log
 
 # Neither the runner nor nested builds need link-local metadata endpoints. Block
 # them before untrusted code starts, including traffic forwarded by rootlesskit.
@@ -275,6 +395,11 @@ chmod 0660 "$raw_socket"
 # proxy identity so even a bind-validation TOCTOU cannot give root inside a
 # rootless child access to the unrestricted daemon API.
 chown root:"$proxy_user" "$raw_socket"
+if ! start_mounter; then
+  echo "Facility could not start the transactional bind broker" >&2
+  tail -n 200 /var/log/facility-bind-mounter.log >&2 || true
+  exit 1
+fi
 start_proxy
 
 export DOCKER_HOST="unix://${public_socket}"

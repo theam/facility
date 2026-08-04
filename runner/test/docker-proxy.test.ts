@@ -1,10 +1,15 @@
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { dockerRequestPolicy, startDockerProxy, validateDockerBody } from "../src/docker-proxy.js";
+import {
+  dockerRequestPolicy,
+  secureDockerBindSources,
+  startDockerProxy,
+  validateDockerBody,
+} from "../src/docker-proxy.js";
 import { untrustedSpawnIdentity } from "../src/index.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -146,7 +151,7 @@ describe("restricted Docker API", () => {
     expect(upstreamRequests).toBe(1);
   });
 
-  test("rewrites validated workspace binds to the nosymfollow view", async () => {
+  test("rewrites validated workspace binds to root-pinned aliases", async () => {
     const dir = await mkdtemp(join(tmpdir(), "facility-docker-workspace-view-"));
     const workspaceRoot = join(dir, "work");
     const workspaceView = join(dir, "trusted-work");
@@ -159,6 +164,7 @@ describe("restricted Docker API", () => {
     const upstreamSocket = join(dir, "upstream.sock");
     const publicSocket = join(dir, "public.sock");
     const upstreamBodies: Array<Record<string, unknown>> = [];
+    const pinnedSources: string[] = [];
     const upstream = http.createServer(async (request, response) => {
       let body = "";
       for await (const chunk of request) body += chunk.toString();
@@ -171,7 +177,10 @@ describe("restricted Docker API", () => {
       publicSocket,
       upstreamSocket,
       workspaceRoot,
-      workspaceView,
+      pinBindSources: async (resolved) => {
+        pinnedSources.push(...resolved);
+        return resolved.map((_, index) => join(workspaceView, `pin-${index + 1}`));
+      },
     });
     cleanup.push(async () => {
       await close(proxy);
@@ -191,11 +200,13 @@ describe("restricted Docker API", () => {
       {
         Image: "facility-security-smoke:local",
         HostConfig: {
-          Binds: [`${workspaceView}/repo:/repo:ro`],
-          Mounts: [{ Type: "bind", Source: `${workspaceView}/repo`, Target: "/repo-again" }],
+          Binds: [`${workspaceView}/pin-1:/repo:ro`],
+          Mounts: [{ Type: "bind", Source: `${workspaceView}/pin-2`, Target: "/repo-again" }],
         },
       },
     ]);
+    const resolvedSource = await realpath(source);
+    expect(pinnedSources).toEqual([resolvedSource, resolvedSource]);
 
     const denied = await request(publicSocket, "/v1.47/containers/create", {
       Image: "facility-security-smoke:local",
@@ -204,6 +215,33 @@ describe("restricted Docker API", () => {
     expect(denied.status).toBe(403);
     expect(denied.body).toContain("host_bind_source_escape_denied");
     expect(upstreamBodies).toHaveLength(1);
+  });
+
+  test("pins all workspace binds in one transaction before rewriting the request", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "facility-docker-bind-transaction-"));
+    const workspaceRoot = join(dir, "work");
+    const first = join(workspaceRoot, "first");
+    const second = join(workspaceRoot, "second");
+    await mkdir(first, { recursive: true });
+    await mkdir(second);
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const body = {
+      HostConfig: {
+        Binds: [`${first}:/first:ro`],
+        Mounts: [{ Type: "bind", Source: second, Target: "/second" }],
+      },
+    };
+
+    await expect(
+      secureDockerBindSources(body, workspaceRoot, async (sources) => {
+        expect(sources).toEqual([await realpath(first), await realpath(second)]);
+        throw new Error("workspace_bind_source_denied");
+      }),
+    ).resolves.toBe("workspace_bind_source_denied");
+    expect(body.HostConfig).toEqual({
+      Binds: [`${first}:/first:ro`],
+      Mounts: [{ Type: "bind", Source: second, Target: "/second" }],
+    });
   });
 
   test("forwards a Docker exec upgrade body before waiting for 101", async () => {

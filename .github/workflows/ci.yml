@@ -206,6 +206,14 @@ jobs:
         if: steps.policy.outputs.required == 'true'
         run: docker build --pull -t facility-runner:dev runner
 
+      - name: Exercise the privileged CodeBuild boundary
+        if: steps.policy.outputs.required == 'true'
+        run: |
+          timeout 10m docker run --rm --privileged --user root \
+            --entrypoint /app/codebuild-runner.sh \
+            --env FACILITY_CODEBUILD_SMOKE=1 \
+            facility-runner:dev
+
       - name: Run the Docker-backed sandbox loop
         if: steps.policy.outputs.required == 'true'
         env:

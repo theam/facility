@@ -1,3 +1,14 @@
+FROM debian:bookworm-slim AS bind-broker-build
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends gcc libc6-dev \
+  && rm -rf /var/lib/apt/lists/*
+COPY bind-broker.c /src/bind-broker.c
+RUN gcc -std=c11 -O2 -Wall -Wextra -Werror \
+      -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE \
+      /src/bind-broker.c -Wl,-z,relro,-z,now -pie \
+      -o /facility-bind-broker
+
 FROM node:22-bookworm
 
 RUN apt-get update \
@@ -69,6 +80,7 @@ RUN npm i -g @anthropic-ai/claude-code@2.1.215 @openai/codex@0.144.6
 RUN corepack enable
 
 WORKDIR /app
+COPY --from=bind-broker-build /facility-bind-broker /usr/local/bin/facility-bind-broker
 COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
 COPY runner-entrypoint.sh codebuild-runner.sh /app/
