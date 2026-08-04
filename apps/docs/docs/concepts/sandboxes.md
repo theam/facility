@@ -33,6 +33,12 @@ A **platform-lane** run (Claude Code, Codex) needs a sandbox profile whose
   API proxy; the runner credential and raw daemon socket use separate UIDs. Set
   `FACILITY_SANDBOX_DRIVER=aws` so the seeded default profile uses that driver.
 
+  An AWS profile's optional `setup.cmd` replaces Facility's lifecycle runner.
+  It runs as the unprivileged sandbox UID and keeps the run-scoped lifecycle
+  token so it can report events and its final result. Treat `sandboxes:*` as a
+  trusted lifecycle-administration permission; repository/model children do not
+  receive that token.
+
 `facility doctor` **fails** its `sandbox_runner` check when no profile matches
 the deployment's driver (a docker profile can't launch on an aws stack, or vice
 versa), so a false-ready deployment surfaces before the first run. For the docker

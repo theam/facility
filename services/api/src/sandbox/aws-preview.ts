@@ -15,7 +15,7 @@ import {
   StopTaskCommand,
   type StopTaskCommandOutput,
 } from "@aws-sdk/client-ecs";
-import type { LaunchSpec, SandboxDriver } from "./driver.js";
+import { type LaunchSpec, type SandboxDriver, SandboxLaunchError } from "./driver.js";
 
 type EcsCommand =
   | RegisterTaskDefinitionCommand
@@ -45,7 +45,7 @@ type AwsPreviewConfig = {
   cpuArchitecture: "X86_64" | "ARM64";
 };
 
-type PreviewRef = { taskArn: string; taskDefinitionArn?: string };
+type PreviewRef = { taskArn?: string; taskDefinitionArn?: string };
 
 /**
  * Preview services need a stable inbound endpoint, which CodeBuild intentionally
@@ -160,9 +160,10 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
         if (!isTaskDefinitionAlreadyGone(deregisterError)) cleanupFailure ??= deregisterError;
       }
       if (cleanupFailure) {
-        throw new AggregateError(
-          [error, cleanupFailure],
+        throw new SandboxLaunchError(
           "AWS preview launch failed and cleanup did not converge",
+          encodeRef({ taskArn, taskDefinitionArn }),
+          { cause: new AggregateError([error, cleanupFailure]) },
         );
       }
       throw error;
@@ -171,7 +172,9 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
 
   async status(ref: string): Promise<"starting" | "running" | "exited" | "lost"> {
     const config = this.config();
-    const task = await this.describe(config.cluster, decodeRef(ref).taskArn);
+    const taskArn = decodeRef(ref).taskArn;
+    if (!taskArn) return "lost";
+    const task = await this.describe(config.cluster, taskArn);
     if (!task) return "lost";
     if (["PROVISIONING", "PENDING", "ACTIVATING"].includes(task.lastStatus ?? "")) {
       return "starting";
@@ -190,6 +193,7 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
   async *logs(ref: string, afterLine = 0): AsyncIterable<string> {
     const config = this.config();
     const taskArn = decodeRef(ref).taskArn;
+    if (!taskArn) return;
     let nextToken: string | undefined;
     let lineNo = 0;
     do {
@@ -222,6 +226,7 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
   async stop(ref: string, opts: { kill?: boolean } = {}): Promise<void> {
     const config = this.config();
     const parsed = decodeRef(ref);
+    if (!parsed.taskArn) return;
     await this.ecs.send(
       new StopTaskCommand({
         cluster: config.cluster,
@@ -236,10 +241,12 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
   async destroy(ref: string): Promise<void> {
     const parsed = decodeRef(ref);
     let failure: unknown;
-    try {
-      await this.stop(ref, { kill: true });
-    } catch (error) {
-      if (!isTaskAlreadyGone(error)) failure = error;
+    if (parsed.taskArn) {
+      try {
+        await this.stop(ref, { kill: true });
+      } catch (error) {
+        if (!isTaskAlreadyGone(error)) failure = error;
+      }
     }
     try {
       if (parsed.taskDefinitionArn) await this.deregister(parsed.taskDefinitionArn);
@@ -324,7 +331,7 @@ function encodeRef(ref: PreviewRef) {
 function decodeRef(ref: string): PreviewRef {
   try {
     const parsed = JSON.parse(Buffer.from(ref, "base64url").toString("utf8")) as PreviewRef;
-    if (parsed.taskArn) return parsed;
+    if (parsed.taskArn || parsed.taskDefinitionArn) return parsed;
   } catch {
     // Legacy ECS previews stored the raw task ARN. Preserve lifecycle cleanup
     // across this deployment instead of abandoning already-running tasks.

@@ -162,6 +162,100 @@ describe("AWS preview sandbox driver", () => {
     expect(commands[4]).toBeInstanceOf(DeregisterTaskDefinitionCommand);
   });
 
+  it("returns a retryable ref when launch cleanup cannot stop the task", async () => {
+    const commands: unknown[] = [];
+    const taskArn = "arn:aws:ecs:eu-west-1:123:task/facility-prod/leaked";
+    const taskDefinitionArn = "arn:aws:ecs:eu-west-1:123:task-definition/preview:10";
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof RegisterTaskDefinitionCommand) {
+          return { taskDefinition: { taskDefinitionArn } };
+        }
+        if (command instanceof RunTaskCommand) return { tasks: [{ taskArn }] };
+        if (command instanceof DescribeTasksCommand) throw new Error("describe failed");
+        if (command instanceof StopTaskCommand) {
+          throw Object.assign(new Error("not authorized"), { name: "AccessDeniedException" });
+        }
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+      async () => undefined,
+    );
+    const expectedRef = Buffer.from(JSON.stringify({ taskArn, taskDefinitionArn })).toString(
+      "base64url",
+    );
+    await expect(
+      driver.launch({
+        runId: "preview:cleanup-failure",
+        image: "example.invalid/preview:latest",
+        env: {},
+        cpu: 1,
+        memoryMb: 1024,
+        timeoutMin: 60,
+        servicePort: 3000,
+      }),
+    ).rejects.toMatchObject({
+      name: "SandboxLaunchError",
+      message: "AWS preview launch failed and cleanup did not converge",
+      ref: expectedRef,
+    });
+    expect(commands.at(-2)).toBeInstanceOf(StopTaskCommand);
+    expect(commands.at(-1)).toBeInstanceOf(DeregisterTaskDefinitionCommand);
+  });
+
+  it("retries definition-only cleanup when RunTask and deregistration both fail", async () => {
+    const commands: unknown[] = [];
+    const taskDefinitionArn = "arn:aws:ecs:eu-west-1:123:task-definition/preview:11";
+    let deregistrationFails = true;
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof RegisterTaskDefinitionCommand) {
+          return { taskDefinition: { taskDefinitionArn } };
+        }
+        if (command instanceof RunTaskCommand) {
+          return { failures: [{ reason: "CAPACITY", detail: "try later" }] };
+        }
+        if (command instanceof DeregisterTaskDefinitionCommand && deregistrationFails) {
+          throw new Error("transient deregistration failure");
+        }
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+    );
+    const expectedRef = Buffer.from(JSON.stringify({ taskDefinitionArn })).toString("base64url");
+    let retryRef = "";
+    try {
+      await driver.launch({
+        runId: "preview:definition-cleanup-failure",
+        image: "example.invalid/preview:latest",
+        env: {},
+        cpu: 1,
+        memoryMb: 1024,
+        timeoutMin: 60,
+        servicePort: 3000,
+      });
+    } catch (error) {
+      expect(error).toMatchObject({ name: "SandboxLaunchError", ref: expectedRef });
+      retryRef = (error as { ref: string }).ref;
+    }
+    expect(retryRef).toBe(expectedRef);
+    deregistrationFails = false;
+    const beforeRetry = commands.length;
+    await driver.destroy(retryRef);
+    expect(commands.slice(beforeRetry)).toHaveLength(1);
+    expect(commands.at(-1)).toBeInstanceOf(DeregisterTaskDefinitionCommand);
+  });
+
   it("still deregisters a preview definition when stopping the task fails", async () => {
     const commands: unknown[] = [];
     const ecs = {

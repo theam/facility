@@ -243,10 +243,10 @@ test("the CodeBuild runner uses a different identity for untrusted commands", ()
   expect(untrustedSpawnIdentity(() => 501)).toEqual({});
 });
 
-test("custom CodeBuild commands drop root and the lifecycle credential", async () => {
+test("custom CodeBuild lifecycle commands drop root", async () => {
   const script = await readFile(new URL("../codebuild-runner.sh", import.meta.url), "utf8");
   expect(script).toMatch(
-    /exec setpriv --reuid="\$untrusted_uid" --regid="\$untrusted_gid" --clear-groups -- \\\n\s+env --unset=RUNNER_TOKEN "\$@"/,
+    /exec setpriv --reuid="\$untrusted_uid" --regid="\$untrusted_gid" --clear-groups -- "\$@"/,
   );
 });
 

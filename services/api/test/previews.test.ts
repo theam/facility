@@ -11,9 +11,10 @@ import {
   destroyPreview,
   provisionPreview,
   proxyPreviewRequest,
+  reconcilePreviews,
   rewritePreviewHtml,
 } from "../src/previews.js";
-import type { SandboxDriver } from "../src/sandbox/driver.js";
+import { type SandboxDriver, SandboxLaunchError } from "../src/sandbox/driver.js";
 import type { AppConfig, Principal } from "../src/types.js";
 
 const databaseUrl =
@@ -210,6 +211,7 @@ describe("SSO-protected preview sandboxes", async () => {
 
       const destroyed = await destroyPreview(db, stored, "destroyed", driver);
       expect(destroyed?.status).toBe("destroyed");
+      expect(destroyed?.ref).toBeNull();
       expect(destroyed?.originUrl).toBeNull();
       expect(destroyedRef).toBe("preview-container");
 
@@ -255,5 +257,56 @@ describe("SSO-protected preview sandboxes", async () => {
         server.close((error) => (error ? reject(error) : resolve())),
       );
     }
+  });
+
+  it("persists a leaked launch ref and clears it on reconciliation", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:sha-cleanup-retry",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: "preview-owner" },
+    });
+    if (!preview) throw new Error("preview cleanup fixture missing");
+    const leakedRef = "preview-task-that-needs-retry";
+    const leakingDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => {
+        throw new SandboxLaunchError("launch_cleanup_failed", leakedRef);
+      },
+      status: async () => "lost",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+    await expect(provisionPreview(config, preview.id, leakingDriver)).rejects.toThrow(
+      "launch_cleanup_failed",
+    );
+    const retained = (
+      await db.select().from(previewSandboxes).where(eq(previewSandboxes.id, preview.id)).limit(1)
+    )[0];
+    expect(retained).toMatchObject({
+      status: "failed",
+      ref: leakedRef,
+      error: "launch_cleanup_failed",
+    });
+
+    let destroyedRef = "";
+    const cleanupDriver: SandboxDriver = {
+      ...leakingDriver,
+      launch: async () => ({ ref: "unused" }),
+      destroy: async (ref) => {
+        destroyedRef = ref;
+      },
+    };
+    await expect(reconcilePreviews(config, cleanupDriver)).resolves.toMatchObject({
+      changed: expect.arrayContaining([preview.id]),
+    });
+    expect(destroyedRef).toBe(leakedRef);
+    const reconciled = (
+      await db.select().from(previewSandboxes).where(eq(previewSandboxes.id, preview.id)).limit(1)
+    )[0];
+    expect(reconciled).toMatchObject({ status: "failed", ref: null });
   });
 });

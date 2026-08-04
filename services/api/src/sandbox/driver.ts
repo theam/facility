@@ -12,6 +12,17 @@ export type LaunchSpec = {
   servicePort?: number;
 };
 
+export class SandboxLaunchError extends Error {
+  constructor(
+    message: string,
+    readonly ref: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "SandboxLaunchError";
+  }
+}
+
 export interface SandboxDriver {
   name: SandboxDriverName;
   launch(spec: LaunchSpec): Promise<{ ref: string; endpoint?: string }>;

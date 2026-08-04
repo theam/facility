@@ -307,8 +307,7 @@ if [[ "$#" -eq 0 ]]; then
   exec node /app/dist/index.js
 fi
 
-# A sandbox profile may replace the Facility lifecycle with a custom command.
-# It must not inherit root or the lifecycle credential merely because CodeBuild
-# needs root for the trusted mount/network setup above.
-exec setpriv --reuid="$untrusted_uid" --regid="$untrusted_gid" --clear-groups -- \
-  env --unset=RUNNER_TOKEN "$@"
+# A sandbox profile may replace the Facility lifecycle with a trusted custom
+# runner. It retains RUNNER_TOKEN so it can report lifecycle events/results, but
+# it must not inherit root merely because CodeBuild needs root for setup.
+exec setpriv --reuid="$untrusted_uid" --regid="$untrusted_gid" --clear-groups -- "$@"
