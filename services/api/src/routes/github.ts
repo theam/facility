@@ -16,6 +16,7 @@ import type { AppConfig, Principal } from "../types.js";
 const IdParams = z.object({ projectId: z.string(), repoId: z.string().optional() });
 const Answers = z.object({
   defaultBranch: z.string().optional(),
+  packageInstallCmd: z.string().optional(),
   provisionCmd: z.string().optional(),
   checkCmds: z.array(z.string()).optional(),
   modules: z.array(z.string()).optional(),

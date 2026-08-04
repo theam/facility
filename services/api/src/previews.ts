@@ -2,7 +2,7 @@ import { newId } from "@facility/core";
 import { createDb, insertAuditEvent, previewSandboxes } from "@facility/db";
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { request as upstreamRequest } from "undici";
-import { type SandboxDriver, sandboxDriver } from "./sandbox/driver.js";
+import { previewSandboxDriver, type SandboxDriver } from "./sandbox/driver.js";
 import type { AppConfig, Principal } from "./types.js";
 
 type Db = ReturnType<typeof createDb>["db"];
@@ -100,7 +100,7 @@ export async function provisionPreview(
     )[0];
     if (preview?.status !== "provisioning" || preview.ref) return preview;
     const spec = previewConfig(preview.config);
-    const driver = driverOverride ?? (await sandboxDriver(config.sandboxDriver));
+    const driver = driverOverride ?? (await previewSandboxDriver(config.sandboxDriver));
     await db
       .update(previewSandboxes)
       .set({ driver: driver.name, updatedAt: new Date() })
@@ -179,7 +179,8 @@ export async function destroyPreview(
   driverOverride?: SandboxDriver,
 ) {
   if (!["destroyed", "expired"].includes(preview.status) && preview.ref) {
-    const driver = driverOverride ?? (await sandboxDriver(preview.driver as "docker" | "aws"));
+    const driver =
+      driverOverride ?? (await previewSandboxDriver(preview.driver as "docker" | "aws"));
     try {
       await driver.destroy(preview.ref);
     } catch (error) {
@@ -253,7 +254,7 @@ export async function reconcilePreviews(config: AppConfig) {
       .where(inArray(previewSandboxes.status, ["provisioning", "running"]));
     for (const preview of active) {
       if (!preview.ref) continue;
-      const driver = await sandboxDriver(preview.driver as "docker" | "aws");
+      const driver = await previewSandboxDriver(preview.driver as "docker" | "aws");
       const state = await driver.status(preview.ref);
       const spec = previewConfig(preview.config);
       const ready =

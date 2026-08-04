@@ -28332,6 +28332,9 @@
                       "defaultBranch": {
                         "type": "string"
                       },
+                      "packageInstallCmd": {
+                        "type": "string"
+                      },
                       "provisionCmd": {
                         "type": "string"
                       },

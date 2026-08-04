@@ -24,8 +24,10 @@ A **platform-lane** run (Claude Code, Codex) needs a sandbox profile whose
   runner. Build it with `docker build -t facility-runner:dev runner/` and set
   `FACILITY_RUNNER_IMAGE` (default `facility-runner:dev`). A bare base image like
   `node:22-bookworm` only supports **BYO-command** runs.
-- **aws** (Fargate) — the runner comes from the AWS runner task definition; set
-  `FACILITY_SANDBOX_DRIVER=aws` so the seeded default profile uses that driver.
+- **aws** (CodeBuild) — each run starts a private CodeBuild job using the
+  profile's runner image. Privileged mode lets provisioning launch nested Docker
+  services such as local Supabase. Set `FACILITY_SANDBOX_DRIVER=aws` so the
+  seeded default profile uses that driver.
 
 `facility doctor` **fails** its `sandbox_runner` check when no profile matches
 the deployment's driver (a docker profile can't launch on an aws stack, or vice
@@ -41,8 +43,13 @@ exactly as the object-store check is.
 ## Drivers
 
 Execution is driver-based: local Docker for development and self-hosting,
-AWS Fargate for cloud, with the driver interface open for Kubernetes jobs.
+AWS CodeBuild for cloud, with the driver interface open for Kubernetes jobs.
 The control plane sees one contract: launch, status, stop, destroy.
+
+AWS preview environments are the deliberate exception to the execution backend:
+they need a private inbound service endpoint, which CodeBuild does not expose.
+The AWS module therefore registers an immutable, unprivileged ECS Fargate task
+definition for each preview image while agent runs remain on privileged CodeBuild.
 
 ## What's inside (and what isn't)
 

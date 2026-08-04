@@ -17,6 +17,7 @@ export type RunBundle = {
     branch: string | null;
     installationTokenRef: string | null;
   };
+  packageInstallCmd: string | null;
   provisionCmd: string | null;
   checkCmds: string[];
   gatewayUrls: { anthropic: string; openai: string };

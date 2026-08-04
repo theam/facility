@@ -26,6 +26,7 @@ facility_instance_id    = ""
 # Local/bootstrap provider fallback only. Production gateways should load
 # provider credentials through the Facility API instead.
 enable_dev_provider_fallback = false
+enable_package_registry_token = false
 
 # Restrict this for non-public test deployments.
 allowed_http_cidr_blocks = ["0.0.0.0/0"]

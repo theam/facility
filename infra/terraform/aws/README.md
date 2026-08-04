@@ -2,8 +2,9 @@
 
 This module provisions the AWS reference deployment from the platform architecture:
 VPC, two private AZs, public ALB, RDS Postgres 16, S3 object storage, ECR,
-ECS Fargate services for `api`, `worker`, `gateway`, `web`, and `mcp`, a runner task
-definition for the AWS sandbox driver, KMS, Secrets Manager, and CloudWatch logs.
+ECS Fargate services for `api`, `worker`, `gateway`, `web`, and `mcp`, privileged
+CodeBuild jobs for agent runs, unprivileged Fargate preview tasks, KMS, Secrets
+Manager, and CloudWatch logs.
 
 Topology:
 
@@ -13,6 +14,11 @@ Topology:
 - `gateway` has no public ALB route. It is reachable only inside the VPC through
   Cloud Map at the `gateway_internal_url` output.
 - Postgres accepts `5432` only from the ECS service security group.
+- CodeBuild sandboxes run in private subnets and can reach the internal gateway.
+  Their least-privilege service role has no Secrets Manager access.
+- Private preview services use per-image Fargate task definitions, a no-permission
+  task role, and a dedicated execution role. Only Facility services can reach
+  their private ports through the sandbox security group.
 - Migrations are a one-shot ECS task definition. Terraform does not run them.
 
 ## 1. Prepare variables
@@ -38,6 +44,8 @@ Edit `playground.tfvars`:
 - Set `github_oauth_allowed_organization` to a GitHub organization login when
   direct login must require active membership; leave it empty for no additional
   organization restriction.
+- Set `enable_package_registry_token = true` only after populating the optional
+  private package token; leave it false for public-package repositories.
 - Tune `envelope_retention_days` for your data-retention policy.
 
 Release tags publish images as `:<version>` (for example, `v0.3.0` publishes
@@ -97,6 +105,7 @@ Record these outputs:
 - `rds_endpoint`
 - `rds_master_user_secret_arn`
 - `ecs_cluster_name`
+- `codebuild_runner_project_name`
 - `migrate_task_definition_arn`
 - `private_subnet_ids`
 - `service_security_group_id`
@@ -154,6 +163,11 @@ Required runtime values:
 - `github_app_private_key`
 - `github_app_webhook_secret`
 - `github_app_slug`
+- `package_registry_token`: optional classic PAT restricted to `read:packages`;
+  the API releases it through the authenticated runner handshake only for the
+  dedicated dependency-install phase; the CodeBuild role has no IAM access to
+  it, and the runner deletes its temporary npm config before provisioning. Set
+  `enable_package_registry_token = true` only after populating it.
 
 The `dev_anthropic_api_key` and `dev_openai_api_key` secrets exist only for
 local/bootstrap fallback compatibility. Prefer provider credentials stored

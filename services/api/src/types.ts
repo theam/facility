@@ -51,6 +51,7 @@ export type AppConfig = {
   s3SecretKey?: string;
   s3Bucket?: string;
   awsRegion?: string;
+  packageRegistryToken?: string;
   githubAppId?: string;
   githubAppPrivateKey?: string;
   githubAppWebhookSecret?: string;

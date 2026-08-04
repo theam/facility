@@ -20,8 +20,9 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { FacilityGithubClient } from "../src/github/client.js";
+import { parseFacilityRepoManifest, syncRepoFacilityConfig } from "../src/github/kickstart.js";
 import { githubEventMatches, processGithubWebhook } from "../src/github/processor.js";
-import { githubRequestContext, resolveSlashCommand } from "../src/github/router.js";
+import { githubRequestContext, resolveSlashCommand, routeTrigger } from "../src/github/router.js";
 import { createPreviewRecord } from "../src/previews.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -418,6 +419,7 @@ describe("github integration", async () => {
       owner: "octo",
       name: repoName,
       defaultBranch: "main",
+      renderAnswers: { execution_lane: { review: "platform" } },
     });
     const agent = (
       await db
@@ -605,6 +607,167 @@ describe("github integration", async () => {
       command: "builder",
       agentCommand: "codex-builder",
       ambiguous: false,
+    });
+  });
+
+  it("routes only creation actions and denies replay-prone GitHub updates", async () => {
+    const issue = {
+      issue: { number: 42, title: "/architect", body: "Plan it" },
+      repository: { owner: { login: "octo" }, name: "repo" },
+      sender: { login: "writer", type: "User" },
+    };
+    await expect(
+      routeTrigger({} as never, "org_test", {} as never, { ...issue, action: "edited" }),
+    ).resolves.toEqual({ routed: false, reason: "unsupported_action" });
+    await expect(
+      routeTrigger({} as never, "org_test", {} as never, {
+        ...issue,
+        action: "edited",
+        comment: { id: 7, body: "/architect" },
+      }),
+    ).resolves.toEqual({ routed: false, reason: "unsupported_action" });
+  });
+
+  it("validates the repository-owned platform lane manifest", () => {
+    expect(
+      parseFacilityRepoManifest(
+        JSON.stringify({
+          packageInstall: "pnpm install --frozen-lockfile",
+          provision: "pnpm run local:setup:ui",
+          checks: ["pnpm verify"],
+          models: { build: "opusplan", plan: "claude-fable-5" },
+          executionLane: {
+            architect: "platform",
+            builder: "platform",
+            review: "repo",
+          },
+        }),
+      ),
+    ).toEqual({
+      packageInstall: "pnpm install --frozen-lockfile",
+      provision: "pnpm run local:setup:ui",
+      checks: ["pnpm verify"],
+      models: { build: "opusplan", plan: "claude-fable-5" },
+      executionLane: { architect: "platform", builder: "platform", review: "repo" },
+    });
+    expect(() =>
+      parseFacilityRepoManifest(JSON.stringify({ executionLane: { review: "sometimes" } })),
+    ).toThrow("executionLane values must be repo or platform");
+  });
+
+  it("reconciles the repository manifest at handoff time and fails closed when removed", async () => {
+    const org = (await db.select().from(orgs).orderBy(asc(orgs.createdAt)).limit(1))[0];
+    if (!org) throw new Error("seeded org missing");
+    const suffix = newId("evt");
+    const projectId = newId("proj");
+    const repoId = newId("repo");
+    await db.insert(projects).values({
+      id: projectId,
+      orgId: org.id,
+      name: "Manifest handoff",
+      slug: `manifest-handoff-${suffix}`,
+      settings: {},
+    });
+    const [repo] = await db
+      .insert(repos)
+      .values({
+        id: repoId,
+        orgId: org.id,
+        projectId,
+        owner: "octo",
+        name: `manifest-${suffix}`,
+        defaultBranch: "main",
+        renderAnswers: { execution_lane: { architect: "repo" }, preserved: true },
+      })
+      .returning();
+    if (!repo) throw new Error("manifest repo missing");
+    const manifest = JSON.stringify({
+      packageInstall: "pnpm install --frozen-lockfile",
+      provision: "pnpm run local:setup:ui",
+      checks: ["pnpm verify"],
+      executionLane: { architect: "platform", builder: "platform" },
+    });
+    const facilityClient = new FacilityGithubClient(
+      {
+        rest: {
+          repos: {
+            getContent: async () => ({
+              data: {
+                type: "file",
+                encoding: "base64",
+                content: Buffer.from(manifest).toString("base64"),
+              },
+            }),
+          },
+        },
+      } as never,
+      { owner: repo.owner, repo: repo.name, defaultBranch: repo.defaultBranch },
+    );
+
+    await expect(
+      syncRepoFacilityConfig({ db, client: facilityClient, repo }),
+    ).resolves.toMatchObject({
+      packageInstallCmd: "pnpm install --frozen-lockfile",
+      provisionCmd: "pnpm run local:setup:ui",
+      checkCmds: ["pnpm verify"],
+      execution_lane: { architect: "platform", builder: "platform" },
+      preserved: true,
+    });
+    const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+    expect(project?.settings).toEqual({});
+
+    const [syncedRepo] = await db.select().from(repos).where(eq(repos.id, repoId));
+    if (!syncedRepo) throw new Error("synced repo missing");
+    const laneOnlyClient = new FacilityGithubClient(
+      {
+        rest: {
+          repos: {
+            getContent: async () => ({
+              data: {
+                type: "file",
+                encoding: "base64",
+                content: Buffer.from(
+                  JSON.stringify({ executionLane: { architect: "platform" } }),
+                ).toString("base64"),
+              },
+            }),
+          },
+        },
+      } as never,
+      { owner: repo.owner, repo: repo.name, defaultBranch: repo.defaultBranch },
+    );
+    await syncRepoFacilityConfig({ db, client: laneOnlyClient, repo: syncedRepo });
+    const [clearedRepo] = await db.select().from(repos).where(eq(repos.id, repoId));
+    expect(clearedRepo?.renderAnswers).toMatchObject({
+      packageInstallCmd: null,
+      provisionCmd: null,
+      checkCmds: [],
+      models: {},
+      execution_lane: { architect: "platform" },
+      preserved: true,
+    });
+    if (!clearedRepo) throw new Error("cleared repo missing");
+    const missingClient = new FacilityGithubClient(
+      {
+        rest: {
+          repos: {
+            getContent: async () => {
+              throw Object.assign(new Error("not found"), { status: 404 });
+            },
+          },
+        },
+      } as never,
+      { owner: repo.owner, repo: repo.name, defaultBranch: repo.defaultBranch },
+    );
+    await syncRepoFacilityConfig({ db, client: missingClient, repo: clearedRepo });
+    const [optedOutRepo] = await db.select().from(repos).where(eq(repos.id, repoId));
+    expect(optedOutRepo?.renderAnswers).toMatchObject({
+      packageInstallCmd: null,
+      provisionCmd: null,
+      checkCmds: [],
+      models: {},
+      execution_lane: {},
+      preserved: true,
     });
   });
 

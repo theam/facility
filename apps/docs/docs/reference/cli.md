@@ -53,9 +53,11 @@ Actions in the repository lane and by Facility in the platform lane.
 ```json
 {
   "defaultBranch": "main",
-  "provision": "pnpm install --frozen-lockfile",
+  "packageInstall": "pnpm install --frozen-lockfile",
+  "provision": "pnpm run local:setup",
   "checks": ["pnpm lint", "pnpm typecheck", "pnpm test"],
   "board": { "org": "acme", "project": 12 },
+  "executionLane": { "architect": "platform", "builder": "platform" },
   "preview": {
     "enabled": true,
     "image": "ghcr.io/acme/app:sha-…",

@@ -18236,6 +18236,7 @@ export interface operations {
                     repoId: string;
                     answers: {
                         defaultBranch?: string;
+                        packageInstallCmd?: string;
                         provisionCmd?: string;
                         checkCmds?: string[];
                         modules?: string[];

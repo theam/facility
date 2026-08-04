@@ -299,16 +299,14 @@ async function checkSandboxRunner(db: Db, config: AppConfig, orgId: string): Pro
       );
     }
     // A profile can run a platform-lane agent only if its driver matches the
-    // deployment (a docker profile can't launch on the AWS/Fargate stack, and
-    // vice versa) AND — for the docker driver — its image ships the runner. The
-    // aws driver runs a pre-built runner task definition, so its image text is
-    // not the gate there.
+    // deployment and its image ships the runner. Docker launches the profile
+    // image directly; CodeBuild receives it as imageOverride for each build.
     const runnerImage = config.sandboxRunnerImage;
     const driver = config.sandboxDriver;
     const canRunRunner = profiles.some(
       (profile) =>
         profile.driver === driver &&
-        (driver === "aws" || profile.image === runnerImage || /runner/i.test(profile.image)),
+        (profile.image === runnerImage || /runner/i.test(profile.image)),
     );
     if (!canRunRunner) {
       // Fail (not warn): platform-lane execution is the platform's primary

@@ -53,6 +53,11 @@ output "ecs_cluster_name" {
   value       = aws_ecs_cluster.facility.name
 }
 
+output "codebuild_runner_project_name" {
+  description = "CodeBuild project used for ephemeral privileged Facility sandboxes."
+  value       = aws_codebuild_project.runner.name
+}
+
 output "migrate_task_definition_arn" {
   description = "One-shot migration task definition. Run manually; Terraform does not auto-run migrations."
   value       = aws_ecs_task_definition.migrate.arn

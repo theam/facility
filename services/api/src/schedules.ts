@@ -4,11 +4,13 @@ import {
   createDb,
   insertAuditEvent,
   projects,
+  repos,
   runEvents,
   runs,
   schedulerWatermarks,
 } from "@facility/db";
 import { and, eq, not, sql } from "drizzle-orm";
+import { laneFor } from "./github/router.js";
 import type { AppConfig } from "./types.js";
 
 type Enqueue = (
@@ -33,6 +35,7 @@ const weekdayNumbers: Record<string, number> = {
 };
 const SCHEDULE_WATERMARK = "agent.schedules";
 const MAX_CATCH_UP_MINUTES = 24 * 60;
+const REPOSITORY_SCHEDULED_AGENTS = new Set(["security-sweep"]);
 
 export async function runAgentSchedules(config: AppConfig, enqueue: Enqueue, now = new Date()) {
   const { db, client } = createDb(config.databaseUrl);
@@ -49,6 +52,7 @@ export async function runAgentSchedules(config: AppConfig, enqueue: Enqueue, now
         ),
       );
     const currentMinute = minuteFloor(now);
+    const projectRepos = await db.select().from(repos);
     const watermark = (
       await db
         .select()
@@ -59,6 +63,14 @@ export async function runAgentSchedules(config: AppConfig, enqueue: Enqueue, now
     const instants = catchUpMinutes(watermark?.lastTick, currentMinute);
     let created = 0;
     for (const { agent } of rows) {
+      if (
+        REPOSITORY_SCHEDULED_AGENTS.has(agent.name) &&
+        !projectRepos.some(
+          (repo) => repo.projectId === agent.projectId && laneFor(repo, agent.name) === "platform",
+        )
+      ) {
+        continue;
+      }
       const triggers = scheduleTriggers(agent.triggers);
       for (const [index, trigger] of triggers.entries()) {
         for (const instant of instants) {

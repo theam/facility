@@ -25,8 +25,8 @@ import {
   syncRepoIssues,
   upsertGhIssueFromWebhook,
 } from "./issues-sync.js";
-import { verifyFingerprints } from "./kickstart.js";
-import { routeTrigger, type TriggerPayload } from "./router.js";
+import { syncRepoFacilityConfig, verifyFingerprints } from "./kickstart.js";
+import { laneFor, routeTrigger, type TriggerPayload } from "./router.js";
 import { renderGithubRunProgress } from "./run-progress.js";
 
 type WebhookPayload = TriggerPayload & {
@@ -98,7 +98,7 @@ export async function processGithubWebhook(
     if (event.eventType === "installation" || event.eventType === "installation_repositories") {
       await processInstallation(db, event.orgId, payload, enqueue);
     } else if (event.eventType === "push") {
-      await processPush(db, event.orgId, payload, enqueue);
+      await processPush(db, event.orgId, payload, config, factory, enqueue);
     } else if (event.eventType === "issues") {
       await upsertGhIssueFromWebhook(db, event.orgId, payload);
       await processTrigger(
@@ -241,6 +241,8 @@ async function processPush(
   db: FacilityDb,
   orgId: string,
   payload: WebhookPayload,
+  config: AppConfig,
+  factory?: GithubClientFactory,
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
 ) {
   const owner = payload.repository?.owner?.login;
@@ -272,6 +274,13 @@ async function processPush(
       (file) => file.path,
     ),
   );
+  if (changed.has(".facility.json")) {
+    await syncRepoFacilityConfig({
+      db,
+      factory: factory ?? createGithubClientFactory(config),
+      repo,
+    });
+  }
   if ([...changed].some((path) => managed.has(path))) {
     await enqueue?.("fingerprints.verify", { repoId: repo.id });
   }
@@ -504,6 +513,10 @@ async function processGithubAgentEvent(
     githubEventMatches(candidate.triggers, eventType, payload),
   );
   if (!agent) return;
+  // Event-driven repository agents are opt-in just like slash commands. The
+  // legacy/default lane is repo, so connecting an existing repository never
+  // silently starts a weaker duplicate reviewer or repair agent.
+  if (laneFor(repo, agent.name) !== "platform") return;
   const pullRequest = pullRequestContext(eventType, payload);
   const pullNumber = pullRequest.number;
   const branch = pullRequest.head;

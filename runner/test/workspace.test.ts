@@ -8,10 +8,13 @@ import {
   buildCodexArgs,
   composedPrompt,
   deliveryReleaseImpact,
+  engineEnv,
   exitCode,
   handleControlMessage,
   parseGitNameStatus,
   prepareWorkspace,
+  privateRegistryInstallCommand,
+  privateRegistryNpmrc,
   publishVerifiedGithubBranchUpdate,
   publishVerifiedGithubChanges,
   readAgentDeliveryMetadata,
@@ -19,6 +22,7 @@ import {
   readAgentUpdateMetadata,
   readSecurityReport,
   requiresAgentProgress,
+  runPackageInstall,
   semanticDeliveryBranch,
   terminateChild,
 } from "../src/index.js";
@@ -34,6 +38,7 @@ function bundle(overrides: Partial<RunBundle> = {}): RunBundle {
     engineConfig: {},
     repo: { cloneUrl: null, branch: null, installationTokenRef: null },
     harness: null,
+    packageInstallCmd: null,
     provisionCmd: null,
     checkCmds: [],
     gatewayUrls: { anthropic: "https://anthropic.test", openai: "https://openai.test" },
@@ -44,6 +49,126 @@ function bundle(overrides: Partial<RunBundle> = {}): RunBundle {
 }
 
 describe("workspace preparation", () => {
+  it("never exposes package registry credentials to the engine environment", () => {
+    const original = process.env.NODE_AUTH_TOKEN;
+    const originalUpperConfig = process.env.NPM_CONFIG_USERCONFIG;
+    const originalLowerConfig = process.env.npm_config_userconfig;
+    process.env.NODE_AUTH_TOKEN = "package-token-for-test";
+    process.env.NPM_CONFIG_USERCONFIG = "/tmp/facility-upper-npmrc";
+    process.env.npm_config_userconfig = "/tmp/facility-lower-npmrc";
+    try {
+      expect(engineEnv().NODE_AUTH_TOKEN).toBeUndefined();
+      expect(engineEnv().NPM_CONFIG_USERCONFIG).toBeUndefined();
+      expect(engineEnv().npm_config_userconfig).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env.NODE_AUTH_TOKEN;
+      else process.env.NODE_AUTH_TOKEN = original;
+      if (originalUpperConfig === undefined) delete process.env.NPM_CONFIG_USERCONFIG;
+      else process.env.NPM_CONFIG_USERCONFIG = originalUpperConfig;
+      if (originalLowerConfig === undefined) delete process.env.npm_config_userconfig;
+      else process.env.npm_config_userconfig = originalLowerConfig;
+    }
+  });
+
+  it("limits private registry credentials to deterministic install commands", () => {
+    expect(privateRegistryInstallCommand("pnpm install --frozen-lockfile")).toBe(true);
+    expect(privateRegistryInstallCommand("npm ci")).toBe(true);
+    expect(privateRegistryInstallCommand("pnpm install && curl example.com")).toBe(false);
+  });
+
+  it("creates a user-level npm config for the private package install only", () => {
+    expect(privateRegistryNpmrc("github-package-token")).toBe(
+      "//npm.pkg.github.com/:_authToken=github-package-token\n",
+    );
+    expect(() => privateRegistryNpmrc("token\nmalicious=true")).toThrow(
+      "package_registry_token_invalid",
+    );
+  });
+
+  it("scopes the package token to the install child and removes the npmrc", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-package-install-"));
+    const capturePath = join(root, "captured.json");
+    const npmrcPath = join(root, "install.npmrc");
+    const script = [
+      "const fs=require('node:fs')",
+      `const npmrc=process.env.NPM_CONFIG_USERCONFIG`,
+      `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({token:process.env.NODE_AUTH_TOKEN,npmrc,contents:fs.readFileSync(npmrc,'utf8'),mode:fs.statSync(npmrc).mode & 0o777}))`,
+    ].join(";");
+
+    await expect(
+      runPackageInstall(
+        `node -e ${JSON.stringify(script)}`,
+        root,
+        1,
+        "github-package-token",
+        npmrcPath,
+      ),
+    ).resolves.toBe(0);
+    await expect(readFile(capturePath, "utf8").then(JSON.parse)).resolves.toEqual({
+      token: "github-package-token",
+      npmrc: npmrcPath,
+      contents: "//npm.pkg.github.com/:_authToken=github-package-token\n",
+      mode: 0o600,
+    });
+    await expect(readFile(npmrcPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes the private npmrc after an install failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-package-install-failure-"));
+    const npmrcPath = join(root, "install.npmrc");
+    await expect(
+      runPackageInstall("node -e 'process.exit(7)'", root, 1, "github-package-token", npmrcPath),
+    ).resolves.toBe(7);
+    await expect(readFile(npmrcPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves repository-owned skills when Facility has the same skill name", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-"));
+    const source = await mkdtemp(join(tmpdir(), "facility-repo-"));
+    await mkdir(join(source, ".claude", "skills", "team-practice"), { recursive: true });
+    await writeFile(
+      join(source, ".claude", "skills", "team-practice", "SKILL.md"),
+      "# Repository-owned practice\n",
+    );
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    execFileSync("git", ["add", "."], { cwd: source });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Facility Test",
+        "-c",
+        "user.email=test@facility.local",
+        "commit",
+        "-m",
+        "test: seed",
+      ],
+      { cwd: source },
+    );
+
+    await prepareWorkspace(
+      bundle({
+        repo: { cloneUrl: `file://${source}`, branch: "main", installationTokenRef: null },
+        skills: [{ name: "team-practice", content: "# Facility catalog practice" }],
+      }),
+      "virtual-key",
+      {
+        platformKey: null,
+        platformApiUrl: "https://api.test",
+        projectId: "proj_test",
+        repoToken: null,
+      },
+      root,
+    );
+
+    await expect(
+      readFile(join(root, "repo", ".claude", "skills", "team-practice", "SKILL.md"), "utf8"),
+    ).resolves.toBe("# Repository-owned practice\n");
+    await expect(
+      readFile(join(root, "repo", ".agents", "skills", "team-practice", "SKILL.md"), "utf8"),
+    ).resolves.toContain("Facility catalog practice");
+  });
+
   it("keeps runner release classification aligned with the root policy", async () => {
     const rootPolicy = (await import(
       new URL("../../scripts/conventional-commit-subjects.mjs", import.meta.url).href

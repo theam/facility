@@ -12,20 +12,33 @@ import {
   type FacilityDb,
   githubInstallations,
   insertAuditEvent,
-  projects,
   proposals,
   repos,
 } from "@facility/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { ApiError } from "../errors.js";
 import type { AppConfig, Principal } from "../types.js";
 import { raisePlatformIssue } from "../watchtower/issues.js";
 import { FacilityGithubClient, type GithubClientFactory, type TreeItem } from "./client.js";
-import { readRepoFiles } from "./repo-files.js";
+import { decodeContent, readRepoFiles } from "./repo-files.js";
 
 export type KickstartAnswers = RenderAnswers;
 
 export type RepoRow = typeof repos.$inferSelect;
+
+export type FacilityRepoManifest = {
+  packageInstall?: string | null;
+  provision?: string | null;
+  checks?: string[];
+  models?: {
+    build?: string;
+    review?: string;
+    plan?: string;
+    codexBuild?: string;
+    codexPlan?: string;
+  };
+  executionLane?: Record<string, "repo" | "platform">;
+};
 
 const MANAGED_FACILITY_PATHS = [
   ".facility.json",
@@ -90,6 +103,146 @@ export async function createGithubClientForRepo(
     repo: repo.name,
     defaultBranch: repo.defaultBranch,
   });
+}
+
+export function parseFacilityRepoManifest(content: string): FacilityRepoManifest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new ApiError(400, "facility_manifest_invalid", ".facility.json is not valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ApiError(400, "facility_manifest_invalid", ".facility.json must be an object");
+  }
+  const value = parsed as Record<string, unknown>;
+  const optionalCommand = (key: string) => {
+    const command = value[key];
+    if (command === undefined || command === null) return command;
+    if (typeof command !== "string" || !command.trim()) {
+      throw new ApiError(
+        400,
+        "facility_manifest_invalid",
+        `${key} must be a command string or null`,
+      );
+    }
+    return command;
+  };
+  let checks: string[] | undefined;
+  if (value.checks !== undefined) {
+    if (!Array.isArray(value.checks) || !value.checks.every((item) => typeof item === "string")) {
+      throw new ApiError(400, "facility_manifest_invalid", "checks must be an array of commands");
+    }
+    checks = value.checks as string[];
+  }
+  let executionLane: Record<string, "repo" | "platform"> | undefined;
+  if (value.executionLane !== undefined) {
+    if (
+      !value.executionLane ||
+      typeof value.executionLane !== "object" ||
+      Array.isArray(value.executionLane) ||
+      !Object.values(value.executionLane).every((lane) => lane === "repo" || lane === "platform")
+    ) {
+      throw new ApiError(
+        400,
+        "facility_manifest_invalid",
+        "executionLane values must be repo or platform",
+      );
+    }
+    executionLane = value.executionLane as Record<string, "repo" | "platform">;
+  }
+  const modelValue = value.models;
+  const models =
+    modelValue && typeof modelValue === "object" && !Array.isArray(modelValue)
+      ? Object.fromEntries(
+          Object.entries(modelValue).filter(
+            ([key, model]) =>
+              ["build", "review", "plan", "codexBuild", "codexPlan"].includes(key) &&
+              typeof model === "string" &&
+              model.trim(),
+          ),
+        )
+      : undefined;
+  return {
+    packageInstall: optionalCommand("packageInstall"),
+    provision: optionalCommand("provision"),
+    checks,
+    models,
+    executionLane,
+  };
+}
+
+export async function syncRepoFacilityConfig(args: {
+  db: FacilityDb;
+  factory?: GithubClientFactory;
+  client?: FacilityGithubClient;
+  repo: RepoRow;
+}) {
+  const client =
+    args.client ??
+    (args.factory ? await createGithubClientForRepo(args.db, args.factory, args.repo) : undefined);
+  if (!client) throw new Error("syncRepoFacilityConfig requires a GitHub client or factory");
+  const current =
+    args.repo.renderAnswers &&
+    typeof args.repo.renderAnswers === "object" &&
+    !Array.isArray(args.repo.renderAnswers)
+      ? (args.repo.renderAnswers as Record<string, unknown>)
+      : {};
+  const content = await readFacilityManifest(client, args.repo.defaultBranch);
+  if (!content) {
+    // Removing the manifest is an explicit opt-out. Clear every repo-owned
+    // runtime override so stale state cannot keep routing or configuring runs.
+    const renderAnswers = clearManifestOverrides(current);
+    await args.db
+      .update(repos)
+      .set({ renderAnswers, updatedAt: new Date() })
+      .where(and(eq(repos.orgId, args.repo.orgId), eq(repos.id, args.repo.id)));
+    return renderAnswers;
+  }
+  const manifest = parseFacilityRepoManifest(content);
+  const renderAnswers = {
+    ...current,
+    packageInstallCmd: manifest.packageInstall ?? null,
+    provisionCmd: manifest.provision ?? null,
+    checkCmds: manifest.checks ?? [],
+    models: manifest.models ?? {},
+    execution_lane: manifest.executionLane ?? {},
+  };
+  await args.db
+    .update(repos)
+    .set({ renderAnswers, updatedAt: new Date() })
+    .where(and(eq(repos.orgId, args.repo.orgId), eq(repos.id, args.repo.id)));
+  return renderAnswers;
+}
+
+function clearManifestOverrides(current: Record<string, unknown>) {
+  return {
+    ...current,
+    packageInstallCmd: null,
+    provisionCmd: null,
+    checkCmds: [],
+    models: {},
+    execution_lane: {},
+  };
+}
+
+async function readFacilityManifest(client: FacilityGithubClient, ref: string) {
+  try {
+    const value = (await client.getContent(".facility.json", ref)) as {
+      type?: string;
+      content?: string;
+      encoding?: string;
+    };
+    if (Array.isArray(value) || value.type !== "file" || typeof value.content !== "string") {
+      return null;
+    }
+    return decodeContent(value.content, value.encoding);
+  } catch (error) {
+    // Absence is a valid, fail-closed repo-lane configuration. Permission and
+    // network failures are not absence and must remain retryable/loud.
+    if ((error as { status?: number }).status === 404) return null;
+    throw error;
+  }
 }
 
 export async function kickstartPreview(
@@ -178,18 +331,6 @@ export async function kickstartRepo(args: {
       updatedAt: new Date(),
     })
     .where(eq(repos.id, args.repo.id));
-  // Persist the resolved acceptance gates into the project's settings too, so the
-  // PLATFORM lane runs them (the runner reads projects.settings.check_cmds as its
-  // fallback). Without this, only the repo lane's vendored workflows would carry
-  // the detected checks and a platform-lane run would have zero gates. Merge with
-  // `||` to preserve default_branch and any other settings keys.
-  await args.db
-    .update(projects)
-    .set({
-      settings: sql`${projects.settings} || ${JSON.stringify({ check_cmds: renderAnswers.checkCmds ?? [] })}::jsonb`,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(projects.orgId, args.repo.orgId), eq(projects.id, args.projectId)));
   await createKickstartProposal(
     args.db,
     args.repo.orgId,

@@ -7,6 +7,7 @@ export type RunBundle = {
   engineConfig: Record<string, unknown>;
   repo: { cloneUrl: string | null; branch: string | null; installationTokenRef: string | null };
   harness?: { files: Record<string, string> } | null;
+  packageInstallCmd: string | null;
   provisionCmd: string | null;
   checkCmds: string[];
   gatewayUrls: { anthropic: string; openai: string };

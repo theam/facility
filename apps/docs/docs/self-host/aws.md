@@ -9,9 +9,22 @@ title: AWS (Terraform)
 - VPC (2 AZ), private subnets for services and RDS
 - RDS Postgres 16, S3 bucket (envelopes/transcripts), ECR repositories
 - ECS Fargate services: `api`, `worker`, `gateway`, `web`, `mcp` behind an ALB
-- Fargate runner tasks for the `aws` sandbox driver
+- ephemeral, privileged CodeBuild jobs for the `aws` sandbox driver
+- unprivileged, per-image ECS Fargate tasks for private preview services
 - KMS-backed secrets into task environments
 - CloudWatch log groups per service
+
+CodeBuild privileged mode is required because repository provisioning may start
+Docker containers (for example, local Supabase). Each build runs in the private
+subnets with the sandbox security group. Its service role can pull the runner
+image, write its own logs, and manage its VPC network interface; it cannot read
+Facility's Secrets Manager values.
+
+Preview services stay on Fargate because the authenticated Facility proxy needs
+to reach their private port. They use a dedicated task role with no permissions
+and a narrowly scoped execution role for image pull and CloudWatch logs. The API
+registers only the requested immutable preview definition and destroys it with
+the task; this path is separate from the privileged agent runner.
 
 Nothing in the services is AWS-specific — this module is a reference, not a
 requirement. The sandbox driver seam (`docker` | `aws`) is where compute
@@ -174,9 +187,18 @@ Terraform creates encrypted containers and never writes values into them.
 | `github_oauth_client_id`, `github_oauth_client_secret` | the App's OAuth credentials (`oidc_client_id` / `oidc_client_secret` in broker mode) |
 | `facility_oauth_jwks` | a persistent private ES256 JWK set |
 | `github_app_id`, `github_app_slug`, `github_app_private_key`, `github_app_webhook_secret` | from the App |
+| `package_registry_token` | optional classic PAT with only `read:packages`, for private GitHub npm packages |
 
 `dev_anthropic_api_key` and `dev_openai_api_key` are a local fallback only —
 add provider credentials through Facility after boot instead.
+
+The trusted API releases `package_registry_token` through the runner's one-shot
+authenticated handshake only when a run declares `.facility.json`'s
+`packageInstall` phase. The CodeBuild role cannot read the secret from AWS. The
+runner writes a temporary user-level npm config for that install child, deletes
+it afterward, and does not pass the token to provisioning scripts, acceptance
+checks, Claude, or Codex. Set `enable_package_registry_token = true` only after
+populating the secret; leave it false for repositories that use public packages.
 
 Keep `sslmode=verify-full`. The production image carries Amazon's global RDS CA
 bundle so the API and worker verify the database certificate and hostname; a

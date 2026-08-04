@@ -274,8 +274,8 @@ describe("render", () => {
 
     expect(crew).toContain("false && contains(github.event.comment.body, '/builder')");
     expect(crew).toContain("false && contains(github.event.comment.body, '/architect')");
-    expect(codex).toContain("false && contains(github.event.comment.body, '/codex-builder')");
-    expect(codex).toContain("false && contains(github.event.comment.body, '/codex-architect')");
+    expect(codex).toContain("true && contains(github.event.comment.body, '/codex-builder')");
+    expect(codex).toContain("true && contains(github.event.comment.body, '/codex-architect')");
   });
 });
 

@@ -23,9 +23,9 @@ jobs:
     if: |
       github.event.sender.type != 'Bot' &&
       (
-        (github.event_name == 'issue_comment' && (({{BUILDER_REPO_LANE}} && contains(github.event.comment.body, '/codex-builder')) || ({{ARCHITECT_REPO_LANE}} && contains(github.event.comment.body, '/codex-architect')))) ||
-        (github.event_name == 'pull_request_review_comment' && (({{BUILDER_REPO_LANE}} && contains(github.event.comment.body, '/codex-builder')) || ({{ARCHITECT_REPO_LANE}} && contains(github.event.comment.body, '/codex-architect')))) ||
-        (github.event_name == 'issues' && (({{BUILDER_REPO_LANE}} && (contains(github.event.issue.body || '', '/codex-builder') || contains(github.event.issue.title || '', '/codex-builder'))) || ({{ARCHITECT_REPO_LANE}} && (contains(github.event.issue.body || '', '/codex-architect') || contains(github.event.issue.title || '', '/codex-architect')))))
+        (github.event_name == 'issue_comment' && (({{CODEX_BUILDER_REPO_LANE}} && contains(github.event.comment.body, '/codex-builder')) || ({{CODEX_ARCHITECT_REPO_LANE}} && contains(github.event.comment.body, '/codex-architect')))) ||
+        (github.event_name == 'pull_request_review_comment' && (({{CODEX_BUILDER_REPO_LANE}} && contains(github.event.comment.body, '/codex-builder')) || ({{CODEX_ARCHITECT_REPO_LANE}} && contains(github.event.comment.body, '/codex-architect')))) ||
+        (github.event_name == 'issues' && (({{CODEX_BUILDER_REPO_LANE}} && (contains(github.event.issue.body || '', '/codex-builder') || contains(github.event.issue.title || '', '/codex-builder'))) || ({{CODEX_ARCHITECT_REPO_LANE}} && (contains(github.event.issue.body || '', '/codex-architect') || contains(github.event.issue.title || '', '/codex-architect')))))
       )
     runs-on: ubuntu-latest
     timeout-minutes: 180

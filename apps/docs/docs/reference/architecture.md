@@ -75,7 +75,7 @@ infra/              # docker-compose (self-host), terraform/aws (reference deplo
 | 9 | GitHub identity for humans; hashed API keys for machines; **per-instance MCP OAuth** | Self-hosted instances use direct GitHub OAuth; SaaS instances consume the commercial broker over OIDC. Each instance publishes its own OAuth authorization server and audience-bound MCP tokens so upstream GitHub credentials are never accepted as Facility credentials. |
 | 10 | RBAC = permission-string catalog; bundled roles + custom roles | `resource:action` grants at org/project scope; custom roles are named permission sets — no policy-engine dependency (OPA rejected for v1: complexity without a customer). |
 | 11 | Audit = append-only `audit_events`, hash-chained per org | tamper-evident without external infra; gateway keeps full request/response envelopes (bodies in object storage). "Store everything by default." |
-| 12 | Sandbox drivers: `docker` (dev/self-host) + `aws` (Fargate) behind one interface | any-cloud via driver seam (k8s Job driver is a documented extension point); Fargate provides the reference cloud path. |
+| 12 | Sandbox drivers: `docker` (dev/self-host) + `aws` (CodeBuild) behind one interface | any-cloud via driver seam (k8s Job driver is a documented extension point); CodeBuild provides the reference cloud path and supports nested Docker services. |
 | 13 | Dual-lane execution: repository lane (compatibility) + control-plane lane (sandboxed) | existing repositories keep their vendored workflows on day one; the control-plane lane runs Project Owner/learning/crew sessions in governed sandboxes. Cutover is per trigger and human-gated. |
 | 14 | HITL uses action types, resolvers, and an append-only ledger | typed actions support different approval workflows while the ledger preserves every human decision. |
 | 15 | KB native storage in Postgres (entries + typed frontmatter + link graph) with git export | write-time validation and graph queries need a DB; git remains the interchange and audit format. |
@@ -137,7 +137,7 @@ corroborates its success.
 ## 7. Deployment
 
 - **Self-host quickstart**: `docker compose up` → postgres, minio, api, worker, gateway, web, and MCP. An administrator binds the dedicated org, owner, GitHub account, and installation with `facility instance bootstrap`; login never auto-creates tenancy.
-- **AWS reference deployment**: Terraform — VPC, RDS Postgres, S3, ECS Fargate services (api/worker/gateway/web/MCP), ALB, ECR, Fargate runner tasks, KMS for master key, CloudWatch logs.
+- **AWS reference deployment**: Terraform — VPC, RDS Postgres, S3, ECS Fargate services (api/worker/gateway/web/MCP), unprivileged Fargate preview tasks, ALB, ECR, privileged CodeBuild runner jobs, KMS for master key, CloudWatch logs.
 - **Any-cloud claim**: everything is containers + PG + S3-API; drivers isolate compute specifics; helm chart is a documented follow-up with the k8s Job driver.
 
 ## 8. What stays deliberately simple (v1)

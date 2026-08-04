@@ -79,7 +79,7 @@ itself when the team wants agents running in its own CI.
 | Turn team rules into enforcement | Repository-specific invariants live in zero-dependency guards. Repeated review feedback can graduate from prose into a deterministic check. | Installer or platform |
 | Keep repositories on a known system version | The platform fingerprints managed files, reports drift, and delivers template upgrades as reviewable pull requests. | Platform |
 | Control model access and spend | The gateway issues project-scoped virtual keys, enforces budgets, attributes usage by project/agent/task, and can store request/response envelopes in your object store. | Platform |
-| Run and supervise agents outside CI | The platform launches Claude Code, Codex, or bring-your-own agents in disposable Docker or AWS Fargate sandboxes, streams sessions, and records human steering. | Platform |
+| Run and supervise agents outside CI | The platform launches Claude Code, Codex, or bring-your-own agents in disposable Docker or AWS CodeBuild sandboxes, streams sessions, and records human steering. | Platform |
 | Reuse operational knowledge | The harness versions skills, rules, agent contracts, guards, and templates. Project knowledge and learning proposals remain human-validated. | Platform |
 | See whether the process works | Receipts, outcomes, health checks, analytics, issues, and a synthetic canary show cost, reliability, acceptance, and recurring failures. | Installer or platform |
 | Operate from different clients | The same permission model is exposed through the web app, REST API, CLI, and MCP server. | Platform |

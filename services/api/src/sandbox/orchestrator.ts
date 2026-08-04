@@ -1293,9 +1293,11 @@ async function buildRunBundle(
       .limit(1)
   )[0];
   const timeoutMin = resourceNumber(profile.resources, "timeout_min", 60);
+  const packageInstallCmd = resolvePackageInstallCmd(profile, repo?.renderAnswers);
   const provisionCmd = resolveProvisionCmd(profile, repo?.renderAnswers);
-  const checkCmds = resolveCheckCmds(profile, project?.settings);
-  const contract = renderRunContract(rawContract, provisionCmd, checkCmds);
+  const checkCmds = resolveCheckCmds(profile, repo?.renderAnswers, project?.settings);
+  const provisionSummary = [packageInstallCmd, provisionCmd].filter(Boolean).join(" && ") || null;
+  const contract = renderRunContract(rawContract, provisionSummary, checkCmds);
   const githubBranch = typeof runGh.branch === "string" ? runGh.branch : null;
   const checkoutBranch = githubPullRequestMode(run.mode) && githubBranch ? githubBranch : null;
   // Point the agent CLIs directly at the gateway service. Anthropic's SDK
@@ -1308,7 +1310,7 @@ async function buildRunBundle(
     engine: normalizeEngine(agent.engine || run.engine),
     contract,
     skills,
-    engineConfig: objectOrEmpty(agent.model),
+    engineConfig: resolveRepoEngineConfig(agent.name, agent.model, repo?.renderAnswers),
     repo: repo
       ? {
           cloneUrl: `https://github.com/${repo.owner}/${repo.name}.git`,
@@ -1316,6 +1318,7 @@ async function buildRunBundle(
           installationTokenRef: repo.installationId,
         }
       : { cloneUrl: null, branch: null, installationTokenRef: null },
+    packageInstallCmd,
     provisionCmd,
     // Acceptance gates: a sandbox profile's setup.check_cmds is an explicit
     // platform-level override; otherwise fall back to the project's own configured
@@ -1946,9 +1949,38 @@ function arrayField(value: unknown, key: string) {
 // Resolve the run's acceptance-gate commands: a sandbox profile's explicit
 // setup.check_cmds override wins; otherwise the project's own configured checks
 // (settings.check_cmds). Empty when neither is set.
-export function resolveCheckCmds(profile: { setup: unknown }, projectSettings: unknown): string[] {
+export function resolveCheckCmds(
+  profile: { setup: unknown },
+  renderAnswers: unknown,
+  projectSettings: unknown,
+): string[] {
   const profileChecks = arrayField(profile.setup, "check_cmds");
-  return profileChecks.length > 0 ? profileChecks : arrayField(projectSettings, "check_cmds");
+  if (profileChecks.length > 0) return profileChecks;
+  const answers = objectOrEmpty(renderAnswers);
+  if (Object.hasOwn(answers, "checkCmds")) return arrayField(answers, "checkCmds");
+  if (Object.hasOwn(answers, "check_cmds")) return arrayField(answers, "check_cmds");
+  return arrayField(projectSettings, "check_cmds");
+}
+
+export function resolveRepoEngineConfig(agentName: string, base: unknown, renderAnswers: unknown) {
+  const config = objectOrEmpty(base);
+  const models = objectOrEmpty(objectOrEmpty(renderAnswers).models);
+  const override =
+    agentName === "architect"
+      ? stringValue(models.plan)
+      : agentName === "builder"
+        ? stringValue(models.build)
+        : agentName === "review"
+          ? stringValue(models.review)
+          : agentName === "codex-architect"
+            ? stringValue(models.codexPlan)
+            : agentName === "codex-builder"
+              ? stringValue(models.codexBuild)
+              : undefined;
+  if (!override) return config;
+  return agentName.startsWith("codex-")
+    ? { ...config, primary: override }
+    : { ...config, model: override };
 }
 
 // The sandbox profile is an explicit platform override. Otherwise use the
@@ -1959,6 +1991,18 @@ export function resolveProvisionCmd(profile: { setup: unknown }, renderAnswers: 
     stringField(profile.setup, "provisionCmd") ??
     stringField(renderAnswers, "provisionCmd") ??
     stringField(renderAnswers, "provision_cmd")
+  );
+}
+
+// Dependency installation is a separate phase so a private-registry token can
+// be scoped to that child process and never reach provisioning scripts, checks,
+// or the model runtime.
+export function resolvePackageInstallCmd(profile: { setup: unknown }, renderAnswers: unknown) {
+  return (
+    stringField(profile.setup, "package_install_cmd") ??
+    stringField(profile.setup, "packageInstallCmd") ??
+    stringField(renderAnswers, "packageInstallCmd") ??
+    stringField(renderAnswers, "package_install_cmd")
   );
 }
 

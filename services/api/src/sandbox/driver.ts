@@ -29,3 +29,9 @@ export async function sandboxDriver(name: SandboxDriverName): Promise<SandboxDri
   const { AwsSandboxDriver } = await import("./aws.js");
   return new AwsSandboxDriver();
 }
+
+export async function previewSandboxDriver(name: SandboxDriverName): Promise<SandboxDriver> {
+  if (name === "docker") return sandboxDriver(name);
+  const { AwsPreviewSandboxDriver } = await import("./aws-preview.js");
+  return new AwsPreviewSandboxDriver();
+}

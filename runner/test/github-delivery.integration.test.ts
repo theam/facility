@@ -254,6 +254,7 @@ function runBundle(cloneUrl: string, overrides: Partial<RunBundle> = {}): RunBun
     engineConfig: {},
     repo: { cloneUrl, branch: "main", installationTokenRef: null },
     harness: null,
+    packageInstallCmd: null,
     provisionCmd: null,
     checkCmds: [],
     gatewayUrls: { anthropic: "https://anthropic.test", openai: "https://openai.test" },

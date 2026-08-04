@@ -72,6 +72,7 @@ describe("sandbox api", async () => {
     sandboxDriver: "docker",
     webUrl: "http://localhost:3000",
     facilityInsecureDev: true,
+    packageRegistryToken: "package-token",
     logLevel: "silent",
   };
   const { db, client } = createDb(databaseUrl);
@@ -639,6 +640,7 @@ describe("sandbox api", async () => {
           branch: "main",
           installationTokenRef: installation.id,
         },
+        packageInstallCmd: "pnpm install --frozen-lockfile",
         provisionCmd: null,
         checkCmds: [],
         gatewayUrls: { anthropic: "http://gateway/anthropic", openai: "http://gateway/openai" },
@@ -661,6 +663,7 @@ describe("sandbox api", async () => {
     expect(response.statusCode).toBe(200);
     const hello = response.json();
     expect(hello.repoToken).toBe("installation-token");
+    expect(hello.packageRegistryToken).toBe("package-token");
     expect(hello.bundleUrl).not.toContain("?");
     const bundlePath = new URL(hello.bundleUrl).pathname;
     expect((await app.inject({ method: "GET", url: bundlePath })).statusCode).toBe(401);
@@ -677,7 +680,61 @@ describe("sandbox api", async () => {
       repo: "private-repo",
       permissions: { contents: "read" },
     });
+    const replay = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/hello`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json().error.code).toBe("virtual_key_revealed");
     app.githubInstallationTokenFactory = undefined;
+  });
+
+  it("does not release the package token when no dedicated install phase exists", async () => {
+    const token = `frt_no_package_${Date.now()}`;
+    const runId = newId("run");
+    const run = await insertRunnerRun(token, "provisioning", runId, {
+      runnerTokenHash: await hashKey(token),
+      sealedVirtualKey: await seal("fvk_no_package", masterKey),
+      bundle: {
+        runId,
+        mode: "architect",
+        engine: "byo",
+        contract: "contract",
+        skills: [],
+        engineConfig: {},
+        repo: { cloneUrl: null, branch: null, installationTokenRef: null },
+        packageInstallCmd: null,
+        provisionCmd: null,
+        checkCmds: [],
+        gatewayUrls: { anthropic: "http://gateway/anthropic", openai: "http://gateway/openai" },
+        scope: {},
+        timeoutMin: 60,
+      },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/hello`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().packageRegistryToken).toBeNull();
+  });
+
+  it("denies credential release after a run is terminal", async () => {
+    const token = `frt_terminal_${Date.now()}`;
+    const run = await insertRunnerRun(token, "failed", newId("run"), {
+      runnerTokenHash: await hashKey(token),
+      sealedVirtualKey: await seal("fvk_terminal", masterKey),
+      bundle: { packageInstallCmd: "pnpm install --frozen-lockfile" },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/hello`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("run_terminal");
   });
 
   it("redacts sealed run credentials from run read APIs", async () => {

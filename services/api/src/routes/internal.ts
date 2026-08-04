@@ -1,6 +1,6 @@
 import { open, verifyKey } from "@facility/core";
 import { githubInstallations, insertAuditEvent, repos, runs, steerMessages } from "@facility/db";
-import { and, asc, eq, gt, inArray, isNull, notInArray } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
@@ -15,7 +15,6 @@ import {
   appendRunEvents,
   type RunSandboxState,
   readSandbox,
-  TERMINAL_RUN_STATUSES,
   terminalStatus,
 } from "../sandbox/state.js";
 import type { AppConfig } from "../types.js";
@@ -97,10 +96,14 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
           sandbox: updatedSandbox,
           updatedAt: new Date(),
         })
-        .where(and(eq(runs.id, run.id), notInArray(runs.status, [...TERMINAL_RUN_STATUSES])))
+        .where(and(eq(runs.id, run.id), eq(runs.status, "provisioning")))
         .returning({ id: runs.id });
       if (!claimed) {
-        throw new ApiError(409, "run_terminal", "Run is no longer active");
+        throw new ApiError(
+          409,
+          "run_credentials_already_released",
+          "Run credentials are no longer available",
+        );
       }
       await appendRunEvents(db, run.orgId, run.id, [{ type: "hello", data: {} }]);
       await updateGithubRunProgress(db, run.id, "running", {
@@ -123,6 +126,13 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         // a per-run GitHub App installation token; here it falls back to a
         // configured token for self-host / validation.
         repoToken: await repoTokenForRun(sandbox),
+        // Released through the same one-shot authenticated handshake as the
+        // virtual and clone keys, and only when this run has a dedicated
+        // dependency-install phase. The sandbox task itself has no IAM access
+        // to the registry secret.
+        packageRegistryToken: sandbox.bundle.packageInstallCmd
+          ? (config.packageRegistryToken ?? null)
+          : null,
         gatewayUrls: sandbox.bundle.gatewayUrls,
       };
     },

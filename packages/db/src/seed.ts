@@ -60,10 +60,18 @@ function defaultRunnerImage(): string {
 }
 
 // Driver the default sandbox profile uses; must match the deployment ("docker"
-// for local/self-host, "aws" for the Fargate stack). Keep in sync with
+// for local/self-host, "aws" for the CodeBuild stack). Keep in sync with
 // config.sandboxDriver.
 function defaultSandboxDriver(): string {
   return process.env.FACILITY_SANDBOX_DRIVER === "aws" ? "aws" : "docker";
+}
+
+function defaultSandboxResources(): string {
+  return JSON.stringify(
+    defaultSandboxDriver() === "aws"
+      ? { cpu: 8, memory_mb: 15_360, timeout_min: 180 }
+      : { cpu: 2, memory_mb: 4_096, timeout_min: 60 },
+  );
 }
 
 function actionTypeExecutor(name: string) {
@@ -293,7 +301,7 @@ async function seedOrgEssentialsSql(sql: postgres.Sql, orgId: string): Promise<v
       ${defaultSandboxDriver()},
       ${defaultRunnerImage()},
       '{"deps":[]}'::jsonb,
-      '{"cpu":2,"memory_mb":4096,"timeout_min":60}'::jsonb,
+      ${defaultSandboxResources()}::jsonb,
       '{"egress":"restricted"}'::jsonb
     )
     ON CONFLICT (id) DO UPDATE SET
@@ -353,7 +361,7 @@ async function seedOrgEssentialsForOrgsSql(sql: postgres.Sql, orgIds: string[]):
       ${defaultSandboxDriver()},
       ${defaultRunnerImage()},
       '{"deps":[]}'::jsonb,
-      '{"cpu":2,"memory_mb":4096,"timeout_min":60}'::jsonb,
+      ${defaultSandboxResources()}::jsonb,
       '{"egress":"restricted"}'::jsonb
     FROM inputs
     ON CONFLICT (id) DO UPDATE SET
@@ -417,7 +425,7 @@ async function seedOrgEssentialsDb(db: RegistryDb, orgId: string): Promise<void>
       ${defaultSandboxDriver()},
       ${defaultRunnerImage()},
       '{"deps":[]}'::jsonb,
-      '{"cpu":2,"memory_mb":4096,"timeout_min":60}'::jsonb,
+      ${defaultSandboxResources()}::jsonb,
       '{"egress":"restricted"}'::jsonb
     )
     ON CONFLICT (id) DO UPDATE SET

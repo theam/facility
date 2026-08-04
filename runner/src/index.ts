@@ -31,6 +31,11 @@ const sessionStateArchive = join(workRoot, "claude-session-state.tgz");
 const AGENT_PROGRESS_MAX_BYTES = 16 * 1024;
 const SECURITY_REPORT_MAX_BYTES = 256 * 1024;
 const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
+const PRIVATE_REGISTRY_INSTALL_COMMANDS = new Set([
+  "npm ci",
+  "pnpm install --frozen-lockfile",
+  "yarn install --immutable",
+]);
 let engineSessionId: string | null = null;
 let activeEngineChild: ReturnType<typeof spawn> | null = null;
 let clearInterruptEscalation: (() => void) | null = null;
@@ -72,6 +77,25 @@ async function main() {
       repoToken: hello.repoToken ? String(hello.repoToken) : null,
     });
     steerStop = startSteeringPoll();
+    if (bundle.packageInstallCmd) {
+      const packageToken = hello.packageRegistryToken
+        ? String(hello.packageRegistryToken).trim()
+        : null;
+      if (packageToken) secretsToRedact.add(packageToken);
+      if (packageToken && !privateRegistryInstallCommand(bundle.packageInstallCmd)) {
+        throw new Error("package_install_command_not_allowed_for_private_registry");
+      }
+      const installed = await runPackageInstall(
+        bundle.packageInstallCmd,
+        cwdFor(bundle),
+        bundle.timeoutMin,
+        packageToken,
+      );
+      if (installed !== 0) {
+        await postResult(bundle, "failed", startedAt, { code: "package_install_failed" });
+        return;
+      }
+    }
     if (bundle.provisionCmd) {
       const provision = await runShell(
         bundle.provisionCmd,
@@ -275,11 +299,15 @@ export async function prepareWorkspace(
     await mkdir(root, { recursive: true });
     for (const [fileBase, skill] of skillsByFile) {
       const skillDir = join(root, fileBase);
+      const skillPath = join(skillDir, "SKILL.md");
+      if (await pathExists(skillPath)) {
+        // Existing repositories own their checked-in agent behavior. A
+        // project/org Facility skill may supplement it under another name, but
+        // must never overwrite a repository skill with the same name.
+        continue;
+      }
       await mkdir(skillDir, { recursive: true });
-      await writeFile(
-        join(skillDir, "SKILL.md"),
-        materializedSkillContent(skill.name, skill.content),
-      );
+      await writeFile(skillPath, materializedSkillContent(skill.name, skill.content));
     }
   }
   if (bundle.harness?.files) {
@@ -299,6 +327,16 @@ export async function prepareWorkspace(
   // Register every injected secret for redaction from captured check output.
   for (const secret of [virtualKey, platform.platformKey, platform.repoToken]) {
     if (secret) secretsToRedact.add(secret);
+  }
+}
+
+async function pathExists(path: string) {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -653,10 +691,16 @@ async function directorySize(path: string): Promise<number> {
   return total;
 }
 
-async function runShell(command: string, cwd: string, eventType: string, timeoutMin: number) {
+async function runShell(
+  command: string,
+  cwd: string,
+  eventType: string,
+  timeoutMin: number,
+  envOverrides?: NodeJS.ProcessEnv,
+) {
   const child = spawn("sh", ["-c", command], {
     cwd,
-    env: engineEnv(),
+    env: { ...engineEnv(), ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const clearTimers = armEngineTimeout(child, timeoutMin);
@@ -674,6 +718,34 @@ async function runShell(command: string, cwd: string, eventType: string, timeout
   await Promise.all(drains);
   clearTimers();
   return code;
+}
+
+export async function runPackageInstall(
+  command: string,
+  cwd: string,
+  timeoutMin: number,
+  packageToken: string | null,
+  userConfigPath = join(workRoot, ".facility-package-npmrc"),
+) {
+  if (!packageToken) return runShell(command, cwd, "shell", timeoutMin);
+  await writeFile(userConfigPath, privateRegistryNpmrc(packageToken), { mode: 0o600 });
+  try {
+    return await runShell(command, cwd, "shell", timeoutMin, {
+      NODE_AUTH_TOKEN: packageToken,
+      NPM_CONFIG_USERCONFIG: userConfigPath,
+    });
+  } finally {
+    await rm(userConfigPath, { force: true });
+  }
+}
+
+export function privateRegistryInstallCommand(command: string) {
+  return PRIVATE_REGISTRY_INSTALL_COMMANDS.has(command.trim());
+}
+
+export function privateRegistryNpmrc(token: string) {
+  if (!token || /[\r\n]/.test(token)) throw new Error("package_registry_token_invalid");
+  return `//npm.pkg.github.com/:_authToken=${token}\n`;
 }
 
 // Cap the self-reported checks file read so a runaway/malicious agent can't OOM
@@ -1554,6 +1626,11 @@ async function fetchJson(url: string, init: RequestInit = {}) {
 export function engineEnv() {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: "/work" };
   delete env.ANTHROPIC_AUTH_TOKEN;
+  // Registry credentials are granted only to the dedicated dependency-install
+  // child. They must never reach provisioning scripts, checks, or the model.
+  delete env.NODE_AUTH_TOKEN;
+  delete env.NPM_CONFIG_USERCONFIG;
+  delete env.npm_config_userconfig;
   // Never expose the runner's internal-lifecycle credential to the (untrusted)
   // engine or check commands. With RUNNER_TOKEN a compromised agent could call
   // /internal/runs/:id/{events,result} for its own run to forge platform-provenance

@@ -51,6 +51,12 @@ describe("API configuration", () => {
     ).toThrow("GitHub organization must be a login, not a URL");
   });
 
+  it("trims the optional package registry credential for scoped runner handoff", () => {
+    expect(readConfig({ ...validEnv, PACKAGE_REGISTRY_TOKEN: "  package-token\n" })).toMatchObject({
+      packageRegistryToken: "package-token",
+    });
+  });
+
   it("rejects the direct GitHub organization restriction in broker mode", () => {
     expect(() =>
       readConfig({

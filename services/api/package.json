@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.5",
+    "@aws-sdk/client-codebuild": "3.1079.0",
     "@aws-sdk/client-cloudwatch-logs": "3.1079.0",
     "@aws-sdk/client-ecs": "3.1079.0",
     "@facility/core": "workspace:*",
@@ -46,7 +47,7 @@
     "pg-boss": "^10.3.2",
     "pino": "^10.1.0",
     "postgres": "^3.4.7",
-    "undici": "^7.28.0",
+    "undici": "^7.29.0",
     "uuidv7": "^1.0.2",
     "zod": "^4.1.13"
   },

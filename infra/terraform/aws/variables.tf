@@ -99,6 +99,12 @@ variable "enable_dev_provider_fallback" {
   default     = false
 }
 
+variable "enable_package_registry_token" {
+  description = "Inject the optional private package registry token into the trusted API for scoped runner handoff. Populate the secret before enabling."
+  type        = bool
+  default     = false
+}
+
 variable "database_name" {
   description = "Initial RDS database name."
   type        = string

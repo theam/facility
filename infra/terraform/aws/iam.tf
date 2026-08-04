@@ -28,8 +28,8 @@ resource "aws_iam_role" "task" {
   })
 }
 
-resource "aws_iam_role" "runner_task" {
-  name = "${local.name_prefix}-runner-task"
+resource "aws_iam_role" "preview_execution" {
+  name = "${local.name_prefix}-preview-execution"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -39,6 +39,41 @@ resource "aws_iam_role" "runner_task" {
         Service = "ecs-tasks.amazonaws.com"
       }
       Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role" "preview_task" {
+  name = "${local.name_prefix}-preview-task"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role" "codebuild_runner" {
+  name = "${local.name_prefix}-codebuild-runner"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "codebuild.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+      Condition = {
+        StringEquals = {
+          "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+        }
+      }
     }]
   })
 }
@@ -97,6 +132,42 @@ resource "aws_iam_role_policy" "ecs_execution" {
   })
 }
 
+resource "aws_iam_role_policy" "preview_execution" {
+  name = "${local.name_prefix}-preview-execution"
+  role = aws_iam_role.preview_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "PullFacilityImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+        Resource = [for repo in aws_ecr_repository.service : repo.arn]
+      },
+      {
+        Sid    = "WritePreviewLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.service["preview"].arn}:*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy" "task" {
   name = "${local.name_prefix}-task"
   role = aws_iam_role.task.id
@@ -139,42 +210,21 @@ resource "aws_iam_role_policy" "task" {
         Resource = aws_kms_key.facility.arn
       },
       {
-        Sid    = "LaunchRunnerTasks"
+        Sid    = "LaunchRunnerBuilds"
         Effect = "Allow"
         Action = [
-          "ecs:RunTask"
+          "codebuild:StartBuild"
         ]
-        Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}-runner:*"
-        Condition = {
-          ArnEquals = {
-            "ecs:cluster" = aws_ecs_cluster.facility.arn
-          }
-        }
+        Resource = aws_codebuild_project.runner.arn
       },
       {
-        Sid    = "ManageRunnerTasks"
+        Sid    = "ManageRunnerBuilds"
         Effect = "Allow"
         Action = [
-          "ecs:DescribeTasks",
-          "ecs:StopTask"
+          "codebuild:BatchGetBuilds",
+          "codebuild:StopBuild"
         ]
-        Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.facility.name}/*"
-      },
-      {
-        Sid    = "PassRunnerRoles"
-        Effect = "Allow"
-        Action = [
-          "iam:PassRole"
-        ]
-        Resource = [
-          aws_iam_role.ecs_execution.arn,
-          aws_iam_role.runner_task.arn
-        ]
-        Condition = {
-          StringEquals = {
-            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
-          }
-        }
+        Resource = aws_codebuild_project.runner.arn
       },
       {
         Sid    = "ReadRunnerLogs"
@@ -183,26 +233,122 @@ resource "aws_iam_role_policy" "task" {
           "logs:GetLogEvents"
         ]
         Resource = "${aws_cloudwatch_log_group.service["runner"].arn}:*"
+      },
+      {
+        Sid      = "RegisterPreviewTaskDefinitions"
+        Effect   = "Allow"
+        Action   = "ecs:RegisterTaskDefinition"
+        Resource = "*"
+      },
+      {
+        Sid      = "DeregisterPreviewTaskDefinitions"
+        Effect   = "Allow"
+        Action   = "ecs:DeregisterTaskDefinition"
+        Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}-preview:*"
+      },
+      {
+        Sid      = "LaunchPreviewTasks"
+        Effect   = "Allow"
+        Action   = "ecs:RunTask"
+        Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${local.name_prefix}-preview:*"
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.facility.arn
+          }
+        }
+      },
+      {
+        Sid    = "ManagePreviewTasks"
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeTasks",
+          "ecs:StopTask"
+        ]
+        Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.facility.name}/*"
+      },
+      {
+        Sid    = "PassPreviewRoles"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = [
+          aws_iam_role.preview_execution.arn,
+          aws_iam_role.preview_task.arn
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid      = "ReadPreviewLogs"
+        Effect   = "Allow"
+        Action   = "logs:GetLogEvents"
+        Resource = "${aws_cloudwatch_log_group.service["preview"].arn}:*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy" "runner_task" {
-  name = "${local.name_prefix}-runner-task"
-  role = aws_iam_role.runner_task.id
+resource "aws_iam_role_policy" "codebuild_runner" {
+  name = "${local.name_prefix}-codebuild-runner"
+  role = aws_iam_role.codebuild_runner.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "WriteOwnLogs"
+        Sid    = "WriteRunnerLogs"
         Effect = "Allow"
         Action = [
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
         Resource = "${aws_cloudwatch_log_group.service["runner"].arn}:*"
+      },
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "PullRunnerImage"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+        Resource = aws_ecr_repository.service["runner"].arn
+      },
+      {
+        Sid    = "ManageVpcNetworkInterfaces"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeDhcpOptions",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVpcs"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid      = "AuthorizeCodeBuildNetworkInterfaces"
+        Effect   = "Allow"
+        Action   = "ec2:CreateNetworkInterfacePermission"
+        Resource = "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:network-interface/*"
+        Condition = {
+          StringEquals = {
+            "ec2:AuthorizedService" = "codebuild.amazonaws.com"
+          }
+          ArnEquals = {
+            "ec2:Subnet" = [for subnet in aws_subnet.private : subnet.arn]
+          }
+        }
       }
     ]
   })

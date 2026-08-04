@@ -33,6 +33,16 @@ weekly security sweep to a platform sandbox, run the new Project Owner agent
 platform-side. Each flip is reversible; the vendored workflows remain the
 fallback.
 
+Declare those choices in `.facility.json` under `executionLane`. A push to the
+default branch synchronizes the reviewed manifest into the control plane. An
+unset agent remains on the `repo` lane, so adoption fails closed and does not
+start duplicate automation.
+
+Platform sandboxes clone the repository before starting the agent. Checked-in
+`AGENTS.md`, `CLAUDE.md`, hooks, commands, guards, and skills therefore remain
+available. If a repository skill and a Facility catalog skill have the same
+name, the checked-in repository skill wins.
+
 ## Step 5 — upgrades
 
 From now on, method updates arrive as upgrade PRs from the platform instead

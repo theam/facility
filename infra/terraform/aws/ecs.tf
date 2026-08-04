@@ -85,43 +85,6 @@ resource "aws_ecs_task_definition" "service" {
   ])
 }
 
-resource "aws_ecs_task_definition" "runner" {
-  family                   = "${local.name_prefix}-runner"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-
-  runtime_platform {
-    cpu_architecture        = var.task_cpu_architecture
-    operating_system_family = "LINUX"
-  }
-  cpu                = tostring(var.task_cpu.runner)
-  memory             = tostring(var.task_memory.runner)
-  execution_role_arn = aws_iam_role.ecs_execution.arn
-  task_role_arn      = aws_iam_role.runner_task.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "runner"
-      image     = local.images.runner
-      essential = true
-      environment = concat(local.common_environment, [
-        { name = "FACILITY_API_URL", value = local.public_urls.api },
-        { name = "GATEWAY_URL", value = "http://${aws_service_discovery_service.gateway.name}.${aws_service_discovery_private_dns_namespace.facility.name}:${local.ports.gateway}" },
-        { name = "SANDBOX_GATEWAY_URL", value = "http://${aws_service_discovery_service.gateway.name}.${aws_service_discovery_private_dns_namespace.facility.name}:${local.ports.gateway}" },
-      ])
-      secrets = []
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.service["runner"].name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "runner"
-        }
-      }
-    }
-  ])
-}
-
 resource "aws_ecs_task_definition" "migrate" {
   family                   = "${local.name_prefix}-migrate"
   requires_compatibilities = ["FARGATE"]

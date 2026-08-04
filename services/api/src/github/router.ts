@@ -12,12 +12,19 @@ import {
 } from "@facility/db";
 import { and, desc, eq, gt, sql } from "drizzle-orm";
 import type { FacilityGithubClient } from "./client.js";
+import { syncRepoFacilityConfig } from "./kickstart.js";
 import { renderGithubRunProgress } from "./run-progress.js";
 
 export type TriggerPayload = {
   action?: string;
   comment?: { id?: number; body?: string };
-  issue?: { number?: number; title?: string; body?: string | null; pull_request?: unknown };
+  issue?: {
+    number?: number;
+    title?: string;
+    body?: string | null;
+    node_id?: string;
+    pull_request?: unknown;
+  };
   repository?: { id?: number; name?: string; owner?: { login?: string }; default_branch?: string };
   sender?: { login?: string; type?: string };
 };
@@ -45,7 +52,14 @@ export async function routeTrigger(
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
 ): Promise<{ routed: boolean; reason?: string; runId?: string }> {
   if (payload.sender?.type === "Bot") return { routed: false, reason: "bot_sender" };
-  const body = payload.comment?.body ?? "";
+  if (payload.comment && payload.action && payload.action !== "created") {
+    return { routed: false, reason: "unsupported_action" };
+  }
+  if (!payload.comment && payload.action && payload.action !== "opened") {
+    return { routed: false, reason: "unsupported_action" };
+  }
+  const body =
+    payload.comment?.body ?? [payload.issue?.title ?? "", payload.issue?.body ?? ""].join("\n");
   const resolved = resolveSlashCommand(body);
   if (resolved.ambiguous) return { routed: false, reason: "ambiguous_command" };
   const command = resolved.command;
@@ -55,8 +69,14 @@ export async function routeTrigger(
   const sender = payload.sender?.login;
   const issueNumber = payload.issue?.number;
   const commentId = payload.comment?.id;
-  if (!owner || !name || !sender || !issueNumber || !commentId) {
+  if (!owner || !name || !sender || !issueNumber) {
     return { routed: false, reason: "missing_payload" };
+  }
+  // Updating an existing PR requires a distinct delivery contract (checkout its
+  // head and update it instead of opening another PR). Keep those invocations on
+  // the repository lane until that contract is implemented and verified.
+  if (payload.issue?.pull_request) {
+    return { routed: false, reason: "pull_request_repo_lane" };
   }
   // Scope to the webhook's resolved org — repos are per-org unique (migration
   // 0012), so a global owner/name lookup could route to another tenant's repo.
@@ -69,7 +89,12 @@ export async function routeTrigger(
   )[0];
   if (!repo) return { routed: false, reason: "repo_unmanaged" };
   if (!(await client.userCanWrite(sender))) return { routed: false, reason: "non_writer" };
-  const lane = laneFor(repo, command);
+  // Reconcile from the default branch at handoff time, not only from an earlier
+  // push delivery. This closes the merge/webhook race where the repository
+  // workflow has already yielded to Facility but the database still has the
+  // previous lane configuration.
+  const renderAnswers = await syncRepoFacilityConfig({ db, client, repo });
+  const lane = laneFor({ ...repo, renderAnswers }, resolved.agentCommand ?? command);
   if (lane !== "platform") return { routed: false, reason: "repo_lane" };
   const agent = await findAgentDef(
     db,
@@ -95,7 +120,7 @@ export async function routeTrigger(
     type: "github_comment",
     repo: { id: repo.id, owner, name },
     issue: { number: issueNumber },
-    comment: { id: commentId },
+    ...(commentId ? { comment: { id: commentId } } : {}),
     // Preserve the end-user request in the immutable run scope. The runner
     // treats scope as untrusted data beneath the agent contract, but without
     // this context an agent only received numeric GitHub IDs and could not know
@@ -141,10 +166,16 @@ export async function routeTrigger(
                 architectRunId: accepted.architectRun.id,
                 architectTrigger: accepted.architectRun.trigger,
                 approvedPlan: accepted.proposal.contextMd,
-                approval: { type: "github", login: sender, commentId },
+                approval: { type: "github", login: sender, commentId: commentId ?? null },
               }
             : githubTrigger,
-          gh: { owner, repo: name, issueNumber, commentId },
+          gh: {
+            owner,
+            repo: name,
+            issueNumber,
+            ...(commentId ? { commentId } : {}),
+            ...(payload.issue?.node_id ? { issueNodeId: payload.issue.node_id } : {}),
+          },
           createdBy: { type: "github", login: sender },
         })
         .returning()

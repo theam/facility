@@ -36,7 +36,7 @@ const EnvSchema = z
     // seeded default sandbox profile and `facility doctor` both key off this.
     FACILITY_RUNNER_IMAGE: z.string().default("facility-runner:dev"),
     // Driver the seeded default sandbox profile uses. Must match the deployment:
-    // "docker" for local/self-host, "aws" for the Fargate stack.
+    // "docker" for local/self-host, "aws" for the CodeBuild stack.
     FACILITY_SANDBOX_DRIVER: z.enum(["docker", "aws"]).default("docker"),
     AUTH_IDENTITY_PROVIDER: z.enum(["github", "oidc"]).default("github"),
     AUTH_CALLBACK_URL: OptionalUrl,
@@ -62,6 +62,7 @@ const EnvSchema = z
     S3_SECRET_KEY: z.string().optional(),
     S3_BUCKET: z.string().optional(),
     AWS_REGION: z.string().optional(),
+    PACKAGE_REGISTRY_TOKEN: z.string().trim().min(1).optional(),
     GITHUB_APP_ID: z.string().optional(),
     GITHUB_APP_PRIVATE_KEY: z.string().optional(),
     GITHUB_APP_WEBHOOK_SECRET: z.string().optional(),
@@ -157,6 +158,7 @@ export function readConfig(env = process.env): AppConfig {
     s3SecretKey: parsed.S3_SECRET_KEY,
     s3Bucket: parsed.S3_BUCKET,
     awsRegion: parsed.AWS_REGION,
+    packageRegistryToken: parsed.PACKAGE_REGISTRY_TOKEN,
     githubAppId: parsed.GITHUB_APP_ID,
     githubAppPrivateKey: parsed.GITHUB_APP_PRIVATE_KEY?.replace(/\\n/g, "\n"),
     githubAppWebhookSecret: parsed.GITHUB_APP_WEBHOOK_SECRET,

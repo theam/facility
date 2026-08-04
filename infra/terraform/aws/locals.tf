@@ -44,18 +44,24 @@ locals {
     { name = "LOG_LEVEL", value = "info" },
     { name = "S3_BUCKET", value = aws_s3_bucket.objects.bucket },
     { name = "AWS_REGION", value = var.aws_region },
-    # The Fargate stack runs sandboxes via the AWS driver, so the seeded default
+    # The AWS stack runs sandboxes via CodeBuild, so the seeded default
     # sandbox profile (created by the migrate+seed task) must use it too.
     { name = "FACILITY_SANDBOX_DRIVER", value = "aws" },
+    { name = "FACILITY_RUNNER_IMAGE", value = local.images.runner },
   ]
 
   aws_sandbox_environment = [
+    { name = "FACILITY_AWS_CODEBUILD_PROJECT", value = aws_codebuild_project.runner.name },
+    # Agent runs use CodeBuild; preview services still need an inbound endpoint,
+    # so they run as unprivileged, dynamically registered Fargate tasks.
     { name = "FACILITY_AWS_ECS_CLUSTER", value = aws_ecs_cluster.facility.name },
-    { name = "FACILITY_AWS_RUNNER_TASK_DEF", value = aws_ecs_task_definition.runner.arn },
     { name = "FACILITY_AWS_SUBNETS", value = join(",", [for subnet in aws_subnet.private : subnet.id]) },
-    { name = "FACILITY_AWS_SECURITY_GROUPS", value = aws_security_group.sandbox.id },
-    { name = "FACILITY_AWS_RUNNER_CONTAINER", value = "runner" },
-    { name = "FACILITY_AWS_RUNNER_LOG_GROUP", value = aws_cloudwatch_log_group.service["runner"].name },
+    { name = "FACILITY_AWS_PREVIEW_SECURITY_GROUPS", value = aws_security_group.sandbox.id },
+    { name = "FACILITY_AWS_PREVIEW_TASK_FAMILY", value = "${local.name_prefix}-preview" },
+    { name = "FACILITY_AWS_PREVIEW_EXECUTION_ROLE_ARN", value = aws_iam_role.preview_execution.arn },
+    { name = "FACILITY_AWS_PREVIEW_TASK_ROLE_ARN", value = aws_iam_role.preview_task.arn },
+    { name = "FACILITY_AWS_PREVIEW_LOG_GROUP", value = aws_cloudwatch_log_group.service["preview"].name },
+    { name = "FACILITY_AWS_TASK_CPU_ARCHITECTURE", value = var.task_cpu_architecture },
   ]
 
   api_environment = concat(local.common_environment, local.aws_sandbox_environment, [
@@ -113,6 +119,7 @@ locals {
     "github_app_private_key",
     "github_app_webhook_secret",
     "github_app_slug",
+    "package_registry_token",
     "dev_anthropic_api_key",
     "dev_openai_api_key",
   ])
@@ -135,9 +142,16 @@ locals {
   ]
 
   common_secrets = local.core_secrets
-  api_secrets = concat(local.core_secrets, local.identity_secrets, [
-    { name = "FACILITY_OAUTH_JWKS", valueFrom = aws_secretsmanager_secret.app["facility_oauth_jwks"].arn },
-  ])
+  package_registry_secrets = [
+    { name = "PACKAGE_REGISTRY_TOKEN", valueFrom = aws_secretsmanager_secret.app["package_registry_token"].arn },
+  ]
+
+  api_secrets = concat(
+    local.core_secrets,
+    local.identity_secrets,
+    [{ name = "FACILITY_OAUTH_JWKS", valueFrom = aws_secretsmanager_secret.app["facility_oauth_jwks"].arn }],
+    var.enable_package_registry_token ? local.package_registry_secrets : []
+  )
 
   dev_provider_secrets = [
     { name = "DEV_ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.app["dev_anthropic_api_key"].arn },
@@ -146,7 +160,7 @@ locals {
 
   gateway_secrets = concat(local.common_secrets, var.enable_dev_provider_fallback ? local.dev_provider_secrets : [])
 
-  log_groups = toset(["api", "worker", "gateway", "web", "mcp", "runner", "migrate"])
+  log_groups = toset(["api", "worker", "gateway", "web", "mcp", "runner", "preview", "migrate"])
 
   ecs_services = {
     api = {

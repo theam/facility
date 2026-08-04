@@ -403,6 +403,8 @@ export async function init(flags, pkgRoot, version) {
     CODEX_VERSION: "0.144.6",
     ARCHITECT_REPO_LANE: "true",
     BUILDER_REPO_LANE: "true",
+    CODEX_ARCHITECT_REPO_LANE: "true",
+    CODEX_BUILDER_REPO_LANE: "true",
     PROVISION_CMD: provisionCmd,
     CHECKS_INLINE: checksInline,
     CHECKS_RUN: checksRun(checks),
@@ -527,12 +529,14 @@ export async function init(flags, pkgRoot, version) {
       codex: { provider: "openai", mode: "api-key" },
     },
     defaultBranch,
+    packageInstall: null,
     provision: provision || null,
     checks,
     models,
     preview,
     canaryBot,
     board: project ? { org, project: Number(project) } : null,
+    executionLane: { architect: "repo", builder: "repo" },
     modules: [],
   };
   writeFileSync(join(dir, ".facility.json"), formatManifest(manifest));

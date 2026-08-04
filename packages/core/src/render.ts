@@ -21,6 +21,7 @@ export type RenderedFile = {
 
 export type RenderAnswers = {
   defaultBranch: string;
+  packageInstallCmd?: string;
   provisionCmd?: string;
   checkCmds?: string[];
   modules?: string[];
@@ -441,6 +442,16 @@ export async function renderFacilityInit(
       answers.execution_lane?.["/builder"] === "platform"
         ? "false"
         : "true",
+    CODEX_ARCHITECT_REPO_LANE:
+      answers.execution_lane?.["codex-architect"] === "platform" ||
+      answers.execution_lane?.["/codex-architect"] === "platform"
+        ? "false"
+        : "true",
+    CODEX_BUILDER_REPO_LANE:
+      answers.execution_lane?.["codex-builder"] === "platform" ||
+      answers.execution_lane?.["/codex-builder"] === "platform"
+        ? "false"
+        : "true",
     PROVISION_CMD: provision,
     CHECKS_INLINE: checks.length ? checks.join(" ; ") : "the checks configured in STANDARD.md",
     CHECKS_LIST: checksList(checks),
@@ -614,6 +625,7 @@ export async function renderFacilityInit(
       codex: { provider: "openai", mode: "api-key" },
     },
     defaultBranch: answers.defaultBranch,
+    packageInstall: answers.packageInstallCmd || null,
     provision: answers.provisionCmd || null,
     checks,
     models,
@@ -622,6 +634,7 @@ export async function renderFacilityInit(
     board: answers.board?.project
       ? { org: answers.board.org, project: Number(answers.board.project) }
       : null,
+    executionLane: answers.execution_lane ?? { architect: "repo", builder: "repo" },
     modules: [],
   };
   addOrReplace(files, {
