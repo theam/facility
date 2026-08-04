@@ -1,5 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -21,6 +22,12 @@ describe("restricted Docker API", () => {
       validateBody: "container",
     });
     expect(dockerRequestPolicy("POST", "/v1.47/containers/abc/start")).toEqual({
+      allowed: true,
+    });
+    expect(dockerRequestPolicy("GET", "/v1.47/containers/abc/archive?path=/tmp/out")).toEqual({
+      allowed: true,
+    });
+    expect(dockerRequestPolicy("POST", "/v1.47/commit?container=abc")).toEqual({
       allowed: true,
     });
     expect(dockerRequestPolicy("POST", "/v1.47/volumes/create")).toEqual({
@@ -139,13 +146,85 @@ describe("restricted Docker API", () => {
     expect(upstreamRequests).toBe(1);
   });
 
-  test("forwards the Docker attach protocol upgrade", async () => {
+  test("rewrites validated workspace binds to the nosymfollow view", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "facility-docker-workspace-view-"));
+    const workspaceRoot = join(dir, "work");
+    const workspaceView = join(dir, "trusted-work");
+    const source = join(workspaceRoot, "repo");
+    const outside = join(dir, "outside");
+    await mkdir(source, { recursive: true });
+    await mkdir(workspaceView);
+    await mkdir(outside);
+    await symlink(outside, join(workspaceRoot, "escape"));
+    const upstreamSocket = join(dir, "upstream.sock");
+    const publicSocket = join(dir, "public.sock");
+    const upstreamBodies: Array<Record<string, unknown>> = [];
+    const upstream = http.createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk.toString();
+      upstreamBodies.push(JSON.parse(body));
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    await listen(upstream, upstreamSocket);
+    const proxy = await startDockerProxy({
+      publicSocket,
+      upstreamSocket,
+      workspaceRoot,
+      workspaceView,
+    });
+    cleanup.push(async () => {
+      await close(proxy);
+      await close(upstream);
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    const accepted = await request(publicSocket, "/v1.47/containers/create", {
+      Image: "facility-security-smoke:local",
+      HostConfig: {
+        Binds: [`${source}:/repo:ro`],
+        Mounts: [{ Type: "bind", Source: source, Target: "/repo-again" }],
+      },
+    });
+    expect(accepted.status).toBe(201);
+    expect(upstreamBodies).toEqual([
+      {
+        Image: "facility-security-smoke:local",
+        HostConfig: {
+          Binds: [`${workspaceView}/repo:/repo:ro`],
+          Mounts: [{ Type: "bind", Source: `${workspaceView}/repo`, Target: "/repo-again" }],
+        },
+      },
+    ]);
+
+    const denied = await request(publicSocket, "/v1.47/containers/create", {
+      Image: "facility-security-smoke:local",
+      HostConfig: { Binds: [`${workspaceRoot}/escape:/host:ro`] },
+    });
+    expect(denied.status).toBe(403);
+    expect(denied.body).toContain("host_bind_source_escape_denied");
+    expect(upstreamBodies).toHaveLength(1);
+  });
+
+  test("forwards a Docker exec upgrade body before waiting for 101", async () => {
     const dir = await mkdtemp(join(tmpdir(), "facility-docker-upgrade-"));
     const upstreamSocket = join(dir, "upstream.sock");
     const publicSocket = join(dir, "public.sock");
-    const upstream = http.createServer();
-    upstream.on("upgrade", (_request, socket) => {
-      socket.end("HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nready");
+    const execBody = JSON.stringify({ Detach: false, Tty: false });
+    const upstream = net.createServer((socket) => {
+      let received = Buffer.alloc(0);
+      socket.on("data", (chunk) => {
+        received = Buffer.concat([received, chunk]);
+        const headersEnd = received.indexOf("\r\n\r\n");
+        if (headersEnd < 0) return;
+        const headers = received.subarray(0, headersEnd).toString();
+        const contentLength = Number(/content-length:\s*(\d+)/i.exec(headers)?.[1] ?? "0");
+        const body = received.subarray(headersEnd + 4);
+        if (body.length < contentLength) return;
+        expect(headers).toContain("POST /v1.47/exec/abc/start HTTP/1.1");
+        expect(body.subarray(0, contentLength).toString()).toBe(execBody);
+        socket.end("HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nready");
+      });
     });
     await listen(upstream, upstreamSocket);
     const proxy = await startDockerProxy({ publicSocket, upstreamSocket });
@@ -155,9 +234,7 @@ describe("restricted Docker API", () => {
       await rm(dir, { recursive: true, force: true });
     });
 
-    await expect(upgrade(publicSocket, "/v1.47/containers/abc/attach?stream=1")).resolves.toBe(
-      "ready",
-    );
+    await expect(upgrade(publicSocket, "/v1.47/exec/abc/start", execBody)).resolves.toBe("ready");
   });
 });
 
@@ -166,14 +243,14 @@ test("the CodeBuild runner uses a different identity for untrusted commands", ()
   expect(untrustedSpawnIdentity(() => 501)).toEqual({});
 });
 
-function listen(server: http.Server, socket: string) {
+function listen(server: http.Server | net.Server, socket: string) {
   return new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socket, resolve);
   });
 }
 
-function close(server: http.Server) {
+function close(server: http.Server | net.Server) {
   return new Promise<void>((resolve, reject) =>
     server.close((error) => (error ? reject(error) : resolve())),
   );
@@ -202,13 +279,18 @@ function request(socketPath: string, path: string, body: Record<string, unknown>
   });
 }
 
-function upgrade(socketPath: string, path: string) {
+function upgrade(socketPath: string, path: string, body: string) {
   return new Promise<string>((resolve, reject) => {
     const req = http.request({
       socketPath,
       method: "POST",
       path,
-      headers: { connection: "Upgrade", upgrade: "tcp" },
+      headers: {
+        connection: "Upgrade",
+        upgrade: "tcp",
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+      },
     });
     req.on("upgrade", (_response, socket, head) => {
       let body = head.toString();
@@ -223,6 +305,6 @@ function upgrade(socketPath: string, path: string) {
       });
     });
     req.on("error", reject);
-    req.end();
+    req.end(body);
   });
 }

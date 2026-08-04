@@ -7,6 +7,7 @@ readonly untrusted_uid="${FACILITY_UNTRUSTED_UID:-1000}"
 readonly untrusted_gid="${FACILITY_UNTRUSTED_GID:-1000}"
 readonly docker_runtime="/run/facility-docker"
 readonly proxy_runtime="/run/facility-proxy"
+readonly workspace_view="/run/facility-workspace"
 readonly raw_socket="${docker_runtime}/docker.sock"
 readonly public_socket="${proxy_runtime}/docker.sock"
 
@@ -76,6 +77,7 @@ start_proxy() {
   setsid runuser --user "$proxy_user" -- env "${proxy_env[@]}" \
     FACILITY_DOCKER_SOCKET="$public_socket" \
     FACILITY_DOCKER_UPSTREAM_SOCKET="$raw_socket" \
+    FACILITY_DOCKER_WORKSPACE_VIEW="$workspace_view" \
     node /app/dist/docker-proxy.js \
     >>/var/log/facility-docker-proxy.log 2>&1 &
   proxy_pid="$!"
@@ -197,6 +199,24 @@ security_smoke() {
     echo "Security smoke failed: the agent user reached the raw Docker socket" >&2
     return 1
   fi
+  if runuser --user "$docker_user" -- test -r "$raw_socket" -o -w "$raw_socket"; then
+    echo "Security smoke failed: rootless container identity can open the raw Docker socket" >&2
+    return 1
+  fi
+  local runtime_socket
+  runtime_socket="$(find "$docker_runtime" -type s ! -path "$raw_socket" -print -quit)"
+  if [[ -z "$runtime_socket" ]]; then
+    echo "Security smoke failed: the runtime isolation probe found no internal socket" >&2
+    return 1
+  fi
+  run_untrusted ln -s "$runtime_socket" /work/.facility-security-runtime-escape
+  if DOCKER_HOST="unix://${raw_socket}" docker create \
+    --mount "type=bind,src=${workspace_view}/.facility-security-runtime-escape,dst=/runtime.sock" \
+    facility-security-smoke:local true >/dev/null 2>&1; then
+    echo "Security smoke failed: a workspace symlink crossed the protected runtime view" >&2
+    return 1
+  fi
+  run_untrusted rm /work/.facility-security-runtime-escape
   if [[ "${FACILITY_CODEBUILD_SMOKE_CREATE_ONLY:-}" == "1" ]]; then
     echo "Facility CodeBuild Docker security boundary passed create-only emulation checks"
   else
@@ -204,13 +224,24 @@ security_smoke() {
   fi
 }
 
-mkdir -p "$docker_runtime" "$proxy_runtime" /var/lib/facility-docker/docker-fuse \
-  /var/lib/facility-docker/docker-vfs /work
+mkdir -p "$docker_runtime" "$proxy_runtime" "$workspace_view" \
+  /var/lib/facility-docker/docker-fuse /var/lib/facility-docker/docker-vfs /work
 chown -R "$docker_user:$docker_user" "$docker_runtime" /var/lib/facility-docker
 chown -R "$proxy_user:$untrusted_gid" "$proxy_runtime"
 chown root:"$untrusted_gid" /work
 chmod 3770 /work
 chmod 0710 "$docker_runtime" "$proxy_runtime"
+chown root:root "$workspace_view"
+chmod 0711 "$workspace_view"
+# Bind requests are rewritten to this trusted alias. Linux's nosymfollow mount
+# flag makes a later workspace symlink swap fail in the kernel, closing the
+# check/use race before dockerd can reach any host runtime socket.
+mount --bind /work "$workspace_view"
+mount -o remount,bind,nosymfollow "$workspace_view"
+if ! findmnt -T "$workspace_view" -no OPTIONS | tr ',' '\n' | grep -qx nosymfollow; then
+  echo "Facility requires a kernel that enforces nosymfollow bind mounts" >&2
+  exit 1
+fi
 : >/var/log/facility-dockerd.log
 : >/var/log/facility-docker-proxy.log
 
@@ -240,7 +271,10 @@ if ! DOCKER_HOST="unix://${raw_socket}" docker info >/dev/null 2>&1; then
   exit 1
 fi
 chmod 0660 "$raw_socket"
-chgrp "$docker_user" "$raw_socket"
+# Dockerd keeps its listening descriptor open. Reassign the pathname to the
+# proxy identity so even a bind-validation TOCTOU cannot give root inside a
+# rootless child access to the unrestricted daemon API.
+chown root:"$proxy_user" "$raw_socket"
 start_proxy
 
 export DOCKER_HOST="unix://${public_socket}"

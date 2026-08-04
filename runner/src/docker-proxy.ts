@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { chmod, chown, realpath, rm } from "node:fs/promises";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import net from "node:net";
 import type { Duplex } from "node:stream";
 
 const DEFAULT_PUBLIC_SOCKET = "/run/facility-proxy/docker.sock";
 const DEFAULT_UPSTREAM_SOCKET = "/run/facility-docker/docker.sock";
+const DEFAULT_WORKSPACE_ROOT = "/work";
+const DEFAULT_WORKSPACE_VIEW = "/run/facility-workspace";
 const MAX_POLICY_BODY_BYTES = 1024 * 1024;
 
 type PolicyDecision =
@@ -22,7 +25,7 @@ export function dockerRequestPolicy(method: string, rawUrl: string): PolicyDecis
   }
   if (
     readOnly &&
-    /^\/(?:containers(?:\/json|\/[^/]+\/(?:json|top|logs|stats|changes|export))|images(?:\/json|\/.+\/(?:json|history|get))|networks(?:\/[^/]+)?|volumes(?:\/[^/]+)?)$/.test(
+    /^\/(?:containers(?:\/json|\/[^/]+\/(?:json|top|logs|stats|changes|export|archive))|images(?:\/json|\/.+\/(?:json|history|get))|networks(?:\/[^/]+)?|volumes(?:\/[^/]+)?)$/.test(
       pathname,
     )
   ) {
@@ -39,7 +42,7 @@ export function dockerRequestPolicy(method: string, rawUrl: string): PolicyDecis
   }
   if (
     method === "POST" &&
-    /^(?:\/auth|\/build|\/build\/prune|\/images\/(?:create|load|prune)|\/images\/.+\/(?:push|tag)|\/containers\/[^/]+\/(?:start|stop|restart|kill|wait|pause|unpause|rename|commit)|\/exec\/[^/]+\/(?:start|resize)|\/networks\/(?:create|prune)|\/networks\/[^/]+\/(?:connect|disconnect)|\/volumes\/prune)$/.test(
+    /^(?:\/auth|\/build|\/build\/prune|\/commit|\/images\/(?:create|load|prune)|\/images\/.+\/(?:push|tag)|\/containers\/[^/]+\/(?:start|stop|restart|kill|wait|pause|unpause|rename)|\/exec\/[^/]+\/(?:start|resize)|\/networks\/(?:create|prune)|\/networks\/[^/]+\/(?:connect|disconnect)|\/volumes\/prune)$/.test(
       pathname,
     )
   ) {
@@ -57,6 +60,7 @@ export function dockerRequestPolicy(method: string, rawUrl: string): PolicyDecis
 export function validateDockerBody(
   kind: "container" | "exec" | "volume",
   value: unknown,
+  workspaceRoot = DEFAULT_WORKSPACE_ROOT,
 ): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "invalid_json_object";
   const body = value as Record<string, unknown>;
@@ -99,13 +103,13 @@ export function validateDockerBody(
     return "host_network_denied";
   }
   for (const source of dockerBindSources(host)) {
-    if (!safeBindSource(source)) return "host_bind_source_denied";
+    if (!safeBindSource(source, workspaceRoot)) return "host_bind_source_denied";
   }
   if (Array.isArray(host.Mounts)) {
     for (const mount of host.Mounts) {
       const type = String(object(mount).Type ?? "").toLowerCase();
       if (type === "bind") {
-        if (!safeBindSource(String(object(mount).Source ?? ""))) {
+        if (!safeBindSource(String(object(mount).Source ?? ""), workspaceRoot)) {
           return "host_bind_source_denied";
         }
       } else if (type === "volume") {
@@ -117,25 +121,44 @@ export function validateDockerBody(
   return null;
 }
 
-export async function validateDockerBindResolution(value: unknown): Promise<string | null> {
+export async function secureDockerBindSources(
+  value: unknown,
+  workspaceRoot = DEFAULT_WORKSPACE_ROOT,
+  workspaceView = DEFAULT_WORKSPACE_VIEW,
+): Promise<string | null> {
   const host = object(object(value).HostConfig);
-  const sources = [
-    ...dockerBindSources(host),
-    ...(Array.isArray(host.Mounts)
-      ? host.Mounts.map(object)
-          .filter((mount) => String(mount.Type ?? "").toLowerCase() === "bind")
-          .map((mount) => String(mount.Source ?? ""))
-      : []),
-  ];
-  for (const source of sources) {
-    if (!source.startsWith("/")) continue;
-    let resolved: string;
-    try {
-      resolved = await realpath(source);
-    } catch {
-      return "host_bind_source_unresolved";
+  const hasBind =
+    (Array.isArray(host.Binds) && host.Binds.length > 0) ||
+    (Array.isArray(host.Mounts) &&
+      host.Mounts.some((mount) => String(object(mount).Type ?? "").toLowerCase() === "bind"));
+  if (!hasBind) return null;
+  let resolvedWorkspaceRoot: string;
+  try {
+    resolvedWorkspaceRoot = await realpath(workspaceRoot);
+  } catch {
+    return "workspace_root_unresolved";
+  }
+  if (Array.isArray(host.Binds)) {
+    for (let index = 0; index < host.Binds.length; index += 1) {
+      const bind = String(host.Binds[index]);
+      const source = bind.split(":", 1)[0] ?? "";
+      const secured = await secureBindSource(source, resolvedWorkspaceRoot, workspaceView);
+      if (typeof secured !== "string") return secured.reason;
+      host.Binds[index] = `${secured}${bind.slice(source.length)}`;
     }
-    if (!safeBindSource(resolved)) return "host_bind_source_escape_denied";
+  }
+  if (Array.isArray(host.Mounts)) {
+    for (const value of host.Mounts) {
+      const mount = object(value);
+      if (String(mount.Type ?? "").toLowerCase() !== "bind") continue;
+      const secured = await secureBindSource(
+        String(mount.Source ?? ""),
+        resolvedWorkspaceRoot,
+        workspaceView,
+      );
+      if (typeof secured !== "string") return secured.reason;
+      mount.Source = secured;
+    }
   }
   return null;
 }
@@ -146,13 +169,17 @@ export async function startDockerProxy(
     upstreamSocket?: string;
     socketUid?: number;
     socketGid?: number;
+    workspaceRoot?: string;
+    workspaceView?: string;
   } = {},
 ) {
   const publicSocket = options.publicSocket ?? DEFAULT_PUBLIC_SOCKET;
   const upstreamSocket = options.upstreamSocket ?? DEFAULT_UPSTREAM_SOCKET;
+  const workspaceRoot = options.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+  const workspaceView = options.workspaceView ?? DEFAULT_WORKSPACE_VIEW;
   await rm(publicSocket, { force: true });
   const server = http.createServer((request, response) => {
-    void handleRequest(request, response, upstreamSocket);
+    void handleRequest(request, response, upstreamSocket, workspaceRoot, workspaceView);
   });
   server.on("upgrade", (request, client, head) => {
     handleUpgrade(request, client, head, upstreamSocket);
@@ -173,6 +200,8 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   upstreamSocket: string,
+  workspaceRoot: string,
+  workspaceView: string,
 ) {
   const method = request.method ?? "GET";
   const url = request.url ?? "/";
@@ -184,9 +213,12 @@ async function handleRequest(
       body = await readBounded(request, MAX_POLICY_BODY_BYTES);
       const parsed = JSON.parse(body.toString("utf8"));
       const reason =
-        validateDockerBody(decision.validateBody, parsed) ??
-        (decision.validateBody === "container" ? await validateDockerBindResolution(parsed) : null);
+        validateDockerBody(decision.validateBody, parsed, workspaceRoot) ??
+        (decision.validateBody === "container"
+          ? await secureDockerBindSources(parsed, workspaceRoot, workspaceView)
+          : null);
       if (reason) return reject(response, reason);
+      body = Buffer.from(JSON.stringify(parsed));
     } catch (error) {
       const reason = error instanceof Error ? error.message : "invalid_request";
       return reject(response, reason);
@@ -220,37 +252,18 @@ function handleUpgrade(
     client.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 21\r\n\r\ndocker_upgrade_denied");
     return;
   }
-  const upstreamRequest = http.request({
-    socketPath: upstreamSocket,
-    method,
-    path: url,
-    headers: { ...request.headers, host: "docker" },
-  });
-  upstreamRequest.on("upgrade", (response, upstream, upstreamHead) => {
-    writeRawResponseHead(client, response);
-    if (upstreamHead.length > 0) client.write(upstreamHead);
+  const upstream = net.createConnection(upstreamSocket, () => {
+    const headers: string[] = [];
+    for (let index = 0; index < request.rawHeaders.length; index += 2) {
+      headers.push(`${request.rawHeaders[index]}: ${request.rawHeaders[index + 1]}`);
+    }
+    upstream.write(
+      `${method} ${url} HTTP/${request.httpVersion}\r\n${headers.join("\r\n")}\r\n\r\n`,
+    );
     if (head.length > 0) upstream.write(head);
     client.pipe(upstream).pipe(client);
   });
-  // Docker normally upgrades attach/exec to a raw stream. Forward an ordinary
-  // response as well so version differences fail explicitly instead of leaving
-  // the CLI waiting forever for a hijack that never arrived.
-  upstreamRequest.on("response", (response) => {
-    writeRawResponseHead(client, response);
-    response.pipe(client);
-  });
-  upstreamRequest.on("error", () => client.destroy());
-  upstreamRequest.end();
-}
-
-function writeRawResponseHead(client: Duplex, response: IncomingMessage) {
-  const headers: string[] = [];
-  for (let index = 0; index < response.rawHeaders.length; index += 2) {
-    headers.push(`${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}`);
-  }
-  client.write(
-    `HTTP/${response.httpVersion} ${response.statusCode ?? 502} ${response.statusMessage ?? ""}\r\n${headers.join("\r\n")}\r\n\r\n`,
-  );
+  upstream.on("error", () => client.destroy());
 }
 
 function dockerPath(rawUrl: string) {
@@ -277,11 +290,33 @@ function dockerBindSources(host: Record<string, unknown>) {
   return host.Binds.map((bind) => String(bind).split(":", 1)[0] ?? "");
 }
 
-function safeBindSource(source: string) {
-  if (source === "/work" || source.startsWith("/work/")) return true;
+function safeBindSource(source: string, workspaceRoot = DEFAULT_WORKSPACE_ROOT) {
+  if (source === workspaceRoot || source.startsWith(`${workspaceRoot}/`)) return true;
   if (source === "/var/run/docker.sock" || source === DEFAULT_PUBLIC_SOCKET) return true;
   // No slash means a Docker-managed named volume, not a host bind.
   return /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(source);
+}
+
+async function secureBindSource(
+  source: string,
+  workspaceRoot: string,
+  workspaceView: string,
+): Promise<string | { reason: string }> {
+  if (!source.startsWith("/")) return source;
+  let resolved: string;
+  try {
+    resolved = await realpath(source);
+  } catch {
+    return { reason: "host_bind_source_unresolved" };
+  }
+  if (!safeBindSource(resolved, workspaceRoot)) {
+    return { reason: "host_bind_source_escape_denied" };
+  }
+  if (resolved === workspaceRoot) return workspaceView;
+  if (resolved.startsWith(`${workspaceRoot}/`)) {
+    return `${workspaceView}${resolved.slice(workspaceRoot.length)}`;
+  }
+  return resolved;
 }
 
 function reject(response: ServerResponse, reason: string) {
@@ -305,6 +340,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   startDockerProxy({
     publicSocket: process.env.FACILITY_DOCKER_SOCKET,
     upstreamSocket: process.env.FACILITY_DOCKER_UPSTREAM_SOCKET,
+    workspaceView: process.env.FACILITY_DOCKER_WORKSPACE_VIEW,
   }).catch((error) => {
     console.error(error);
     process.exitCode = 1;

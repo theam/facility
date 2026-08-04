@@ -41,7 +41,7 @@ describe("AwsSandboxDriver", () => {
       ],
     });
     expect((command as StartBuildCommand | undefined)?.input.buildspecOverride).toBe(
-      "version: 0.2\nphases:\n  build:\n    commands:\n      - \"'/app/codebuild-runner.sh' 'node' 'runner'\\\"'\\\"'s script.js'\"\n",
+      "version: 0.2\nrun-as: root\nphases:\n  build:\n    commands:\n      - \"'/app/codebuild-runner.sh' 'node' 'runner'\\\"'\\\"'s script.js'\"\n",
     );
   });
 

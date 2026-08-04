@@ -181,7 +181,7 @@ function codeBuildComputeType(cpu: number, memoryMb: number) {
 
 function codeBuildBuildspec(cmd: string[]) {
   const command = ["/app/codebuild-runner.sh", ...cmd].map(shellQuote).join(" ");
-  return `version: 0.2\nphases:\n  build:\n    commands:\n      - ${JSON.stringify(command)}\n`;
+  return `version: 0.2\nrun-as: root\nphases:\n  build:\n    commands:\n      - ${JSON.stringify(command)}\n`;
 }
 
 function shellQuote(value: string) {
