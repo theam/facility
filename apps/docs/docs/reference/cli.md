@@ -108,6 +108,13 @@ they can be used directly as CI gates.
 one JSON object with parsed events in `--json` mode. `sessions watch --json`
 is the deliberate JSONL exception because it is an unbounded event stream.
 
+`sessions trigger <project> <agent> --input <json-or-text>` carries the manual
+run's objective. Builder agents require a non-empty text or structured input;
+Facility rejects objective-free manual builder runs instead of letting an agent
+guess what to implement.
+Programmatic callers must likewise provide a non-empty `message`, `approvedPlan`,
+structured `input`, or governed issue number when they trigger a builder.
+
 `facility doctor` checks the current repository. Add `--platform` to use the
 current saved profile, `--profile <name>` to select one, or pass `--url` and
 `--key` together. Remote plaintext targets require `--allow-insecure`, exactly

@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@facility/run-objective": "file:../packages/run-objective",
     "zod": "^4.1.13"
   },
   "devDependencies": {

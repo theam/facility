@@ -8,6 +8,7 @@ import {
   steerMessages,
   withOrg,
 } from "@facility/db";
+import { isBuilderMode, runObjectiveText } from "@facility/run-objective";
 import { and, desc, eq, notInArray, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import postgres from "postgres";
@@ -178,18 +179,19 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
           "plan_acceptance runs can only be created by the approved-plan executor",
         );
       }
+      const agent = await resolveRunAgentDef(p.orgId, projectId, body);
+      const trigger = validatedRunTrigger(agent.name, body.trigger);
       // Preserve issue provenance across generic dispatch (retries pass the
       // source run's trigger): without this, a retried issue-run loses its
       // gh linkage and disappears from the issue's history and the pipeline.
-      const triggerRepo = body.trigger?.repo as { owner?: unknown; name?: unknown } | undefined;
-      const triggerIssue = body.trigger?.issue as { number?: unknown } | undefined;
+      const triggerRepo = trigger.repo as { owner?: unknown; name?: unknown } | undefined;
+      const triggerIssue = trigger.issue as { number?: unknown } | undefined;
       const gh =
         typeof triggerRepo?.owner === "string" &&
         typeof triggerRepo?.name === "string" &&
         typeof triggerIssue?.number === "number"
           ? { owner: triggerRepo.owner, repo: triggerRepo.name, issueNumber: triggerIssue.number }
           : {};
-      const agent = await resolveRunAgentDef(p.orgId, projectId, body);
       const run = (
         await db
           .insert(runs)
@@ -206,7 +208,7 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
             // caller-supplied default made CLI/MCP-triggered Claude/BYO runs look
             // like Codex runs even though orchestration correctly used the agent.
             engine: agent.engine,
-            trigger: body.trigger ?? {},
+            trigger,
             gh,
             createdBy: { type: p.type, id: p.id },
           })
@@ -706,6 +708,12 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
       return redactRunSecrets(run);
     },
   );
+}
+
+function validatedRunTrigger(agentName: string, value: Record<string, unknown> | undefined) {
+  const trigger = { ...value };
+  if (!isBuilderMode(agentName) || runObjectiveText(trigger)) return trigger;
+  throw new ApiError(400, "run_objective_required", "A builder run requires a non-empty objective");
 }
 
 function parentGhForResume(value: unknown) {

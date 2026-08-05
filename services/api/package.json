@@ -26,6 +26,7 @@
     "@facility/core": "workspace:*",
     "@facility/db": "workspace:*",
     "@facility/harness": "workspace:*",
+    "@facility/run-objective": "workspace:*",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.1.0",
     "@fastify/formbody": "^8.0.2",

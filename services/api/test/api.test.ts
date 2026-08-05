@@ -829,7 +829,7 @@ describe("api", async () => {
         payload: {
           mode: "builder",
           engine: "codex",
-          trigger: { agentName: target.agent.name },
+          trigger: { agentName: target.agent.name, message: "Exercise agent resolution" },
         },
       });
       expect(run.statusCode).toBe(200);
@@ -842,7 +842,12 @@ describe("api", async () => {
         method: "POST",
         url: `/v1/projects/${target.projectId}/runs`,
         headers: { cookie },
-        payload: { mode: "builder", engine: "codex", agentDefId: target.agent.id },
+        payload: {
+          mode: "builder",
+          engine: "codex",
+          agentDefId: target.agent.id,
+          trigger: { message: "Exercise id-based agent resolution" },
+        },
       });
       expect(runById.statusCode).toBe(200);
       expect(runById.json().agentDefId).toBe(target.agent.id);
@@ -4134,7 +4139,12 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/projects/${other.json().id}/runs`,
       headers: { cookie },
-      payload: { mode: "builder", engine: "codex", agentDefId: otherAgent?.id },
+      payload: {
+        mode: "builder",
+        engine: "codex",
+        agentDefId: otherAgent?.id,
+        trigger: { type: "manual", message: "Exercise cross-project run reads" },
+      },
     });
     const denied = await app.inject({
       method: "GET",
@@ -4681,12 +4691,120 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/projects/${project.json().id}/runs`,
       headers: { cookie },
-      payload: { mode: "manual", engine: "codex", agentDefId: agent.id },
+      payload: {
+        mode: "manual",
+        engine: "codex",
+        agentDefId: agent.id,
+        trigger: { type: "manual", message: "Exercise effective engine selection" },
+      },
     });
 
     expect(run.statusCode).toBe(200);
     expect(run.json().engine).toBe("claude_code");
     expect(run.json().mode).toBe(agent.name);
+  });
+
+  it("requires an objective for builder runs without governed issue context", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Builder Objective", slug: `builder-objective-${Date.now()}` },
+    });
+    const builder = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(and(eq(agentDefs.projectId, project.json().id), eq(agentDefs.name, "builder")))
+        .limit(1)
+    )[0];
+    if (!builder) throw new Error("seeded builder fixture missing");
+    const runsBeforeRejection = await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.projectId, project.json().id));
+
+    for (const trigger of [
+      { type: "manual", source: "agent-page" },
+      { type: "manual", source: "agent-page", message: "   " },
+    ]) {
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${project.json().id}/runs`,
+        headers: { cookie },
+        payload: { agentDefId: builder.id, trigger },
+      });
+      expect(rejected.statusCode).toBe(400);
+      expect(rejected.json().error.code).toBe("run_objective_required");
+    }
+    expect(
+      await db.select({ id: runs.id }).from(runs).where(eq(runs.projectId, project.json().id)),
+    ).toHaveLength(runsBeforeRejection.length);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.json().id}/runs`,
+      headers: { cookie },
+      payload: {
+        agentDefId: builder.id,
+        trigger: {
+          type: "manual",
+          source: "agent-page",
+          message: "Implement the next approved Platform task",
+        },
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().trigger).toMatchObject({
+      type: "manual",
+      source: "agent-page",
+      message: "Implement the next approved Platform task",
+    });
+
+    for (const trigger of [
+      { source: "web", approvedPlan: "Ship the approved Platform plan" },
+      { source: "cli", input: "Implement the requested CLI task" },
+    ]) {
+      const objectiveRun = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${project.json().id}/runs`,
+        headers: { cookie },
+        payload: { agentDefId: builder.id, trigger },
+      });
+      expect(objectiveRun.statusCode).toBe(200);
+    }
+
+    const issueRetry = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.json().id}/runs`,
+      headers: { cookie },
+      payload: {
+        agentDefId: builder.id,
+        trigger: {
+          type: "web_issue",
+          source: "web",
+          retryOf: accepted.json().id,
+          repo: { owner: "theam", name: "tam-os" },
+          issue: { number: 42 },
+        },
+      },
+    });
+    expect(issueRetry.statusCode).toBe(200);
+
+    const cliInput = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.json().id}/runs`,
+      headers: { cookie },
+      payload: {
+        agentDefId: builder.id,
+        trigger: {
+          source: "cli",
+          agentName: "builder",
+          input: { objective: "Implement the next approved Platform task" },
+        },
+      },
+    });
+    expect(cliInput.statusCode).toBe(200);
   });
 
   it("creates and dispatches each scheduled run exactly once per UTC minute", async () => {
@@ -5589,7 +5707,11 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/projects/${target.projectId}/runs`,
       headers: { cookie },
-      payload: { mode: "manual", agentDefId: target.agent.id },
+      payload: {
+        mode: "manual",
+        agentDefId: target.agent.id,
+        trigger: { type: "manual", message: "Exercise terminal webhook delivery" },
+      },
     });
     expect(run.statusCode).toBe(200);
     expect(
@@ -5651,7 +5773,12 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/projects/${target.projectId}/runs`,
       headers: { cookie },
-      payload: { mode: "builder", engine: "codex", agentDefId: target.agent.id },
+      payload: {
+        mode: "builder",
+        engine: "codex",
+        agentDefId: target.agent.id,
+        trigger: { type: "manual", message: "Exercise terminal steering rejection" },
+      },
     });
     const canceled = await app.inject({
       method: "POST",

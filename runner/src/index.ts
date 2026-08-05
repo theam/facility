@@ -18,6 +18,7 @@ import {
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import { runObjectiveText } from "@facility/run-objective";
 import {
   parseClaudeSessionId,
   parseClaudeStreamJsonLine,
@@ -39,6 +40,8 @@ const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
 const RATE_LIMIT_RETRY_LIMIT = 8;
 const DEFAULT_RETRY_AFTER_MS = 1_000;
 const MAX_RETRY_AFTER_MS = 60_000;
+const GIT_COMMAND_TIMEOUT_MS = 2 * 60_000;
+const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 const EVENT_BATCH_MAX = 50;
 // Fastify's JSON body limit is 1 MiB. Leave room for envelope overhead and
 // future schema fields while retaining the old ability to send one large line.
@@ -214,8 +217,14 @@ async function main() {
           : await runChecks(bundle, cwdFor(bundle))
         : false;
     const engineAndChecksSucceeded = engineCode === 0 && checksPassed && securityReportConfigured;
+    if (engineAndChecksSucceeded) {
+      await emit([{ type: "delivery", data: { status: "preparing" } }]);
+    }
     const git = engineAndChecksSucceeded ? await shipGitChanges(bundle) : undefined;
     const deliveryError = engineAndChecksSucceeded ? deliveryFailure(bundle, git) : null;
+    if (engineAndChecksSucceeded) {
+      await emit([deliveryStatusEvent(git, deliveryError)]);
+    }
     const succeeded = engineAndChecksSucceeded && deliveryError === null;
     await postResult(
       bundle,
@@ -1036,6 +1045,22 @@ export function requiresDelivery(mode: string) {
   return mode === "builder" || mode.endsWith("-builder");
 }
 
+export function deliveryStatusEvent(
+  git: Record<string, unknown> | undefined,
+  deliveryError: string | null,
+): RunEvent {
+  const pushError = typeof git?.pushError === "string" ? git.pushError : null;
+  const error = pushError ?? deliveryError;
+  return {
+    type: "delivery",
+    data: {
+      status: error ? "failed" : "prepared",
+      changed: git?.changed === true,
+      ...(error ? { error } : {}),
+    },
+  };
+}
+
 function isSecurityMode(mode: string) {
   return ["security", "security_sweep"].includes(normalizedMode(mode));
 }
@@ -1637,7 +1662,8 @@ async function availableGithubBranch(
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const suffix = attempt === 0 ? "" : `-${runId.slice(-8)}${attempt === 1 ? "" : `-${attempt}`}`;
     const candidate = `${requested}${suffix}`;
-    const response = await request(
+    const response = await githubFetch(
+      request,
       `https://api.github.com/repos/${repo}/git/ref/heads/${candidate
         .split("/")
         .map(encodeURIComponent)
@@ -1652,23 +1678,40 @@ async function availableGithubBranch(
   throw new Error("github_semantic_branch_unavailable");
 }
 
-async function githubRequest<T = Record<string, unknown>>(
+export async function githubRequest<T = Record<string, unknown>>(
   request: typeof fetch,
   url: string,
   token: string,
   init: RequestInit,
+  timeoutMs = GITHUB_REQUEST_TIMEOUT_MS,
 ) {
-  const response = await request(url, {
-    ...init,
-    headers: {
-      ...githubHeaders(token),
-      "content-type": "application/json",
-      ...(init.headers ?? {}),
+  const response = await githubFetch(
+    request,
+    url,
+    {
+      ...init,
+      headers: {
+        ...githubHeaders(token),
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
+      },
     },
-  });
+    timeoutMs,
+  );
   const text = await response.text();
   if (!response.ok) throw new Error(`github_signed_delivery_http_${response.status}: ${text}`);
   return (text ? JSON.parse(text) : {}) as T;
+}
+
+async function githubFetch(
+  request: typeof fetch,
+  url: string,
+  init: RequestInit,
+  timeoutMs = GITHUB_REQUEST_TIMEOUT_MS,
+) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return request(url, { ...init, signal });
 }
 
 function githubHeaders(token: string) {
@@ -1687,13 +1730,26 @@ function chunk<T>(items: T[], size: number) {
   return chunks;
 }
 
-async function gitOutput(cwd: string, args: string[], trustedBootstrap = false) {
+export async function gitOutput(
+  cwd: string,
+  args: string[],
+  trustedBootstrap = false,
+  timeoutMs = GIT_COMMAND_TIMEOUT_MS,
+) {
   const child = spawn("git", ["-c", `safe.directory=${cwd}`, ...args], {
     cwd,
     env: trustedBootstrap ? process.env : engineEnv(),
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
     ...(trustedBootstrap ? {} : untrustedSpawnIdentity()),
   });
+  let timedOut = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    signalProcessGroup(child, "SIGTERM");
+    killTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), 5_000);
+  }, timeoutMs);
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => {
@@ -1703,6 +1759,16 @@ async function gitOutput(cwd: string, args: string[], trustedBootstrap = false) 
     stderr += chunk.toString();
   });
   const code = await exitCode(child);
+  clearTimeout(timeout);
+  if (timedOut) {
+    if (killTimer) clearTimeout(killTimer);
+    // The Git parent can exit on SIGTERM while an inherited process group
+    // member ignores it. Escalate once more before returning so clearing the
+    // grace timer cannot orphan that resistant descendant.
+    signalProcessGroup(child, "SIGKILL");
+    throw new Error(`git ${args[0] ?? "command"} timed out after ${timeoutMs}ms`);
+  }
+  if (killTimer) clearTimeout(killTimer);
   if (code !== 0) throw new Error(redactSecrets(`git ${args[0]} exited ${code}: ${stderr}`));
   return stdout;
 }
@@ -1948,19 +2014,11 @@ function armEngineTimeout(child: ReturnType<typeof spawn>, timeoutMin: number) {
 // hung command's descendants die with it instead of being orphaned. Falls back to
 // signalling just the child if the group is already gone.
 function armProcessGroupTimeout(child: ReturnType<typeof spawn>, timeoutMin: number) {
-  const signalGroup = (signal: NodeJS.Signals) => {
-    try {
-      if (child.pid) process.kill(-child.pid, signal);
-      else child.kill(signal);
-    } catch {
-      child.kill(signal);
-    }
-  };
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const termTimer = setTimeout(
     () => {
-      signalGroup("SIGTERM");
-      killTimer = setTimeout(() => signalGroup("SIGKILL"), 15_000);
+      signalProcessGroup(child, "SIGTERM");
+      killTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), 15_000);
     },
     Math.max(1, timeoutMin - 2) * 60_000,
   );
@@ -1968,6 +2026,15 @@ function armProcessGroupTimeout(child: ReturnType<typeof spawn>, timeoutMin: num
     clearTimeout(termTimer);
     if (killTimer) clearTimeout(killTimer);
   };
+}
+
+function signalProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  try {
+    if (child.pid) process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+    child.kill(signal);
+  }
 }
 
 export function composedPrompt(bundle: RunBundle) {
@@ -1980,6 +2047,9 @@ export function composedPrompt(bundle: RunBundle) {
     bundle.scope.type === "conversation" && typeof bundle.scope.message === "string"
       ? `\n\n## Conversation\n${bundle.scope.message}`
       : "";
+  const objective = runObjectiveText(bundle.scope);
+  const objectiveNote =
+    bundle.scope.type !== "conversation" && objective ? `\n\n## Run objective\n${objective}` : "";
   const progressNote = requiresAgentProgress(bundle.mode)
     ? `\n\n## Live GitHub progress\nBefore substantive work, create \`.agent-sdlc/progress.md\` with a short task-specific context and a Markdown checkbox list of the steps you decided this task needs. Update it whenever you start or finish a step so a reviewer can understand real progress from GitHub. Keep it accurate and concise; do not put secrets, generic lifecycle milestones, or the final response in it. Facility transports this file into the existing GitHub progress comment.`
     : "";
@@ -2006,7 +2076,7 @@ export function composedPrompt(bundle: RunBundle) {
   const repairDeliveryNote = repairRepositoryMode(normalizedMode(bundle.mode))
     ? `\n\n## Agent-owned PR update\nIf and only if you make verified repository changes, create \`.agent-sdlc/delivery.json\` before finishing with exactly \`{"branch":"<the existing PR branch>","commitMessage":"<matching Conventional Commit type>: describe the correction"}\`. Facility will add a signed commit to that same branch through the GitHub App. The branch must exactly match the checked-out PR branch. Choose a truthful Conventional Commit type whose release impact is no greater than the existing pull request range; do not add \`!\` or a \`BREAKING CHANGE:\` footer unless that range is already breaking. If a truthful message would raise the impact, leave the manifest absent and report that the PR title must be updated first. Do not run \`git push\`, create another branch or pull request, force-push, or depend on \`gh\`. If no code change is needed, do not create the manifest.`
     : "";
-  return `${bundle.contract}\n\nScope:\n${JSON.stringify(bundle.scope, null, 2)}${harnessNote}${steeringNote}${conversationNote}${progressNote}${repositoryOutputNote}${githubEventNote}${projectSkillsNote}${deliveryNote}${repairDeliveryNote}`;
+  return `${bundle.contract}\n\nScope:\n${JSON.stringify(bundle.scope, null, 2)}${harnessNote}${steeringNote}${conversationNote}${objectiveNote}${progressNote}${repositoryOutputNote}${githubEventNote}${projectSkillsNote}${deliveryNote}${repairDeliveryNote}`;
 }
 
 export function buildCodexArgs(bundle: RunBundle) {

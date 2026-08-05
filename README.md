@@ -224,7 +224,7 @@ To run agents in local Docker sandboxes, also build the runner image named in
 `.env`:
 
 ```bash
-docker build -t facility-runner:dev runner/
+docker build -f runner/Dockerfile -t facility-runner:dev .
 ```
 
 To delegate all of this to Claude Code or Codex, paste this prompt:

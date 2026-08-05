@@ -163,6 +163,7 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ]; then
             if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
               runner/ \
+              packages/run-objective/ \
               services/api/src/sandbox/ \
               services/api/test/sandbox.e2e.test.ts \
               Dockerfile \
@@ -204,7 +205,7 @@ jobs:
 
       - name: Build the runner image
         if: steps.policy.outputs.required == 'true'
-        run: docker build --pull -t facility-runner:dev runner
+        run: docker build --pull -f runner/Dockerfile -t facility-runner:dev .
 
       - name: Exercise the privileged CodeBuild boundary
         if: steps.policy.outputs.required == 'true'

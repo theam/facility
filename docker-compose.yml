@@ -68,7 +68,7 @@ services:
   # This one-shot service never runs an agent; it only makes the image available
   # to the host Docker daemon used by api/worker.
   runner-image:
-    build: { context: ./runner }
+    build: { context: ., dockerfile: runner/Dockerfile }
     image: ${FACILITY_RUNNER_IMAGE:-facility-runner:dev}
     entrypoint: ["/bin/true"]
     restart: "no"

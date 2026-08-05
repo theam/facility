@@ -73,4 +73,4 @@ retag_and_push api worker
 build_and_push gateway Dockerfile gateway
 build_and_push mcp Dockerfile mcp
 build_and_push web apps/web/Dockerfile web
-build_and_push runner runner/Dockerfile "" "$ROOT_DIR/runner"
+build_and_push runner runner/Dockerfile "" "$ROOT_DIR"

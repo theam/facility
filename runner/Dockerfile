@@ -3,7 +3,7 @@ FROM debian:bookworm-slim AS bind-broker-build
 RUN apt-get update \
   && apt-get install -y --no-install-recommends gcc libc6-dev \
   && rm -rf /var/lib/apt/lists/*
-COPY bind-broker.c /src/bind-broker.c
+COPY runner/bind-broker.c /src/bind-broker.c
 RUN gcc -std=c11 -O2 -Wall -Wextra -Werror \
       -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE \
       /src/bind-broker.c -Wl,-z,relro,-z,now -pie \
@@ -81,9 +81,11 @@ RUN corepack enable
 
 WORKDIR /app
 COPY --from=bind-broker-build /facility-bind-broker /usr/local/bin/facility-bind-broker
-COPY package.json package-lock.json tsconfig.json ./
-COPY src ./src
-COPY runner-entrypoint.sh codebuild-runner.sh /app/
+COPY runner/package.json runner/package-lock.json runner/tsconfig.json ./
+COPY packages/run-objective/package.json /packages/run-objective/
+COPY packages/run-objective/src /packages/run-objective/src
+COPY runner/src ./src
+COPY runner/runner-entrypoint.sh runner/codebuild-runner.sh /app/
 RUN npm ci && npm run build && npm prune --omit=dev
 
 # Run non-root: agent CLIs (Claude Code) refuse bypass-permissions as root, and

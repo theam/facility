@@ -21,7 +21,7 @@ A **platform-lane** run (Claude Code, Codex) needs a sandbox profile whose
 **driver matches the deployment** and that can run the Facility runner:
 
 - **docker** (local/self-host) — the profile's image entrypoint must be the
-  runner. Build it with `docker build -t facility-runner:dev runner/` and set
+  runner. Build it with `docker build -f runner/Dockerfile -t facility-runner:dev .` and set
   `FACILITY_RUNNER_IMAGE` (default `facility-runner:dev`). A bare base image like
   `node:22-bookworm` only supports **BYO-command** runs.
 - **aws** (CodeBuild) — each run starts a private CodeBuild job using the runner

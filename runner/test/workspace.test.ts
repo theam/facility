@@ -6,19 +6,23 @@ import {
   readdir,
   readFile,
   realpath,
+  rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildClaudeCodeArgs,
   buildCodexArgs,
   composedPrompt,
   deliveryReleaseImpact,
+  deliveryStatusEvent,
   engineEnv,
   exitCode,
+  githubRequest,
+  gitOutput,
   handleControlMessage,
   parseGitNameStatus,
   prepareWorkspace,
@@ -853,6 +857,170 @@ describe("workspace preparation", () => {
       restoreEnv("OPENAI_API_KEY", previousEnv.openai);
       restoreEnv("FACILITY_PLATFORM_KEY", previousEnv.platform);
     }
+  });
+});
+
+describe("bounded Git delivery commands", () => {
+  it("terminates a Git process group that exceeds its delivery deadline", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-git-timeout-"));
+    const pidPath = join(root, ".facility-hang.pid");
+    try {
+      await expect(
+        gitOutput(
+          root,
+          [
+            "-c",
+            "alias.facility-hang=!sleep 30 & echo $! > .facility-hang.pid; wait",
+            "facility-hang",
+          ],
+          true,
+          100,
+        ),
+      ).rejects.toThrow("git -c timed out after 100ms");
+
+      const descendantPid = Number((await readFile(pidPath, "utf8")).trim());
+      expect(Number.isInteger(descendantPid)).toBe(true);
+      await expectProcessToExit(descendantPid);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("escalates after the Git parent exits when a descendant ignores SIGTERM", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-git-kill-timeout-"));
+    const pidPath = join(root, ".facility-resistant.pid");
+    try {
+      await expect(
+        gitOutput(
+          root,
+          [
+            "-c",
+            "alias.facility-hang=!sh -c 'trap \"\" TERM; echo $$ > .facility-resistant.pid; while :; do sleep 1; done' >/dev/null 2>&1 & wait",
+            "facility-hang",
+          ],
+          true,
+          100,
+        ),
+      ).rejects.toThrow("git -c timed out after 100ms");
+
+      const descendantPid = Number((await readFile(pidPath, "utf8")).trim());
+      expect(Number.isInteger(descendantPid)).toBe(true);
+      await expectProcessToExit(descendantPid);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts a signed-delivery HTTP request at its deadline", async () => {
+    const requestSignals: AbortSignal[] = [];
+    const request = vi.fn((_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const requestSignal = init?.signal;
+      if (requestSignal) requestSignals.push(requestSignal);
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(requestSignal.reason), {
+          once: true,
+        });
+      });
+    }) as unknown as typeof fetch;
+
+    await expect(
+      githubRequest(request, "https://api.github.test/graphql", "installation-token", {}, 10),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(requestSignals[0]?.aborted).toBe(true);
+  });
+});
+
+describe("delivery phase reporting", () => {
+  it.each([
+    {
+      name: "a signed delivery failure",
+      git: { changed: true, pushError: "github request timed out" },
+      deliveryError: "delivery_push_failed",
+      expectedError: "github request timed out",
+    },
+    {
+      name: "a builder without a repository",
+      git: undefined,
+      deliveryError: "delivery_repo_not_configured",
+      expectedError: "delivery_repo_not_configured",
+    },
+    {
+      name: "a builder without changes",
+      git: { changed: false },
+      deliveryError: "delivery_no_changes",
+      expectedError: "delivery_no_changes",
+    },
+  ])("does not announce $name as prepared", ({ git, deliveryError, expectedError }) => {
+    expect(deliveryStatusEvent(git, deliveryError)).toEqual({
+      type: "delivery",
+      data: {
+        status: "failed",
+        changed: git?.changed === true,
+        error: expectedError,
+      },
+    });
+  });
+
+  it("announces a valid delivery as prepared", () => {
+    expect(deliveryStatusEvent({ changed: true }, null)).toEqual({
+      type: "delivery",
+      data: { status: "prepared", changed: true },
+    });
+  });
+});
+
+async function expectProcessToExit(pid: number) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`process ${pid} survived its Git command timeout`);
+}
+
+describe("run prompt composition", () => {
+  it("promotes a manual run message to an explicit objective", () => {
+    const prompt = composedPrompt(
+      bundle({ scope: { type: "manual", source: "agent-page", message: "  Fix the builder  " } }),
+    );
+
+    expect(prompt).toContain("## Run objective\nFix the builder");
+  });
+
+  it("promotes CLI text input to the same explicit objective", () => {
+    const prompt = composedPrompt(
+      bundle({ scope: { source: "cli", agentName: "builder", input: "Fix the CLI builder" } }),
+    );
+
+    expect(prompt).toContain("## Run objective\nFix the CLI builder");
+  });
+
+  it("promotes approved plans, structured input, and governed issues", () => {
+    const objectives: Array<[Record<string, unknown>, string]> = [
+      [{ approvedPlan: "Ship the approved plan" }, "Ship the approved plan"],
+      [
+        { input: { objective: "Fix the structured CLI builder" } },
+        '{\n  "objective": "Fix the structured CLI builder"\n}',
+      ],
+      [{ issue: { number: 42 } }, "Implement the governed GitHub issue #42 described in Scope."],
+    ];
+
+    for (const [scope, objective] of objectives) {
+      expect(composedPrompt(bundle({ scope }))).toContain(`## Run objective\n${objective}`);
+    }
+  });
+
+  it("keeps conversation messages in their conversation section", () => {
+    const prompt = composedPrompt(
+      bundle({ scope: { type: "conversation", message: "Continue the discussion" } }),
+    );
+
+    expect(prompt).toContain("## Conversation\nContinue the discussion");
+    expect(prompt).not.toContain("## Run objective");
   });
 });
 

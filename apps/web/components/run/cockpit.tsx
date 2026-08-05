@@ -1,5 +1,6 @@
 "use client";
 
+import { isBuilderMode, runObjectiveText } from "@facility/run-objective";
 import { Button, Cell, cx, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } from "@facility/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RunTranscript } from "@/components/run/transcript";
@@ -436,13 +437,28 @@ export function RunCockpit({
 
   async function retryRun() {
     if (!window.confirm("Retry this run with the same project and agent?")) return;
+    const trigger: Record<string, unknown> = {
+      ...(run.trigger ?? {}),
+      source: "web",
+      retryOf: run.id,
+    };
+    if (isBuilderMode(run.mode) && !runObjectiveText(trigger)) {
+      const objective = window.prompt("Retry this builder — what should it do?");
+      if (objective === null) return;
+      const message = objective.trim();
+      if (!message) {
+        setAction({ tone: "bad", message: "an objective is required to retry this builder" });
+        return;
+      }
+      trigger.message = message;
+    }
     setBusy("retry");
     setAction(null);
     try {
       const body: Record<string, unknown> = {
         mode: run.mode,
         engine: run.engine,
-        trigger: { ...(run.trigger ?? {}), source: "web", retryOf: run.id },
+        trigger,
       };
       if (run.agentDefId) body.agentDefId = run.agentDefId;
       else {

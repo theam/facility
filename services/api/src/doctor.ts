@@ -350,7 +350,7 @@ async function checkSandboxRunner(db: Db, config: AppConfig, orgId: string): Pro
             "sandbox_runner",
             "Sandbox runner image",
             `The runner image "${runnerImage}" is not present on the Docker daemon; the first platform-lane run will try to pull it.`,
-            `Pre-build or pull it (e.g. \`docker build -t ${runnerImage} runner/\`) — a local-only tag or an unreachable registry will fail that pull.`,
+            `Pre-build or pull it (e.g. \`docker build -f runner/Dockerfile -t ${runnerImage} .\`) — a local-only tag or an unreachable registry will fail that pull.`,
           );
         }
       } catch {

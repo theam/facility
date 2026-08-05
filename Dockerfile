@@ -25,6 +25,7 @@ COPY packages/db/package.json packages/db/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/mcp/package.json packages/mcp/
 COPY packages/harness/package.json packages/harness/
+COPY packages/run-objective/package.json packages/run-objective/
 COPY services/api/package.json services/api/
 COPY services/gateway/package.json services/gateway/
 RUN pnpm install --frozen-lockfile --filter '@facility/core...' \

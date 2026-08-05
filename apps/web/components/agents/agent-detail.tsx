@@ -1,5 +1,6 @@
 "use client";
 
+import { isBuilderMode } from "@facility/run-objective";
 import {
   Button,
   Divider,
@@ -104,12 +105,23 @@ export function AgentDetail(props: Props) {
   }
 
   async function runNow() {
+    const trigger: Record<string, unknown> = { type: "manual", source: "agent-page" };
+    if (isBuilderMode(agent.name)) {
+      const objective = window.prompt(`Run ${agent.name} — what should it do?`);
+      if (objective === null) return;
+      const message = objective.trim();
+      if (!message) {
+        setNote({ scope: "run", text: "an objective is required to start this builder" });
+        return;
+      }
+      trigger.message = message;
+    }
     setBusy("run");
     setNote(null);
     const res = await clientApi<{ id: string }>("POST", `/v1/projects/${projectId}/runs`, {
       agentDefId: agent.id,
       mode: agent.name,
-      trigger: { type: "manual", source: "agent-page" },
+      trigger,
     });
     setBusy(null);
     if (!res.ok) return setNote({ scope: "run", text: res.message });
