@@ -23,6 +23,7 @@ import {
 } from "../src/crypto.js";
 import { diffManifest, manifestFor } from "../src/fingerprints.js";
 import { newId } from "../src/ids.js";
+import { allowedModelsForEngine, CLAUDE_CODE_MODEL_POLICY_VERSION } from "../src/models.js";
 import { can } from "../src/permissions.js";
 import { costCents } from "../src/pricing.js";
 import { validateProviderBaseUrl } from "../src/provider-url.js";
@@ -35,6 +36,49 @@ import {
 import { renderFacilityInit } from "../src/render.js";
 
 const masterKey = Buffer.alloc(32, 7).toString("base64");
+
+describe("run-scoped model policy", () => {
+  it("expands Claude Code's hybrid model into its concrete wire models", () => {
+    expect(allowedModelsForEngine("claude_code", { model: "opusplan" })).toEqual([
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+    ]);
+  });
+
+  it("matches every alias emitted by Claude Code 2.1.215 through a custom base URL", () => {
+    expect(allowedModelsForEngine("claude_code", { model: "opus" })).toEqual(["claude-opus-4-8"]);
+    expect(allowedModelsForEngine("claude_code", { model: "opus48" })).toEqual(["opus48"]);
+    expect(allowedModelsForEngine("claude_code", { model: "sonnet" })).toEqual(["claude-sonnet-5"]);
+    expect(allowedModelsForEngine("claude_code", { model: "sonnet46" })).toEqual(["sonnet46"]);
+    expect(allowedModelsForEngine("claude_code", { model: "haiku" })).toEqual([
+      "claude-haiku-4-5-20251001",
+    ]);
+    expect(allowedModelsForEngine("claude_code", { model: "haiku45" })).toEqual(["haiku45"]);
+    expect(allowedModelsForEngine("claude_code", { model: "fable" })).toEqual(["claude-fable-5"]);
+    expect(allowedModelsForEngine("claude_code", { model: "fable5" })).toEqual(["fable5"]);
+  });
+
+  it("restricts Codex primary models and preserves exact model ids", () => {
+    expect(allowedModelsForEngine("codex", { primary: "gpt-5.6-sol" })).toEqual(["gpt-5.6-sol"]);
+    expect(allowedModelsForEngine("claude_code", { model: "claude-fable-5" })).toEqual([
+      "claude-fable-5",
+    ]);
+    expect(allowedModelsForEngine("claude_code", { model: "future-alias" })).toEqual([
+      "future-alias",
+    ]);
+  });
+
+  it("leaves BYO routing unrestricted even when its command has model metadata", () => {
+    expect(
+      allowedModelsForEngine("byo", { model: "metadata-model", primary: "metadata-primary" }),
+    ).toBeUndefined();
+  });
+
+  it("fails CI when the pinned Claude Code version changes without reviewing its alias map", () => {
+    const dockerfile = readFileSync(new URL("../../../runner/Dockerfile", import.meta.url), "utf8");
+    expect(dockerfile).toContain(`@anthropic-ai/claude-code@${CLAUDE_CODE_MODEL_POLICY_VERSION}`);
+  });
+});
 
 describe("ids", () => {
   it("creates prefixed uuidv7 ids", () => {

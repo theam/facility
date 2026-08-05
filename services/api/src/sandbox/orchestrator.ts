@@ -1,4 +1,5 @@
 import {
+  allowedModelsForEngine,
   type FacilityReceipt,
   FacilityReceiptSchema,
   generateApiKey,
@@ -74,8 +75,11 @@ type FinishRunDeps = {
   githubClientFactory?: GithubClientFactory;
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>;
 };
+type DispatchRunDeps = {
+  sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
+};
 
-export async function dispatchRun(config: AppConfig, job: DispatchJob) {
+export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: DispatchRunDeps = {}) {
   if (!job.runId || !job.orgId) throw new Error("runs.dispatch requires runId and orgId");
   const { db, client } = createDb(config.databaseUrl);
   // Track credentials + the launched sandbox as they come into existence so a
@@ -108,7 +112,7 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob) {
       prefix: virtualKey.lookup,
       last4: virtualKey.last4,
       hash: virtualKey.hash,
-      allowedModels: modelNames(bundle.engineConfig),
+      allowedModels: allowedModelsForEngine(bundle.engine, bundle.engineConfig),
       expiresAt: new Date(Date.now() + bundle.timeoutMin * 60_000),
     });
     // Track the moment it exists — before any further step that could throw.
@@ -141,7 +145,7 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob) {
 
     const runnerToken = `frt_${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
     const driverName = normalizeDriver(profile.driver);
-    const driver = await sandboxDriver(driverName);
+    const driver = await (deps.sandboxDriver ?? sandboxDriver)(driverName);
     const launchSpec: LaunchSpec = {
       runId: run.id,
       image: profile.image,
@@ -2027,11 +2031,6 @@ function command(value: unknown) {
   return Array.isArray(candidate)
     ? candidate.filter((item): item is string => typeof item === "string")
     : undefined;
-}
-
-function modelNames(value: Record<string, unknown>) {
-  const model = value.model;
-  return typeof model === "string" ? [model] : undefined;
 }
 
 function objectOrEmpty(value: unknown): Record<string, unknown> {

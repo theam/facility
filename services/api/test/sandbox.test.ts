@@ -10,10 +10,12 @@ import {
   migrate,
   projects,
   registryItems,
+  registryVersions,
   repos,
   roles,
   runEvents,
   runs,
+  sandboxProfiles,
   seed,
   virtualKeys,
 } from "@facility/db";
@@ -24,7 +26,8 @@ import { buildApp } from "../src/app.js";
 import { verifyStoredReceipts } from "../src/receipt-integrity.js";
 import { AwsSandboxDriver } from "../src/sandbox/aws.js";
 import { DockerSandboxDriver } from "../src/sandbox/docker.js";
-import { finishRun, reconcileSandboxes } from "../src/sandbox/orchestrator.js";
+import type { SandboxDriver } from "../src/sandbox/driver.js";
+import { dispatchRun, finishRun, reconcileSandboxes } from "../src/sandbox/orchestrator.js";
 import { appendRunEvents } from "../src/sandbox/state.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -134,6 +137,124 @@ describe("sandbox api", async () => {
         throw { statusCode: 500, message: "daemon boom" };
       }).imageExists("runner:dev"),
     ).rejects.toMatchObject({ statusCode: 500 });
+  });
+
+  it("dispatch persists engine-specific model policy on each run key", async () => {
+    const suffix = Date.now();
+    const contract = (
+      await db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          scope: "project",
+          projectId,
+          kind: "agent_contract",
+          name: `model-policy-${suffix}`,
+          latestVersion: 1,
+        })
+        .returning()
+    )[0];
+    if (!contract) throw new Error("model policy contract fixture missing");
+    await db.insert(registryVersions).values({
+      id: newId("ver"),
+      orgId,
+      itemId: contract.id,
+      version: 1,
+      content: "Exercise the configured model.",
+      contentHash: `model-policy-${suffix}`,
+      status: "active",
+    });
+    const profile = (
+      await db
+        .insert(sandboxProfiles)
+        .values({
+          id: newId("sbx"),
+          orgId,
+          projectId,
+          name: `model-policy-${suffix}`,
+          driver: "docker",
+          image: "facility-runner:test",
+          resources: { timeout_min: 5 },
+        })
+        .returning()
+    )[0];
+    if (!profile) throw new Error("model policy sandbox fixture missing");
+
+    const driver: SandboxDriver = {
+      name: "docker",
+      launch: async (spec) => ({ ref: `fake-${spec.runId}` }),
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+    const cases = [
+      {
+        name: "claude",
+        engine: "claude_code",
+        model: { model: "opusplan" },
+        expected: ["claude-opus-4-8", "claude-sonnet-5"],
+      },
+      {
+        name: "codex",
+        engine: "codex",
+        model: { primary: "gpt-5.6-sol" },
+        expected: ["gpt-5.6-sol"],
+      },
+      {
+        name: "byo",
+        engine: "byo",
+        model: { model: "metadata-only", cmd: "true" },
+        expected: null,
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      const agent = (
+        await db
+          .insert(agentDefs)
+          .values({
+            id: newId("agent"),
+            orgId,
+            projectId,
+            name: `model-policy-${fixture.name}-${suffix}`,
+            engine: fixture.engine,
+            model: fixture.model,
+            contractItemId: contract.id,
+            sandboxProfileId: profile.id,
+            triggers: [],
+            permissions: [],
+            enabled: true,
+          })
+          .returning()
+      )[0];
+      if (!agent) throw new Error(`${fixture.name} agent fixture missing`);
+      const run = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId,
+            agentDefId: agent.id,
+            mode: "custom",
+            engine: fixture.engine,
+            trigger: {},
+            createdBy: { type: "user", id: "model-policy-test" },
+          })
+          .returning()
+      )[0];
+      if (!run) throw new Error(`${fixture.name} run fixture missing`);
+
+      await dispatchRun(config, { runId: run.id, orgId }, { sandboxDriver: async () => driver });
+
+      const [key] = await db
+        .select({ allowedModels: virtualKeys.allowedModels })
+        .from(virtualKeys)
+        .where(eq(virtualKeys.runId, run.id));
+      expect(key?.allowedModels).toEqual(fixture.expected);
+    }
   });
 
   it("appendRunEvents allocates contiguous seqs under concurrent appends", async () => {

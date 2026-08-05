@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, constants as fsConstants } from "node:fs";
 import {
   appendFile,
   chmod,
@@ -10,6 +10,7 @@ import {
   open,
   readdir,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -359,6 +360,7 @@ async function runEngine(bundle: RunBundle, startedAt: number) {
   if (interruptRequested) return 130;
   if (bundle.engine === "claude_code") {
     const restored = await restoreSessionState(bundle);
+    await trustClaudeWorkspace(cwdFor(bundle));
     const args = buildClaudeCodeArgs(bundle, restored);
     addModelFlags(args, bundle.engineConfig);
     return runJsonProcess(
@@ -1821,6 +1823,44 @@ export function engineEnv() {
   // which are separately authorized and cannot touch run lifecycle.)
   delete env.RUNNER_TOKEN;
   return env;
+}
+
+/**
+ * Trust only Facility's ephemeral workspace so Claude Code honors the checked-in
+ * project settings and guards without an interactive first-run dialog.
+ *
+ * Provisioning runs before the engine and is untrusted, so replace any path it
+ * left behind with an exclusive, no-follow create. A raced path fails closed
+ * instead of letting the lifecycle process overwrite a symlink target as root.
+ */
+export async function trustClaudeWorkspace(
+  workspace: string,
+  home = workRoot,
+  identity = untrustedSpawnIdentity(),
+) {
+  const configPath = join(home, ".claude.json");
+  const trustedWorkspace = await realpath(workspace);
+  await rm(configPath, { force: true });
+  const handle = await open(
+    configPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await handle.writeFile(
+      `${JSON.stringify({ projects: { [trustedWorkspace]: { hasTrustDialogAccepted: true } } })}\n`,
+    );
+    // Keep ownership and mode changes bound to the descriptor opened with
+    // O_NOFOLLOW. A path-based chown/chmod after close would let an untrusted
+    // background process swap in a symlink between those operations.
+    if (identity.uid !== undefined && identity.gid !== undefined) {
+      await handle.chown(identity.uid, identity.gid);
+    }
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
+  return configPath;
 }
 
 export function untrustedSpawnIdentity(getuid: (() => number) | undefined = process.getuid): {

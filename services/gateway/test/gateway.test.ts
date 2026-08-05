@@ -1,4 +1,4 @@
-import { generateApiKey, newId, seal } from "@facility/core";
+import { allowedModelsForEngine, generateApiKey, newId, seal } from "@facility/core";
 import type { FacilityDb } from "@facility/db";
 import {
   budgets,
@@ -446,7 +446,65 @@ describe("gateway", async () => {
     await waitForRequestCount(1);
   });
 
-  it("6b. unpriced models fail closed before upstream unless the key is explicit zero-cost", async () => {
+  it("6a. Claude Code opusplan keys admit only the concrete hybrid wire models", async () => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      allowedModels: allowedModelsForEngine("claude_code", { model: "opusplan" }),
+    });
+    expect(
+      (
+        await postAnthropic(setup.secret, {
+          model: "claude-opus-4-8",
+          messages: [],
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await postAnthropic(setup.secret, {
+          model: "claude-sonnet-5",
+          messages: [],
+        })
+      ).status,
+    ).toBe(200);
+    const denied = await postAnthropic(setup.secret, {
+      model: "claude-haiku-4-5",
+      messages: [],
+    });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ error: { type: "blocked_policy" } });
+    expect(stubState.anthropicCalls).toBe(2);
+  });
+
+  it("6b. Codex primary keys admit only their exact wire model", async () => {
+    const setup = await setupVirtualKey({
+      provider: "openai",
+      baseUrl: `${stubOrigin}/openai/v1`,
+      allowedModels: allowedModelsForEngine("codex", { primary: "gpt-5.6-sol" }),
+    });
+    expect((await postOpenAi(setup.secret, { model: "gpt-5.6-sol", messages: [] })).status).toBe(
+      200,
+    );
+    const denied = await postOpenAi(setup.secret, { model: "gpt-5.5", messages: [] });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ error: { type: "blocked_policy" } });
+    expect(stubState.openaiCalls).toBe(1);
+  });
+
+  it("6c. BYO model metadata does not restrict gateway routing", async () => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      allowedModels: allowedModelsForEngine("byo", { model: "metadata-only" }),
+    });
+    expect(
+      (await postAnthropic(setup.secret, { model: "claude-sonnet-5", messages: [] })).status,
+    ).toBe(200);
+    expect(stubState.anthropicCalls).toBe(1);
+  });
+
+  it("6d. unpriced models fail closed before upstream unless the key is explicit zero-cost", async () => {
     const blocked = await setupVirtualKey({
       provider: "anthropic",
       baseUrl: `${stubOrigin}/anthropic/v1`,

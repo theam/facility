@@ -1,5 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +34,7 @@ import {
   runPackageInstall,
   semanticDeliveryBranch,
   terminateChild,
+  trustClaudeWorkspace,
 } from "../src/index.js";
 import type { RunBundle } from "../src/types.js";
 
@@ -49,6 +59,42 @@ function bundle(overrides: Partial<RunBundle> = {}): RunBundle {
 }
 
 describe("workspace preparation", () => {
+  it("writes scoped Claude trust without following an untrusted config symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-claude-trust-"));
+    const repo = join(root, "repo");
+    const protectedPath = join(root, "protected");
+    await mkdir(repo);
+    await writeFile(protectedPath, "do not replace\n");
+    await symlink(protectedPath, join(root, ".claude.json"));
+    const identity = {
+      uid: process.getuid?.() ?? 1000,
+      gid: process.getgid?.() ?? 1000,
+    };
+
+    const configPath = await trustClaudeWorkspace(repo, root, identity);
+
+    await expect(readFile(protectedPath, "utf8")).resolves.toBe("do not replace\n");
+    await expect(readFile(configPath, "utf8").then(JSON.parse)).resolves.toEqual({
+      projects: { [await realpath(repo)]: { hasTrustDialogAccepted: true } },
+    });
+    const info = await lstat(configPath);
+    expect(info.isFile()).toBe(true);
+    expect(info.isSymbolicLink()).toBe(false);
+    expect(info.mode & 0o777).toBe(0o600);
+    expect(info.uid).toBe(identity.uid);
+    expect(info.gid).toBe(identity.gid);
+  });
+
+  it("fails closed when an untrusted process occupies the config path with a directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-claude-trust-denied-"));
+    const repo = join(root, "repo");
+    await mkdir(repo);
+    await mkdir(join(root, ".claude.json"));
+
+    await expect(trustClaudeWorkspace(repo, root, {})).rejects.toThrow();
+    expect((await lstat(join(root, ".claude.json"))).isDirectory()).toBe(true);
+  });
+
   it("never exposes package registry credentials to the engine environment", () => {
     const original = process.env.NODE_AUTH_TOKEN;
     const originalUpperConfig = process.env.NPM_CONFIG_USERCONFIG;

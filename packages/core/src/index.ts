@@ -3,6 +3,7 @@ export * from "./crypto.js";
 export * from "./detect.js";
 export * from "./fingerprints.js";
 export * from "./ids.js";
+export * from "./models.js";
 export * from "./object-store.js";
 export * from "./permissions.js";
 export * from "./pricing.js";
