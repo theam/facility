@@ -95,6 +95,9 @@ locals {
     { name = "PUBLIC_URL", value = local.public_urls.api },
     { name = "WEB_URL", value = local.public_urls.web },
     { name = "FACILITY_PREVIEW_URL", value = local.public_urls.preview },
+    # API and worker can both dispatch/reconcile sandboxes. They must derive the
+    # same ownership namespace when an operator pins a stable instance id.
+    { name = "FACILITY_INSTANCE_ID", value = var.facility_instance_id },
     { name = "GATEWAY_URL", value = "http://${aws_service_discovery_service.gateway.name}.${aws_service_discovery_private_dns_namespace.facility.name}:${local.ports.gateway}" },
     { name = "SANDBOX_GATEWAY_URL", value = "http://${aws_service_discovery_service.gateway.name}.${aws_service_discovery_private_dns_namespace.facility.name}:${local.ports.gateway}" },
   ])

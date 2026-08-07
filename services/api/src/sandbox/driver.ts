@@ -2,6 +2,10 @@ export type SandboxDriverName = "docker" | "aws";
 
 export type LaunchSpec = {
   runId: string;
+  // Opaque control-plane ownership boundary for shared Docker daemons. Docker
+  // uses it as a label; managed-cloud drivers already isolate by project/task.
+  namespace?: string;
+  kind?: "run" | "preview";
   image: string;
   env: Record<string, string>;
   // Trusted control-plane partition for provider-managed dependency caches.

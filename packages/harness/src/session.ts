@@ -4,7 +4,6 @@ export type HarnessSessionInput = {
   chain: ArtifactChainConfig;
   charterMd: string;
   activeMd: string;
-  apiBaseUrl: string;
   runId: string;
   /** Agent mode of the run this bundle is for — gates mode-specific tool docs. */
   mode?: string;
@@ -56,7 +55,7 @@ Conclusions must land in the KB before the session ends. A terminal successful r
 }
 
 function toolsMd(input: HarnessSessionInput) {
-  const base = input.apiBaseUrl.replace(/\/$/, "");
+  const base = "$FACILITY_API_URL";
   return `# Platform Tool Notes
 
 Authenticate with the run's platform key: send \`Authorization: Bearer $FACILITY_PLATFORM_KEY\`
@@ -85,7 +84,7 @@ ${productOwnerToolsMd(input)}`;
 
 function productOwnerToolsMd(input: HarnessSessionInput) {
   if (input.mode !== "project-owner") return "";
-  const base = input.apiBaseUrl.replace(/\/$/, "");
+  const base = "$FACILITY_API_URL";
   return `
 ## Product Owner Tools
 

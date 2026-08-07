@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   assertLocalDatabaseUrl,
   assertSupportedNode,
+  developmentServiceEnvironment,
   prepareDevEnv,
   setEnvIfBlank,
   usesLocalStorage,
@@ -222,6 +223,25 @@ test("an exported S3 endpoint overrides the env file and selects external storag
 test("requires Node.js 22 or newer", () => {
   assert.doesNotThrow(() => assertSupportedNode("22.0.0"));
   assert.throws(() => assertSupportedNode("21.7.3"), /Node\.js 22 or newer is required/);
+});
+
+test("development services use the compose network unless the operator selects one", () => {
+  const prepared = {
+    databaseUrl: "postgres://facility:facility@localhost:5461/facility_e2e",
+    devOrigins: "tunnel.example.dev",
+  };
+  assert.deepEqual(developmentServiceEnvironment(prepared, { KEEP: "yes" }), {
+    KEEP: "yes",
+    DATABASE_URL: prepared.databaseUrl,
+    FACILITY_DEV_ORIGINS: "tunnel.example.dev",
+    FACILITY_SANDBOX_DOCKER_NETWORK: "facility-dev_default",
+  });
+  assert.equal(
+    developmentServiceEnvironment(prepared, {
+      FACILITY_SANDBOX_DOCKER_NETWORK: "custom-runner-network",
+    }).FACILITY_SANDBOX_DOCKER_NETWORK,
+    "custom-runner-network",
+  );
 });
 
 test("surfaces the development origins so the web server can receive them", async () => {

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { createObjectStore, type ObjectStoreFetch, signS3Request } from "../src/object-store.js";
+import {
+  createObjectStore,
+  type ObjectStoreFetch,
+  resolveObjectStoreCredentials,
+  signS3Request,
+} from "../src/object-store.js";
 
 type CapturedRequest = {
   url: string;
@@ -28,6 +33,23 @@ afterEach(() => {
 });
 
 describe("object store", () => {
+  it("does not combine explicit S3 credentials with an ambient AWS session token", async () => {
+    process.env.AWS_SESSION_TOKEN = "expired-aws-session-token";
+
+    await expect(
+      resolveObjectStoreCredentials({
+        s3Bucket: "facility-test",
+        s3Endpoint: "http://127.0.0.1:9000",
+        s3AccessKey: "minio-access",
+        s3SecretKey: "minio-secret",
+        awsRegion: "us-east-1",
+      }),
+    ).resolves.toEqual({
+      accessKeyId: "minio-access",
+      secretAccessKey: "minio-secret",
+    });
+  });
+
   it("creates deterministic SigV4 headers with the expected structure", () => {
     const body = Buffer.from("fixed body");
     const headers = signS3Request({

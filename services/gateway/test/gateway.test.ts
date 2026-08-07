@@ -53,6 +53,18 @@ describe("gateway operational contract", () => {
     }
   });
 
+  it("answers the Claude Code base-url compatibility probe without provider work", async () => {
+    const app = await buildApp(baseConfig, { db: healthDb(async () => undefined) });
+    try {
+      const response = await app.inject({ method: "HEAD", url: "/anthropic" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["x-request-id"]).toBeTruthy();
+      expect(response.body).toBe("");
+    } finally {
+      await app.close();
+    }
+  });
+
   it.each([
     "/health",
     "/readyz",

@@ -16,6 +16,7 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import { sandboxNamespace } from "../src/sandbox/cache.js";
 import { DockerSandboxDriver } from "../src/sandbox/docker.js";
 import { dispatchRun } from "../src/sandbox/orchestrator.js";
 import type { AppConfig } from "../src/types.js";
@@ -23,6 +24,7 @@ import type { AppConfig } from "../src/types.js";
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_sbx";
 const masterKey = Buffer.alloc(32, 7).toString("base64");
+const dockerNamespace = sandboxNamespace({ databaseUrl, secretMasterKey: masterKey });
 
 describe("sandbox docker e2e", () => {
   if (process.env.FACILITY_E2E_DOCKER !== "1") {
@@ -285,7 +287,7 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number) {
 }
 
 async function containersFor(runId: string) {
-  return (await new DockerSandboxDriver().listFacilityContainers()).filter(
+  return (await new DockerSandboxDriver().listFacilityContainers(dockerNamespace)).filter(
     (container) => container.runId === runId,
   );
 }

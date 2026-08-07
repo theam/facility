@@ -20,6 +20,19 @@ afterEach(async () => {
 });
 
 describe("restricted Docker API", () => {
+  test("seeds Corepack into ephemeral run storage instead of the persistent package cache", async () => {
+    const runnerRoot = fileURLToPath(new URL("..", import.meta.url));
+    const [dockerfile, entrypoint] = await Promise.all([
+      readFile(join(runnerRoot, "Dockerfile"), "utf8"),
+      readFile(join(runnerRoot, "runner-entrypoint.sh"), "utf8"),
+    ]);
+    expect(dockerfile).toContain(
+      "COREPACK_HOME=/opt/facility-corepack corepack install --global --cache-only",
+    );
+    expect(entrypoint).toContain('export COREPACK_HOME="$XDG_CACHE_HOME/node/corepack"');
+    expect(entrypoint).toContain('cp -a /opt/facility-corepack/. "$COREPACK_HOME/"');
+  });
+
   test("pins package-store integrity for project-scoped CodeBuild caches", async () => {
     const script = await readFile(
       join(fileURLToPath(new URL("..", import.meta.url)), "codebuild-runner.sh"),

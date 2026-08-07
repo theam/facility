@@ -139,6 +139,14 @@ async function canConnect() {
   }
 }
 
+function repositoryApiWithoutFacilityManifest() {
+  return {
+    getContent: async () => {
+      throw Object.assign(new Error("Not Found"), { status: 404 });
+    },
+  };
+}
+
 describe("github platform lane", async () => {
   const reachable = await canConnect();
   if (!reachable) {
@@ -2422,7 +2430,21 @@ describe("github platform lane", async () => {
               return { data: { assignees: [{ login: "platform-owner" }] } };
             },
           },
-          repos: {},
+          repos: {
+            getContent: async () => ({
+              data: {
+                type: "file",
+                encoding: "base64",
+                content: Buffer.from(
+                  JSON.stringify({
+                    packageInstall: "pnpm install --frozen-lockfile",
+                    checks: ["pnpm verify"],
+                    executionLane: { architect: "platform", builder: "platform" },
+                  }),
+                ).toString("base64"),
+              },
+            }),
+          },
           git: {},
           pulls: {},
         },
@@ -2483,6 +2505,12 @@ describe("github platform lane", async () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().gh.issueNumber).toBe(44);
+    const [manifestSyncedRepo] = await db.select().from(repos).where(eq(repos.id, repo.id));
+    expect(manifestSyncedRepo?.renderAnswers).toMatchObject({
+      packageInstallCmd: "pnpm install --frozen-lockfile",
+      checkCmds: ["pnpm verify"],
+      execution_lane: { architect: "platform", builder: "platform" },
+    });
     expect(response.json().trigger.request).toEqual({
       title: "Deliver complete error states",
       body: "Update agencies and people detail routes.",
@@ -2531,7 +2559,7 @@ describe("github platform lane", async () => {
             addAssignees: async () => ({ data: { assignees: [] } }),
             createComment: async () => ({ data: { id: 2 } }),
           },
-          repos: {},
+          repos: repositoryApiWithoutFacilityManifest(),
           git: {},
           pulls: {},
         },
@@ -2578,7 +2606,7 @@ describe("github platform lane", async () => {
             },
             createComment: async () => ({ data: { id: 3 } }),
           },
-          repos: {},
+          repos: repositoryApiWithoutFacilityManifest(),
           git: {},
           pulls: {},
         },
@@ -2652,7 +2680,7 @@ describe("github platform lane", async () => {
             },
             listComments: async () => ({ data: [] }),
           },
-          repos: {},
+          repos: repositoryApiWithoutFacilityManifest(),
           git: {},
           pulls: {},
         },

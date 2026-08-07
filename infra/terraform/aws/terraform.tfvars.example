@@ -24,6 +24,8 @@ auth_identity_provider = "github"
 # Optional. When set, only active members of this GitHub organization may sign in.
 github_oauth_allowed_organization = ""
 oidc_issuer             = ""
+# Recommended for every long-lived stack so sandbox ownership survives a
+# database endpoint move; required to match the registered commercial OIDC id.
 facility_instance_id    = ""
 
 # Local/bootstrap provider fallback only. Production gateways should load

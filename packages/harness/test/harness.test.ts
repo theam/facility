@@ -93,11 +93,14 @@ it("builds session recovery bundle text", () => {
     chain: researchChain,
     charterMd: "## Blocked Stop Condition\n",
     activeMd: "## Objective\n\n## Next Step\n\n## Blocker\n\n## Links\n",
-    apiBaseUrl: "http://localhost:4400",
     runId: "run_1",
   });
   expect(bundle.files["harness/SESSION.md"]).toContain("Session recovery");
   expect(bundle.files["harness/SESSION.md"]).toContain("ACTIVE is capped");
+  expect(bundle.files["harness/TOOLS.md"]).toContain(
+    "POST $FACILITY_API_URL/v1/projects/:projectId/kb/entries?dry=1",
+  );
+  expect(bundle.files["harness/TOOLS.md"]).not.toContain("localhost");
 });
 
 function activeSpace(overrides: Partial<Parameters<typeof validate>[0]["space"]> = {}) {

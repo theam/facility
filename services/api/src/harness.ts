@@ -11,7 +11,6 @@ import {
   validate,
 } from "@facility/harness";
 import { and, eq } from "drizzle-orm";
-import type { AppConfig } from "./types.js";
 
 type Db = ReturnType<typeof createDb>["db"];
 
@@ -194,16 +193,18 @@ export function ensureActive(activeMd: string, refs: string[]) {
 
 export function harnessFragmentForBundle(input: {
   space: typeof kbSpaces.$inferSelect | undefined;
-  config: AppConfig;
+  harnessItemId: string | null | undefined;
   runId: string;
   mode?: string;
 }) {
-  if (!input.space) return undefined;
+  // A KB space exists for every initialized project, but only agents with an
+  // explicit harness receive its mandatory session protocol. This predicate
+  // intentionally matches runUsesHarness(), which owns the terminal KB gate.
+  if (!input.space || !input.harnessItemId) return undefined;
   return buildHarnessBundle({
     chain: chainFromConfig(input.space.config),
     charterMd: input.space.charterMd,
     activeMd: input.space.activeMd,
-    apiBaseUrl: input.config.publicUrl,
     runId: input.runId,
     mode: input.mode,
   });

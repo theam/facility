@@ -30,6 +30,7 @@ export type RunBundle = {
     sessionStateFrom: string;
     prompt: string;
     branch?: string;
+    fallbackScope?: Record<string, unknown>;
   };
 };
 

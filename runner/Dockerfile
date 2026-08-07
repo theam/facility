@@ -87,6 +87,16 @@ RUN cd /opt/facility-agent-clis \
 # writable /work.
 RUN corepack enable
 
+# Seed the repository's pinned package-manager release into an immutable image
+# layer. The entrypoint copies this trusted seed into each sandbox's ephemeral
+# tmpfs; repositories pinning another release can still download it for that run,
+# but no executable Corepack cache persists into the next run.
+COPY package.json /tmp/facility-root-package.json
+RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packageManager")" \
+  && COREPACK_HOME=/opt/facility-corepack corepack install --global --cache-only "$package_manager" \
+  && chmod -R a-w /opt/facility-corepack \
+  && rm -f /tmp/facility-root-package.json
+
 WORKDIR /app
 COPY --from=bind-broker-build /facility-bind-broker /usr/local/bin/facility-bind-broker
 COPY runner/package.json runner/package-lock.json runner/tsconfig.json ./
@@ -98,7 +108,7 @@ RUN npm ci && npm run build && npm prune --omit=dev
 
 # Run non-root: agent CLIs (Claude Code) refuse bypass-permissions as root, and
 # a rogue agent process should never hold uid 0.
-RUN mkdir -p /work \
+RUN mkdir -p /work/.facility-package-cache \
   && chown -R node:node /work \
   && chown -R root:root /app \
   && chmod -R a-w /app \

@@ -203,7 +203,6 @@ export async function resolveObjectStoreCredentials(
     return {
       accessKeyId: configAccessKey,
       secretAccessKey: configSecretKey,
-      sessionToken: process.env.AWS_SESSION_TOKEN,
     };
   }
 

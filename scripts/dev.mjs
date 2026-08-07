@@ -171,6 +171,20 @@ export function assertSupportedNode(version = process.versions.node) {
   }
 }
 
+export function developmentServiceEnvironment(prepared, base = process.env) {
+  const environment = { ...base, DATABASE_URL: prepared.databaseUrl };
+  if (prepared.devOrigins) environment.FACILITY_DEV_ORIGINS = prepared.devOrigins;
+  // docker-compose.dev.yml has the stable project name `facility-dev`. The
+  // seeded runner profiles are fail-closed (`egress=restricted`), so leaving
+  // this blank gives sandboxes NetworkMode=none and they cannot complete their
+  // authenticated API/gateway handshake. Preserve an explicit operator
+  // network, but make the normal `pnpm dev` path work without hidden setup.
+  if (!environment.FACILITY_SANDBOX_DOCKER_NETWORK?.trim()) {
+    environment.FACILITY_SANDBOX_DOCKER_NETWORK = "facility-dev_default";
+  }
+  return environment;
+}
+
 export function run(
   command,
   args,
@@ -198,8 +212,7 @@ export async function startDevelopment(root = repoRoot) {
   console.log("\nFacility development\n");
 
   const prepared = await prepareDevEnv(root);
-  const environment = { ...process.env, DATABASE_URL: prepared.databaseUrl };
-  if (prepared.devOrigins) environment.FACILITY_DEV_ORIGINS = prepared.devOrigins;
+  const environment = developmentServiceEnvironment(prepared);
   if (prepared.created) console.log("✓ Created .env from .env.example");
   if (prepared.filled.includes("DATABASE_URL"))
     console.log("✓ Added the local development database URL");

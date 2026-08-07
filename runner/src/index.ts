@@ -64,6 +64,7 @@ let engineSessionId: string | null = null;
 let activeEngineChild: ReturnType<typeof spawn> | null = null;
 let clearInterruptEscalation: (() => void) | null = null;
 let interruptRequested = false;
+let engineEventTransportDegraded = false;
 
 // Secret values injected into the run (virtual key, platform key, runner token,
 // repo clone token) that must never surface in captured check output persisted to
@@ -206,6 +207,14 @@ async function main() {
             },
           },
         ]);
+      }
+      if (engineEventTransportDegraded) {
+        await emit([
+          {
+            type: "artifact_error",
+            data: { kind: "engine_events_degraded" },
+          },
+        ]).catch(() => undefined);
       }
       await uploadTranscript();
       await uploadSessionState(activeBundle);
@@ -589,11 +598,20 @@ async function runJsonProcess(
       const sessionId = parseSessionId(line);
       if (sessionId) {
         engineSessionId = sessionId;
-        await emit([{ type: "session", data: { engine_session_id: sessionId } }]);
+        if (
+          !(await emitEngineEventsBestEffort(
+            [{ type: "session", data: { engine_session_id: sessionId } }],
+            emit,
+          ))
+        ) {
+          engineEventTransportDegraded = true;
+        }
       }
     }
     const event = parse(line);
-    if (event) await emit([event]);
+    if (event && !(await emitEngineEventsBestEffort([event], emit))) {
+      engineEventTransportDegraded = true;
+    }
   }
   const code = await exitCode(child);
   if (activeEngineChild === child) activeEngineChild = null;
@@ -865,7 +883,7 @@ export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boo
   const args =
     bundle.resume && restoredSessionState
       ? ["-p", bundle.resume.prompt, "--resume", bundle.resume.sessionId]
-      : ["-p", composedPrompt(bundle)];
+      : ["-p", resumeRecoveryPrompt(bundle)];
   args.push(
     "--output-format",
     "stream-json",
@@ -876,6 +894,27 @@ export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boo
     "500",
   );
   return args;
+}
+
+export function resumeRecoveryPrompt(bundle: RunBundle) {
+  const fallbackScope = bundle.resume?.fallbackScope;
+  if (!fallbackScope) return composedPrompt(bundle);
+  const priorPrompt = composedPrompt({ ...bundle, scope: fallbackScope });
+  return `${priorPrompt}\n\n## Resume recovery\nThe prior Claude session state from run ${bundle.resume?.sessionStateFrom} was unavailable. Continue from the governed objective above without assuming unrecorded prior work.\n\n## Resume instruction\n${bundle.resume?.prompt}`;
+}
+
+export async function emitEngineEventsBestEffort(
+  events: RunEvent[],
+  send: (events: RunEvent[]) => Promise<unknown>,
+) {
+  try {
+    await send(events);
+    return true;
+  } catch {
+    // Stream events are live observability, not the execution boundary. The
+    // complete local JSONL transcript and final /result remain authoritative.
+    return false;
+  }
 }
 
 type ControlMessage = { id: string; body: string; kind?: string };

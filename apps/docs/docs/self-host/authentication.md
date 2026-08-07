@@ -49,7 +49,16 @@ DATABASE_URL=postgres://... facility instance bootstrap \
 ```
 
 The command connects directly to PostgreSQL, is idempotent for the exact same binding, and refuses
-to modify a database containing a different instance.
+to modify a database containing a different instance. When you run the source
+CLI rather than the API image's one-shot operator command, reconcile the new
+organization immediately afterward:
+
+```bash
+DATABASE_URL=postgres://... FACILITY_SEED_DEMO=0 pnpm --filter @facility/db run deploy
+```
+
+The API image performs this reconciliation automatically in the same bootstrap
+task.
 
 ## SaaS OIDC broker
 

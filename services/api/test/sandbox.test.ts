@@ -7,6 +7,7 @@ import {
   conversations,
   createDb,
   githubInstallations,
+  kbSpaces,
   migrate,
   projects,
   registryItems,
@@ -25,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { verifyStoredReceipts } from "../src/receipt-integrity.js";
 import { AwsSandboxDriver } from "../src/sandbox/aws.js";
-import { sandboxCachePartition } from "../src/sandbox/cache.js";
+import { sandboxCachePartition, sandboxNamespace } from "../src/sandbox/cache.js";
 import { DockerSandboxDriver } from "../src/sandbox/docker.js";
 import type { SandboxDriver } from "../src/sandbox/driver.js";
 import {
@@ -194,6 +195,143 @@ describe("sandbox api", async () => {
         throw { statusCode: 500, message: "daemon boom" };
       }).imageExists("runner:dev"),
     ).rejects.toMatchObject({ statusCode: 500 });
+  });
+
+  it("grants the legacy KB floor only to an explicitly harness-backed run", async () => {
+    const suffix = Date.now();
+    const [contract, harness, profile] = await Promise.all([
+      db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          scope: "project",
+          projectId,
+          kind: "agent_contract",
+          name: `permission-contract-${suffix}`,
+          latestVersion: 1,
+        })
+        .returning()
+        .then((rows) => rows[0]),
+      db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          scope: "project",
+          projectId,
+          kind: "harness",
+          name: `permission-harness-${suffix}`,
+          latestVersion: 1,
+        })
+        .returning()
+        .then((rows) => rows[0]),
+      db
+        .insert(sandboxProfiles)
+        .values({
+          id: newId("sbx"),
+          orgId,
+          projectId,
+          name: `permission-profile-${suffix}`,
+          driver: "docker",
+          image: "facility-runner:test",
+          resources: { timeout_min: 5 },
+        })
+        .returning()
+        .then((rows) => rows[0]),
+    ]);
+    if (!contract || !harness || !profile) throw new Error("permission fixtures missing");
+    await Promise.all([
+      db.insert(registryVersions).values({
+        id: newId("ver"),
+        orgId,
+        itemId: contract.id,
+        version: 1,
+        content: "Exercise the permission boundary.",
+        contentHash: `permission-contract-${suffix}`,
+        status: "active",
+      }),
+      db.insert(registryVersions).values({
+        id: newId("ver"),
+        orgId,
+        itemId: harness.id,
+        version: 1,
+        content: "Harness fixture.",
+        contentHash: `permission-harness-${suffix}`,
+        status: "active",
+      }),
+      db.insert(kbSpaces).values({
+        id: newId("kb"),
+        orgId,
+        projectId,
+        charterMd: "# Charter\n",
+        activeMd: "## Objective\n\n## Next Step\n\n## Blocker\n\n## Links\n",
+        config: {},
+      }),
+    ]);
+    const driver: SandboxDriver = {
+      name: "docker",
+      launch: async (spec) => ({ ref: `fake-${spec.runId}` }),
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    const permissionSets: string[][] = [];
+    for (const harnessEnabled of [false, true]) {
+      const agent = (
+        await db
+          .insert(agentDefs)
+          .values({
+            id: newId("agent"),
+            orgId,
+            projectId,
+            name: `permission-agent-${harnessEnabled}-${suffix}`,
+            engine: "byo",
+            model: { cmd: "true" },
+            contractItemId: contract.id,
+            harnessItemId: harnessEnabled ? harness.id : null,
+            sandboxProfileId: profile.id,
+            triggers: [],
+            permissions: [],
+            enabled: true,
+          })
+          .returning()
+      )[0];
+      if (!agent) throw new Error("permission agent fixture missing");
+      const run = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId,
+            agentDefId: agent.id,
+            mode: harnessEnabled ? "project-owner" : "builder",
+            engine: "byo",
+            trigger: {},
+            createdBy: { type: "user", id: "permission-test" },
+          })
+          .returning()
+      )[0];
+      if (!run) throw new Error("permission run fixture missing");
+      await dispatchRun(config, { runId: run.id, orgId }, { sandboxDriver: async () => driver });
+      const key = (
+        await db.select({ roleId: apiKeys.roleId }).from(apiKeys).where(eq(apiKeys.runId, run.id))
+      )[0];
+      const role = key?.roleId
+        ? (
+            await db
+              .select({ permissions: roles.permissions })
+              .from(roles)
+              .where(eq(roles.id, key.roleId))
+          )[0]
+        : undefined;
+      permissionSets.push(role?.permissions ?? []);
+    }
+
+    expect(permissionSets).toEqual([[], ["kb:read", "kb:write", "tasks:read", "tasks:write"]]);
   });
 
   it("dispatch persists engine-specific model policy on each run key", async () => {
@@ -500,7 +638,10 @@ describe("sandbox api", async () => {
     );
 
     expect(launched.at(-1)?.env).not.toHaveProperty("FACILITY_SANDBOX_NESTED_DOCKER");
-    expect(launched.at(-1)?.cachePartition).toBeUndefined();
+    expect(launched.at(-1)?.cachePartition).toBe(
+      sandboxCachePartition(config.secretMasterKey, orgId, projectId),
+    );
+    expect(launched.at(-1)?.env).not.toHaveProperty("FACILITY_CACHE_PARTITION");
     const dockerSandboxEvent = (
       await db
         .select({ data: runEvents.data })
@@ -1407,6 +1548,63 @@ describe("sandbox api", async () => {
     expect(await driver.status(launched.ref)).toBe("lost");
   }, 60_000);
 
+  it("isolates run sweeps from other instances and preview workloads", async () => {
+    if (!(await dockerReachable())) {
+      console.warn("Docker socket is not reachable from this sandbox; skipping namespace test");
+      return;
+    }
+    const driver = new DockerSandboxDriver();
+    const refs: string[] = [];
+    try {
+      const alphaRun = await driver.launch({
+        runId: `run_alpha_${Date.now()}`,
+        namespace: "instance_alpha",
+        kind: "run",
+        image: "alpine:3.20",
+        env: {},
+        cpu: 0.5,
+        memoryMb: 128,
+        timeoutMin: 1,
+        cmd: ["sleep", "30"],
+      });
+      refs.push(alphaRun.ref);
+      const betaRun = await driver.launch({
+        runId: `run_beta_${Date.now()}`,
+        namespace: "instance_beta",
+        kind: "run",
+        image: "alpine:3.20",
+        env: {},
+        cpu: 0.5,
+        memoryMb: 128,
+        timeoutMin: 1,
+        cmd: ["sleep", "30"],
+      });
+      refs.push(betaRun.ref);
+      const alphaPreview = await driver.launch({
+        runId: `preview:alpha_${Date.now()}`,
+        namespace: "instance_alpha",
+        kind: "preview",
+        image: "alpine:3.20",
+        env: {},
+        cpu: 0.5,
+        memoryMb: 128,
+        timeoutMin: 1,
+        cmd: ["sleep", "30"],
+      });
+      refs.push(alphaPreview.ref);
+
+      expect(await driver.listFacilityContainers("instance_alpha")).toEqual([
+        { ref: alphaRun.ref, runId: expect.stringMatching(/^run_alpha_/) },
+      ]);
+      expect(await driver.listFacilityContainers("instance_beta")).toEqual([
+        { ref: betaRun.ref, runId: expect.stringMatching(/^run_beta_/) },
+      ]);
+      expect(await driver.status(alphaPreview.ref)).toBe("running");
+    } finally {
+      await Promise.all(refs.map((ref) => driver.destroy(ref).catch(() => undefined)));
+    }
+  }, 60_000);
+
   it("reconciler destroys orphan docker containers after label and run-state double check", async () => {
     if (!(await dockerReachable())) {
       console.warn(
@@ -1418,6 +1616,7 @@ describe("sandbox api", async () => {
     const runId = `run_orphan_${Date.now()}`;
     const launched = await driver.launch({
       runId,
+      namespace: sandboxNamespace(config),
       image: "alpine:3.20",
       env: {},
       cpu: 0.5,

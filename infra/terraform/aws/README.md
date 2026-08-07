@@ -54,6 +54,9 @@ Edit `playground.tfvars`:
 - Use the module-owned ECR release path below.
 - Select direct `github` authentication for self-hosting or `oidc` for a SaaS
   broker. MCP OAuth is always issued by the dedicated Facility instance.
+- Set a stable `facility_instance_id` so API and worker retain one sandbox
+  ownership namespace across PostgreSQL endpoint moves. For commercial OIDC it
+  must match the instance id registered with the identity broker.
 - Set `github_oauth_allowed_organization` to a GitHub organization login when
   direct login must require active membership; leave it empty for no additional
   organization restriction.

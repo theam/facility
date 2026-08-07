@@ -1707,7 +1707,7 @@ describe("api", async () => {
           id: newId("run"),
           orgId,
           projectId: planProjectId,
-          mode: "architect",
+          mode: "codex-architect",
           engine: "codex",
           status: "succeeded",
           trigger: { type: "github_comment", issue: { number: 42 } },

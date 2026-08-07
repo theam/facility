@@ -52,7 +52,9 @@ start without MinIO and do not wait on bucket creation.
 
 Create a GitHub App for the local instance, configure its OAuth callback and
 credentials, and run `facility instance bootstrap` before opening
-`http://localhost:3400`. To let GitHub reach a development machine —
+`http://localhost:3400`. If you run the source CLI, follow bootstrap with
+`FACILITY_SEED_DEMO=0 pnpm --filter @facility/db run deploy`; the API image's
+operator wrapper does that reconciliation automatically. To let GitHub reach a development machine —
 webhooks, so the loop reacts to issues, comments and pull requests — see
 [Local development](local-development). See [Authentication modes](authentication) for the exact
 callback, permissions, and bootstrap arguments. Local login uses GitHub exactly

@@ -54,6 +54,20 @@ function bootstrapOverrideCommand(markdown) {
   return [...override[1].matchAll(/"([^"]*)"/g)].map(([, token]) => token);
 }
 
+test("AWS api and worker use one stable sandbox ownership namespace", () => {
+  const apiEnvironment = localsTerraform
+    .split("api_environment =", 2)[1]
+    ?.split("worker_environment =", 1)[0];
+  const workerEnvironment = localsTerraform
+    .split("worker_environment =", 2)[1]
+    ?.split("gateway_environment =", 1)[0];
+  assert.match(apiEnvironment ?? "", /name = "FACILITY_INSTANCE_ID"/);
+  assert.match(workerEnvironment ?? "", /name = "FACILITY_INSTANCE_ID"/);
+  for (const markdown of guides.values()) {
+    assert.match(markdown, /stable `facility_instance_id`/);
+  }
+});
+
 test("AWS guides use one truthful ECR-only automated release path", () => {
   for (const [guideName, markdown] of guides) {
     assert.match(
@@ -136,6 +150,11 @@ test("the runbook bootstraps by the name the api image puts on the PATH", () => 
     stage,
     /chmod \+x \/usr\/local\/bin\/facility/,
     "the api stage must install an executable `facility` on the PATH",
+  );
+  assert.match(
+    stage,
+    /FACILITY_SEED_DEMO=0 exec node \/app\/node_modules\/@facility\/db\/dist\/bin\/deploy\.js/,
+    "bootstrap must reconcile org-scoped profiles and contracts in the same one-shot task",
   );
   // Exec form, so the guard resolves the name without a shell — the way the
   // container runtime does for an ECS command override, and unlike `RUN cmd`.

@@ -198,7 +198,7 @@ async function executePlanAcceptance(
       .limit(1)
   )[0];
   if (!architectRun) throw new Error("plan_acceptance_architect_run_not_found");
-  if (architectRun.mode !== "architect") {
+  if (!["architect", "codex-architect"].includes(architectRun.mode)) {
     throw new Error("plan_acceptance_source_not_architect");
   }
   if (!["succeeded", "awaiting_human"].includes(architectRun.status)) {

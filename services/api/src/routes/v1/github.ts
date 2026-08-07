@@ -16,7 +16,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
 import { createGithubClientFactory, type GithubClientFactory } from "../../github/client.js";
-import { createGithubClientForRepo } from "../../github/kickstart.js";
+import { createGithubClientForRepo, syncRepoFacilityConfig } from "../../github/kickstart.js";
 import {
   assertGithubRequestContextSize,
   findAgentDef,
@@ -888,6 +888,11 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
         );
       }
       const githubClient = await createGithubClientForRepo(db, githubFactory, repo);
+      // Control-plane dispatch must consume the same repository-owned runtime
+      // configuration as slash-command dispatch. Reconcile at handoff time so a
+      // recently merged `.facility.json` cannot leave direct triggers using
+      // stale provisioning, checks, models, or execution-lane settings.
+      await syncRepoFacilityConfig({ db, client: githubClient, repo });
       const [githubIssue, issueComments] = await Promise.all([
         githubClient.getIssue(number),
         loadGithubIssueComments(githubClient, number),

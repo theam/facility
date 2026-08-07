@@ -4,6 +4,7 @@ import { and, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
 import { request as upstreamRequest } from "undici";
 import { z } from "zod";
 import { ApiError } from "./errors.js";
+import { sandboxNamespace } from "./sandbox/cache.js";
 import { previewSandboxDriver, type SandboxDriver, SandboxLaunchError } from "./sandbox/driver.js";
 import type { AppConfig, Principal } from "./types.js";
 
@@ -377,6 +378,8 @@ export async function provisionPreview(
       launchStartedAt = Date.now();
       const launchSpec = {
         runId: `preview:${preview.id}`,
+        namespace: sandboxNamespace(config),
+        kind: "preview" as const,
         image: spec.image,
         cmd: spec.command,
         env: { PORT: String(spec.port), FACILITY_PREVIEW: "1" },

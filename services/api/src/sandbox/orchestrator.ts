@@ -61,7 +61,7 @@ import {
 } from "../previews.js";
 import type { AppConfig } from "../types.js";
 import { raisePlatformIssue, resolvePlatformIssue } from "../watchtower/issues.js";
-import { sandboxCachePartition } from "./cache.js";
+import { sandboxCachePartition, sandboxNamespace } from "./cache.js";
 import { nestedDockerEnabled, provisioningDepth } from "./capabilities.js";
 import { DockerSandboxDriver } from "./docker.js";
 import type { LaunchSpec, SandboxDriver, SandboxDriverName } from "./driver.js";
@@ -86,6 +86,8 @@ type FinishRunDeps = {
 type DispatchRunDeps = {
   sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
 };
+
+const RESUME_FALLBACK_SCOPE_MAX_BYTES = 32 * 1024;
 
 export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: DispatchRunDeps = {}) {
   if (!job.runId || !job.orgId) throw new Error("runs.dispatch requires runId and orgId");
@@ -131,7 +133,12 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
     // agent's permissions actually changes what its run can do, and a run key
     // can never carry org-admin/destructive scopes regardless of the agent def.
     // Pinned to the run's project; revoked when the run ends.
-    const harnessRoleId = await ensureRunAgentRole(db, run.orgId, agentPermissions);
+    const harnessRoleId = await ensureRunAgentRole(
+      db,
+      run.orgId,
+      agentPermissions,
+      Boolean(bundle.harness),
+    );
     const platformKey = await generateApiKey("fak");
     await db.insert(apiKeys).values({
       id: platformKey.id,
@@ -158,6 +165,9 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
     const driver = await (deps.sandboxDriver ?? sandboxDriver)(driverName);
     const launchSpec: LaunchSpec = {
       runId: run.id,
+      namespace: sandboxNamespace(config),
+      kind: "run",
+      cachePartition: sandboxCachePartition(config.secretMasterKey, run.orgId, run.projectId),
       image: profile.image,
       env: {
         FACILITY_API_URL: config.sandboxApiUrl,
@@ -167,11 +177,6 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
           ? { FACILITY_SANDBOX_NESTED_DOCKER: nestedDocker ? "1" : "0" }
           : {}),
       },
-      ...(driverName === "aws"
-        ? {
-            cachePartition: sandboxCachePartition(config.secretMasterKey, run.orgId, run.projectId),
-          }
-        : {}),
       cpu: resourceNumber(profile.resources, "cpu", 2),
       memoryMb: resourceNumber(profile.resources, "memory_mb", 4096),
       timeoutMin: bundle.timeoutMin,
@@ -1428,7 +1433,7 @@ const RUN_SAFE_RESOURCES = new Set([
 ]);
 
 /** Intersect an agent def's declared permissions with the run-safe ceiling. */
-export function runSafePermissions(agentPermissions: string[]): string[] {
+export function runSafePermissions(agentPermissions: string[], harnessEnabled = false): string[] {
   const safe = new Set<string>();
   for (const perm of agentPermissions) {
     if (perm === "*") continue; // wildcard is never run-mintable
@@ -1440,9 +1445,10 @@ export function runSafePermissions(agentPermissions: string[]): string[] {
     if (resource === "hitl" && !["read", "write"].includes(action)) continue;
     safe.add(perm);
   }
-  // Back-compat / safety floor: an agent with no run-safe permissions still gets
-  // the harness minimum so a mis-seeded PO/learning agent isn't silently inert.
-  if (safe.size === 0) return [...HARNESS_AGENT_PERMS];
+  // Back-compat floor only for an explicitly harness-enabled agent. A builder
+  // or custom agent with no declared permissions must not silently receive KB
+  // read/write access merely because the project has a KB space.
+  if (safe.size === 0 && harnessEnabled) return [...HARNESS_AGENT_PERMS];
   return [...safe].sort();
 }
 
@@ -1456,8 +1462,9 @@ async function ensureRunAgentRole(
   db: ReturnType<typeof createDb>["db"],
   orgId: string,
   agentPermissions: string[],
+  harnessEnabled: boolean,
 ): Promise<string> {
-  const permissions = runSafePermissions(agentPermissions);
+  const permissions = runSafePermissions(agentPermissions, harnessEnabled);
   const fingerprint = permissions.join(",") || "none";
   const name = `run-agent:${fingerprint}`;
   const existing = (
@@ -1515,7 +1522,7 @@ export async function reconcileSandboxes(
     // the orphaned-key sweep — still runs instead of the whole tick throwing.
     try {
       const docker = new DockerSandboxDriver();
-      for (const container of await docker.listFacilityContainers()) {
+      for (const container of await docker.listFacilityContainers(sandboxNamespace(config))) {
         const run = (await db.select().from(runs).where(eq(runs.id, container.runId)).limit(1))[0];
         const sandbox = readSandbox(run?.sandbox);
         if (!run || terminalStatus(run.status) || sandbox.ref !== container.ref) {
@@ -1729,7 +1736,12 @@ async function buildRunBundle(
     },
     scope: objectOrEmpty(run.trigger),
     timeoutMin,
-    harness: harnessFragmentForBundle({ space, config, runId: run.id, mode: run.mode }),
+    harness: harnessFragmentForBundle({
+      space,
+      harnessItemId: agent.harnessItemId,
+      runId: run.id,
+      mode: run.mode,
+    }),
   };
   const resume = await resumeForRun(db, run);
   if (resume) bundle.resume = resume;
@@ -1747,6 +1759,7 @@ async function resumeForRun(db: ReturnType<typeof createDb>["db"], run: RunRow) 
       sessionId: parent.engineSessionId,
       sessionStateFrom: parent.id,
       prompt: resumePrompt(trigger),
+      ...resumeFallbackScope(parent.trigger),
       ...resumeBranch(parent),
     };
   }
@@ -1777,6 +1790,7 @@ async function resumeForRun(db: ReturnType<typeof createDb>["db"], run: RunRow) 
       sessionId: conversation.engineSessionId,
       sessionStateFrom: parent.id,
       prompt: resumePrompt(trigger),
+      ...resumeFallbackScope(parent.trigger),
       ...resumeBranch(parent),
     };
   }
@@ -1808,6 +1822,22 @@ async function loadResumeParent(
 function resumePrompt(trigger: Record<string, unknown>) {
   const message = trigger.message;
   return typeof message === "string" && message.trim() ? message : "Continue where you left off.";
+}
+
+export function boundedResumeFallbackScope(value: unknown): Record<string, unknown> | undefined {
+  const scope = objectOrEmpty(value);
+  try {
+    return Buffer.byteLength(JSON.stringify(scope)) <= RESUME_FALLBACK_SCOPE_MAX_BYTES
+      ? scope
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resumeFallbackScope(value: unknown) {
+  const fallbackScope = boundedResumeFallbackScope(value);
+  return fallbackScope ? { fallbackScope } : {};
 }
 
 function resumeBranch(parent: RunRow) {

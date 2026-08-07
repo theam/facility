@@ -27,6 +27,12 @@ containers, devices, added capabilities, daemon administration, and host binds
 outside `/work` (plus its own restricted socket). The lifecycle runner keeps its
 run token under a different UID, and link-local metadata egress is blocked.
 
+Set a stable `facility_instance_id` in the Terraform variables for every
+long-lived stack. The API and worker use the same value when identifying owned
+sandboxes, so a later PostgreSQL endpoint move does not change that boundary.
+Commercial OIDC deployments must use the instance id registered with the
+identity broker.
+
 Agent dependency downloads use CodeBuild's S3 cache because AWS local caches
 are unavailable for VPC builds. Facility derives an unguessable partition from
 the organization and project, then supplies a separate S3 prefix for that run.
@@ -430,6 +436,10 @@ account login, and `--github-account-type user`. Then read the log stream:
 `{"ok":true,"created":true,...}` on the first run and `"created":false` on
 any later one. The command takes an advisory lock, is idempotent for the same
 binding, and refuses to modify a database already bound to a different instance.
+In the API image, the `facility` wrapper then reruns the same idempotent database
+deployment entry point before the task exits. That second reconciliation is
+intentional: the first migration task ran before the organization existed, while
+sandbox profiles, action types, and bundled contracts are organization-scoped.
 
 That refusal is also the one failure worth recognising in advance:
 `bootstrap_failed: Database already contains a different Facility instance`

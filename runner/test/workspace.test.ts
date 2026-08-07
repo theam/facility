@@ -19,6 +19,7 @@ import {
   composedPrompt,
   deliveryReleaseImpact,
   deliveryStatusEvent,
+  emitEngineEventsBestEffort,
   engineEnv,
   exitCode,
   githubRequest,
@@ -35,6 +36,7 @@ import {
   readAgentUpdateMetadata,
   readSecurityReport,
   requiresAgentProgress,
+  resumeRecoveryPrompt,
   runnerReceiptActivity,
   runPackageInstall,
   semanticDeliveryBranch,
@@ -1166,6 +1168,38 @@ describe("Claude resume controls", () => {
     ]);
     expect(buildClaudeCodeArgs(runBundle, false)).not.toContain("--resume");
     expect(buildClaudeCodeArgs(runBundle, false)).toContain(composedPrompt(runBundle));
+  });
+
+  it("recovers the governed parent objective when session state is missing", () => {
+    const runBundle = bundle({
+      engine: "claude_code",
+      scope: { type: "resume", message: "Continue the implementation" },
+      resume: {
+        sessionId: "sess_123",
+        sessionStateFrom: "run_parent",
+        prompt: "Continue the implementation",
+        fallbackScope: {
+          approvedPlan: "Deduplicate the helpers described in issue 557",
+          issue: { number: 557 },
+        },
+      },
+    });
+
+    const prompt = resumeRecoveryPrompt(runBundle);
+    expect(prompt).toContain("Deduplicate the helpers described in issue 557");
+    expect(prompt).toContain("prior Claude session state from run run_parent was unavailable");
+    expect(prompt).toContain("## Resume instruction\nContinue the implementation");
+    expect(buildClaudeCodeArgs(runBundle, false)).not.toContain("--resume");
+  });
+
+  it("keeps live engine-event transport failures off the execution boundary", async () => {
+    const event = [{ type: "assistant", data: { text: "work completed" } }];
+    await expect(
+      emitEngineEventsBestEffort(event, async () => {
+        throw new Error("transient network failure");
+      }),
+    ).resolves.toBe(false);
+    await expect(emitEngineEventsBestEffort(event, async () => undefined)).resolves.toBe(true);
   });
 
   it("branches steer and interrupt control messages", async () => {

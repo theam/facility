@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import Docker from "dockerode";
 import type { LaunchSpec, SandboxDriver } from "./driver.js";
@@ -6,6 +7,11 @@ type ContainerSummary = {
   Id: string;
   Labels?: Record<string, string>;
 };
+
+const NAMESPACE_LABEL = "facility.sandbox.namespace";
+const KIND_LABEL = "facility.sandbox.kind";
+const RUN_LABEL = "facility.sandbox.run";
+const DEFAULT_NAMESPACE = "default";
 
 export class DockerSandboxDriver implements SandboxDriver {
   readonly name = "docker" as const;
@@ -33,13 +39,28 @@ export class DockerSandboxDriver implements SandboxDriver {
   async launch(spec: LaunchSpec): Promise<{ ref: string; endpoint?: string }> {
     await this.ensureImage(spec.image);
     const network = dockerNetworkMode(spec.network);
+    const packageCache = packageCacheMount(spec);
     const container = await this.docker.createContainer({
       Image: spec.image,
       Cmd: spec.cmd,
-      Env: Object.entries(spec.env).map(([key, value]) => `${key}=${value}`),
-      Labels: { "facility.run": spec.runId },
+      Env: Object.entries({ ...packageCache?.env, ...spec.env }).map(
+        ([key, value]) => `${key}=${value}`,
+      ),
+      // Do not retain the legacy `facility.run` label. Old Facility workers
+      // sweep that label globally and would delete a new instance's healthy
+      // containers during a rolling upgrade. These versioned ownership labels
+      // make both instance and workload kind explicit.
+      Labels: {
+        [NAMESPACE_LABEL]: spec.namespace ?? DEFAULT_NAMESPACE,
+        [KIND_LABEL]: spec.kind ?? "run",
+        [RUN_LABEL]: spec.runId,
+      },
       ...(spec.servicePort ? { ExposedPorts: { [`${spec.servicePort}/tcp`]: {} } } : {}),
       HostConfig: {
+        // Use Docker's built-in tiny init as PID 1. Agent tools may launch and
+        // disown children; without an init those children become permanent
+        // zombies because the Node runner is not a process reaper.
+        Init: true,
         AutoRemove: false,
         Memory: Math.max(128, spec.memoryMb) * 1024 * 1024,
         NanoCpus: Math.max(0.1, spec.cpu) * 1_000_000_000,
@@ -51,6 +72,7 @@ export class DockerSandboxDriver implements SandboxDriver {
           "/tmp": "rw,exec,nosuid,nodev,size=512m",
           "/var/tmp": "rw,exec,nosuid,nodev,size=512m",
         },
+        ...(packageCache ? { Mounts: [packageCache.mount] } : {}),
         ...(network.hostConfig ?? {}),
         ...(spec.servicePort
           ? {
@@ -138,13 +160,15 @@ export class DockerSandboxDriver implements SandboxDriver {
     await this.waitForRemoval(ref);
   }
 
-  async listFacilityContainers(): Promise<Array<{ ref: string; runId: string }>> {
+  async listFacilityContainers(
+    namespace = DEFAULT_NAMESPACE,
+  ): Promise<Array<{ ref: string; runId: string }>> {
     const containers = (await this.docker.listContainers({
       all: true,
-      filters: { label: ["facility.run"] },
+      filters: { label: [`${NAMESPACE_LABEL}=${namespace}`, `${KIND_LABEL}=run`] },
     })) as ContainerSummary[];
     return containers.flatMap((container) => {
-      const runId = container.Labels?.["facility.run"];
+      const runId = container.Labels?.[RUN_LABEL];
       return runId ? [{ ref: container.Id, runId }] : [];
     });
   }
@@ -175,6 +199,39 @@ export class DockerSandboxDriver implements SandboxDriver {
     }
     throw new Error(`Docker container ${ref} was not removed before timeout`);
   }
+}
+
+function packageCacheMount(spec: LaunchSpec) {
+  if (!spec.cachePartition || spec.kind === "preview") return undefined;
+  const namespace = spec.namespace ?? DEFAULT_NAMESPACE;
+  const digest = createHash("sha256")
+    .update(namespace)
+    .update("\0")
+    .update(spec.cachePartition)
+    .digest("hex")
+    .slice(0, 32);
+  const target = "/work/.facility-package-cache";
+  return {
+    env: {
+      // Package-manager downloads are safe to reuse within the control plane's
+      // project partition. pnpm_config_store_dir is the actual content-addressed
+      // package store (PNPM_HOME is only the global-bin directory), while npm's
+      // `_cacache` verifies content integrity. Do not persist COREPACK_HOME: it
+      // contains executable package-manager code, so a writable cross-run copy
+      // would create a same-project persistence channel. The cache is a Docker
+      // volume, not another service, and never contains the repository working
+      // tree.
+      pnpm_config_store_dir: `${target}/pnpm-store`,
+      PNPM_CONFIG_VERIFY_STORE_INTEGRITY: "true",
+      NPM_CONFIG_CACHE: `${target}/npm`,
+    },
+    mount: {
+      Type: "volume" as const,
+      Source: `facility-package-cache-${digest}`,
+      Target: target,
+      ReadOnly: false,
+    },
+  };
 }
 
 function sleep(ms: number) {

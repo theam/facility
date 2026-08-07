@@ -107,6 +107,12 @@ export async function buildApp(
   app.get("/health", readiness);
   app.get("/readyz", readiness);
 
+  // Claude Code probes its configured ANTHROPIC_BASE_URL with HEAD before it
+  // sends the first message. Keep that compatibility probe deliberately
+  // unauthenticated and side-effect free: model requests below still require a
+  // run-scoped virtual key and pass through the full budget/metering path.
+  app.get("/anthropic", async () => ({ ok: true, provider: "anthropic" as const }));
+
   app.post("/anthropic/v1/*", (request, reply) =>
     meteringDrain.track(
       handleProvider(request, reply, "anthropic", config, db, envelopeStore, now),
