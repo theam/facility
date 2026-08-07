@@ -344,6 +344,7 @@ resource "aws_iam_role_policy" "codebuild_runner" {
         ]
         Resource = "${aws_s3_bucket.objects.arn}/codebuild-cache/*"
       },
+      local.codebuild_cache_list_statement,
       {
         Sid    = "VerifyCacheBucket"
         Effect = "Allow"
@@ -397,4 +398,22 @@ resource "aws_iam_role_policy" "codebuild_runner" {
       }
     ]
   })
+}
+
+locals {
+  # CodeBuild's S3 cache client lists the configured prefix before it downloads
+  # an archive. Object-only permissions make every restore fail with
+  # AccessDenied. The bucket action remains confined to Facility's cache
+  # subtree, so the runner cannot enumerate unrelated object prefixes.
+  codebuild_cache_list_statement = {
+    Sid      = "ListProjectCachePrefix"
+    Effect   = "Allow"
+    Action   = "s3:ListBucket"
+    Resource = aws_s3_bucket.objects.arn
+    Condition = {
+      StringLike = {
+        "s3:prefix" = ["codebuild-cache/*"]
+      }
+    }
+  }
 }

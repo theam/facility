@@ -56,6 +56,13 @@ export class DockerSandboxDriver implements SandboxDriver {
         [RUN_LABEL]: spec.runId,
       },
       ...(spec.servicePort ? { ExposedPorts: { [`${spec.servicePort}/tcp`]: {} } } : {}),
+      // Keep the repository workspace on an anonymous Docker volume instead
+      // of a RAM-backed tmpfs. Dependency trees for real repositories routinely
+      // exceed several GiB while package managers unpack them; charging that to
+      // the daemon's memory budget makes otherwise healthy runs OOM under local
+      // concurrency. The volume remains run-scoped and `destroy({ v: true })`
+      // removes it with the container, so no workspace or credential persists.
+      Volumes: { "/work": {} },
       HostConfig: {
         // Use Docker's built-in tiny init as PID 1. Agent tools may launch and
         // disown children; without an init those children become permanent
@@ -66,9 +73,6 @@ export class DockerSandboxDriver implements SandboxDriver {
         NanoCpus: Math.max(0.1, spec.cpu) * 1_000_000_000,
         ReadonlyRootfs: true,
         Tmpfs: {
-          // Owned by the non-root `node` user (uid 1000) the runner image runs
-          // as — a root-owned tmpfs over /work would be unwritable to the agent.
-          "/work": "rw,exec,nosuid,nodev,size=4g,uid=1000,gid=1000",
           "/tmp": "rw,exec,nosuid,nodev,size=512m",
           "/var/tmp": "rw,exec,nosuid,nodev,size=512m",
         },
@@ -222,6 +226,14 @@ function packageCacheMount(spec: LaunchSpec) {
       // volume, not another service, and never contains the repository working
       // tree.
       pnpm_config_store_dir: `${target}/pnpm-store`,
+      // Docker Desktop and small self-hosted daemons often share a finite VM
+      // with the control plane. pnpm otherwise derives aggressive concurrency
+      // from the host CPU count, which can overwhelm that shared daemon while
+      // extracting a large dependency graph. These remain package-manager
+      // settings, not a shell-command override, so private-registry command
+      // validation stays intact.
+      pnpm_config_network_concurrency: "4",
+      pnpm_config_child_concurrency: "2",
       PNPM_CONFIG_VERIFY_STORE_INTEGRITY: "true",
       NPM_CONFIG_CACHE: `${target}/npm`,
     },

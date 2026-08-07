@@ -311,7 +311,8 @@ test("the CodeBuild role and lifecycle cannot escape the cache prefix", () => {
   assert.match(policy, /s3:GetObjectVersion/);
   assert.match(policy, /s3:PutObject/);
   assert.match(policy, /codebuild-cache\/\*/);
-  assert.doesNotMatch(policy, /s3:ListBucket/);
+  assert.match(policy, /s3:ListBucket/);
+  assert.match(policy, /"s3:prefix"\s*=\s*\["codebuild-cache\/\*"\]/);
   assert.match(policy, /kms:GenerateDataKey/);
   assert.match(policy, /kms:Decrypt/);
   assert.match(policy, /kms:ViaService/);

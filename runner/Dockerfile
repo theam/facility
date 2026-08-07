@@ -138,7 +138,7 @@ RUN cd /opt/facility-agent-clis \
   && codex --version
 
 # Create the package-manager shims while the image is still writable. Runtime
-# sandboxes mount /work as a writable tmpfs and keep the image root read-only;
+# sandboxes mount /work as a writable, per-run volume and keep the image root read-only;
 # baking the shims makes a later `corepack enable` idempotent instead of trying
 # (and failing) to write /usr/local/bin. Package downloads still use $HOME in
 # writable /work.
@@ -146,7 +146,7 @@ RUN corepack enable
 
 # Seed the repository's pinned package-manager release into an immutable image
 # layer. The entrypoint copies this trusted seed into each sandbox's ephemeral
-# tmpfs; repositories pinning another release can still download it for that run,
+# workspace; repositories pinning another release can still download it for that run,
 # but no executable Corepack cache persists into the next run.
 COPY package.json /tmp/facility-root-package.json
 RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packageManager")" \

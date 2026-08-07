@@ -43,8 +43,11 @@ describe("Docker sandbox ownership and caches", () => {
     ]);
 
     expect(created[0]).toMatchObject({
+      Volumes: { "/work": {} },
       Env: [
         "pnpm_config_store_dir=/work/.facility-package-cache/pnpm-store",
+        "pnpm_config_network_concurrency=4",
+        "pnpm_config_child_concurrency=2",
         "PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true",
         "NPM_CONFIG_CACHE=/work/.facility-package-cache/npm",
       ],
@@ -55,6 +58,10 @@ describe("Docker sandbox ownership and caches", () => {
       },
       HostConfig: {
         Init: true,
+        Tmpfs: {
+          "/tmp": "rw,exec,nosuid,nodev,size=512m",
+          "/var/tmp": "rw,exec,nosuid,nodev,size=512m",
+        },
         Mounts: [
           {
             Type: "volume",
@@ -65,6 +72,9 @@ describe("Docker sandbox ownership and caches", () => {
         ],
       },
     });
+    expect((created[0]?.HostConfig as { Tmpfs?: Record<string, string> }).Tmpfs).not.toHaveProperty(
+      "/work",
+    );
     expect(
       (created[0]?.Labels as Record<string, string> | undefined)?.["facility.run"],
     ).toBeUndefined();
