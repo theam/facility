@@ -4,7 +4,7 @@
 #
 #   docker build --target api     -t facility/api .
 #   docker build --target gateway -t facility/gateway .
-FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS base
+FROM node:25-trixie-slim@sha256:aabbe39553d15ede8a97cc60c9e1a97034ff772afcf696ea42b94e7f5f2ec71b AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 RUN apt-get update \
