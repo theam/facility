@@ -1,7 +1,7 @@
 # Facility web (Next.js standalone). Built once; FACILITY_API_URL is supplied
 # when the container starts so the same artifact works in every installation.
 #   docker build -f apps/web/Dockerfile -t facility/web .
-FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS base
+FROM node:25-trixie-slim@sha256:aabbe39553d15ede8a97cc60c9e1a97034ff772afcf696ea42b94e7f5f2ec71b AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable
 WORKDIR /app
