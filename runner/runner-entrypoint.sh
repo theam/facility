@@ -15,6 +15,10 @@ mkdir -p "$COREPACK_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 # may be downloaded here without weakening that boundary.
 if [[ -d /opt/facility-corepack ]]; then
   cp -a /opt/facility-corepack/. "$COREPACK_HOME/"
+  # The image seed is deliberately read-only. Its per-run copy must be writable
+  # so a repository pinning another package-manager release can add it to this
+  # sandbox's ephemeral cache.
+  chmod -R u+w "$COREPACK_HOME"
 fi
 
 if [[ "$(id -u)" -eq 0 ]]; then

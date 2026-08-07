@@ -31,6 +31,7 @@ describe("restricted Docker API", () => {
     );
     expect(entrypoint).toContain('export COREPACK_HOME="$XDG_CACHE_HOME/node/corepack"');
     expect(entrypoint).toContain('cp -a /opt/facility-corepack/. "$COREPACK_HOME/"');
+    expect(entrypoint).toContain('chmod -R u+w "$COREPACK_HOME"');
   });
 
   test("pins package-store integrity for project-scoped CodeBuild caches", async () => {
