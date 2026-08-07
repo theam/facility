@@ -45,6 +45,12 @@ database_backup_retention_days = 7
 enable_deletion_protection = true
 force_destroy_bucket       = false
 
+# Optional paid Amazon Inspector integration. This changes the ECR scan type
+# for the whole AWS account/region, while the filter below is limited to this
+# stack's repositories. Enable only in a dedicated registry or when this stack
+# is the declared owner of the shared registry scanning policy.
+enable_ecr_enhanced_scanning = false
+
 envelope_retention_days = 90
 
 container_image_tags = {

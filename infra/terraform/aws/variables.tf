@@ -159,6 +159,12 @@ variable "force_destroy_bucket" {
   default     = false
 }
 
+variable "enable_ecr_enhanced_scanning" {
+  description = "Manage the account-and-region ECR registry scan type with Amazon Inspector and scan only this Facility repository prefix on push. This is a paid, registry-wide setting; enable it only when this stack owns the registry scanning policy."
+  type        = bool
+  default     = false
+}
+
 variable "container_image_tags" {
   description = "Image tags used when image_overrides does not provide a full image URI. The worker tag is retained for tfvars compatibility; the AWS fallback runs worker from the API image."
   type = object({

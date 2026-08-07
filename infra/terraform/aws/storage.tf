@@ -110,6 +110,25 @@ resource "aws_ecr_repository" "service" {
   }
 }
 
+# ECR exposes fix availability only through Inspector-backed enhanced findings.
+# Registry scanning is account-and-region scoped, so shared accounts must leave
+# this opt-in disabled and manage their single registry policy centrally.
+resource "aws_ecr_registry_scanning_configuration" "facility" {
+  count = var.enable_ecr_enhanced_scanning ? 1 : 0
+
+  # This registry policy supersedes each repository's basic scan_on_push setting.
+  scan_type = "ENHANCED"
+
+  rule {
+    scan_frequency = "SCAN_ON_PUSH"
+
+    repository_filter {
+      filter      = "${local.name_prefix}/*"
+      filter_type = "WILDCARD"
+    }
+  }
+}
+
 resource "aws_ecr_lifecycle_policy" "service" {
   for_each = aws_ecr_repository.service
 

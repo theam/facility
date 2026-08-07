@@ -10,10 +10,79 @@ import {
   createAwsCliAdapter,
   createAwsReleaseManifest,
   deployAws,
+  enforceEcrScanPolicy,
   normalizeTerraformOutputs,
   taskDefinitionRegistration,
   validateAwsReleaseManifest,
 } from "./deploy-aws.mjs";
+
+test("ECR scan policy keeps basic scanning strict and gates enhanced actionable findings", () => {
+  assert.throws(
+    () =>
+      enforceEcrScanPolicy(
+        { findingSeverityCounts: { CRITICAL: 1, HIGH: 2 } },
+        { enhanced: false, repository: "repo@digest" },
+      ),
+    (error) => error.code === "ecr_scan_blocked" && /1 critical and 2 high/.test(error.message),
+  );
+
+  assert.deepEqual(
+    enforceEcrScanPolicy(
+      {
+        findingSeverityCounts: { CRITICAL: 1, HIGH: 1 },
+        enhancedFindings: [
+          { severity: "CRITICAL", fixAvailable: "NO" },
+          { severity: "HIGH", fixAvailable: "NO" },
+        ],
+      },
+      { enhanced: true, repository: "repo@digest" },
+    ),
+    {
+      critical: 1,
+      high: 1,
+      actionableCritical: 0,
+      actionableHigh: 0,
+      enhanced: true,
+    },
+  );
+
+  for (const fixAvailable of ["YES", "PARTIAL"]) {
+    assert.throws(
+      () =>
+        enforceEcrScanPolicy(
+          {
+            findingSeverityCounts: { HIGH: 1 },
+            enhancedFindings: [{ severity: "HIGH", fixAvailable }],
+          },
+          { enhanced: true, repository: "repo@digest" },
+        ),
+      (error) =>
+        error.code === "ecr_scan_blocked" &&
+        /0 critical and 1 high vulnerabilities have fixes available/.test(error.message),
+    );
+  }
+});
+
+test("ECR enhanced scan policy fails closed on malformed or incomplete findings", () => {
+  for (const findings of [
+    { findingSeverityCounts: { HIGH: 1 } },
+    { findingSeverityCounts: { HIGH: 1 }, enhancedFindings: [] },
+    {
+      findingSeverityCounts: { HIGH: 1 },
+      enhancedFindings: [{ severity: "HIGH", fixAvailable: undefined }],
+    },
+    { findingSeverityCounts: { HIGH: -1 }, enhancedFindings: [] },
+  ]) {
+    assert.throws(
+      () =>
+        enforceEcrScanPolicy(findings, {
+          enhanced: true,
+          repository: "repo@digest",
+        }),
+      (error) => error.code === "ecr_scan_invalid_response",
+    );
+  }
+});
 
 const account = "123456789012";
 const region = "eu-west-1";
@@ -805,7 +874,7 @@ if (service === "ecr" && operation === "describe-images") {
   const scanCalls = calls.filter((call) => call[3] === "ecr" && call[4] === "describe-image-scan-findings");
   const status = scanCalls.length === 1 ? "IN_PROGRESS" : "ACTIVE";
   const completed = scanCalls.length >= 3 ? { imageScanCompletedAt: "2026-08-07T00:00:00Z" } : {};
-  process.stdout.write(JSON.stringify({ imageScanStatus: { status }, imageScanFindings: { ...completed, findingSeverityCounts: {} } }));
+  process.stdout.write(JSON.stringify({ imageScanStatus: { status }, imageScanFindings: { ...completed, findingSeverityCounts: {}, enhancedFindings: [] } }));
 } else {
   process.stderr.write("unexpected adapter command " + service + " " + operation);
   process.exit(19);
@@ -844,6 +913,56 @@ if (service === "ecr" && operation === "describe-images") {
   await assert.rejects(
     aws.assertImage(`${prefix}/api`, digests.api),
     (error) => error.code === "ecr_scan_blocked" && /1 critical and 2 high/.test(error.message),
+  );
+});
+
+test("AWS CLI adapter admits only non-fixable enhanced findings", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "facility-aws-enhanced-image-scan-"));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  const command = join(directory, "aws");
+  await writeFile(
+    command,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const service = args[3];
+const operation = args[4];
+const repository = args[args.indexOf("--repository-name") + 1];
+if (service === "ecr" && operation === "describe-images") {
+  const digest = args[args.findIndex((arg) => arg.startsWith("imageDigest="))].slice("imageDigest=".length);
+  process.stdout.write(JSON.stringify({ imageDetails: [{ imageDigest: digest }] }));
+} else if (service === "ecr" && operation === "describe-image-scan-findings") {
+  const fixAvailable = repository.endsWith("/api") ? "NO" : repository.endsWith("/gateway") ? "YES" : undefined;
+  process.stdout.write(JSON.stringify({
+    imageScanStatus: { status: "ACTIVE" },
+    imageScanFindings: {
+      imageScanCompletedAt: "2026-08-07T00:00:00Z",
+      findingSeverityCounts: { HIGH: 1 },
+      enhancedFindings: [{ severity: "HIGH", ...(fixAvailable ? { fixAvailable } : {}) }]
+    }
+  }));
+} else {
+  process.stderr.write("unexpected adapter command " + service + " " + operation);
+  process.exit(19);
+}
+`,
+  );
+  await chmod(command, 0o755);
+  const aws = createAwsCliAdapter({
+    awsCommand: command,
+    commandTimeoutMs: 1_000,
+    pollIntervalMs: 1,
+    region,
+  });
+
+  await aws.assertImage(`${prefix}/api`, digests.api);
+  await assert.rejects(
+    aws.assertImage(`${prefix}/gateway`, digests.gateway),
+    (error) =>
+      error.code === "ecr_scan_blocked" && /1 high vulnerabilities have fixes/.test(error.message),
+  );
+  await assert.rejects(
+    aws.assertImage(`${prefix}/mcp`, digests.mcp),
+    (error) => error.code === "ecr_scan_invalid_response",
   );
 });
 

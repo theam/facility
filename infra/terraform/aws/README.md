@@ -242,8 +242,20 @@ plaintext to the terminal.
 ## 5. Stage or deploy the release
 
 The release command validates every image against this stack's ECR repositories
-and architecture, waits for each ECR basic or enhanced scan to complete, and rejects any
-image with a HIGH or CRITICAL finding. The deploying AWS principal needs
+and architecture and waits for its cached ECR scan-on-push result. Basic scanning
+remains fail-closed and rejects any HIGH or CRITICAL finding because it cannot
+report whether an update exists. When `enable_ecr_enhanced_scanning = true`, the
+module opts this account and region into paid Amazon Inspector scanning for only
+`${project}-${environment}/*`. With enhanced scanning enabled, deployment rejects
+every HIGH or CRITICAL finding whose `fixAvailable` value is `YES` or `PARTIAL`.
+This matches the pinned Grype
+`--only-fixed` promotion policy without maintaining a drifting CVE allowlist.
+
+The enhanced setting is registry-wide even though its repository filter is narrow.
+Leave it disabled in a shared AWS account unless this stack owns the central ECR
+scanning policy. Applying the opt-in requires
+`ecr:PutRegistryScanningConfiguration` and may require `inspector2:Enable` when
+Inspector has not already been activated. The deploying AWS principal needs
 `ecr:DescribeImages` and `ecr:DescribeImageScanFindings`. It then verifies the
 Terraform-owned CodeBuild runner digest, copies the freshly rendered Terraform
 task templates, and replaces only their main container images. It runs the

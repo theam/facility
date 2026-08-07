@@ -199,8 +199,18 @@ test("AWS guides require the build manifest and reserve overrides for the runner
     );
     assert.match(
       markdown,
-      /ECR basic or enhanced[\s\S]{0,120}HIGH or CRITICAL/,
-      `${guideName} must document the deployment vulnerability gate`,
+      /Basic scanning[\s\S]{0,120}(?:rejects|reject) any HIGH or CRITICAL/,
+      `${guideName} must document the fail-closed basic-scan gate`,
+    );
+    assert.match(
+      markdown,
+      /enhanced scanning[\s\S]{0,160}HIGH or CRITICAL[\s\S]{0,80}`fixAvailable`[\s\S]{0,80}`YES` or `PARTIAL`/i,
+      `${guideName} must document the actionable enhanced-scan gate`,
+    );
+    assert.match(
+      markdown,
+      /registry-wide[\s\S]{0,180}(?:shared AWS account|shared account)/i,
+      `${guideName} must disclose the enhanced scanner's account and Region blast radius`,
     );
     assert.match(
       markdown,

@@ -99,6 +99,14 @@ hostnames, and select `auth_identity_provider = "github"` for self-hosting. A
 tfvars filename does not set Terraform's `environment` variable, so do not
 leave the copied `playground` value behind.
 
+Set `enable_ecr_enhanced_scanning = true` only when this stack owns the ECR
+scanning policy for the AWS account and Region. This is a paid Amazon Inspector
+integration and changes the registry-wide scan type, although its on-push filter
+is limited to this stack's `${project}-${environment}/*` repositories. Leave it
+false in a shared account whose registry scanning policy is managed centrally.
+Applying the opt-in requires `ecr:PutRegistryScanningConfiguration` and may
+require `inspector2:Enable` when Inspector has not already been activated.
+
 To limit direct GitHub login to active members of one organization, set
 `github_oauth_allowed_organization` to its login. Leave it empty to preserve
 Facility's invitation and App-installation checks without an additional
@@ -359,8 +367,11 @@ print secret values or commit `.env`, tfvars, state, or private-key files.
 ## 5. Stage the digest-pinned release and database gate
 
 One command now replaces the manual register/run/wait/update sequence. It checks
-that every digest exists in this stack's ECR, waits for each ECR basic or enhanced
-scan to complete, and rejects any image with a HIGH or CRITICAL finding. It then verifies
+that every digest exists in this stack's ECR and waits for its cached scan-on-push
+result. Basic scanning rejects any HIGH or CRITICAL finding because it cannot
+report whether an update exists. Inspector-backed enhanced scanning rejects every
+HIGH or CRITICAL finding whose `fixAvailable` value is `YES` or `PARTIAL`; a
+missing or inconsistent enhanced result also fails closed. It then verifies
 architecture and the Terraform-owned runner, registers task revisions from the
 exact Terraform templates, and runs the database deploy task. The deploying AWS
 principal therefore needs `ecr:DescribeImages` and

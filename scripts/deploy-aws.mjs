@@ -13,6 +13,7 @@ export const AWS_IMAGE_NAMES = Object.freeze(["api", "worker", "gateway", "web",
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const FULL_SHA_PATTERN = /^[0-9a-f]{40,64}$/;
+const ECR_FIX_AVAILABILITY = new Set(["YES", "NO", "PARTIAL"]);
 const ECR_REPOSITORY_PATTERN =
   /^\d{12}\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?\/[a-z0-9]+(?:[._/-][a-z0-9]+)*$/;
 const TASK_REGISTRATION_FIELDS = Object.freeze([
@@ -92,6 +93,75 @@ function expectedPlatform(cpuArchitecture) {
     "terraform_outputs_invalid",
     `task_cpu_architecture must be X86_64 or ARM64, received ${cpuArchitecture || "missing"}`,
   );
+}
+
+function vulnerabilityCounts(findings, repository) {
+  const counts = findings?.findingSeverityCounts;
+  const critical = Number(counts?.CRITICAL ?? 0);
+  const high = Number(counts?.HIGH ?? 0);
+  if (!Number.isSafeInteger(critical) || critical < 0 || !Number.isSafeInteger(high) || high < 0) {
+    throw new AwsDeployError(
+      "ecr_scan_invalid_response",
+      `ECR returned invalid vulnerability counts for ${repository}`,
+    );
+  }
+  return { critical, high };
+}
+
+export function enforceEcrScanPolicy(findings, { enhanced, repository }) {
+  const { critical, high } = vulnerabilityCounts(findings, repository);
+  if (!enhanced) {
+    // Basic scanning cannot distinguish a patchable vulnerability from one for
+    // which the distribution has no update. Preserve the original fail-closed
+    // behavior instead of silently guessing.
+    if (critical > 0 || high > 0) {
+      throw new AwsDeployError(
+        "ecr_scan_blocked",
+        `ECR blocked ${repository}: ${critical} critical and ${high} high vulnerabilities`,
+      );
+    }
+    return { critical, high, actionableCritical: 0, actionableHigh: 0, enhanced: false };
+  }
+
+  if (!Array.isArray(findings?.enhancedFindings)) {
+    throw new AwsDeployError(
+      "ecr_scan_invalid_response",
+      `ECR returned no enhanced findings for ${repository}`,
+    );
+  }
+
+  let actionableCritical = 0;
+  let actionableHigh = 0;
+  let observedCritical = 0;
+  let observedHigh = 0;
+  for (const finding of findings.enhancedFindings) {
+    if (finding?.severity !== "CRITICAL" && finding?.severity !== "HIGH") continue;
+    if (!ECR_FIX_AVAILABILITY.has(finding.fixAvailable)) {
+      throw new AwsDeployError(
+        "ecr_scan_invalid_response",
+        `ECR returned invalid fix availability for ${repository}`,
+      );
+    }
+    if (finding.severity === "CRITICAL") observedCritical += 1;
+    else observedHigh += 1;
+    if (finding.fixAvailable === "NO") continue;
+    if (finding.severity === "CRITICAL") actionableCritical += 1;
+    else actionableHigh += 1;
+  }
+
+  if (observedCritical !== critical || observedHigh !== high) {
+    throw new AwsDeployError(
+      "ecr_scan_invalid_response",
+      `ECR enhanced findings did not match vulnerability counts for ${repository}`,
+    );
+  }
+  if (actionableCritical > 0 || actionableHigh > 0) {
+    throw new AwsDeployError(
+      "ecr_scan_blocked",
+      `ECR blocked ${repository}: ${actionableCritical} critical and ${actionableHigh} high vulnerabilities have fixes available`,
+    );
+  }
+  return { critical, high, actionableCritical, actionableHigh, enhanced: true };
 }
 
 export function createAwsReleaseManifest({ metadata, repositoryPrefix, sourceSha, platform }) {
@@ -855,26 +925,10 @@ export function createAwsCliAdapter({
           );
         }
 
-        const counts = findings?.findingSeverityCounts;
-        const critical = Number(counts?.CRITICAL ?? 0);
-        const high = Number(counts?.HIGH ?? 0);
-        if (
-          !Number.isSafeInteger(critical) ||
-          critical < 0 ||
-          !Number.isSafeInteger(high) ||
-          high < 0
-        ) {
-          throw new AwsDeployError(
-            "ecr_scan_invalid_response",
-            `ECR returned invalid vulnerability counts for ${repository}@${digest}`,
-          );
-        }
-        if (critical > 0 || high > 0) {
-          throw new AwsDeployError(
-            "ecr_scan_blocked",
-            `ECR blocked ${repository}@${digest}: ${critical} critical and ${high} high vulnerabilities`,
-          );
-        }
+        enforceEcrScanPolicy(findings, {
+          enhanced: status === "ACTIVE",
+          repository: `${repository}@${digest}`,
+        });
         return { done: true };
       });
     },
