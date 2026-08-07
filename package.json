@@ -15,6 +15,7 @@
     "clean:outputs": "node scripts/clean-outputs.mjs",
     "build:clean": "pnpm clean:outputs && turbo run build --force",
     "dev": "node scripts/dev.mjs",
+    "deploy:aws": "node scripts/deploy-aws.mjs deploy",
     "dev:services": "turbo run dev dev:worker",
     "test": "pnpm test:dev && turbo run test",
     "test:dev": "node --test scripts/*.test.mjs",
@@ -25,6 +26,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "guards": "node guards/run.mjs",
+    "migrations:check": "node scripts/migrations.mjs check",
     "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {

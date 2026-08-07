@@ -179,7 +179,7 @@ variable "container_image_tags" {
 }
 
 variable "image_overrides" {
-  description = "Optional full image URI overrides keyed by api, worker, gateway, web, mcp, or runner. A worker override may intentionally separate it from the default API artifact."
+  description = "Advanced full image template overrides keyed by api, worker, gateway, web, mcp, or runner. The automated AWS release path replaces service images from its ECR-only manifest; use runner to pin the Terraform-owned CodeBuild image."
   type        = map(string)
   default     = {}
 }

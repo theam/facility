@@ -38,6 +38,16 @@ output "ecr_repository_urls" {
   value       = { for name, repo in aws_ecr_repository.service : name => repo.repository_url }
 }
 
+output "aws_region" {
+  description = "AWS region used by the digest-pinned deploy command."
+  value       = var.aws_region
+}
+
+output "task_cpu_architecture" {
+  description = "CPU architecture that release image manifests must match."
+  value       = var.task_cpu_architecture
+}
+
 output "secret_arns" {
   description = "Secrets Manager ARNs to populate out-of-band. Values are intentionally not managed by Terraform."
   value       = { for name, secret in aws_secretsmanager_secret.app : name => secret.arn }
@@ -66,6 +76,11 @@ output "codebuild_runner_project_name" {
 output "migrate_task_definition_arn" {
   description = "One-shot migration task definition. Run manually; Terraform does not auto-run migrations."
   value       = aws_ecs_task_definition.migrate.arn
+}
+
+output "service_task_definition_arns" {
+  description = "Terraform-rendered service templates used to register digest-pinned release revisions."
+  value       = { for name, task in aws_ecs_task_definition.service : name => task.arn }
 }
 
 output "private_subnet_ids" {

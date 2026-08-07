@@ -48,7 +48,7 @@ Edit `playground.tfvars`:
 - Set `enable_cloudfront_api_endpoint = true` to get an AWS-managed HTTPS API
   and webhook URL without a public DNS zone. This is intended for validation;
   use your own hostname and ACM certificate for production.
-- Choose the image source below before the first apply.
+- Use the module-owned ECR release path below.
 - Select direct `github` authentication for self-hosting or `oidc` for a SaaS
   broker. MCP OAuth is always issued by the dedicated Facility instance.
 - Set `github_oauth_allowed_organization` to a GitHub organization login when
@@ -58,30 +58,17 @@ Edit `playground.tfvars`:
   private package token; leave it false for public-package repositories.
 - Tune `envelope_retention_days` for your data-retention policy.
 
-Release tags publish images as `:<version>` (for example, `v0.3.0` publishes
-`:0.3.0`). GitHub creates each GHCR package private; repository visibility does
-not make it public. Use the release path only after a maintainer has made all
-six packages public and you have verified that each chosen image tag is
-anonymously pullable. Then add the overrides before the first apply, replacing
-`<version>` with the release version without its leading `v`:
+The automated AWS release path deliberately deploys only from the ECR
+repositories owned by this module. Leave service `image_overrides` empty and set
+every `container_image_tags` entry to the commit tag that Step 3 will push before
+the first apply. Public GHCR artifacts remain useful for other providers, but
+they are not a direct input to `deploy:aws`: an AWS release must first exist in
+this stack's ECR and have the exact manifest produced in Step 3. This preserves
+an in-account digest existence check and one supported AWS release path.
 
-```hcl
-image_overrides = {
-  api     = "ghcr.io/theam/facility/api:<version>"
-  worker  = "ghcr.io/theam/facility/worker:<version>"
-  gateway = "ghcr.io/theam/facility/gateway:<version>"
-  web     = "ghcr.io/theam/facility/web:<version>"
-  mcp     = "ghcr.io/theam/facility/mcp:<version>"
-  runner  = "ghcr.io/theam/facility/runner:<version>"
-}
-```
-
-Release images are `linux/amd64`, matching the module's default
-`task_cpu_architecture`. If any package or tag is absent or private, or if you
-are deploying on Graviton, from a non-release commit, or from a private fork,
-leave `image_overrides` empty and use the build fallback in Step 3. On that
-path, set every `container_image_tags` entry to the commit tag you will push
-before the first apply.
+`image_overrides` remains an advanced task-template escape hatch. The documented
+flow uses it only to pin the privileged runner to the exact ECR digest after the
+first build.
 
 For the first apply, set every service count to zero. Secret values do not exist
 yet, and on the build path neither do the images. `mcp_desired_count` otherwise
@@ -111,22 +98,25 @@ terraform apply -var-file=playground.tfvars
 Record these outputs:
 
 - `ecr_repository_urls`
+- `aws_region`
+- `task_cpu_architecture`
 - `secret_arns`
 - `rds_endpoint`
 - `rds_master_user_secret_arn`
 - `ecs_cluster_name`
 - `codebuild_runner_project_name`
 - `migrate_task_definition_arn`
+- `service_task_definition_arns`
 - `private_subnet_ids`
 - `service_security_group_id`
 
-## 3. Build and push images when needed
+## 3. Build and push release images
 
-If you configured and verified public `image_overrides` before the first apply,
-skip this step. The web image reads `FACILITY_API_URL` when it runs, so one
-published artifact works for every deployment. Set it to a bare HTTP(S) origin
-with no credentials, path, query, or fragment. Otherwise, from the module
-directory used above, build from the repository root and return afterward:
+This step is required because it creates the exact ECR manifest consumed by the
+release gate. The web image reads `FACILITY_API_URL` when it runs, so one artifact
+works for every deployment. Set it to a bare HTTP(S) origin with no credentials,
+path, query, or fragment. From the module directory used above, build from the
+repository root and return afterward:
 
 ```bash
 cd ../../..
@@ -152,11 +142,24 @@ The graph builds `linux/amd64` by default, matching Terraform's default
 in Terraform. The build exits before registry login if Buildx is unavailable or
 an explicit `PLATFORM` conflicts with `CPU_ARCHITECTURE`.
 
+The last output line is `manifest=<absolute path>`. That mode-`0600` JSON file
+maps all six runtime roles to exact ECR digests and records the full source SHA
+and platform. Keep the path for the deploy command; tags are build handles, not
+the deployment identity.
+
+The privileged CodeBuild runner remains Terraform-owned. Copy the manifest's
+exact `images.runner` digest reference into `image_overrides.runner` and apply
+the same tfvars before deploying. Most application releases reproduce the same
+runner digest and need no runner apply. When runner bytes change, the explicit
+apply is a deliberate security boundary; the deploy command verifies the
+CodeBuild project but never mutates it.
+
 When `api_url` changes, update the web task's runtime `FACILITY_API_URL` and
 redeploy the existing image; it does not need to be rebuilt.
 
-If you changed `container_image_tags` after the first apply, apply again before
-running the migrate task. Keeping the tag stable avoids that extra apply.
+Apply Terraform before the release command whenever a task template, service
+configuration, or runner digest changed. Ordinary application-image changes do
+not put Terraform on the hot path.
 
 ### Upgrade note: retire the duplicate worker repository
 
@@ -220,27 +223,41 @@ The RDS master password is in `rds_master_user_secret_arn`; use the runbook's
 captured pipeline to URL-encode it into `database_url` without writing the
 plaintext to the terminal.
 
-## 5. Run the migrate + seed task once
+## 5. Stage or deploy the release
 
-The `migrate` task is one database deploy gate. It holds one bounded lock while
-it applies checksum-verified migrations and reconciles the bundled essentials
-(roles, action types, registry, and sandbox profiles) that administrative
-bootstrap and `facility doctor` require. Re-running it is safe. Run it only
-after the `database_url` secret and images are populated:
+The release command validates every image against this stack's ECR repositories
+and architecture, verifies the Terraform-owned CodeBuild runner digest, copies
+the freshly rendered Terraform task templates, and replaces only their main
+container images. It then runs the one-shot database deploy task and waits for
+exit `0` before changing any service. The five service updates run in parallel;
+a failed rollout restores all five prior task definitions but never rolls back
+the database.
+
+The wait budget is 12 minutes by default. Pass `--command-timeout-ms <milliseconds>`
+(up to 3600000) when this stack's measured rollout time needs a larger bound.
+
+For the first deployment, while all desired counts are deliberately zero:
 
 ```bash
-aws ecs run-task \
-  --cluster "$(terraform output -raw ecs_cluster_name)" \
-  --launch-type FARGATE \
-  --task-definition "$(terraform output -raw migrate_task_definition_arn)" \
-  --network-configuration "awsvpcConfiguration={subnets=$(terraform output -json private_subnet_ids),securityGroups=[$(terraform output -raw service_security_group_id)],assignPublicIp=DISABLED}"
+pnpm --dir ../../.. deploy:aws \
+  --manifest /absolute/path/from-build-images.json \
+  --terraform-dir . \
+  --allow-zero-desired
 ```
 
-Watch `/facility/<environment>/migrate` in CloudWatch Logs for JSON
-`facility.db.deploy` events ending with `phase=deploy,status=completed`. Exit
-`10` is a retryable lock timeout; exit `11` identifies an applied migration
-whose SHA-256 changed; exit `12` identifies migration SQL that rolled back.
-`facility doctor` will flag `seed_essentials` if this task did not run.
+This produces a `status=staged` event: migration and digest pointers are ready,
+but zero running tasks are not reported as healthy. Raise all five desired
+counts in the next step. On later deployments, omit `--allow-zero-desired`; the
+command waits for and verifies five healthy services. Exit `10` is a retryable
+database-lock timeout, `11` is a changed applied migration, `12` is rolled-back
+migration SQL, `21` means service rollback succeeded, and `22` means operator
+intervention is required because service rollback was incomplete.
+
+Treat this command as a single-writer operation: do not run it concurrently
+from CI and an operator laptop. It rechecks all five service pointers after the
+database gate and refuses observed drift, but ECS has no atomic compare-and-swap
+across services. A CI wrapper must use one concurrency group per Facility
+environment.
 
 ## 6. Bind the instance
 
@@ -257,8 +274,10 @@ Until this runs, every sign-in fails with `not_invited` or
 
 ## 7. Start and verify the services
 
-Raise all five desired counts in `playground.tfvars`, apply the same file, and
-wait for every service, including MCP:
+After the first staged deployment, raise all five desired counts in
+`playground.tfvars`, apply the same file, and wait for every service, including
+MCP. Terraform continues to own desired counts and service configuration while
+preserving the digest-pinned live task pointers:
 
 ```bash
 terraform apply -var-file=playground.tfvars

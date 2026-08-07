@@ -166,4 +166,11 @@ resource "aws_ecs_service" "service" {
     aws_lb_listener.http,
     aws_lb_listener.https,
   ]
+
+  # Terraform owns the task template; the release command copies that exact
+  # revision, pins its image digest, and owns the live service pointer. Desired
+  # count and every other service property remain Terraform-managed.
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }

@@ -5,6 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 IMAGE_TAG="${IMAGE_TAG:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo latest)}"
 CPU_ARCHITECTURE="${CPU_ARCHITECTURE:-X86_64}"
+SOURCE_SHA="${SOURCE_SHA:-$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)}"
+
+if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40,64}$ ]]; then
+  printf 'SOURCE_SHA must be a full lowercase commit SHA (received %s)\n' "${SOURCE_SHA:-missing}" >&2
+  exit 1
+fi
 
 case "$CPU_ARCHITECTURE" in
   X86_64) expected_platform="linux/amd64" ;;
@@ -45,6 +51,14 @@ export ECR_REGISTRY ECR_PREFIX IMAGE_TAG PLATFORM
 
 login
 
+mkdir -p "$ROOT_DIR/.tmp"
+metadata_path="$(mktemp "$ROOT_DIR/.tmp/facility-bake-metadata.XXXXXX")"
+manifest_path="${MANIFEST_PATH:-$ROOT_DIR/.tmp/facility-aws-release-$SOURCE_SHA.json}"
+cleanup() {
+  rm -f "$metadata_path"
+}
+trap cleanup EXIT
+
 # Bake runs independent targets concurrently and shares the root Dockerfile's
 # dependency graph. API and worker run the same digest from the API repository
 # with different ECS commands, so only one copy is pushed and scanned.
@@ -53,8 +67,19 @@ login
   # env-free infra directory so application secrets are neither parsed nor
   # forwarded into the build definition.
   cd "$ROOT_DIR/infra"
-  docker buildx bake --allow=fs.read=.. --file "$BAKE_FILE" --push
+  docker buildx bake \
+    --allow=fs.read=.. \
+    --file "$BAKE_FILE" \
+    --metadata-file "$metadata_path" \
+    --push
 )
+
+node "$ROOT_DIR/scripts/deploy-aws.mjs" manifest \
+  --metadata "$metadata_path" \
+  --repository-prefix "$ECR_REGISTRY/$ECR_PREFIX" \
+  --source-sha "$SOURCE_SHA" \
+  --platform "$PLATFORM" \
+  --output "$manifest_path" >/dev/null
 
 # Preserve the script's stable machine-readable output contract while making
 # the worker alias explicit for callers that still expect all service roles.
@@ -64,3 +89,4 @@ printf 'worker=%s\n' "$api_ref"
 for name in gateway mcp web runner; do
   printf '%s=%s/%s/%s:%s\n' "$name" "$ECR_REGISTRY" "$ECR_PREFIX" "$name" "$IMAGE_TAG"
 done
+printf 'manifest=%s\n' "$manifest_path"

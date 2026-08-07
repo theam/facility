@@ -22,6 +22,10 @@ target "service" {
   context    = ".."
   dockerfile = "Dockerfile"
   platforms  = [PLATFORM]
+  # A timestamped provenance wrapper gives identical runtime bytes a new
+  # manifest digest on every build. The release manifest pins the reproducible
+  # runtime manifest without presenting the timestamped wrapper as provenance.
+  attest = ["type=provenance,disabled=true"]
 }
 
 target "api" {
@@ -48,6 +52,7 @@ target "web" {
   target     = "web"
   platforms  = [PLATFORM]
   tags = ["${ECR_REGISTRY}/${ECR_PREFIX}/web:${IMAGE_TAG}"]
+  attest = ["type=provenance,disabled=true"]
 }
 
 target "runner" {
@@ -55,4 +60,5 @@ target "runner" {
   dockerfile = "runner/Dockerfile"
   platforms  = [PLATFORM]
   tags       = ["${ECR_REGISTRY}/${ECR_PREFIX}/runner:${IMAGE_TAG}"]
+  attest     = ["type=provenance,disabled=true"]
 }

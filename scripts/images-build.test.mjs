@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -16,7 +16,7 @@ async function fakeCommands(t) {
   await writeFile(
     join(directory, "docker"),
     `#!/usr/bin/env node
-const { appendFileSync, readFileSync } = require("node:fs");
+const { appendFileSync, readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const stdin = args[0] === "login" ? readFileSync(0, "utf8") : null;
 appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({
@@ -26,6 +26,14 @@ appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({
   stdin,
 }) + "\\n");
 if (args[0] === "buildx" && args[1] === "version" && process.env.FAKE_BUILDX_UNAVAILABLE === "1") process.exit(17);
+if (args[0] === "buildx" && args[1] === "bake") {
+  const metadataPath = args[args.indexOf("--metadata-file") + 1];
+  const metadata = Object.fromEntries(["api", "gateway", "mcp", "web", "runner"].map((name, index) => {
+    const digest = "sha256:" + String(index + 1).repeat(64);
+    return [name, { "containerimage.digest": digest, "containerimage.descriptor": { digest } }];
+  }));
+  writeFileSync(metadataPath, JSON.stringify(metadata));
+}
 `,
   );
   await writeFile(
@@ -56,6 +64,8 @@ function environment(fake, overrides = {}) {
     IMAGE_TAG: "abc123def456",
     CPU_ARCHITECTURE: "X86_64",
     PLATFORM: "linux/amd64",
+    SOURCE_SHA: "a".repeat(40),
+    MANIFEST_PATH: join(fake.directory, "release-manifest.json"),
     ...overrides,
   };
 }
@@ -102,8 +112,11 @@ test("AWS fallback builds the complete image set through one Bake graph", async 
     "--allow=fs.read=..",
     "--file",
     join(root, "infra", "docker-bake.hcl"),
+    "--metadata-file",
+    bake.args[6],
     "--push",
   ]);
+  assert.match(bake.args[6], /^.*\/\.tmp\/facility-bake-metadata\.[A-Za-z0-9]+$/);
   assert.equal(bake.cwd, join(root, "infra"));
   assert.deepEqual(bake.env, {
     ECR_REGISTRY: "123456789012.dkr.ecr.eu-west-1.amazonaws.com",
@@ -122,7 +135,25 @@ test("AWS fallback builds the complete image set through one Bake graph", async 
     "mcp=123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/mcp:abc123def456",
     "web=123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/web:abc123def456",
     "runner=123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/runner:abc123def456",
+    `manifest=${join(fake.directory, "release-manifest.json")}`,
   ]);
+  const manifest = JSON.parse(
+    await readFile(join(fake.directory, "release-manifest.json"), "utf8"),
+  );
+  assert.deepEqual(manifest, {
+    schemaVersion: 1,
+    sourceSha: "a".repeat(40),
+    platform: "linux/amd64",
+    images: {
+      api: `123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/api@sha256:${"1".repeat(64)}`,
+      worker: `123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/api@sha256:${"1".repeat(64)}`,
+      gateway: `123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/gateway@sha256:${"2".repeat(64)}`,
+      mcp: `123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/mcp@sha256:${"3".repeat(64)}`,
+      web: `123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/web@sha256:${"4".repeat(64)}`,
+      runner: `123456789012.dkr.ecr.eu-west-1.amazonaws.com/facility-test/runner@sha256:${"5".repeat(64)}`,
+    },
+  });
+  assert.equal((await stat(join(fake.directory, "release-manifest.json"))).mode & 0o777, 0o600);
 });
 
 test("Bake keeps thin target boundaries and publishes every target through one graph", async () => {
@@ -139,17 +170,21 @@ test("Bake keeps thin target boundaries and publishes every target through one g
   assert.match(bake, /target "mcp" \{[\s\S]*target\s+= "mcp"/);
   assert.match(bake, /target "web" \{[\s\S]*dockerfile = "apps\/web\/Dockerfile"/);
   assert.match(bake, /target "runner" \{[\s\S]*dockerfile = "runner\/Dockerfile"/);
-  for (const image of ["api", "gateway", "mcp", "web", "runner"]) {
-    assert.match(publish, new RegExp(`target "${image}" \\{`));
+  assert.match(bake, /target "service" \{[\s\S]*?attest\s+= \["type=provenance,disabled=true"\]/);
+  for (const image of ["web", "runner"]) {
     assert.match(
-      publish,
+      bake,
       new RegExp(
         `target "${image}" \\{[\\s\\S]*?attest\\s+= \\["type=provenance,disabled=true"\\]`,
       ),
     );
+  }
+  for (const image of ["api", "gateway", "mcp", "web", "runner"]) {
+    assert.match(publish, new RegExp(`target "${image}" \\{`));
     assert.match(publish, new RegExp(`/${image},push-by-digest=true`));
     assert.match(publish, new RegExp(`scope=facility-${image}`));
   }
+  assert.doesNotMatch(publish, /attest\s+=/);
   assert.doesNotMatch(publish, /target "control"|\/control,/);
 
   const dockerignore = await readFile(join(root, ".dockerignore"), "utf8");

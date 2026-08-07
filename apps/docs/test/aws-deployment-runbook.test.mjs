@@ -24,6 +24,8 @@ const codeBuildTerraform = readFileSync(
 const iamTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/iam.tf"), "utf8");
 const localsTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/locals.tf"), "utf8");
 const storageTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/storage.tf"), "utf8");
+const ecsTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/ecs.tf"), "utf8");
+const outputsTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/outputs.tf"), "utf8");
 
 function apiStage(image) {
   const start = image.indexOf("FROM base AS api\n");
@@ -40,46 +42,22 @@ function bootstrapOverrideCommand(markdown) {
   return [...override[1].matchAll(/"([^"]*)"/g)].map(([, token]) => token);
 }
 
-function imageOverrideBlock(markdown, guideName) {
-  const match = markdown.match(/```hcl\n(image_overrides = \{[\s\S]*?\n\})\n```/);
-  assert.ok(match, `${guideName} must include the release image_overrides block`);
-  return match[1];
-}
-
-test("AWS guides select verified public release images before the first apply", () => {
+test("AWS guides use one truthful ECR-only automated release path", () => {
   for (const [guideName, markdown] of guides) {
-    const privatePackageWarning = markdown.indexOf("GitHub creates each GHCR package private");
-    const publicPackageRequirement = markdown.search(/made all\s+six packages public/);
-    const anonymousPullRequirement = markdown.search(/anonymously\s+pullable/);
-    const imageOverrides = markdown.indexOf("image_overrides = {");
-    const firstApply = markdown.indexOf("apply -var-file");
-
-    assert.notEqual(privatePackageWarning, -1, `${guideName} must explain GHCR's private default`);
-    assert.notEqual(
-      publicPackageRequirement,
-      -1,
-      `${guideName} must require all release packages to be public`,
+    assert.match(
+      markdown,
+      /automated AWS release path deliberately deploys only from the ECR\s+repositories owned by this module/,
+      `${guideName} must make ECR the single automated AWS release source`,
     );
-    assert.notEqual(
-      anonymousPullRequirement,
-      -1,
-      `${guideName} must require an anonymous-pull check`,
-    );
-    assert.notEqual(firstApply, -1, `${guideName} must include the first Terraform apply`);
-    assert.ok(
-      privatePackageWarning < imageOverrides &&
-        publicPackageRequirement < imageOverrides &&
-        anonymousPullRequirement < imageOverrides,
-      `${guideName} must state the GHCR visibility prerequisite before configuring overrides`,
-    );
-    assert.ok(
-      imageOverrides < firstApply,
-      `${guideName} must configure image_overrides before the first Terraform apply`,
+    assert.match(
+      markdown,
+      /Public GHCR artifacts remain useful for other providers, but\s+they are not a\s+direct input to `deploy:aws`/,
+      `${guideName} must distinguish general GHCR publication from AWS deployment`,
     );
     assert.doesNotMatch(
       markdown,
-      /because the packages are public/,
-      `${guideName} must not assume the packages are already public`,
+      /ghcr\.io\/theam\/facility\/|skip this step/,
+      `${guideName} must not advertise the unsupported direct-GHCR shortcut`,
     );
   }
 });
@@ -111,26 +89,17 @@ test("the runbook bootstraps by the name the api image puts on the PATH", () => 
   );
 });
 
-test("AWS guides keep the release override and build-fallback paths synchronized", () => {
-  const [[runbookName, runbook], [readmeName, readme]] = guides;
-  assert.equal(
-    imageOverrideBlock(runbook, runbookName),
-    imageOverrideBlock(readme, readmeName),
-    "both AWS guides must use the same release image overrides",
-  );
-
+test("AWS guides require the build manifest and reserve overrides for the runner", () => {
   for (const [guideName, markdown] of guides) {
-    for (const service of ["api", "worker", "gateway", "web", "mcp", "runner"]) {
-      assert.match(
-        markdown,
-        new RegExp(`ghcr\\.io/theam/facility/${service}:<version>`),
-        `${guideName} must override the ${service} image`,
-      );
-    }
     assert.match(
       markdown,
-      /## 3\. Build and push images when needed[\s\S]*?If you configured and verified public `image_overrides` before the first apply,\s+skip this step\./,
-      `${guideName} must keep self-built images as a conditional fallback`,
+      /## 3\. Build and push release images[\s\S]*?required because it creates the exact ECR manifest/,
+      `${guideName} must require the manifest-producing build step`,
+    );
+    assert.match(
+      markdown,
+      /image_overrides[\s\S]*?pin the privileged runner to the exact ECR digest/,
+      `${guideName} must scope the documented override to the Terraform-owned runner`,
     );
   }
 });
@@ -162,6 +131,36 @@ test("AWS stores the shared API and worker artifact once without collapsing thei
       markdown,
       /API and worker (?:run|use) the same API digest|API and worker run the same API digest/,
       `${guideName} must explain the shared artifact`,
+    );
+  }
+});
+
+test("AWS release ownership stays narrow and the guides use the digest deploy gate", () => {
+  const service = ecsTerraform.slice(ecsTerraform.indexOf('resource "aws_ecs_service" "service"'));
+  assert.match(service, /lifecycle \{\s+ignore_changes = \[task_definition\]\s+\}/);
+  assert.doesNotMatch(service, /ignore_changes\s*=\s*\[[^\]]*desired_count/);
+  assert.doesNotMatch(codeBuildTerraform, /ignore_changes/);
+  assert.match(
+    outputsTerraform,
+    /output "service_task_definition_arns"[\s\S]*aws_ecs_task_definition\.service/,
+  );
+  assert.match(outputsTerraform, /output "task_cpu_architecture"/);
+
+  for (const [guideName, markdown] of guides) {
+    assert.match(
+      markdown,
+      /deploy:aws[\s\S]*--manifest[\s\S]*--allow-zero-desired/,
+      `${guideName} must stage the initial digest release without certifying zero tasks`,
+    );
+    assert.match(
+      markdown,
+      /CodeBuild runner remains Terraform-owned|CodeBuild runner is intentionally not changed/,
+      `${guideName} must keep the privileged runner outside the fast mutation path`,
+    );
+    assert.match(
+      markdown,
+      /restores all five prior task definitions|restored; `22` requires intervention/,
+      `${guideName} must document service-only rollback`,
     );
   }
 });
