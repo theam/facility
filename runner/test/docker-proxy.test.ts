@@ -20,6 +20,14 @@ afterEach(async () => {
 });
 
 describe("restricted Docker API", () => {
+  test("pins package-store integrity for project-scoped CodeBuild caches", async () => {
+    const script = await readFile(
+      join(fileURLToPath(new URL("..", import.meta.url)), "codebuild-runner.sh"),
+      "utf8",
+    );
+    expect(script).toContain("export PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true");
+  });
+
   test("allows build and ordinary container lifecycle calls", () => {
     expect(dockerRequestPolicy("POST", "/v1.47/build?t=repo%2Fimage")).toEqual({
       allowed: true,

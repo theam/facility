@@ -195,6 +195,384 @@ describe("SSO-protected preview sandboxes", async () => {
     expect(replacement?.config).toMatchObject({ image: "ghcr.io/example/app:replacement" });
   });
 
+  it("requeues durable unbound previews and leases launch to one worker", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:durable-preview",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("durable preview fixture missing");
+
+    const requeued: string[] = [];
+    await expect(
+      reconcilePreviews(config, undefined, async (previewId) => {
+        requeued.push(previewId);
+      }),
+    ).resolves.toMatchObject({ requeued: expect.arrayContaining([preview.id]) });
+
+    await db
+      .update(previewSandboxes)
+      .set({ provisionClaimedAt: new Date(Date.now() - 16 * 60_000) })
+      .where(eq(previewSandboxes.id, preview.id));
+    const staleRequeues: string[] = [];
+    await reconcilePreviews(config, undefined, async (previewId) => {
+      staleRequeues.push(previewId);
+    });
+    expect(staleRequeues).toContain(preview.id);
+
+    let launchCount = 0;
+    let releaseLaunch: () => void = () => undefined;
+    let markLaunchStarted: () => void = () => undefined;
+    const launchStarted = new Promise<void>((resolve) => {
+      markLaunchStarted = resolve;
+    });
+    const launchGate = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+    const driver: SandboxDriver = {
+      name: "docker",
+      launch: async () => {
+        launchCount += 1;
+        markLaunchStarted();
+        await launchGate;
+        return { ref: "leased-preview", endpoint: "http://127.0.0.1:3999" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+    const first = provisionPreview(config, preview.id, driver);
+    await launchStarted;
+    const duplicate = await provisionPreview(config, preview.id, driver);
+    expect(duplicate).toMatchObject({ id: preview.id, status: "provisioning", ref: null });
+    expect(launchCount).toBe(1);
+    releaseLaunch();
+    await expect(first).resolves.toMatchObject({
+      id: preview.id,
+      status: "running",
+      ref: "leased-preview",
+      provisionClaimedAt: null,
+    });
+  });
+
+  it("recovers a stale AWS launch exactly once instead of starting another task", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:recover-existing",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("stale recovery fixture missing");
+    await db
+      .update(previewSandboxes)
+      .set({ driver: "aws", provisionClaimedAt: new Date(Date.now() - 16 * 60_000) })
+      .where(eq(previewSandboxes.id, preview.id));
+
+    let recoveryCount = 0;
+    let launchCount = 0;
+    const driver: SandboxDriver = {
+      name: "aws",
+      recoverLaunch: async (spec) => {
+        recoveryCount += 1;
+        expect(spec).toEqual({ runId: `preview:${preview.id}`, servicePort: 3000 });
+        return { ref: "recovered-task", endpoint: "http://10.0.2.45:3000" };
+      },
+      launch: async () => {
+        launchCount += 1;
+        return { ref: "duplicate-task", endpoint: "http://10.0.2.46:3000" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await expect(provisionPreview(config, preview.id, driver)).resolves.toMatchObject({
+      status: "running",
+      ref: "recovered-task",
+      originUrl: "http://10.0.2.45:3000",
+      provisionClaimedAt: null,
+    });
+    await expect(provisionPreview(config, preview.id, driver)).resolves.toMatchObject({
+      status: "running",
+      ref: "recovered-task",
+    });
+    expect(recoveryCount).toBe(1);
+    expect(launchCount).toBe(0);
+  });
+
+  it("keeps stale recovery retryable when AWS task discovery is denied", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:recover-denied",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("recovery denial fixture missing");
+    const staleClaim = new Date(Date.now() - 16 * 60_000);
+    await db
+      .update(previewSandboxes)
+      .set({ driver: "aws", provisionClaimedAt: staleClaim })
+      .where(eq(previewSandboxes.id, preview.id));
+
+    let denied = true;
+    let launchCount = 0;
+    const driver: SandboxDriver = {
+      name: "aws",
+      recoverLaunch: async () => {
+        if (denied) throw Object.assign(new Error("not authorized"), { name: "AccessDenied" });
+        return { ref: "eventually-recovered", endpoint: "http://10.0.2.47:3000" };
+      },
+      launch: async () => {
+        launchCount += 1;
+        return { ref: "must-not-launch", endpoint: "http://10.0.2.48:3000" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await expect(provisionPreview(config, preview.id, driver)).rejects.toThrow("not authorized");
+    const deniedRow = (
+      await db.select().from(previewSandboxes).where(eq(previewSandboxes.id, preview.id)).limit(1)
+    )[0];
+    expect(deniedRow).toMatchObject({
+      status: "provisioning",
+      ref: null,
+      error: "preview_recovery_failed:not authorized",
+      provisionClaimedAt: staleClaim,
+    });
+    expect(launchCount).toBe(0);
+
+    denied = false;
+    await expect(provisionPreview(config, preview.id, driver)).resolves.toMatchObject({
+      status: "running",
+      ref: "eventually-recovered",
+    });
+    expect(launchCount).toBe(0);
+  });
+
+  it("destroys a launch that loses its attach lease to terminal preview state", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:attach-race",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("attach race fixture missing");
+    let releaseLaunch: () => void = () => undefined;
+    let markLaunchStarted: () => void = () => undefined;
+    const launchStarted = new Promise<void>((resolve) => {
+      markLaunchStarted = resolve;
+    });
+    const launchGate = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+    const destroyed: string[] = [];
+    const driver: SandboxDriver = {
+      name: "aws",
+      launch: async () => {
+        markLaunchStarted();
+        await launchGate;
+        return { ref: "lost-attach-task", endpoint: "http://10.0.2.49:3000" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async (ref) => {
+        destroyed.push(ref);
+      },
+    };
+
+    const provisioning = provisionPreview(config, preview.id, driver);
+    await launchStarted;
+    await db
+      .update(previewSandboxes)
+      .set({ status: "destroyed", provisionClaimedAt: null })
+      .where(eq(previewSandboxes.id, preview.id));
+    releaseLaunch();
+
+    await expect(provisioning).resolves.toMatchObject({ status: "destroyed", ref: null });
+    expect(destroyed).toEqual(["lost-attach-task"]);
+  });
+
+  it("does not destroy the task a recovery worker adopted from a slow launcher", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:slow-launch-adoption",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("slow launch adoption fixture missing");
+
+    let releaseLaunch: () => void = () => undefined;
+    let markLaunchStarted: () => void = () => undefined;
+    const launchStarted = new Promise<void>((resolve) => {
+      markLaunchStarted = resolve;
+    });
+    const launchGate = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+    let launchCount = 0;
+    let recoveryCount = 0;
+    const destroyed: string[] = [];
+    const adopted = {
+      ref: "slow-task-adopted-by-recovery",
+      endpoint: "http://10.0.2.52:3000",
+    };
+    const driver: SandboxDriver = {
+      name: "aws",
+      launch: async () => {
+        launchCount += 1;
+        markLaunchStarted();
+        await launchGate;
+        return adopted;
+      },
+      recoverLaunch: async () => {
+        recoveryCount += 1;
+        return adopted;
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async (ref) => {
+        destroyed.push(ref);
+      },
+    };
+
+    const original = provisionPreview(config, preview.id, driver);
+    await launchStarted;
+    await db
+      .update(previewSandboxes)
+      .set({ provisionClaimedAt: new Date(Date.now() - 16 * 60_000) })
+      .where(eq(previewSandboxes.id, preview.id));
+
+    await expect(provisionPreview(config, preview.id, driver)).resolves.toMatchObject({
+      status: "running",
+      ref: adopted.ref,
+    });
+    releaseLaunch();
+    await expect(original).resolves.toMatchObject({ status: "running", ref: adopted.ref });
+    expect({ launchCount, recoveryCount, destroyed }).toEqual({
+      launchCount: 1,
+      recoveryCount: 1,
+      destroyed: [],
+    });
+  });
+
+  it("does not resurrect a terminal preview when post-attach persistence fails", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:post-attach-failure",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("post-attach failure fixture missing");
+    let releaseStatus: () => void = () => undefined;
+    let markStatusStarted: () => void = () => undefined;
+    const statusStarted = new Promise<void>((resolve) => {
+      markStatusStarted = resolve;
+    });
+    const statusGate = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    const destroyed: string[] = [];
+    const driver: SandboxDriver = {
+      name: "aws",
+      launch: async () => ({
+        ref: "attached-before-failure",
+        endpoint: "http://10.0.2.51:3000",
+      }),
+      status: async () => {
+        markStatusStarted();
+        await statusGate;
+        throw new Error("describe failed");
+      },
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async (ref) => {
+        destroyed.push(ref);
+      },
+    };
+
+    const provisioning = provisionPreview(config, preview.id, driver);
+    await statusStarted;
+    await db
+      .update(previewSandboxes)
+      .set({ status: "destroyed", ref: null, originUrl: null, provisionClaimedAt: null })
+      .where(eq(previewSandboxes.id, preview.id));
+    releaseStatus();
+
+    await expect(provisioning).rejects.toThrow("describe failed");
+    const terminal = (
+      await db.select().from(previewSandboxes).where(eq(previewSandboxes.id, preview.id)).limit(1)
+    )[0];
+    expect(terminal).toMatchObject({ status: "destroyed", ref: null, originUrl: null });
+    expect(destroyed).toEqual(["attached-before-failure"]);
+  });
+
+  it("reconciles a crash after ref and endpoint attachment without relaunching", async () => {
+    const preview = await createPreviewRecord(db, {
+      orgId,
+      projectId,
+      image: "ghcr.io/example/app:attached-before-crash",
+      port: 3000,
+      ttlHours: 24,
+      createdBy: { type: "user", id: userId },
+    });
+    if (!preview) throw new Error("post-attach crash fixture missing");
+    await db
+      .update(previewSandboxes)
+      .set({
+        driver: "aws",
+        ref: "attached-task",
+        originUrl: "http://10.0.2.50:3000",
+        status: "provisioning",
+        provisionClaimedAt: null,
+      })
+      .where(eq(previewSandboxes.id, preview.id));
+    let launchCount = 0;
+    const driver: SandboxDriver = {
+      name: "aws",
+      launch: async () => {
+        launchCount += 1;
+        return { ref: "duplicate" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await expect(reconcilePreviews(config, driver)).resolves.toMatchObject({
+      changed: expect.arrayContaining([preview.id]),
+    });
+    const recovered = (
+      await db.select().from(previewSandboxes).where(eq(previewSandboxes.id, preview.id)).limit(1)
+    )[0];
+    expect(recovered).toMatchObject({
+      status: "running",
+      ref: "attached-task",
+      originUrl: "http://10.0.2.50:3000",
+    });
+    expect(launchCount).toBe(0);
+  });
+
   it("provisions a private origin, exposes only the SSO proxy URL, and destroys on demand", async () => {
     let requestedPath = "";
     const server = createServer((_request, response) => {
@@ -289,6 +667,18 @@ describe("SSO-protected preview sandboxes", async () => {
         headers: { host: "facility.test", cookie },
       });
       expect(controlOrigin.statusCode).toBe(404);
+      const encodedControlOrigin = await app.inject({
+        method: "GET",
+        url: `/%70review/${preview.id}/`,
+        headers: { host: "facility.test", cookie },
+      });
+      expect(encodedControlOrigin.statusCode).toBe(404);
+      const encodedControlApiOnPreviewOrigin = await app.inject({
+        method: "GET",
+        url: `/%76%31/projects/${projectId}/previews`,
+        headers: { host: "facility-previews.test", cookie },
+      });
+      expect(encodedControlApiOnPreviewOrigin.statusCode).toBe(404);
       const opened = await app.inject({
         method: "GET",
         url: `/v1/projects/${projectId}/previews/${preview.id}/open`,

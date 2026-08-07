@@ -10,6 +10,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { pathToFileURL } from "node:url";
 
 const MAX_REPAIR_ATTEMPTS = 2;
+const MAX_BRANCH_REPAIR_ATTEMPTS = 3;
 const FAILURE_CONCLUSIONS = new Set([
   "action_required",
   "cancelled",
@@ -147,6 +148,19 @@ export function countAttempts(comments, fingerprint) {
   return count;
 }
 
+export function countBranchAttempts(comments) {
+  let count = 0;
+  for (const comment of comments) {
+    ATTEMPT_RE.lastIndex = 0;
+    let match = ATTEMPT_RE.exec(comment.body ?? "");
+    while (match) {
+      if (match[3] === "started") count += 1;
+      match = ATTEMPT_RE.exec(comment.body ?? "");
+    }
+  }
+  return count;
+}
+
 function attemptState(comments, fingerprint, headSha) {
   const state = { startedAtHead: false, triageSeen: false };
   for (const comment of comments) {
@@ -197,9 +211,11 @@ export function decideDoctorAction({
 
   const failure = failures[0];
   const attempts = countAttempts(comments, failure.fingerprint);
+  const branchAttempts = countBranchAttempts(comments);
   const markers = attemptState(comments, failure.fingerprint, eventHeadSha);
   const base = {
     attempts,
+    branchAttempts,
     failure,
     triageSeen: markers.triageSeen,
     pullRequest,
@@ -235,6 +251,9 @@ export function decideDoctorAction({
   }
   if (attempts >= MAX_REPAIR_ATTEMPTS) {
     return none(`repair attempt limit reached for fingerprint ${failure.fingerprint}`);
+  }
+  if (branchAttempts >= MAX_BRANCH_REPAIR_ATTEMPTS) {
+    return none(`repair attempt limit reached for this pull-request branch`);
   }
 
   return {

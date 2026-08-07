@@ -3,7 +3,7 @@
 # target succeeds and promotion validates the complete set. Default BuildKit
 # provenance embeds per-run timestamps in an unsigned wrapper index, making an
 # identical runtime image produce a different digest on replay. The base graph
-# disables that wrapper so AWS and GHCR address the same reproducible manifest.
+# disables that wrapper so AWS and GHCR address the same exact runtime manifest.
 variable "PUBLISH_REGISTRY" {
   default = "ghcr.io"
 }

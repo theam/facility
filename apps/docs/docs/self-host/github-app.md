@@ -46,11 +46,14 @@ For an existing-repository lifecycle, set these **Repository permissions**:
 |---|---|---|
 | Actions | Read-only | inspect workflow runs and receive `workflow_run` |
 | Checks | Read-only | receive CI check results |
+| Code scanning alerts | Read-only | collect deterministic platform security-sweep evidence when code scanning is enabled |
 | Contents | Read and write | clone, read files, create commits, and update governed branches |
+| Dependabot alerts | Read-only | collect deterministic platform security-sweep evidence when Dependabot is enabled |
 | Deployments | Read-only | receive deployment health signals |
 | Issues | Read and write | sync work issues, publish agent plans/comments, and project qualifying security or learning work through trusted code (receipts/outcomes do not create issues) |
 | Metadata | Read-only | repository identity and collaborator metadata; GitHub normally selects this automatically |
 | Pull requests | Read and write | open and close PRs and collect review evidence |
+| Secret scanning alerts | Read-only | collect deterministic platform security-sweep evidence when secret scanning is enabled |
 | Workflows | Read and write | install or update files under `.github/workflows` during kickstart |
 
 Set **Organization permissions → Members** and **Account permissions → Email
@@ -68,6 +71,8 @@ to connect and operate on an existing repository.
 GitHub shows only webhook events allowed by the selected permissions. In
 particular, `workflow_run` requires Actions read access, `check_run` requires
 Checks read access, and `deployment_status` requires Deployments read access.
+Facility records a scanner as unavailable rather than clean when its GitHub
+feature is disabled or its read permission has not been approved.
 See GitHub's
 [permission guide](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app)
 and [webhook event reference](https://docs.github.com/en/webhooks/webhook-events-and-payloads).

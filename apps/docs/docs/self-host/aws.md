@@ -155,9 +155,16 @@ route53_zone_id               = ""
 enable_cloudfront_api_endpoint = true
 ```
 
+The CloudFront validation endpoint and an ALB certificate are mutually
+exclusive because CloudFront uses the certificate-less HTTP listener as its
+origin. Terraform rejects enabling both.
+
 For production, leave the CloudFront validation endpoint disabled, point
 `api_hostname` at the ALB with a real certificate, and set `route53_zone_id`
-only when Terraform should create the alias record.
+only when Terraform should create the alias record. With an ACM certificate,
+the port 80 listener preserves the host, path, and query while redirecting every
+request to HTTPS; it never forwards plaintext traffic to a Facility service.
+Certificate-less testing retains direct HTTP forwarding.
 
 Protected previews also require `preview_hostname` on a separately registered
 site, covered by the same ACM certificate. Set `preview_route53_zone_id` when
@@ -206,6 +213,10 @@ apply are excluded from the Docker context.
 The script writes a mode-`0600` release manifest at
 `FACILITY_RELEASE_MANIFEST`. It contains the full source SHA, platform, and exact
 ECR digest for all six runtime roles. Deployment never resolves the build tags.
+
+The script rejects a dirty Git worktree so that this SHA identifies the bytes it
+labels. Commit or stash release inputs first; reserve
+`FACILITY_ALLOW_DIRTY_BUILD=1` for explicitly non-production experiments.
 
 The privileged CodeBuild runner is intentionally not changed by the fast deploy
 command. Copy this exact value into `image_overrides.runner` in the tfvars file,
@@ -331,10 +342,13 @@ print secret values or commit `.env`, tfvars, state, or private-key files.
 ## 5. Stage the digest-pinned release and database gate
 
 One command now replaces the manual register/run/wait/update sequence. It checks
-that every digest exists in this stack's ECR, verifies architecture and the
-Terraform-owned runner, registers task revisions from the exact Terraform
-templates, and runs the database deploy task. Only an exit-`0` database gate can
-advance to the five parallel service pointer updates.
+that every digest exists in this stack's ECR, waits for each ECR basic or enhanced
+scan to complete, and rejects any image with a HIGH or CRITICAL finding. It then verifies
+architecture and the Terraform-owned runner, registers task revisions from the
+exact Terraform templates, and runs the database deploy task. The deploying AWS
+principal therefore needs `ecr:DescribeImages` and
+`ecr:DescribeImageScanFindings`; only an exit-`0` database gate can advance to the
+five parallel service pointer updates.
 
 The wait budget is 12 minutes by default. Pass `--command-timeout-ms <milliseconds>`
 (up to 3600000) when this stack's measured rollout time needs a larger bound.

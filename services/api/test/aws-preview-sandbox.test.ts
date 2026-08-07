@@ -1,6 +1,7 @@
 import {
   DeregisterTaskDefinitionCommand,
   DescribeTasksCommand,
+  ListTasksCommand,
   RegisterTaskDefinitionCommand,
   RunTaskCommand,
   StopTaskCommand,
@@ -83,6 +84,10 @@ describe("AWS preview sandbox driver", () => {
       ],
     });
     expect(commands[1]).toBeInstanceOf(RunTaskCommand);
+    expect((commands[1] as RunTaskCommand).input.startedBy).toMatch(
+      /^facility-preview-[a-f0-9]{19}$/,
+    );
+    expect((commands[1] as RunTaskCommand).input.startedBy).toHaveLength(36);
     expect(commands[2]).toBeInstanceOf(DescribeTasksCommand);
     expect(commands[3]).toBeInstanceOf(DescribeTasksCommand);
     await expect(driver.status(launched.ref)).resolves.toBe("running");
@@ -90,6 +95,134 @@ describe("AWS preview sandbox driver", () => {
     await driver.destroy(launched.ref);
     expect(commands[5]).toBeInstanceOf(StopTaskCommand);
     expect(commands[6]).toBeInstanceOf(DeregisterTaskDefinitionCommand);
+  });
+
+  it("recovers the exact active task and its private endpoint without relaunching", async () => {
+    const commands: unknown[] = [];
+    const taskArn = "arn:aws:ecs:eu-west-1:123:task/facility-prod/recovered";
+    const taskDefinitionArn = "arn:aws:ecs:eu-west-1:123:task-definition/preview:12";
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof ListTasksCommand) {
+          return command.input.desiredStatus === "STOPPED"
+            ? { taskArns: [] }
+            : { taskArns: [taskArn] };
+        }
+        if (command instanceof DescribeTasksCommand) {
+          return {
+            tasks: [
+              {
+                taskArn,
+                taskDefinitionArn,
+                startedBy: (commands[0] as ListTasksCommand).input.startedBy,
+                lastStatus: "RUNNING",
+                attachments: [{ details: [{ name: "privateIPv4Address", value: "10.0.2.44" }] }],
+              },
+            ],
+          };
+        }
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+      async () => undefined,
+    );
+
+    await expect(
+      driver.recoverLaunch({ runId: "preview:sbx_recovered", servicePort: 3000 }),
+    ).resolves.toEqual({
+      ref: Buffer.from(JSON.stringify({ taskArn, taskDefinitionArn })).toString("base64url"),
+      endpoint: "http://10.0.2.44:3000",
+    });
+    expect(commands).toHaveLength(3);
+    expect(commands[0]).toBeInstanceOf(ListTasksCommand);
+    expect((commands[0] as ListTasksCommand).input).toMatchObject({
+      cluster: "facility-prod",
+      startedBy: expect.stringMatching(/^facility-preview-[a-f0-9]{19}$/),
+    });
+    expect((commands[0] as ListTasksCommand).input).not.toHaveProperty("desiredStatus");
+    expect(commands[1]).toBeInstanceOf(ListTasksCommand);
+    expect((commands[1] as ListTasksCommand).input).toMatchObject({
+      cluster: "facility-prod",
+      family: "facility-prod-preview",
+      desiredStatus: "STOPPED",
+    });
+    expect(commands[2]).toBeInstanceOf(DescribeTasksCommand);
+  });
+
+  it("cleans a stopped recovered task and its definition before allowing relaunch", async () => {
+    const commands: unknown[] = [];
+    const taskArn = "arn:aws:ecs:eu-west-1:123:task/facility-prod/stopped-recovery";
+    const taskDefinitionArn = "arn:aws:ecs:eu-west-1:123:task-definition/preview:13";
+    const ecs = {
+      send: async (command: unknown) => {
+        commands.push(command);
+        if (command instanceof ListTasksCommand) {
+          return command.input.desiredStatus === "STOPPED"
+            ? { taskArns: [taskArn] }
+            : { taskArns: [] };
+        }
+        if (command instanceof DescribeTasksCommand) {
+          return {
+            tasks: [
+              {
+                taskArn,
+                taskDefinitionArn,
+                startedBy: (commands[0] as ListTasksCommand).input.startedBy,
+                lastStatus: "STOPPED",
+              },
+            ],
+          };
+        }
+        return {};
+      },
+    };
+    const driver = new AwsPreviewSandboxDriver(
+      ecs as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+    );
+
+    await expect(
+      driver.recoverLaunch({ runId: "preview:stopped-recovery", servicePort: 3000 }),
+    ).resolves.toBeUndefined();
+    expect(
+      commands.map((command) => (command as { constructor: { name: string } }).constructor.name),
+    ).toEqual([
+      "ListTasksCommand",
+      "ListTasksCommand",
+      "DescribeTasksCommand",
+      "StopTaskCommand",
+      "DeregisterTaskDefinitionCommand",
+    ]);
+  });
+
+  it("returns no recovery when no active task exists and propagates discovery denial", async () => {
+    const missing = new AwsPreviewSandboxDriver(
+      { send: async () => ({ taskArns: [] }) } as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+    );
+    await expect(
+      missing.recoverLaunch({ runId: "preview:missing", servicePort: 3000 }),
+    ).resolves.toBeUndefined();
+
+    const denied = new AwsPreviewSandboxDriver(
+      {
+        send: async () => {
+          throw Object.assign(new Error("not authorized"), { name: "AccessDeniedException" });
+        },
+      } as never,
+      { send: async () => ({}) } as never,
+      previewEnv,
+    );
+    await expect(
+      denied.recoverLaunch({ runId: "preview:denied", servicePort: 3000 }),
+    ).rejects.toMatchObject({ name: "AccessDeniedException" });
   });
 
   it("returns a private endpoint after the existing activation budget expires", async () => {

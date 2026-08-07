@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim AS bind-broker-build
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS bind-broker-build
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends gcc libc6-dev \
@@ -9,7 +9,7 @@ RUN gcc -std=c11 -O2 -Wall -Wextra -Werror \
       /src/bind-broker.c -Wl,-z,relro,-z,now -pie \
       -o /facility-bind-broker
 
-FROM node:22-bookworm
+FROM node:22-bookworm@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -69,8 +69,16 @@ RUN useradd --system --uid 1001 --create-home --home-dir /var/lib/facility-docke
   && usermod --append --groups node,facility-docker facility-proxy \
   && usermod --add-subuids 100000-165535 --add-subgids 100000-165535 facility-docker
 
-# Pinned 2026-07-19 after `npm view`: claude-code 2.1.215, codex 0.144.6.
-RUN npm i -g @anthropic-ai/claude-code@2.1.215 @openai/codex@0.144.6
+# Keep the privileged agent toolchain in its own locked, cacheable layer. The
+# runner application changes more frequently and must not re-resolve CLI
+# transitives or invalidate this install.
+COPY runner/agent-clis/package.json runner/agent-clis/package-lock.json /opt/facility-agent-clis/
+RUN cd /opt/facility-agent-clis \
+  && npm ci --omit=dev \
+  && ln -s /opt/facility-agent-clis/node_modules/.bin/claude /usr/local/bin/claude \
+  && ln -s /opt/facility-agent-clis/node_modules/.bin/codex /usr/local/bin/codex \
+  && claude --version \
+  && codex --version
 
 # Create the package-manager shims while the image is still writable. Runtime
 # sandboxes mount /work as a writable tmpfs and keep the image root read-only;

@@ -639,12 +639,14 @@ describe("api", async () => {
     const profileByAgent = new Map(
       projectAgents.map((agent) => [agent.name, agent.sandboxProfileId]),
     );
-    for (const name of ["architect", "codex-architect", "review", "security-sweep"]) {
+    for (const name of ["review", "security-sweep"]) {
       expect(profileByAgent.get(name), name).toBe(analysisSandboxProfileId(orgId));
     }
     for (const name of [
       "builder",
+      "architect",
       "codex-builder",
+      "codex-architect",
       "address-review",
       "ci-doctor",
       "project-owner",

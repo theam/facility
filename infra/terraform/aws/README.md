@@ -44,10 +44,13 @@ Edit `playground.tfvars`:
 - Set `app_hostname`, `api_hostname`, `mcp_hostname`, and the separately
   registered `preview_hostname`.
 - Set `acm_certificate_arn` for HTTPS, or leave it empty for HTTP-only testing.
+  When set, the ALB redirects every port 80 request to the same host, path, and
+  query on HTTPS; only certificate-less deployments forward HTTP to services.
 - Set `route53_zone_id` if Terraform should create alias records.
 - Set `enable_cloudfront_api_endpoint = true` to get an AWS-managed HTTPS API
   and webhook URL without a public DNS zone. This is intended for validation;
-  use your own hostname and ACM certificate for production.
+  it requires `acm_certificate_arn = ""`. Use your own hostname and ACM
+  certificate for production; Terraform rejects enabling both modes.
 - Use the module-owned ECR release path below.
 - Select direct `github` authentication for self-hosting or `oidc` for a SaaS
   broker. MCP OAuth is always issued by the dedicated Facility instance.
@@ -147,6 +150,10 @@ maps all six runtime roles to exact ECR digests and records the full source SHA
 and platform. Keep the path for the deploy command; tags are build handles, not
 the deployment identity.
 
+The script rejects a dirty Git worktree so that this SHA identifies the bytes it
+labels. Commit or stash release inputs first; reserve
+`FACILITY_ALLOW_DIRTY_BUILD=1` for explicitly non-production experiments.
+
 The privileged CodeBuild runner remains Terraform-owned. Copy the manifest's
 exact `images.runner` digest reference into `image_overrides.runner` and apply
 the same tfvars before deploying. Most application releases reproduce the same
@@ -226,12 +233,14 @@ plaintext to the terminal.
 ## 5. Stage or deploy the release
 
 The release command validates every image against this stack's ECR repositories
-and architecture, verifies the Terraform-owned CodeBuild runner digest, copies
-the freshly rendered Terraform task templates, and replaces only their main
-container images. It then runs the one-shot database deploy task and waits for
-exit `0` before changing any service. The five service updates run in parallel;
-a failed rollout restores all five prior task definitions but never rolls back
-the database.
+and architecture, waits for each ECR basic or enhanced scan to complete, and rejects any
+image with a HIGH or CRITICAL finding. The deploying AWS principal needs
+`ecr:DescribeImages` and `ecr:DescribeImageScanFindings`. It then verifies the
+Terraform-owned CodeBuild runner digest, copies the freshly rendered Terraform
+task templates, and replaces only their main container images. It runs the
+one-shot database deploy task and waits for exit `0` before changing any service.
+The five service updates run in parallel; a failed rollout restores all five prior task definitions
+but never rolls back the database.
 
 The wait budget is 12 minutes by default. Pass `--command-timeout-ms <milliseconds>`
 (up to 3600000) when this stack's measured rollout time needs a larger bound.

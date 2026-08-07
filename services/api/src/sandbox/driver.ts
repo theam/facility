@@ -15,6 +15,8 @@ export type LaunchSpec = {
   servicePort?: number;
 };
 
+export type RecoverLaunchSpec = Pick<LaunchSpec, "runId" | "servicePort">;
+
 export class SandboxLaunchError extends Error {
   constructor(
     message: string,
@@ -29,6 +31,7 @@ export class SandboxLaunchError extends Error {
 export interface SandboxDriver {
   name: SandboxDriverName;
   launch(spec: LaunchSpec): Promise<{ ref: string; endpoint?: string }>;
+  recoverLaunch?(spec: RecoverLaunchSpec): Promise<{ ref: string; endpoint?: string } | undefined>;
   status(ref: string): Promise<"starting" | "running" | "exited" | "lost">;
   logs(ref: string, afterLine?: number): AsyncIterable<string>;
   stop(ref: string, opts?: { kill?: boolean }): Promise<void>;

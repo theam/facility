@@ -9,7 +9,11 @@ import {
   writeTranscriptObject,
 } from "../envelopes.js";
 import { ApiError, notFound } from "../errors.js";
-import { createGithubInstallationTokenFactory } from "../github/client.js";
+import {
+  createGithubClientFactory,
+  createGithubInstallationTokenFactory,
+} from "../github/client.js";
+import { collectGithubSecuritySweepEvidence } from "../github/security-sweep.js";
 import { finishRun, updateGithubRunProgress } from "../sandbox/orchestrator.js";
 import {
   appendRunEvents,
@@ -83,6 +87,9 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       if (sandbox.virtualKeyRevealedAt) {
         throw new ApiError(409, "virtual_key_revealed", "Run credentials were already revealed");
       }
+      const securitySweepEvidence = isSecuritySweepMode(run.mode)
+        ? await securitySweepEvidenceForRun(run, sandbox)
+        : null;
       const updatedSandbox = { ...sandbox, virtualKeyRevealedAt: new Date().toISOString() };
       // Claim the transition to running only if the run is still active. A cancel
       // that lands between the auth snapshot and here must win — we must not
@@ -133,6 +140,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         packageRegistryToken: sandbox.bundle.packageInstallCmd
           ? (config.packageRegistryToken ?? null)
           : null,
+        securitySweepEvidence,
         gatewayUrls: sandbox.bundle.gatewayUrls,
       };
     },
@@ -488,6 +496,65 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         .limit(1)
     )[0];
   }
+
+  async function securitySweepEvidenceForRun(
+    run: typeof runs.$inferSelect,
+    sandbox: RunSandboxState,
+  ) {
+    const repo = await repoForRun(run, sandbox);
+    if (!repo?.installationId) {
+      throw new ApiError(
+        409,
+        "security_sweep_repo_unavailable",
+        "Security sweep repository installation is unavailable",
+      );
+    }
+    const installation = (
+      await db
+        .select()
+        .from(githubInstallations)
+        .where(
+          and(
+            eq(githubInstallations.id, repo.installationId),
+            eq(githubInstallations.orgId, run.orgId),
+            isNull(githubInstallations.suspendedAt),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!installation) {
+      throw new ApiError(
+        409,
+        "security_sweep_installation_unavailable",
+        "Security sweep GitHub installation is unavailable",
+      );
+    }
+    const factory =
+      app.githubClientFactory ??
+      (config.githubAppId && config.githubAppPrivateKey ? createGithubClientFactory(config) : null);
+    if (!factory) {
+      throw new ApiError(
+        409,
+        "security_sweep_github_unavailable",
+        "Security sweep GitHub client is unavailable",
+      );
+    }
+    const ref = sandbox.bundle?.repo.branch;
+    if (!ref) {
+      throw new ApiError(
+        409,
+        "security_sweep_ref_unavailable",
+        "Security sweep repository ref is unavailable",
+      );
+    }
+    return collectGithubSecuritySweepEvidence({
+      octokit: await factory(installation.installationId),
+      runId: run.id,
+      owner: repo.owner,
+      repo: repo.name,
+      ref,
+    });
+  }
 }
 
 function bearer(value: string | undefined) {
@@ -499,4 +566,8 @@ function parseGithubCloneUrl(value: string): { owner: string; repo: string } | n
   const match = value.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (!match?.[1] || !match[2]) return null;
   return { owner: match[1], repo: match[2] };
+}
+
+function isSecuritySweepMode(mode: string) {
+  return ["security", "security_sweep"].includes(mode.replace(/^codex-/, "").replace(/-/g, "_"));
 }

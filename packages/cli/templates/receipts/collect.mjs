@@ -73,7 +73,6 @@ export function collectReceipt(env = process.env, now = new Date()) {
   const integrity = {
     algorithm: "sha256",
     previous_sha256: null,
-    attestation: "github-actions-oidc",
   };
   return {
     ...receipt,
@@ -108,7 +107,7 @@ export function writeReceipt(receipt, env = process.env) {
         `- Mode: \`${receipt.mode}\``,
         `- Result: \`${receipt.result}\``,
         `- Receipt SHA-256: \`${receipt.integrity.payload_sha256}\``,
-        "- Attestation: GitHub Actions OIDC build provenance",
+        "- Integrity: SHA-256 (verify the separate GitHub Actions attestation when enabled)",
         "",
       ].join("\n"),
       { flag: "a" },
@@ -276,7 +275,7 @@ function stableStringify(value) {
   if (value && typeof value === "object") {
     return `{${Object.entries(value)
       .filter(([, inner]) => inner !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([key, inner]) => `${JSON.stringify(key)}:${stableStringify(inner)}`)
       .join(",")}}`;
   }

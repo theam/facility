@@ -974,18 +974,26 @@ describe("github integration", async () => {
     );
   });
 
-  it("treats an opened non-draft PR as ready for review but leaves drafts alone", () => {
+  it("reviews every current non-draft PR head while leaving drafts alone", () => {
     const triggers = [{ type: "github", event: "pull_request", action: "ready_for_review" }];
+    for (const action of ["opened", "reopened", "synchronize", "ready_for_review"]) {
+      expect(
+        githubEventMatches(triggers, "pull_request", {
+          action,
+          pull_request: { draft: false },
+        }),
+      ).toBe(true);
+    }
     expect(
       githubEventMatches(triggers, "pull_request", {
-        action: "opened",
-        pull_request: { draft: false },
-      }),
-    ).toBe(true);
-    expect(
-      githubEventMatches(triggers, "pull_request", {
-        action: "opened",
+        action: "synchronize",
         pull_request: { draft: true },
+      }),
+    ).toBe(false);
+    expect(
+      githubEventMatches(triggers, "pull_request", {
+        action: "closed",
+        pull_request: { draft: false },
       }),
     ).toBe(false);
   });

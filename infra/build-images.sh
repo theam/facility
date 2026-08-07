@@ -6,11 +6,28 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 IMAGE_TAG="${IMAGE_TAG:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo latest)}"
 CPU_ARCHITECTURE="${CPU_ARCHITECTURE:-X86_64}"
 SOURCE_SHA="${SOURCE_SHA:-$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)}"
+FACILITY_ALLOW_DIRTY_BUILD="${FACILITY_ALLOW_DIRTY_BUILD:-0}"
 
 if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40,64}$ ]]; then
   printf 'SOURCE_SHA must be a full lowercase commit SHA (received %s)\n' "${SOURCE_SHA:-missing}" >&2
   exit 1
 fi
+
+if [[ "$FACILITY_ALLOW_DIRTY_BUILD" != "0" && "$FACILITY_ALLOW_DIRTY_BUILD" != "1" ]]; then
+  printf 'FACILITY_ALLOW_DIRTY_BUILD must be 0 or 1 (received %s)\n' \
+    "$FACILITY_ALLOW_DIRTY_BUILD" >&2
+  exit 1
+fi
+if ! worktree_status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+  printf '%s\n' 'Facility release images must be built from a Git worktree.' >&2
+  exit 1
+fi
+if [[ -n "$worktree_status" && "$FACILITY_ALLOW_DIRTY_BUILD" != "1" ]]; then
+  printf '%s\n' \
+    'Refusing to label uncommitted image bytes with SOURCE_SHA; commit or stash changes, or explicitly set FACILITY_ALLOW_DIRTY_BUILD=1.' >&2
+  exit 1
+fi
+unset worktree_status
 
 case "$CPU_ARCHITECTURE" in
   X86_64) expected_platform="linux/amd64" ;;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   CloudWatchLogsClient,
   GetLogEventsCommand,
@@ -8,6 +9,8 @@ import {
   DescribeTasksCommand,
   type DescribeTasksCommandOutput,
   ECSClient,
+  ListTasksCommand,
+  type ListTasksCommandOutput,
   RegisterTaskDefinitionCommand,
   type RegisterTaskDefinitionCommandOutput,
   RunTaskCommand,
@@ -16,17 +19,24 @@ import {
   type StopTaskCommandOutput,
   type Task,
 } from "@aws-sdk/client-ecs";
-import { type LaunchSpec, type SandboxDriver, SandboxLaunchError } from "./driver.js";
+import {
+  type LaunchSpec,
+  type RecoverLaunchSpec,
+  type SandboxDriver,
+  SandboxLaunchError,
+} from "./driver.js";
 
 type EcsCommand =
   | RegisterTaskDefinitionCommand
   | DeregisterTaskDefinitionCommand
   | RunTaskCommand
+  | ListTasksCommand
   | DescribeTasksCommand
   | StopTaskCommand;
 type EcsOutput =
   | RegisterTaskDefinitionCommandOutput
   | RunTaskCommandOutput
+  | ListTasksCommandOutput
   | DescribeTasksCommandOutput
   | StopTaskCommandOutput
   | Record<string, never>;
@@ -117,6 +127,7 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
           taskDefinition: taskDefinitionArn,
           launchType: "FARGATE",
           count: 1,
+          startedBy: previewStartedBy(spec.runId),
           enableExecuteCommand: false,
           networkConfiguration: {
             awsvpcConfiguration: {
@@ -172,6 +183,86 @@ export class AwsPreviewSandboxDriver implements SandboxDriver {
       }
       throw error;
     }
+  }
+
+  async recoverLaunch(
+    spec: RecoverLaunchSpec,
+  ): Promise<{ ref: string; endpoint?: string } | undefined> {
+    const config = this.config();
+    if (!spec.servicePort) throw new Error("aws_preview_service_port_required");
+    const startedBy = previewStartedBy(spec.runId);
+    const taskArns = new Set<string>();
+    for (const filter of [
+      { startedBy },
+      // ECS forbids combining startedBy with another filter. Stopped tasks are
+      // visible for roughly an hour, so scan only this preview family and then
+      // verify startedBy on DescribeTasks before cleaning its task definition.
+      { desiredStatus: "STOPPED" as const, family: config.family },
+    ]) {
+      let nextToken: string | undefined;
+      do {
+        const listed = (await this.ecs.send(
+          new ListTasksCommand({ cluster: config.cluster, ...filter, nextToken }),
+        )) as ListTasksCommandOutput;
+        for (const taskArn of listed.taskArns ?? []) taskArns.add(taskArn);
+        nextToken = listed.nextToken;
+      } while (nextToken);
+    }
+    if (taskArns.size === 0) return undefined;
+
+    const describedTasks: Task[] = [];
+    const listedTaskArns = [...taskArns];
+    for (let offset = 0; offset < listedTaskArns.length; offset += 100) {
+      const described = (await this.ecs.send(
+        new DescribeTasksCommand({
+          cluster: config.cluster,
+          tasks: listedTaskArns.slice(offset, offset + 100),
+        }),
+      )) as DescribeTasksCommandOutput;
+      describedTasks.push(...(described.tasks ?? []));
+    }
+    const tasks = describedTasks
+      .filter((task) => task.startedBy === startedBy && task.taskArn && task.taskDefinitionArn)
+      .sort(
+        (left, right) =>
+          Number(terminalTaskStatus(left.lastStatus)) -
+            Number(terminalTaskStatus(right.lastStatus)) ||
+          (left.createdAt?.getTime() ?? 0) - (right.createdAt?.getTime() ?? 0) ||
+          compareCodePoints(String(left.taskArn), String(right.taskArn)),
+      );
+    const recovered = tasks[0];
+    if (!recovered?.taskArn || !recovered.taskDefinitionArn) return undefined;
+
+    // A previous implementation or an exceptionally stale retry may have
+    // produced more than one task. Do not attach one while silently leaking the
+    // rest: converge extras first, then adopt the oldest launch deterministically.
+    for (const duplicate of tasks.slice(1)) {
+      if (!duplicate.taskArn || !duplicate.taskDefinitionArn) continue;
+      await this.destroy(
+        encodeRef({
+          taskArn: duplicate.taskArn,
+          taskDefinitionArn: duplicate.taskDefinitionArn,
+        }),
+      );
+    }
+
+    const ref = encodeRef({
+      taskArn: recovered.taskArn,
+      taskDefinitionArn: recovered.taskDefinitionArn,
+    });
+    if (terminalTaskStatus(recovered.lastStatus)) {
+      await this.destroy(ref);
+      return undefined;
+    }
+    const privateIp = await this.waitForRunnableEndpoint(
+      config.cluster,
+      recovered.taskArn,
+      recovered,
+    );
+    return {
+      ref,
+      ...(privateIp ? { endpoint: `http://${privateIp}:${spec.servicePort}` } : {}),
+    };
   }
 
   async status(ref: string): Promise<"starting" | "running" | "exited" | "lost"> {
@@ -388,6 +479,17 @@ function requiredListEnv(env: NodeJS.ProcessEnv, name: string) {
       .filter(Boolean) ?? [];
   if (values.length === 0) throw notConfigured(name);
   return values;
+}
+
+function previewStartedBy(runId: string) {
+  const digest = createHash("sha256").update(runId).digest("hex").slice(0, 19);
+  return `facility-preview-${digest}`;
+}
+
+function compareCodePoints(left: string, right: string) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function notConfigured(name: string) {

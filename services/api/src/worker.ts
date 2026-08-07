@@ -85,7 +85,9 @@ export async function startWorker() {
       } else if (queue === "previews.destroy") {
         await destroyPreviewById(config, String((data as { previewId?: string }).previewId ?? ""));
       } else if (queue === "previews.reconcile") {
-        result = await reconcilePreviews(config);
+        result = await reconcilePreviews(config, undefined, (previewId) =>
+          boss.send("previews.provision", { previewId }),
+        );
       } else if (queue === "watchtower.outcomes") {
         await runWatchtowerOutcomes(config);
       } else if (queue === "watchtower.health") {

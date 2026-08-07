@@ -268,6 +268,17 @@ resource "aws_iam_role_policy" "task" {
         Resource = "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${aws_ecs_cluster.facility.name}/*"
       },
       {
+        Sid      = "DiscoverPreviewTasks"
+        Effect   = "Allow"
+        Action   = "ecs:ListTasks"
+        Resource = "*"
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.facility.arn
+          }
+        }
+      },
+      {
         Sid    = "PassPreviewRoles"
         Effect = "Allow"
         Action = "iam:PassRole"

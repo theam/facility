@@ -45,8 +45,23 @@ appendFileSync(process.env.FAKE_AWS_LOG, JSON.stringify({ args }) + "\\n");
 if (args[0] === "ecr" && args[1] === "get-login-password") process.stdout.write("registry-password\\n");
 `,
   );
+  await writeFile(
+    join(directory, "git"),
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("status")) {
+  if (process.env.FAKE_GIT_DIRTY === "1") process.stdout.write(" M services/api/src/index.ts\\n");
+} else if (args.includes("rev-parse")) {
+  process.stdout.write(args.includes("--short") ? "abc123def456\\n" : "${"a".repeat(40)}\\n");
+} else {
+  process.stderr.write("unexpected git command " + args.join(" "));
+  process.exit(19);
+}
+`,
+  );
   await chmod(join(directory, "docker"), 0o755);
   await chmod(join(directory, "aws"), 0o755);
+  await chmod(join(directory, "git"), 0o755);
   t.after(() => rm(directory, { recursive: true, force: true }));
   return { directory, dockerLog, awsLog };
 }
@@ -190,6 +205,52 @@ test("Bake keeps thin target boundaries and publishes every target through one g
   const dockerignore = await readFile(join(root, ".dockerignore"), "utf8");
   assert.match(dockerignore, /^\*\*\/\.terraform$/m);
   assert.match(dockerignore, /^\*\*\/\*\.tfstate\.\*$/m);
+
+  const controlDockerfile = await readFile(join(root, "Dockerfile"), "utf8");
+  const webDockerfile = await readFile(join(root, "apps/web/Dockerfile"), "utf8");
+  const runnerDockerfile = await readFile(join(root, "runner/Dockerfile"), "utf8");
+  const agentCliPackage = JSON.parse(
+    await readFile(join(root, "runner", "agent-clis", "package.json"), "utf8"),
+  );
+  const agentCliLock = JSON.parse(
+    await readFile(join(root, "runner", "agent-clis", "package-lock.json"), "utf8"),
+  );
+  assert.doesNotMatch(webDockerfile, /^COPY \. \.$/m);
+  assert.ok(
+    webDockerfile.indexOf("COPY pnpm-lock.yaml") < webDockerfile.indexOf("RUN pnpm install"),
+  );
+  assert.ok(
+    webDockerfile.indexOf("RUN pnpm install") < webDockerfile.indexOf("COPY apps/web apps/web"),
+  );
+  assert.doesNotMatch(runnerDockerfile, /npm (?:i|install) -g/);
+  assert.match(
+    runnerDockerfile,
+    /COPY runner\/agent-clis\/package\.json runner\/agent-clis\/package-lock\.json/,
+  );
+  assert.match(runnerDockerfile, /npm ci --omit=dev/);
+  assert.deepEqual(agentCliPackage.dependencies, {
+    "@anthropic-ai/claude-code": "2.1.215",
+    "@openai/codex": "0.144.6",
+  });
+  assert.deepEqual(agentCliLock.packages[""].dependencies, agentCliPackage.dependencies);
+  for (const packageName of Object.keys(agentCliPackage.dependencies)) {
+    const locked = agentCliLock.packages[`node_modules/${packageName}`];
+    assert.ok(locked);
+    assert.match(locked.integrity, /^sha512-/);
+  }
+  for (const dockerfile of [controlDockerfile, webDockerfile, runnerDockerfile]) {
+    const stages = new Set();
+    const externalBases = [];
+    for (const match of dockerfile.matchAll(/^FROM\s+(\S+)(?:\s+AS\s+(\S+))?/gim)) {
+      const reference = match[1];
+      if (!stages.has(reference)) externalBases.push(reference);
+      if (match[2]) stages.add(match[2]);
+    }
+    assert.ok(externalBases.length > 0);
+    for (const base of externalBases) {
+      assert.match(base, /@sha256:[0-9a-f]{64}$/);
+    }
+  }
 });
 
 for (const [name, overrides, message] of [
@@ -216,4 +277,16 @@ test("missing Buildx fails actionably before registry authentication", async (t)
     (await invocations(fake.dockerLog)).map(({ args }) => args),
     [["buildx", "version"]],
   );
+});
+
+test("dirty release inputs fail before registry authentication unless explicitly acknowledged", async (t) => {
+  const fake = await fakeCommands(t);
+  const denied = run(fake, { FAKE_GIT_DIRTY: "1" });
+  assert.notEqual(denied.status, 0);
+  assert.match(denied.stderr, /Refusing to label uncommitted image bytes with SOURCE_SHA/);
+  assert.deepEqual(await invocations(fake.awsLog), []);
+  assert.deepEqual(await invocations(fake.dockerLog), []);
+
+  const allowed = run(fake, { FAKE_GIT_DIRTY: "1", FACILITY_ALLOW_DIRTY_BUILD: "1" });
+  assert.equal(allowed.status, 0, allowed.stderr);
 });

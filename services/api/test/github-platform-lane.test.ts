@@ -37,6 +37,7 @@ import {
   syncRepoPullRequests,
   upsertGhPullRequestFromWebhook,
 } from "../src/github/pull-requests-sync.js";
+import { reconcilePreviews } from "../src/previews.js";
 import { deliverPendingRunDeliveries } from "../src/sandbox/delivery.js";
 import {
   finishRun,
@@ -1238,6 +1239,7 @@ describe("github platform lane", async () => {
       .from(runs)
       .where(and(eq(runs.projectId, projectId), sql`${runs.trigger}->>'delivery' = ${eventId}`));
     expect(run?.mode).toBe("ci_doctor");
+    expect(run?.ciRepairKey).toMatch(/^[a-f0-9]{64}$/);
     expect(run?.trigger).toMatchObject({
       workflowRun: {
         name: "build",
@@ -3788,6 +3790,73 @@ describe("github platform lane", async () => {
     expect(comments.some((body) => body.includes("organization SSO"))).toBe(true);
   });
 
+  it("recovers a durable preview request when its first queue send fails", async () => {
+    const repo = await insertRepoWithInstallation(`preview-queue-failure-${Date.now()}`);
+    await db
+      .update(repos)
+      .set({
+        renderAnswers: {
+          preview: {
+            enabled: true,
+            image: "ghcr.io/example/review-app:{{ commit_sha }}",
+            port: 3000,
+          },
+        },
+      })
+      .where(eq(repos.id, repo.id));
+    const run = await insertRun({
+      status: "running",
+      gh: { owner: repo.owner, repo: repo.name, issueNumber: 57 },
+    });
+    const attempted: string[] = [];
+    await finishAndDeliver(
+      run,
+      {
+        status: "succeeded",
+        git: {
+          changed: true,
+          branch: "feature/preview-queue-failure",
+          headSha: "previewqueue123",
+          pullRequestTitle: "feat: deliver durable preview",
+          pullRequestBody: "## Summary\n\n- Recover the preview queue request.",
+        },
+      },
+      {
+        config,
+        enqueue: async (queue) => {
+          attempted.push(queue);
+          if (queue === "previews.provision") throw new Error("queue_temporarily_unavailable");
+          return null;
+        },
+        githubClientFactory: deliveryFactory({
+          branch: "feature/preview-queue-failure",
+          headSha: "previewqueue123",
+          number: 14,
+        }),
+      },
+    );
+
+    const [preview] = await db
+      .select()
+      .from(previewSandboxes)
+      .where(eq(previewSandboxes.runId, run.id));
+    expect(preview).toMatchObject({
+      repoId: repo.id,
+      status: "provisioning",
+      ref: null,
+      provisionClaimedAt: null,
+    });
+    expect(attempted).toContain("previews.provision");
+
+    const recovered: string[] = [];
+    await expect(
+      reconcilePreviews(config, undefined, async (previewId) => {
+        recovered.push(previewId);
+      }),
+    ).resolves.toMatchObject({ requeued: expect.arrayContaining([preview?.id]) });
+    expect(recovered).toContain(preview?.id);
+  });
+
   it("finishRun publishes an architect plan and opens the human Gate 1 proposal", async () => {
     const repo = await insertRepoWithInstallation(`plan-${Date.now()}`);
     const run = await insertRun({
@@ -3885,6 +3954,352 @@ describe("github platform lane", async () => {
       .from(platformIssues)
       .where(eq(platformIssues.fingerprint, `pr_delivery_pending:${run.id}`));
     expect(issue?.state).toBe("open");
+  });
+
+  it("dispatches address-review only for trusted reviews of Facility-delivered bot PRs", async () => {
+    const agent = await insertAgent("address-review", [
+      { type: "github", event: "pull_request_review", action: "submitted" },
+    ]);
+    const scenarios: Array<{
+      name: string;
+      admitted: boolean;
+      reason?: string;
+    }> = [
+      { name: "admitted", admitted: true },
+      { name: "human-authored", admitted: false, reason: "human_authored_pull_request" },
+      { name: "fork", admitted: false, reason: "cross_repository_pull_request" },
+      { name: "draft", admitted: false, reason: "draft_pull_request" },
+      { name: "untrusted-reviewer", admitted: false, reason: "untrusted_reviewer" },
+      { name: "self-review", admitted: false, reason: "self_review" },
+      { name: "stale-head", admitted: false, reason: "stale_pull_request_event" },
+      { name: "stale-review", admitted: false, reason: "stale_review" },
+      { name: "wrong-installation", admitted: false, reason: "installation_mismatch" },
+      { name: "wrong-base", admitted: false, reason: "delivery_base_mismatch" },
+      { name: "missing-delivery", admitted: false, reason: "not_facility_delivered" },
+      { name: "cross-tenant-delivery", admitted: false, reason: "not_facility_delivered" },
+      { name: "repair-lineage", admitted: true },
+      { name: "unauthorized-head", admitted: false, reason: "unauthorized_head" },
+    ];
+
+    for (const [index, scenario] of scenarios.entries()) {
+      const suffix = `${scenario.name}-${Date.now()}-${index}`;
+      const owner = `review-owner-${suffix}`;
+      const repoName = `review-repo-${suffix}`;
+      const branch = `facility/issue-${index + 1}`;
+      const headSha = `live-head-${index + 1}`;
+      const pullNumber = 500 + index;
+      const installation = await insertInstallation(owner);
+      const repo = await insertRepo({
+        owner,
+        name: repoName,
+        installationId: installation.id,
+      });
+      await db
+        .update(repos)
+        .set({ renderAnswers: { execution_lane: { "address-review": "platform" } } })
+        .where(eq(repos.id, repo.id));
+      const producingRun = await insertRun({
+        mode: "builder",
+        status: "succeeded",
+        trigger: { source: "plan_acceptance", approvedPlan: "Implement the reviewed change." },
+        gh: { owner, repo: repoName, branch },
+      });
+      if (!new Set(["missing-delivery", "cross-tenant-delivery"]).has(scenario.name)) {
+        await db.insert(runDeliveries).values({
+          runId: producingRun.id,
+          orgId,
+          projectId,
+          repoId: repo.id,
+          owner,
+          repoName,
+          headBranch: branch,
+          expectedHeadSha: new Set(["repair-lineage", "unauthorized-head"]).has(scenario.name)
+            ? "builder-head"
+            : headSha,
+          baseBranch: "main",
+          title: "Facility delivery",
+          body: "Delivery body",
+          status: "delivered",
+          prNumber: pullNumber,
+          prUrl: `https://github.test/${owner}/${repoName}/pull/${pullNumber}`,
+          deliveredAt: new Date(),
+        });
+      }
+      if (scenario.name === "repair-lineage") {
+        await insertRun({
+          mode: "address_review",
+          status: "succeeded",
+          trigger: { deliveryContext: { producingRunId: producingRun.id } },
+          gh: { owner, repo: repoName, branch, headSha },
+        });
+      }
+      if (scenario.name === "cross-tenant-delivery") {
+        const otherOrgId = newId("org");
+        const otherProjectId = newId("proj");
+        const otherRepoId = newId("repo");
+        const otherRunId = newId("run");
+        await db.insert(orgs).values({
+          id: otherOrgId,
+          name: `Other ${suffix}`,
+          slug: `other-${suffix}`,
+        });
+        await db.insert(projects).values({
+          id: otherProjectId,
+          orgId: otherOrgId,
+          name: `Other ${suffix}`,
+          slug: `other-${suffix}`,
+        });
+        await db.insert(repos).values({
+          id: otherRepoId,
+          orgId: otherOrgId,
+          projectId: otherProjectId,
+          owner,
+          name: repoName,
+          defaultBranch: "main",
+        });
+        await db.insert(runs).values({
+          id: otherRunId,
+          orgId: otherOrgId,
+          projectId: otherProjectId,
+          mode: "builder",
+          engine: "codex",
+          status: "succeeded",
+          gh: { owner, repo: repoName, branch },
+          createdBy: { type: "system", id: "test" },
+        });
+        await db.insert(runDeliveries).values({
+          runId: otherRunId,
+          orgId: otherOrgId,
+          projectId: otherProjectId,
+          repoId: otherRepoId,
+          owner,
+          repoName,
+          headBranch: branch,
+          expectedHeadSha: headSha,
+          baseBranch: "main",
+          title: "Foreign delivery",
+          body: "Must not authorize the managed tenant",
+          status: "delivered",
+          prNumber: pullNumber,
+          deliveredAt: new Date(),
+        });
+      }
+
+      const integration = (
+        await db
+          .insert(integrations)
+          .values({ id: newId("int"), orgId, kind: "github", name: suffix })
+          .returning()
+      )[0];
+      if (!integration) throw new Error("integration insert failed");
+      const reviewer =
+        scenario.name === "self-review"
+          ? "facility-test[bot]"
+          : scenario.name === "untrusted-reviewer"
+            ? "outsider"
+            : "maintainer";
+      const eventId = newId("evt");
+      await db.insert(inboundEvents).values({
+        id: eventId,
+        orgId,
+        integrationId: integration.id,
+        verified: true,
+        eventType: "pull_request_review",
+        payload: {
+          action: "submitted",
+          installation: {
+            id:
+              scenario.name === "wrong-installation"
+                ? installation.installationId + 10_000
+                : installation.installationId,
+          },
+          sender: { login: reviewer, type: reviewer.endsWith("[bot]") ? "Bot" : "User" },
+          repository: {
+            owner: { login: owner },
+            name: repoName,
+            full_name: `${owner}/${repoName}`,
+          },
+          review: {
+            id: 900 + index,
+            state: "changes_requested",
+            commit_id: scenario.name === "stale-review" ? "reviewed-old-head" : headSha,
+            user: { login: reviewer },
+          },
+          pull_request: {
+            number: pullNumber,
+            title: "Facility PR",
+            body: "Body",
+            state: "open",
+            draft: scenario.name === "draft",
+            user: {
+              login: "facility-builder[bot]",
+              type: scenario.name === "human-authored" ? "User" : "Bot",
+            },
+            html_url: `https://github.test/${owner}/${repoName}/pull/${pullNumber}`,
+            head: {
+              ref: branch,
+              sha: scenario.name === "stale-head" ? "stale-head" : headSha,
+              repo: { full_name: `${owner}/${repoName}` },
+            },
+            base: {
+              ref: scenario.name === "wrong-base" ? "release" : "main",
+              repo: { full_name: `${owner}/${repoName}` },
+            },
+          },
+        },
+      });
+
+      const jobs: Array<{ queue: string; data: Record<string, unknown> }> = [];
+      let liveReadCount = 0;
+      let releaseLiveReads: () => void = () => undefined;
+      const liveReadsReady = new Promise<void>((resolve) => {
+        releaseLiveReads = resolve;
+      });
+      const factory: GithubClientFactory = async () =>
+        ({
+          rest: {
+            pulls: {
+              get: async () => {
+                if (scenario.name === "admitted") {
+                  liveReadCount += 1;
+                  if (liveReadCount === 2) releaseLiveReads();
+                  await liveReadsReady;
+                }
+                return {
+                  data: {
+                    number: pullNumber,
+                    title: "Facility PR",
+                    body: "Body",
+                    state: "open",
+                    draft: scenario.name === "draft",
+                    user: {
+                      login: "facility-builder[bot]",
+                      type: scenario.name === "human-authored" ? "User" : "Bot",
+                    },
+                    html_url: `https://github.test/${owner}/${repoName}/pull/${pullNumber}`,
+                    head: {
+                      ref: branch,
+                      sha: headSha,
+                      repo: {
+                        full_name:
+                          scenario.name === "fork" ? `fork/${repoName}` : `${owner}/${repoName}`,
+                      },
+                    },
+                    base: {
+                      ref: scenario.name === "wrong-base" ? "release" : "main",
+                      repo: { full_name: `${owner}/${repoName}` },
+                    },
+                  },
+                };
+              },
+              getReview: async () => ({
+                data: {
+                  id: 900 + index,
+                  state: "CHANGES_REQUESTED",
+                  commit_id: scenario.name === "stale-review" ? "reviewed-old-head" : headSha,
+                  user: { login: reviewer },
+                  body: "Address the submitted findings.",
+                  submitted_at: "2026-08-07T00:00:00Z",
+                },
+              }),
+              listCommentsForReview: async () => ({
+                data: [
+                  {
+                    id: 2_000 + index,
+                    path: "src/example.ts",
+                    line: 17,
+                    body: "Handle the boundary case.",
+                    diff_hunk: "@@ -16,1 +16,2 @@",
+                    html_url: `https://github.test/${owner}/${repoName}/pull/${pullNumber}#review`,
+                  },
+                ],
+              }),
+            },
+            repos: {
+              getCollaboratorPermissionLevel: async () => ({
+                data: { permission: scenario.name === "untrusted-reviewer" ? "read" : "write" },
+              }),
+            },
+            issues: {
+              createComment: async () => ({
+                data: {
+                  id: 1_000 + index,
+                  html_url: `https://github.test/${owner}/${repoName}/pull/${pullNumber}#comment`,
+                },
+              }),
+            },
+          },
+        }) as never;
+      const process = () =>
+        processGithubWebhook(
+          db,
+          { ...config, githubAppSlug: "facility-test" },
+          { inboundEventId: eventId },
+          factory,
+          async (queue, data) => {
+            jobs.push({ queue, data });
+            return null;
+          },
+        );
+      if (scenario.name === "admitted") await Promise.all([process(), process()]);
+      else await process();
+
+      const dispatched = await db
+        .select()
+        .from(runs)
+        .where(
+          and(
+            eq(runs.agentDefId, agent.id),
+            sql`${runs.gh}->>'owner' = ${owner}`,
+            sql`${runs.gh}->>'repo' = ${repoName}`,
+          ),
+        );
+      if (scenario.admitted) {
+        expect(dispatched).toHaveLength(1);
+        expect(dispatched[0]?.trigger).toMatchObject({
+          pullRequest: { number: pullNumber, head: branch, headSha },
+          review: {
+            id: 900 + index,
+            author: reviewer,
+            comments: [{ path: "src/example.ts", line: 17, body: "Handle the boundary case." }],
+          },
+          deliveryContext: { producingRunId: producingRun.id },
+        });
+        expect(dispatched[0]?.githubDeliveryId).toBe(eventId);
+        expect(jobs).toEqual([
+          { queue: "runs.dispatch", data: { runId: dispatched[0]?.id, orgId } },
+        ]);
+        await processGithubWebhook(
+          db,
+          { ...config, githubAppSlug: "facility-test" },
+          { inboundEventId: eventId },
+          factory,
+          async (queue, data) => {
+            jobs.push({ queue, data });
+            return null;
+          },
+        );
+        expect(jobs).toHaveLength(1);
+      } else {
+        expect(dispatched).toHaveLength(0);
+        expect(jobs).toHaveLength(0);
+        const denial = (
+          await db
+            .select()
+            .from(auditEvents)
+            .where(
+              and(
+                eq(auditEvents.orgId, orgId),
+                eq(auditEvents.action, "github.review_repair.denied"),
+                sql`${auditEvents.target}->>'id' = ${repo.id}`,
+              ),
+            )
+            .orderBy(sql`${auditEvents.seq} desc`)
+            .limit(1)
+        )[0];
+        expect(denial?.payload).toMatchObject({ pullNumber, reason: scenario.reason });
+      }
+    }
   });
 
   function deliveryFactory(input: {

@@ -825,6 +825,58 @@ export function createAwsCliAdapter({
           `${repository}@${digest} does not exist in ECR`,
         );
       }
+
+      await pollUntil(`ECR vulnerability scan for ${repository}@${digest}`, async () => {
+        let scan;
+        try {
+          scan = await awsJson("ecr", "describe-image-scan-findings", [
+            "--repository-name",
+            repositoryName,
+            "--image-id",
+            `imageDigest=${digest}`,
+          ]);
+        } catch (error) {
+          // ECR can briefly return ScanNotFoundException after the image itself is visible.
+          if (String(error?.message).includes("ScanNotFoundException")) return { done: false };
+          throw error;
+        }
+
+        const status = scan.imageScanStatus?.status;
+        if (status === "IN_PROGRESS" || status === "PENDING") return { done: false };
+        const findings = scan.imageScanFindings;
+        // Registry-wide enhanced scanning reports ACTIVE after its initial scan.
+        // Require a completed-scan timestamp so ACTIVE cannot admit an image
+        // before Inspector has produced its first result.
+        if (status === "ACTIVE" && !findings?.imageScanCompletedAt) return { done: false };
+        if (status !== "COMPLETE" && status !== "ACTIVE") {
+          throw new AwsDeployError(
+            "ecr_scan_unavailable",
+            `ECR vulnerability scan for ${repository}@${digest} is ${status || "missing"}`,
+          );
+        }
+
+        const counts = findings?.findingSeverityCounts;
+        const critical = Number(counts?.CRITICAL ?? 0);
+        const high = Number(counts?.HIGH ?? 0);
+        if (
+          !Number.isSafeInteger(critical) ||
+          critical < 0 ||
+          !Number.isSafeInteger(high) ||
+          high < 0
+        ) {
+          throw new AwsDeployError(
+            "ecr_scan_invalid_response",
+            `ECR returned invalid vulnerability counts for ${repository}@${digest}`,
+          );
+        }
+        if (critical > 0 || high > 0) {
+          throw new AwsDeployError(
+            "ecr_scan_blocked",
+            `ECR blocked ${repository}@${digest}: ${critical} critical and ${high} high vulnerabilities`,
+          );
+        }
+        return { done: true };
+      });
     },
 
     async getRunnerImage(projectName) {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DatabaseDeployConfigError,
   databaseDeployExitCode,
+  databaseDeployIncludesDemoData,
   databaseDeployLockTimeout,
   MigrationChecksumError,
   MigrationExecutionError,
@@ -9,6 +10,12 @@ import {
 } from "../src/index.js";
 
 describe("database deploy configuration", () => {
+  it("defaults the production deploy entry point to demo data off", () => {
+    expect(databaseDeployIncludesDemoData(undefined)).toBe(false);
+    expect(databaseDeployIncludesDemoData(false)).toBe(false);
+    expect(databaseDeployIncludesDemoData(true)).toBe(true);
+  });
+
   it("accepts only bounded integer lock timeouts", () => {
     expect(databaseDeployLockTimeout(undefined)).toBe(60_000);
     expect(databaseDeployLockTimeout("0")).toBe(0);

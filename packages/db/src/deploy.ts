@@ -65,6 +65,12 @@ export function databaseDeployExitCode(error: unknown): number {
   return 1;
 }
 
+// `seed` remains convenient for local demo setup, but the production-shaped
+// deploy entry point must never create a privileged demo tenant by omission.
+export function databaseDeployIncludesDemoData(value: boolean | undefined): boolean {
+  return value === true;
+}
+
 export function databaseDeployLockTimeout(
   value = process.env.FACILITY_DB_DEPLOY_LOCK_TIMEOUT_MS,
 ): number {
@@ -136,7 +142,7 @@ export async function deployDatabaseWithClient(
     phaseStartedAt = performance.now();
     log({ event: "facility.db.deploy", phase, status: "started" });
     await seedWithClient(client, {
-      includeDemoData: options.includeDemoData,
+      includeDemoData: databaseDeployIncludesDemoData(options.includeDemoData),
       log: () => undefined,
     });
     log({

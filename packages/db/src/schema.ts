@@ -446,6 +446,11 @@ export const runs = pgTable(
     receipt: jsonb("receipt"),
     gh: jsonb("gh").notNull().default(sql`'{}'::jsonb`),
     engineSessionId: text("engine_session_id"),
+    githubDeliveryId: text("github_delivery_id"),
+    // A distinct GitHub delivery can report the same failing PR head. This
+    // durable admission key prevents scaled workers from dispatching two
+    // ci-doctor runs for that head after both observed the same history.
+    ciRepairKey: text("ci_repair_key"),
     transcriptUri: text("transcript_uri"),
     sessionStateUri: text("session_state_uri"),
     error: text("error"),
@@ -455,7 +460,15 @@ export const runs = pgTable(
     createdBy: jsonb("created_by").notNull(),
     ...timestamps,
   },
-  (table) => [index("runs_org_project_idx").on(table.orgId, table.projectId)],
+  (table) => [
+    index("runs_org_project_idx").on(table.orgId, table.projectId),
+    uniqueIndex("runs_org_github_delivery_uidx")
+      .on(table.orgId, table.githubDeliveryId)
+      .where(sql`${table.githubDeliveryId} is not null`),
+    uniqueIndex("runs_org_ci_repair_key_uidx")
+      .on(table.orgId, table.ciRepairKey)
+      .where(sql`${table.ciRepairKey} is not null`),
+  ],
 );
 
 export const runEvents = pgTable(
@@ -1042,6 +1055,7 @@ export const previewSandboxes = pgTable(
     originUrl: text("origin_url"),
     config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
     error: text("error"),
+    provisionClaimedAt: timestamp("provision_claimed_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastHealthAt: timestamp("last_health_at", { withTimezone: true }),
     createdBy: jsonb("created_by").notNull(),
@@ -1057,6 +1071,9 @@ export const previewSandboxes = pgTable(
       table.createdAt.desc(),
     ),
     index("preview_sandboxes_expiry_idx").on(table.status, table.expiresAt),
+    index("preview_sandboxes_unbound_provision_idx")
+      .on(table.status, table.provisionClaimedAt, table.createdAt)
+      .where(sql`${table.status} = 'provisioning' and ${table.ref} is null`),
     check(
       "preview_sandboxes_status_check",
       sql`${table.status} in ('provisioning', 'running', 'failed', 'expired', 'destroyed')`,

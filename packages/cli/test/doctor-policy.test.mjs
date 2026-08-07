@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   classifyFailure,
+  countBranchAttempts,
   countAttempts,
   decideDoctorAction,
   sanitizeFailureSignal,
@@ -15,6 +16,7 @@ import {
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 const SHA_C = "c".repeat(40);
+const SHA_D = "d".repeat(40);
 const CONFORMANCE_VECTORS = JSON.parse(
   readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "fixtures/doctor-policy-conformance.json"),
@@ -257,6 +259,25 @@ test("enforces two attempts for one SHA-stable failure fingerprint", () => {
   });
   assert.equal(decision.action, "none");
   assert.match(decision.reason, /attempt limit/);
+});
+
+test("caps all repair attempts on one pull-request branch across changing fingerprints", () => {
+  const comments = [
+    { body: `<!-- facility-doctor attempt fingerprint="lint-a" head_sha="${SHA_A}" outcome="started" -->` },
+    { body: `<!-- facility-doctor attempt fingerprint="unit-b" head_sha="${SHA_B}" outcome="started" -->` },
+    { body: `<!-- facility-doctor attempt fingerprint="build-c" head_sha="${SHA_C}" outcome="started" -->` },
+  ];
+  assert.equal(countBranchAttempts(comments), 3);
+  const decision = decide({
+    eventHeadSha: SHA_D,
+    pullRequest: pullRequest({ head: { sha: SHA_D } }),
+    checks: [
+      check({ output: { title: "Typecheck failed", summary: "Cannot assign a new value" } }),
+    ],
+    comments,
+  });
+  assert.equal(decision.action, "none");
+  assert.match(decision.reason, /pull-request branch/);
 });
 
 test("does not spend two attempts on the same unchanged head", () => {

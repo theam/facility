@@ -631,6 +631,10 @@ export XDG_CACHE_HOME=/work/.cache
 export XDG_CONFIG_HOME=/work/.config
 export XDG_DATA_HOME=/work/.local/share
 export TMPDIR=/work/.tmp
+# Every project run may restore and update its project-scoped package cache.
+# Keep pnpm's content verification explicit so an untrusted branch cannot make
+# a later trusted run consume bytes that do not match its frozen lockfile.
+export PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true
 mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$npm_cache" "$TMPDIR"
 chown -R "$untrusted_uid:$untrusted_gid" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" /work/.local \
   "$npm_cache" "$TMPDIR"

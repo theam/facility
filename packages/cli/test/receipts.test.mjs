@@ -47,6 +47,7 @@ test("collects a privacy-preserving, tamper-evident agent receipt", async () => 
   assert.equal(receipt.checks_truncated, false);
   assert.equal(receipt.github.actor, undefined);
   assert.match(receipt.github.actor_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(receipt.integrity.attestation, undefined);
   assert.equal(verifyReceipt(receipt), true);
   assert.equal(verifyReceipt({ ...receipt, result: "failed" }), false);
   assert.equal(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { newId } from "@facility/core";
 import {
   agentDefs,
@@ -12,6 +13,7 @@ import {
   previewSandboxes,
   projects,
   repos,
+  runDeliveries,
   runEvents,
   runs,
 } from "@facility/db";
@@ -19,6 +21,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { applyFacilitySignal } from "../integrations/signals.js";
 import type { AppConfig } from "../types.js";
 import { resolvePlatformIssue } from "../watchtower/issues.js";
+import { decideAddressReviewAdmission, isTrustedReviewBot } from "./address-review-policy.js";
 import { type CiDoctorDecision, decideCiDoctorAction } from "./ci-doctor-policy.js";
 import {
   createGithubClientFactory,
@@ -64,17 +67,23 @@ type WebhookPayload = TriggerPayload & {
     body?: string | null;
     draft?: boolean;
     state?: string;
-    user?: { login?: string | null } | null;
+    user?: { login?: string | null; type?: string | null } | null;
     html_url?: string;
     merged?: boolean;
-    base?: { ref?: string };
-    head?: { ref?: string; sha?: string };
+    base?: { ref?: string; repo?: { full_name?: string } | null };
+    head?: { ref?: string; sha?: string; repo?: { full_name?: string } | null };
     created_at?: string;
     updated_at?: string;
     closed_at?: string;
     merged_at?: string;
   };
-  review?: { id?: number; body?: string | null; state?: string; user?: { login?: string } };
+  review?: {
+    id?: number;
+    body?: string | null;
+    state?: string;
+    commit_id?: string;
+    user?: { login?: string };
+  };
   workflow_run?: {
     id?: number;
     name?: string;
@@ -191,6 +200,8 @@ export async function processGithubWebhook(
         payload,
         factory ?? createGithubClientFactory(config),
         enqueue,
+        undefined,
+        config.githubAppSlug,
       );
     } else if (event.eventType === "workflow_run") {
       await processWorkflowRun(
@@ -687,6 +698,7 @@ async function processGithubAgentEvent(
   factory: GithubClientFactory,
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
   preferredAgentName?: string,
+  githubAppSlug?: string,
 ) {
   const owner = payload.repository?.owner?.login;
   const name = payload.repository?.name;
@@ -751,10 +763,76 @@ async function processGithubAgentEvent(
   }
   const pullNumber = pullRequest.number;
   const branch = pullRequest.head;
-  const deliveryContext = branch ? await githubDeliveryContext(db, repo, branch) : null;
+  let deliveryContext = branch ? await githubDeliveryContext(db, repo, branch) : null;
+  let reviewContext: unknown = payload.review ?? null;
   let ciDoctorContext: Record<string, unknown> | null = null;
   const isCiDoctor = agent.name.replace(/-/g, "_") === "ci_doctor";
-  if (eventType === "workflow_run" && !isCiDoctor) {
+  const isAddressReview = agent.name.replace(/-/g, "_") === "address_review";
+  if (eventType === "pull_request_review" && isAddressReview) {
+    const reviewer = payload.review?.user?.login;
+    const sender = payload.sender?.login;
+    if (!pullNumber) return;
+    const client = new FacilityGithubClient(await factory(installationId), {
+      owner,
+      repo: name,
+      defaultBranch: repo.defaultBranch,
+    });
+    const reviewId = payload.review?.id;
+    if (!reviewId) return;
+    const [livePullRequest, liveReview] = await Promise.all([
+      client.getAddressReviewPullRequest(pullNumber),
+      client.getAddressReviewSubmittedReview(pullNumber, reviewId),
+    ]);
+    const delivery = await addressReviewDeliveryLineage(db, repo, {
+      pullNumber: livePullRequest.number,
+      headBranch: livePullRequest.head.ref,
+      headSha: livePullRequest.head.sha,
+    });
+    const installationMatches = await repoInstallationMatches(db, repo, installationId);
+    const reviewerCanWrite = liveReview.author
+      ? isTrustedReviewBot(liveReview.author) || (await client.userCanWrite(liveReview.author))
+      : false;
+    const admission = decideAddressReviewAdmission({
+      repository: `${owner}/${name}`,
+      defaultBranch: repo.defaultBranch,
+      facilityAppSlug: githubAppSlug,
+      event: {
+        pullNumber,
+        headRef: branch,
+        headSha: pullRequest.headSha,
+        reviewId: payload.review?.id,
+        reviewState: payload.review?.state,
+        reviewCommitSha: payload.review?.commit_id,
+        reviewer,
+        sender,
+      },
+      pullRequest: livePullRequest,
+      review: liveReview,
+      reviewerCanWrite,
+      installationMatches,
+      facilityDelivered: Boolean(delivery),
+      deliveryBaseBranch: delivery?.baseBranch,
+      headShaAuthorized: delivery?.headShaAuthorized ?? false,
+    });
+    if (!admission.admitted) {
+      await auditGithub(db, orgId, "github.review_repair.denied", repo, {
+        pullNumber,
+        reason: admission.reason,
+      });
+      return;
+    }
+    pullRequest = {
+      number: livePullRequest.number,
+      title: payload.pull_request?.title ?? null,
+      body: payload.pull_request?.body ?? null,
+      url: livePullRequest.url,
+      head: livePullRequest.head.ref,
+      headSha: livePullRequest.head.sha,
+      base: livePullRequest.base.ref,
+    };
+    deliveryContext = await githubDeliveryContext(db, repo, livePullRequest.head.ref);
+    reviewContext = liveReview;
+  } else if (eventType === "workflow_run" && !isCiDoctor) {
     // Generic workflow agents retain their old failure-only behavior and never
     // inherit CI-doctor's privileged deterministic repair semantics.
     if (payload.workflow_run?.conclusion !== "failure") return;
@@ -863,6 +941,12 @@ async function processGithubAgentEvent(
     orgId,
     projectId: repo.projectId,
     agentDefId: agent.id,
+    githubDeliveryId: eventId,
+    ...(ciDoctorContext
+      ? {
+          ciRepairKey: ciRepairAdmissionKey(repo.id, branch ?? "", pullRequest.headSha ?? ""),
+        }
+      : {}),
     mode: agent.name.replace(/-/g, "_"),
     engine: agent.engine,
     trigger: {
@@ -872,7 +956,7 @@ async function processGithubAgentEvent(
       delivery: eventId,
       repository: { owner, name, defaultBranch: repo.defaultBranch },
       pullRequest,
-      review: payload.review ?? null,
+      review: reviewContext,
       workflowRun: sanitizedWorkflowRun(payload.workflow_run),
       ...(ciDoctorContext ? { ciDoctor: ciDoctorContext } : {}),
       deliveryContext,
@@ -888,10 +972,7 @@ async function processGithubAgentEvent(
       id: payload.sender?.login ?? `${eventType}-webhook`,
     },
   };
-  const inserted =
-    eventType === "workflow_run"
-      ? await db.insert(runs).values(values).onConflictDoNothing().returning()
-      : await db.insert(runs).values(values).returning();
+  const inserted = await db.insert(runs).values(values).onConflictDoNothing().returning();
   const run = inserted[0];
   if (!run) return;
   await db.insert(runEvents).values({
@@ -956,6 +1037,91 @@ async function processGithubAgentEvent(
     action: payload.action,
   });
   await enqueue?.("runs.dispatch", { runId: run.id, orgId });
+}
+
+async function repoInstallationMatches(
+  db: FacilityDb,
+  repo: typeof repos.$inferSelect,
+  installationId: number,
+) {
+  if (!repo.installationId) return false;
+  const installation = (
+    await db
+      .select({ id: githubInstallations.id })
+      .from(githubInstallations)
+      .where(
+        and(
+          eq(githubInstallations.id, repo.installationId),
+          eq(githubInstallations.orgId, repo.orgId),
+          eq(githubInstallations.installationId, installationId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  return Boolean(installation);
+}
+
+async function addressReviewDeliveryLineage(
+  db: FacilityDb,
+  repo: typeof repos.$inferSelect,
+  input: { pullNumber: number; headBranch: string; headSha: string },
+) {
+  const delivery = (
+    await db
+      .select({
+        runId: runDeliveries.runId,
+        baseBranch: runDeliveries.baseBranch,
+        expectedHeadSha: runDeliveries.expectedHeadSha,
+      })
+      .from(runDeliveries)
+      .innerJoin(
+        runs,
+        and(
+          eq(runs.id, runDeliveries.runId),
+          eq(runs.orgId, runDeliveries.orgId),
+          eq(runs.projectId, runDeliveries.projectId),
+          eq(runs.status, "succeeded"),
+          inArray(runs.mode, ["builder", "codex_builder", "codex-builder"]),
+        ),
+      )
+      .where(
+        and(
+          eq(runDeliveries.orgId, repo.orgId),
+          eq(runDeliveries.projectId, repo.projectId),
+          eq(runDeliveries.repoId, repo.id),
+          eq(runDeliveries.owner, repo.owner),
+          eq(runDeliveries.repoName, repo.name),
+          eq(runDeliveries.status, "delivered"),
+          eq(runDeliveries.prNumber, input.pullNumber),
+          eq(runDeliveries.headBranch, input.headBranch),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!delivery) return null;
+  if (delivery.expectedHeadSha === input.headSha) {
+    return { ...delivery, headShaAuthorized: true };
+  }
+  const repair = (
+    await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, repo.orgId),
+          eq(runs.projectId, repo.projectId),
+          eq(runs.status, "succeeded"),
+          inArray(runs.mode, ["address_review", "address-review", "ci_doctor", "ci-doctor"]),
+          sql`${runs.gh}->>'owner' = ${repo.owner}`,
+          sql`${runs.gh}->>'repo' = ${repo.name}`,
+          sql`${runs.gh}->>'branch' = ${input.headBranch}`,
+          sql`${runs.gh}->>'headSha' = ${input.headSha}`,
+          sql`${runs.trigger}#>>'{deliveryContext,producingRunId}' = ${delivery.runId}`,
+        ),
+      )
+      .limit(1)
+  )[0];
+  return { ...delivery, headShaAuthorized: Boolean(repair) };
 }
 
 async function githubDeliveryContext(
@@ -1099,6 +1265,18 @@ async function ciDoctorHistory(
   };
 }
 
+function ciRepairAdmissionKey(repoId: string, branch: string, headSha: string) {
+  return createHash("sha256")
+    .update("facility/ci-repair-admission/v1")
+    .update("\0")
+    .update(repoId)
+    .update("\0")
+    .update(branch)
+    .update("\0")
+    .update(headSha)
+    .digest("hex");
+}
+
 async function ciRepairNoticeReported(
   db: FacilityDb,
   repo: typeof repos.$inferSelect,
@@ -1191,7 +1369,7 @@ export function githubEventMatches(
     return (
       eventType === "pull_request" &&
       trigger.action === "ready_for_review" &&
-      payload.action === "opened" &&
+      ["opened", "reopened", "synchronize"].includes(payload.action ?? "") &&
       payload.pull_request?.draft !== true
     );
   });

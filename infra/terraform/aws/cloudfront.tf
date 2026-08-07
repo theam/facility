@@ -56,5 +56,12 @@ resource "aws_cloudfront_distribution" "api" {
     minimum_protocol_version = "TLSv1"
   }
 
+  lifecycle {
+    precondition {
+      condition     = var.acm_certificate_arn == ""
+      error_message = "enable_cloudfront_api_endpoint requires acm_certificate_arn to be empty because its ALB origin uses certificate-less HTTP forwarding."
+    }
+  }
+
   depends_on = [aws_lb_listener.http]
 }

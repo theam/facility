@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, containers]
+
+  - package-ecosystem: docker
+    directory: /apps/web
+    schedule:
+      interval: weekly
+    labels: [dependencies, containers]
+
+  - package-ecosystem: docker
+    directory: /runner
+    schedule:
+      interval: weekly
+    labels: [dependencies, containers]

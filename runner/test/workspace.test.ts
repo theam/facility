@@ -35,6 +35,7 @@ import {
   readAgentUpdateMetadata,
   readSecurityReport,
   requiresAgentProgress,
+  runnerReceiptActivity,
   runPackageInstall,
   semanticDeliveryBranch,
   terminateChild,
@@ -912,6 +913,74 @@ describe("workspace preparation", () => {
       restoreEnv("OPENAI_API_KEY", previousEnv.openai);
       restoreEnv("FACILITY_PLATFORM_KEY", previousEnv.platform);
     }
+  });
+});
+
+describe("runner receipt activity", () => {
+  it("counts repository changes for delivery and repair modes without runtime artifacts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-receipt-"));
+    const repo = join(root, "repo");
+    try {
+      await mkdir(join(repo, "src"), { recursive: true });
+      await mkdir(join(repo, ".agent-sdlc"), { recursive: true });
+      await mkdir(join(repo, "harness"), { recursive: true });
+      execFileSync("git", ["init", "--initial-branch=main"], { cwd: repo });
+      execFileSync("git", ["config", "user.email", "facility@example.invalid"], { cwd: repo });
+      execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: repo });
+      await writeFile(join(repo, "src", "changed.ts"), "export const value = 1;\n");
+      await writeFile(join(repo, "src", "deleted.ts"), "export const removed = true;\n");
+      await writeFile(join(repo, ".agent-sdlc", "delivery.json"), "{}\n");
+      await writeFile(join(repo, "harness", "SESSION.md"), "# Original\n");
+      execFileSync("git", ["add", "-A"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "test: initialize receipt fixture"], { cwd: repo });
+      execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repo });
+
+      await writeFile(join(repo, "src", "changed.ts"), "export const value = 2;\n");
+      await rm(join(repo, "src", "deleted.ts"));
+      await writeFile(join(repo, "src", "added.ts"), "export const added = true;\n");
+      await writeFile(join(repo, ".agent-sdlc", "delivery.json"), '{"branch":"feature/task"}\n');
+      await writeFile(join(repo, "harness", "SESSION.md"), "# Injected\n");
+      await mkdir(join(repo, ".claude", "skills", "receipt_skill"), { recursive: true });
+      await writeFile(
+        join(repo, ".claude", "skills", "receipt_skill", "SKILL.md"),
+        "# Injected skill\n",
+      );
+      await mkdir(join(repo, "node_modules", "runtime-only"), { recursive: true });
+      await writeFile(join(repo, "node_modules", "runtime-only", "index.js"), "generated\n");
+
+      const repoBundle = bundle({
+        repo: {
+          cloneUrl: "https://github.com/acme/widget.git",
+          branch: "main",
+          expectedHeadSha: null,
+          installationTokenRef: "installation",
+        },
+        skills: [{ name: "receipt skill", content: "# Receipt skill" }],
+        harness: { files: { "harness/SESSION.md": "# Injected" } },
+      });
+      for (const mode of ["builder", "codex-builder", "address-review", "ci-doctor"]) {
+        await expect(
+          runnerReceiptActivity({ ...repoBundle, mode }, "succeeded", root),
+        ).resolves.toMatchObject({ file_changes: 3 });
+      }
+      await expect(runnerReceiptActivity(repoBundle, "failed", root)).resolves.toMatchObject({
+        file_changes: 3,
+        errors: 1,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "architect",
+    "review",
+    "security-sweep",
+    "custom",
+  ])("keeps %s receipt file changes at zero", async (mode) => {
+    await expect(runnerReceiptActivity(bundle({ mode }), "succeeded")).resolves.toMatchObject({
+      file_changes: 0,
+    });
   });
 });
 

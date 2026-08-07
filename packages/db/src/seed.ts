@@ -49,7 +49,7 @@ const BUNDLED_ACTION_TYPES = [
   { name: "mcp_tool_call", required: ["toolName", "args", "requestedBy"] },
 ];
 
-const ANALYSIS_AGENT_NAMES = ["architect", "codex-architect", "review", "security-sweep"] as const;
+const ANALYSIS_AGENT_NAMES = ["review", "security-sweep"] as const;
 
 export function defaultSandboxProfileId(orgId: string): string {
   return orgId === "org_dev_the_agile_monkeys" ? "sbx_dev_default" : `sbx_default_${orgId}`;

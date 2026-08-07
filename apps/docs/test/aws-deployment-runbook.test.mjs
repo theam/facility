@@ -26,6 +26,18 @@ const localsTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/loca
 const storageTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/storage.tf"), "utf8");
 const ecsTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/ecs.tf"), "utf8");
 const outputsTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/outputs.tf"), "utf8");
+const albTerraform = readFileSync(resolve(repoRoot, "infra/terraform/aws/alb.tf"), "utf8");
+const cloudfrontTerraform = readFileSync(
+  resolve(repoRoot, "infra/terraform/aws/cloudfront.tf"),
+  "utf8",
+);
+
+function terraformResource(source, type, name) {
+  const start = source.indexOf(`resource "${type}" "${name}" {`);
+  assert.notEqual(start, -1, `${type}.${name} must exist`);
+  const nextResource = source.indexOf('\nresource "', start + 1);
+  return source.slice(start, nextResource === -1 ? undefined : nextResource);
+}
 
 function apiStage(image) {
   const start = image.indexOf("FROM base AS api\n");
@@ -58,6 +70,51 @@ test("AWS guides use one truthful ECR-only automated release path", () => {
       markdown,
       /ghcr\.io\/theam\/facility\/|skip this step/,
       `${guideName} must not advertise the unsupported direct-GHCR shortcut`,
+    );
+  }
+});
+
+test("the public ALB forwards HTTP only when no ACM certificate exists", () => {
+  const listener = terraformResource(albTerraform, "aws_lb_listener", "http");
+  assert.match(
+    listener,
+    /type\s*=\s*var\.acm_certificate_arn == "" \? \(var\.enable_cloudfront_api_endpoint \? "forward" : "fixed-response"\) : "redirect"/,
+  );
+  assert.match(
+    listener,
+    /dynamic "redirect" \{[\s\S]*?for_each = var\.acm_certificate_arn == "" \? \[\] : \[1\]/,
+  );
+  assert.match(listener, /host\s*= "#\{host\}"/);
+  assert.match(listener, /path\s*= "\/#\{path\}"/);
+  assert.match(listener, /query\s*= "#\{query\}"/);
+  assert.match(listener, /status_code = "HTTP_301"/);
+  assert.match(
+    cloudfrontTerraform,
+    /precondition \{[\s\S]*?condition\s*= var\.acm_certificate_arn == ""/,
+    "CloudFront's HTTP-only ALB origin must reject certificate-backed mode",
+  );
+
+  for (const route of ["api", "web", "mcp", "preview"]) {
+    const rule = terraformResource(albTerraform, "aws_lb_listener_rule", `http_${route}`);
+    assert.match(
+      rule,
+      /count\s*=\s*var\.acm_certificate_arn == "" \? 1 : 0/,
+      `the ${route} HTTP forwarding rule must not exist when HTTPS is configured`,
+    );
+    assert.match(rule, /type\s*=\s*"forward"/);
+  }
+
+  for (const [guideName, markdown] of guides) {
+    assert.match(
+      markdown,
+      /(?:redirects|redirecting)[\s\S]{0,140}HTTPS/,
+      `${guideName} must document the HTTPS redirect boundary`,
+    );
+    assert.match(markdown, /port 80/, `${guideName} must identify the plaintext listener`);
+    assert.match(
+      markdown,
+      /(?:never forwards plaintext|only certificate-less deployments forward HTTP)/,
+      `${guideName} must restrict plaintext forwarding to certificate-less deployments`,
     );
   }
 });
@@ -100,6 +157,16 @@ test("AWS guides require the build manifest and reserve overrides for the runner
       markdown,
       /image_overrides[\s\S]*?pin the privileged runner to the exact ECR digest/,
       `${guideName} must scope the documented override to the Terraform-owned runner`,
+    );
+    assert.match(
+      markdown,
+      /ECR basic or enhanced[\s\S]{0,120}HIGH or CRITICAL/,
+      `${guideName} must document the deployment vulnerability gate`,
+    );
+    assert.match(
+      markdown,
+      /ecr:DescribeImages[\s\S]{0,80}ecr:DescribeImageScanFindings/,
+      `${guideName} must document the operator's scan-read permissions`,
     );
   }
 });
@@ -210,4 +277,26 @@ test("the CodeBuild role and lifecycle cannot escape the cache prefix", () => {
   assert.match(lifecycle, /prefix = "codebuild-cache\/"/);
   assert.match(lifecycle, /days = 30/);
   assert.match(lifecycle, /noncurrent_days = 7/);
+});
+
+test("the API can discover preview tasks without widening task mutation permissions", () => {
+  const discoveryStart = iamTerraform.indexOf('Sid      = "DiscoverPreviewTasks"');
+  assert.notEqual(discoveryStart, -1, "preview orphan recovery must be able to list ECS tasks");
+  const discovery = iamTerraform.slice(
+    discoveryStart,
+    iamTerraform.indexOf("\n      {", discoveryStart),
+  );
+  assert.match(discovery, /Action\s*=\s*"ecs:ListTasks"/);
+  assert.match(discovery, /Resource\s*=\s*"\*"/);
+  assert.match(discovery, /"ecs:cluster"\s*=\s*aws_ecs_cluster\.facility\.arn/);
+
+  const management = iamTerraform.match(
+    /Sid\s*=\s*"ManagePreviewTasks"[\s\S]*?Resource\s*=\s*"([^"]+)"/,
+  );
+  assert.ok(management, "preview task management policy must exist");
+  assert.doesNotMatch(
+    management[1],
+    /^\*$/,
+    "DescribeTasks and StopTask must remain scoped to this deployment's task ARNs",
+  );
 });

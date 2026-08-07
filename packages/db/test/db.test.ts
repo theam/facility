@@ -136,6 +136,103 @@ describe("db", async () => {
     }
   });
 
+  it("enforces GitHub-delivery, CI-repair, and active-preview idempotency in Postgres", async () => {
+    const orgId = newId("org");
+    const projectId = newId("proj");
+    await db.insert(schema.orgs).values({
+      id: orgId,
+      name: "Idempotency constraints",
+      slug: `idempotency-${orgId}`,
+      settings: {},
+    });
+    await db.insert(schema.projects).values({
+      id: projectId,
+      orgId,
+      name: "Idempotency constraints",
+      slug: "idempotency",
+      settings: {},
+    });
+
+    const run = (overrides: Partial<typeof schema.runs.$inferInsert> = {}) => ({
+      id: newId("run"),
+      orgId,
+      projectId,
+      mode: "builder",
+      engine: "codex",
+      trigger: {},
+      sandbox: {},
+      gh: {},
+      createdBy: { type: "test", id: "db-idempotency" },
+      ...overrides,
+    });
+
+    const deliveryId = `delivery-${randomUUID()}`;
+    await db.insert(schema.runs).values(run({ githubDeliveryId: deliveryId }));
+    await expect(
+      db.insert(schema.runs).values(run({ githubDeliveryId: deliveryId })),
+    ).rejects.toMatchObject({
+      cause: { code: "23505", constraint_name: "runs_org_github_delivery_uidx" },
+    });
+
+    const ciRepairKey = randomUUID().replaceAll("-", "");
+    await db
+      .insert(schema.runs)
+      .values(
+        run({ ciRepairKey, githubDeliveryId: `delivery-${randomUUID()}`, mode: "ci_doctor" }),
+      );
+    await expect(
+      db
+        .insert(schema.runs)
+        .values(
+          run({ ciRepairKey, githubDeliveryId: `delivery-${randomUUID()}`, mode: "ci_doctor" }),
+        ),
+    ).rejects.toMatchObject({
+      cause: { code: "23505", constraint_name: "runs_org_ci_repair_key_uidx" },
+    });
+
+    const previewRun = await db.insert(schema.runs).values(run()).returning({ id: schema.runs.id });
+    const runId = previewRun[0]?.id;
+    if (!runId) throw new Error("preview idempotency run fixture missing");
+    const expiresAt = new Date(Date.now() + 60_000);
+    await db.insert(schema.previewSandboxes).values({
+      id: newId("sbx"),
+      orgId,
+      projectId,
+      runId,
+      status: "failed",
+      driver: "aws",
+      config: {},
+      expiresAt,
+      createdBy: { type: "test", id: "terminal-preview" },
+    });
+    await db.insert(schema.previewSandboxes).values({
+      id: newId("sbx"),
+      orgId,
+      projectId,
+      runId,
+      status: "provisioning",
+      driver: "aws",
+      config: {},
+      expiresAt,
+      createdBy: { type: "test", id: "active-preview" },
+    });
+    await expect(
+      db.insert(schema.previewSandboxes).values({
+        id: newId("sbx"),
+        orgId,
+        projectId,
+        runId,
+        status: "running",
+        driver: "aws",
+        config: {},
+        expiresAt,
+        createdBy: { type: "test", id: "duplicate-active-preview" },
+      }),
+    ).rejects.toMatchObject({
+      cause: { code: "23505", constraint_name: "preview_sandboxes_run_uidx" },
+    });
+  });
+
   it("runs schema and system-data reconciliation behind one deploy entry point", async () => {
     const observer = postgres(databaseUrl, { max: 1 });
     // Open the observer before the very short empty-database reconciliation;
@@ -389,7 +486,7 @@ describe("db", async () => {
     ).toEqual({ type: "webhook", config: { url: "https://hooks.invalid/plan" } });
   });
 
-  it("moves only managed analysis agents to their tenant's analysis profile", async () => {
+  it("moves only managed lightweight analysis agents to their tenant's analysis profile", async () => {
     const orgA = newId("org");
     const orgB = newId("org");
     const projectA = newId("proj");
@@ -436,7 +533,7 @@ describe("db", async () => {
         id: newId("agent"),
         orgId: orgA,
         projectId: projectA,
-        name: "architect",
+        name: "review",
         contractItemId: contractA.id,
         sandboxProfileId: defaultSandboxProfileId(orgA),
       },
@@ -444,7 +541,7 @@ describe("db", async () => {
         id: newId("agent"),
         orgId: orgA,
         projectId: projectA,
-        name: "review",
+        name: "architect",
         contractItemId: contractA.id,
         sandboxProfileId: customProfileId,
       },
@@ -504,8 +601,8 @@ describe("db", async () => {
     expect(assignments.get(fixtures[1]?.id ?? "")).toBe(customProfileId);
     expect(assignments.get(fixtures[2]?.id ?? "")).toBeNull();
     expect(assignments.get(fixtures[3]?.id ?? "")).toBe(defaultSandboxProfileId(orgA));
-    expect(assignments.get(fixtures[4]?.id ?? "")).toBe(analysisSandboxProfileId(orgB));
-    expect(assignments.get(fixtures[4]?.id ?? "")).not.toBe(analysisSandboxProfileId(orgA));
+    expect(assignments.get(fixtures[4]?.id ?? "")).toBe(defaultSandboxProfileId(orgB));
+    expect(assignments.get(fixtures[4]?.id ?? "")).not.toBe(defaultSandboxProfileId(orgA));
 
     await db
       .update(schema.agentDefs)
@@ -684,7 +781,22 @@ describe("db", async () => {
     // A developer database can include later migrations from another worktree;
     // assert this checkout's latest migration was applied without assuming it
     // is the newest row in that shared database.
-    expect(Array.from(applied).map((row) => row.name)).toContain("0030_github_sync_watermarks.sql");
+    expect(Array.from(applied).map((row) => row.name)).toContain(
+      "0038_ci_repair_admission_key.sql",
+    );
+    const previewRunIndex = (await db.execute(
+      sql`
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE tablename = 'preview_sandboxes'
+          AND indexname = 'preview_sandboxes_run_uidx'
+      `,
+    )) as Iterable<{ indexdef: string }>;
+    const previewRunIndexDefinition = Array.from(previewRunIndex)[0]?.indexdef ?? "";
+    expect(previewRunIndexDefinition).toContain("status");
+    expect(previewRunIndexDefinition).toContain("provisioning");
+    expect(previewRunIndexDefinition).toContain("running");
+    expect(previewRunIndexDefinition).not.toContain("failed");
     const invalidOutcomeRollups = (await db.execute(
       sql`
         SELECT count(*)::int AS count

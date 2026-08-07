@@ -23,8 +23,8 @@ target "service" {
   dockerfile = "Dockerfile"
   platforms  = [PLATFORM]
   # A timestamped provenance wrapper gives identical runtime bytes a new
-  # manifest digest on every build. The release manifest pins the reproducible
-  # runtime manifest without presenting the timestamped wrapper as provenance.
+  # manifest digest on every build. The release manifest pins the exact runtime
+  # manifest produced by this build without presenting the wrapper as provenance.
   attest = ["type=provenance,disabled=true"]
 }
 

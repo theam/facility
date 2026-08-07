@@ -1,0 +1,9 @@
+{
+  "name": "@facility/agent-clis",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.215",
+    "@openai/codex": "0.144.6"
+  }
+}

@@ -1,6 +1,10 @@
 import { App } from "@octokit/app";
 import { Octokit as RestOctokit } from "@octokit/rest";
 import type { AppConfig } from "../types.js";
+import type {
+  AddressReviewPullRequest,
+  AddressReviewSubmittedReview,
+} from "./address-review-policy.js";
 import type { CiDoctorCheck, CiDoctorPullRequest } from "./ci-doctor-policy.js";
 
 const GITHUB_EVIDENCE_PAGE_SIZE = 100;
@@ -63,6 +67,8 @@ export type Octokit = {
       update: (args: Record<string, unknown>) => Promise<{ data: unknown }>;
       listReviews?: (args: Record<string, unknown>) => Promise<{ data: unknown[] }>;
       listReviewComments?: (args: Record<string, unknown>) => Promise<{ data: unknown[] }>;
+      getReview?: (args: Record<string, unknown>) => Promise<{ data: unknown }>;
+      listCommentsForReview?: (args: Record<string, unknown>) => Promise<{ data: unknown[] }>;
       listCommits?: (args: Record<string, unknown>) => Promise<{ data: unknown[] }>;
       listFiles?: (args: Record<string, unknown>) => Promise<{
         data: Array<{ filename?: string }>;
@@ -856,13 +862,116 @@ export class FacilityGithubClient {
     };
   }
 
-  async userCanWrite(username: string): Promise<boolean> {
-    const response = await this.octokit.rest.repos.getCollaboratorPermissionLevel({
+  async getAddressReviewPullRequest(number: number): Promise<AddressReviewPullRequest> {
+    if (!this.octokit.rest.pulls.get) throw new Error("GitHub PR reads are unavailable");
+    const response = await this.octokit.rest.pulls.get({
       owner: this.repo.owner,
       repo: this.repo.repo,
-      username,
+      pull_number: number,
     });
-    return ["admin", "maintain", "write"].includes(response.data.permission);
+    const pullRequest = response.data;
+    const author = pullRequest.user;
+    const head = pullRequest.head;
+    const base = pullRequest.base;
+    if (
+      !author?.login ||
+      !author.type ||
+      !head?.ref ||
+      !head.sha ||
+      !head.repo?.full_name ||
+      !base?.ref ||
+      !base.repo?.full_name ||
+      !pullRequest.html_url
+    ) {
+      throw new Error("GitHub address-review pull-request evidence is incomplete");
+    }
+    return {
+      number: pullRequest.number,
+      state: pullRequest.state === "open" ? "open" : "closed",
+      draft: pullRequest.draft === true,
+      url: pullRequest.html_url,
+      author: { login: author.login, type: author.type },
+      head: {
+        ref: head.ref,
+        sha: head.sha,
+        repo: head.repo.full_name,
+      },
+      base: { ref: base.ref, repo: base.repo.full_name },
+    };
+  }
+
+  async getAddressReviewSubmittedReview(
+    pullNumber: number,
+    reviewId: number,
+  ): Promise<AddressReviewSubmittedReview> {
+    const getReview = this.octokit.rest.pulls.getReview;
+    const listComments = this.octokit.rest.pulls.listCommentsForReview;
+    if (!getReview || !listComments) {
+      throw new Error("GitHub submitted-review evidence endpoints are unavailable");
+    }
+    const [reviewResponse, comments] = await Promise.all([
+      getReview({
+        owner: this.repo.owner,
+        repo: this.repo.repo,
+        pull_number: pullNumber,
+        review_id: reviewId,
+      }),
+      boundedGithubPages("submitted-review comments", (page) =>
+        listComments({
+          owner: this.repo.owner,
+          repo: this.repo.repo,
+          pull_number: pullNumber,
+          review_id: reviewId,
+          per_page: GITHUB_EVIDENCE_PAGE_SIZE,
+          page,
+        }).then((response) => response.data),
+      ),
+    ]);
+    const review = objectRecord(reviewResponse.data);
+    const author = objectRecord(review.user);
+    const id = Number(review.id);
+    const state = typeof review.state === "string" ? review.state.toLowerCase() : "";
+    const commitSha = typeof review.commit_id === "string" ? review.commit_id : "";
+    const authorLogin = typeof author.login === "string" ? author.login : "";
+    if (!Number.isInteger(id) || id !== reviewId || !state || !commitSha || !authorLogin) {
+      throw new Error("GitHub submitted-review evidence is incomplete");
+    }
+    return {
+      id,
+      state,
+      commitSha,
+      author: authorLogin,
+      body: boundedText(review.body),
+      submittedAt: typeof review.submitted_at === "string" ? review.submitted_at : null,
+      comments: comments.map((value) => {
+        const comment = objectRecord(value);
+        return {
+          id: numberOrNull(comment.id),
+          path: stringOrNull(comment.path),
+          line: numberOrNull(comment.line ?? comment.original_line),
+          body: boundedText(comment.body),
+          diffHunk: boundedText(comment.diff_hunk),
+          url: stringOrNull(comment.html_url),
+        };
+      }),
+    };
+  }
+
+  async userCanWrite(username: string): Promise<boolean> {
+    try {
+      const response = await this.octokit.rest.repos.getCollaboratorPermissionLevel({
+        owner: this.repo.owner,
+        repo: this.repo.repo,
+        username,
+      });
+      return ["admin", "maintain", "write"].includes(response.data.permission);
+    } catch (error) {
+      // GitHub returns 404 for users who are not collaborators. Treat that as
+      // a deterministic denial while preserving rate-limit and service errors
+      // so the durable webhook job can retry them.
+      if (statusCode(error) === 404) return false;
+      throw error;
+    }
   }
 
   private refuseDefaultBranch(ref: string) {
@@ -1139,6 +1248,14 @@ function objectRecord(value: unknown): Record<string, unknown> {
 function boundedText(value: unknown) {
   if (typeof value !== "string") return null;
   return value.length > 2_000 ? `${value.slice(0, 2_000)}…` : value;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function statusCode(error: unknown) {

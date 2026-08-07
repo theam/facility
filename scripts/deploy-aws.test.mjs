@@ -570,6 +570,8 @@ const operation = args[4];
 if (service === "ecr" && operation === "describe-images") {
   const digest = args[args.findIndex((arg) => arg.startsWith("imageDigest="))].slice("imageDigest=".length);
   process.stdout.write(JSON.stringify({ imageDetails: [{ imageDigest: digest }] }));
+} else if (service === "ecr" && operation === "describe-image-scan-findings") {
+  process.stdout.write(JSON.stringify({ imageScanStatus: { status: "COMPLETE" }, imageScanFindings: { findingSeverityCounts: {} } }));
 } else if (service === "codebuild" && operation === "batch-get-projects") {
   process.stdout.write(JSON.stringify({ projects: [{ name: "facility-test-runner", environment: { image: "runner:wrong" } }] }));
 } else if (service === "ecs" && operation === "describe-services") {
@@ -649,6 +651,8 @@ const value = (flag) => args[args.indexOf(flag) + 1];
 if (service === "ecr" && operation === "describe-images") {
   const digest = args[args.findIndex((arg) => arg.startsWith("imageDigest="))].slice("imageDigest=".length);
   process.stdout.write(JSON.stringify({ imageDetails: [{ imageDigest: digest }] }));
+} else if (service === "ecr" && operation === "describe-image-scan-findings") {
+  process.stdout.write(JSON.stringify({ imageScanStatus: { status: "COMPLETE" }, imageScanFindings: { findingSeverityCounts: {} } }));
 } else if (service === "codebuild" && operation === "batch-get-projects") {
   process.stdout.write(JSON.stringify({ projects: [{ name: "facility-test-runner", environment: { image: process.env.FAKE_RUNNER_IMAGE } }] }));
 } else if (service === "ecs" && operation === "describe-services") {
@@ -777,6 +781,69 @@ if (service === "ecr" && operation === "describe-images") {
       taskDefinition: "arn:migrate",
     }),
     /did not start exactly one/,
+  );
+});
+
+test("AWS CLI adapter waits for usable ECR findings and blocks vulnerable digests", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "facility-aws-image-scan-"));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  const awsLog = join(directory, "aws.log");
+  const command = join(directory, "aws");
+  await writeFile(
+    command,
+    `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const service = args[3];
+const operation = args[4];
+appendFileSync(${JSON.stringify(awsLog)}, JSON.stringify(args) + "\\n");
+if (service === "ecr" && operation === "describe-images") {
+  const digest = args[args.findIndex((arg) => arg.startsWith("imageDigest="))].slice("imageDigest=".length);
+  process.stdout.write(JSON.stringify({ imageDetails: [{ imageDigest: digest }] }));
+} else if (service === "ecr" && operation === "describe-image-scan-findings") {
+  const calls = readFileSync(${JSON.stringify(awsLog)}, "utf8").trim().split("\\n").map(JSON.parse);
+  const scanCalls = calls.filter((call) => call[3] === "ecr" && call[4] === "describe-image-scan-findings");
+  const status = scanCalls.length === 1 ? "IN_PROGRESS" : "ACTIVE";
+  const completed = scanCalls.length >= 3 ? { imageScanCompletedAt: "2026-08-07T00:00:00Z" } : {};
+  process.stdout.write(JSON.stringify({ imageScanStatus: { status }, imageScanFindings: { ...completed, findingSeverityCounts: {} } }));
+} else {
+  process.stderr.write("unexpected adapter command " + service + " " + operation);
+  process.exit(19);
+}
+`,
+  );
+  await chmod(command, 0o755);
+  const aws = createAwsCliAdapter({
+    awsCommand: command,
+    commandTimeoutMs: 1_000,
+    pollIntervalMs: 1,
+    region,
+  });
+  await aws.assertImage(`${prefix}/api`, digests.api);
+  const calls = (await readFile(awsLog, "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(calls.filter((args) => args.includes("describe-image-scan-findings")).length, 3);
+
+  await writeFile(
+    command,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const service = args[3];
+const operation = args[4];
+if (service === "ecr" && operation === "describe-images") {
+  const digest = args[args.findIndex((arg) => arg.startsWith("imageDigest="))].slice("imageDigest=".length);
+  process.stdout.write(JSON.stringify({ imageDetails: [{ imageDigest: digest }] }));
+} else if (service === "ecr" && operation === "describe-image-scan-findings") {
+  process.stdout.write(JSON.stringify({ imageScanStatus: { status: "COMPLETE" }, imageScanFindings: { findingSeverityCounts: { CRITICAL: 1, HIGH: 2 } } }));
+} else {
+  process.stderr.write("unexpected adapter command " + service + " " + operation);
+  process.exit(19);
+}
+`,
+  );
+  await chmod(command, 0o755);
+  await assert.rejects(
+    aws.assertImage(`${prefix}/api`, digests.api),
+    (error) => error.code === "ecr_scan_blocked" && /1 critical and 2 high/.test(error.message),
   );
 });
 

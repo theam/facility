@@ -185,7 +185,23 @@ test("CI gates release images and the reusable publisher stages digests before p
     /build[_-]args|FACILITY_API_URL=/,
     "the release web image must remain portable across runtime API origins",
   );
-  assert.match(imagesWorkflow, /promote:\n {4}needs: \[plan, build\]/);
+  const scanJob = imagesWorkflow.split("\n  promote:")[0].split("\n  scan:")[1];
+  assert.ok(scanJob, "images workflow must scan the addressable digest set");
+  assert.match(scanJob, /needs: build/);
+  assert.doesNotMatch(scanJob, /anchore\/scan-action|raw\.githubusercontent\.com/);
+  assert.match(scanJob, /GRYPE_VERSION: 0\.110\.0/);
+  assert.match(scanJob, /GRYPE_SHA256: [0-9a-f]{64}/);
+  assert.match(scanJob, /sha256sum --check --strict/);
+  assert.match(scanJob, /"\$GRYPE" db update/);
+  assert.match(scanJob, /GRYPE_DB_AUTO_UPDATE: "false"/);
+  assert.match(scanJob, /GRYPE_CHECK_FOR_APP_UPDATE: "false"/);
+  assert.match(scanJob, /for image in api gateway mcp web runner/);
+  assert.match(scanJob, /registry:\$IMAGE_PREFIX\/\$image@\$digest/);
+  assert.match(scanJob, /--fail-on high --only-fixed/);
+  assert.match(scanJob, /scan_failed=1/);
+  assert.match(scanJob, /exit "\$scan_failed"/);
+  assert.doesNotMatch(scanJob, /matrix:/);
+  assert.match(imagesWorkflow, /promote:\n {4}needs: \[plan, build, scan\]/);
   assert.match(imagesWorkflow, /node scripts\/images\.mjs promote/);
   assert.match(
     ciWorkflow,

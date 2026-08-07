@@ -53,16 +53,29 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type             = var.enable_cloudfront_api_endpoint ? "forward" : "fixed-response"
-    target_group_arn = var.enable_cloudfront_api_endpoint ? aws_lb_target_group.service["api"].arn : null
+    type             = var.acm_certificate_arn == "" ? (var.enable_cloudfront_api_endpoint ? "forward" : "fixed-response") : "redirect"
+    target_group_arn = var.acm_certificate_arn == "" && var.enable_cloudfront_api_endpoint ? aws_lb_target_group.service["api"].arn : null
 
     dynamic "fixed_response" {
-      for_each = var.enable_cloudfront_api_endpoint ? [] : [1]
+      for_each = var.acm_certificate_arn == "" && !var.enable_cloudfront_api_endpoint ? [1] : []
 
       content {
         content_type = "text/plain"
         message_body = "Facility hostname not configured"
         status_code  = "404"
+      }
+    }
+
+    dynamic "redirect" {
+      for_each = var.acm_certificate_arn == "" ? [] : [1]
+
+      content {
+        host        = "#{host}"
+        path        = "/#{path}"
+        port        = "443"
+        protocol    = "HTTPS"
+        query       = "#{query}"
+        status_code = "HTTP_301"
       }
     }
   }
@@ -88,7 +101,29 @@ resource "aws_lb_listener" "https" {
   }
 }
 
+moved {
+  from = aws_lb_listener_rule.http_api
+  to   = aws_lb_listener_rule.http_api[0]
+}
+
+moved {
+  from = aws_lb_listener_rule.http_web
+  to   = aws_lb_listener_rule.http_web[0]
+}
+
+moved {
+  from = aws_lb_listener_rule.http_mcp
+  to   = aws_lb_listener_rule.http_mcp[0]
+}
+
+moved {
+  from = aws_lb_listener_rule.http_preview
+  to   = aws_lb_listener_rule.http_preview[0]
+}
+
 resource "aws_lb_listener_rule" "http_api" {
+  count = var.acm_certificate_arn == "" ? 1 : 0
+
   listener_arn = aws_lb_listener.http.arn
   priority     = 10
 
@@ -105,6 +140,8 @@ resource "aws_lb_listener_rule" "http_api" {
 }
 
 resource "aws_lb_listener_rule" "http_web" {
+  count = var.acm_certificate_arn == "" ? 1 : 0
+
   listener_arn = aws_lb_listener.http.arn
   priority     = 20
 
@@ -121,6 +158,7 @@ resource "aws_lb_listener_rule" "http_web" {
 }
 
 resource "aws_lb_listener_rule" "http_mcp" {
+  count        = var.acm_certificate_arn == "" ? 1 : 0
   listener_arn = aws_lb_listener.http.arn
   priority     = 30
   action {
@@ -133,6 +171,7 @@ resource "aws_lb_listener_rule" "http_mcp" {
 }
 
 resource "aws_lb_listener_rule" "http_preview" {
+  count        = var.acm_certificate_arn == "" ? 1 : 0
   listener_arn = aws_lb_listener.http.arn
   priority     = 40
   action {

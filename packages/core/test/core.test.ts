@@ -75,8 +75,12 @@ describe("run-scoped model policy", () => {
   });
 
   it("fails CI when the pinned Claude Code version changes without reviewing its alias map", () => {
-    const dockerfile = readFileSync(new URL("../../../runner/Dockerfile", import.meta.url), "utf8");
-    expect(dockerfile).toContain(`@anthropic-ai/claude-code@${CLAUDE_CODE_MODEL_POLICY_VERSION}`);
+    const agentClis = JSON.parse(
+      readFileSync(new URL("../../../runner/agent-clis/package.json", import.meta.url), "utf8"),
+    );
+    expect(agentClis.dependencies["@anthropic-ai/claude-code"]).toBe(
+      CLAUDE_CODE_MODEL_POLICY_VERSION,
+    );
   });
 });
 
@@ -351,6 +355,9 @@ describe("audit", () => {
     const first = hashChain(null, { b: 2, a: 1 });
     expect(hashChain(null, { a: 1, b: 2 })).toBe(first);
     expect(hashChain(first, { a: 1 })).not.toBe(first);
+    expect(hashChain(null, { z: 1, ä: 2, A: 3, a: 4 })).toBe(
+      "5347c7c917380c15ab8fbf413dccbddcca3bdfc3df03905c0e54cfe788c83289",
+    );
   });
 });
 
@@ -391,6 +398,9 @@ describe("receipts", () => {
       previous_sha256: "a".repeat(64),
       payload_sha256: receiptContentDigest(sealed),
     });
+    expect(sealed.integrity?.payload_sha256).toBe(
+      "772c4970f519bb800bafef9f62c5f072b893555afef1f0d36f0839fc6b318a9d",
+    );
     expect(verifyFacilityReceipt(sealed)).toBe(true);
     expect(verifyFacilityReceipt({ ...sealed, result: "failed" })).toBe(false);
     expect(

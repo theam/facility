@@ -433,7 +433,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
     const crew = [
       {
         name: "architect",
-        sandbox: "analysis",
+        sandbox: "full",
         engine: "claude_code",
         model: { model: "claude-sonnet-5" },
         contract: "prompts/architect",
@@ -455,7 +455,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       },
       {
         name: "codex-architect",
-        sandbox: "analysis",
+        sandbox: "full",
         engine: "codex",
         model: { primary: "gpt-5.6-sol", reasoning_effort: "high" },
         contract: "prompts/architect",

@@ -2312,7 +2312,7 @@ function nonnegativeInt(value: unknown) {
 
 function receiptCheck(value: unknown) {
   const data = objectOrEmpty(value);
-  const rawStatus = typeof data.status === "string" ? data.status : "unknown";
+  const rawStatus = typeof data.status === "string" ? data.status.trim().toLowerCase() : "unknown";
   const status = ["passed", "failed", "skipped"].includes(rawStatus) ? rawStatus : "unknown";
   const rawName = typeof data.command === "string" ? data.command : data.name;
   return {

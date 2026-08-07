@@ -1015,7 +1015,7 @@ describe("sandbox api", async () => {
       },
       {
         type: "check",
-        data: { name: "agent smoke", status: "skipped", self_reported: true },
+        data: { name: "agent smoke", status: " SKIPPED ", self_reported: true },
       },
     ]);
 
@@ -1087,7 +1087,7 @@ describe("sandbox api", async () => {
     expect(body).toContain("notify delivered");
   }, 10_000);
 
-  it("returns a per-installation repo token for runner clone credentials", async () => {
+  it("returns per-installation clone credentials and bound security-sweep evidence", async () => {
     const token = "frt_clone";
     const installationNumber = Date.now();
     const owner = `octo-${installationNumber}`;
@@ -1119,7 +1119,7 @@ describe("sandbox api", async () => {
       sealedVirtualKey: await seal("fvk_test", masterKey),
       bundle: {
         runId,
-        mode: "builder",
+        mode: "security-sweep",
         engine: "byo",
         contract: "contract",
         skills: [],
@@ -1138,10 +1138,25 @@ describe("sandbox api", async () => {
         timeoutMin: 60,
       },
     });
+    await db.update(runs).set({ mode: "security-sweep" }).where(eq(runs.id, run.id));
     let tokenInput: Record<string, unknown> | undefined;
     app.githubInstallationTokenFactory = async (input) => {
       tokenInput = input;
       return "installation-token";
+    };
+    const previousGithubFactory = app.githubClientFactory;
+    app.githubClientFactory = async (actualInstallationId) => {
+      expect(actualInstallationId).toBe(installationNumber);
+      return {
+        request: async (route: string) => ({
+          data: route.includes("dependency-graph") ? { sbom: { packages: [] } } : [],
+        }),
+        rest: {
+          repos: {
+            getBranch: async () => ({ data: { commit: { sha: "a".repeat(40) } } }),
+          },
+        },
+      } as never;
     };
 
     const response = await app.inject({
@@ -1154,6 +1169,22 @@ describe("sandbox api", async () => {
     const hello = response.json();
     expect(hello.repoToken).toBe("installation-token");
     expect(hello.packageRegistryToken).toBe("package-token");
+    expect(hello.securitySweepEvidence).toMatchObject({
+      schema: "facility.security.sweep-input.v1",
+      runId,
+      repository: {
+        owner,
+        name: "private-repo",
+        ref: "main",
+        headSha: "a".repeat(40),
+      },
+      sources: {
+        codeScanning: [],
+        dependabot: [],
+        secretScanning: [],
+        sbom: { sbom: { packages: [] } },
+      },
+    });
     expect(hello.bundleUrl).not.toContain("?");
     const bundlePath = new URL(hello.bundleUrl).pathname;
     expect((await app.inject({ method: "GET", url: bundlePath })).statusCode).toBe(401);
@@ -1178,6 +1209,7 @@ describe("sandbox api", async () => {
     expect(replay.statusCode).toBe(409);
     expect(replay.json().error.code).toBe("virtual_key_revealed");
     app.githubInstallationTokenFactory = undefined;
+    app.githubClientFactory = previousGithubFactory;
   });
 
   it("does not release the package token when no dedicated install phase exists", async () => {
