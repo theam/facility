@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   analysisSandboxProfileId,
   applyMigrations,
+  builderSandboxProfileId,
   createDb,
   defaultSandboxProfileId,
   deployDatabase,
@@ -418,6 +419,10 @@ describe("db", async () => {
           name: "Analysis runner",
           resources: { cpu: 2, memory_mb: 4096, timeout_min: 60 },
         }),
+        expect.objectContaining({
+          name: "Builder runner",
+          resources: { cpu: 2, memory_mb: 4096, timeout_min: 60 },
+        }),
       ]),
     );
   });
@@ -478,6 +483,7 @@ describe("db", async () => {
     ]);
     expect(seededProfiles.map((profile) => profile.name).sort()).toEqual([
       "Analysis runner",
+      "Builder runner",
       "Default runner",
     ]);
     expect(seededProfiles).toEqual(
@@ -488,6 +494,10 @@ describe("db", async () => {
         }),
         expect.objectContaining({
           name: "Analysis runner",
+          resources: { cpu: 2, memory_mb: 4096, timeout_min: 60 },
+        }),
+        expect.objectContaining({
+          name: "Builder runner",
           resources: { cpu: 2, memory_mb: 4096, timeout_min: 60 },
         }),
       ]),
@@ -549,7 +559,7 @@ describe("db", async () => {
     ).toEqual({ type: "webhook", config: { url: "https://hooks.invalid/plan" } });
   });
 
-  it("moves only managed lightweight analysis agents to their tenant's analysis profile", async () => {
+  it("moves only managed agents to their tenant's optimized profile", async () => {
     const orgA = newId("org");
     const orgB = newId("org");
     const projectA = newId("proj");
@@ -663,8 +673,8 @@ describe("db", async () => {
     expect(assignments.get(fixtures[0]?.id ?? "")).toBe(analysisSandboxProfileId(orgA));
     expect(assignments.get(fixtures[1]?.id ?? "")).toBe(customProfileId);
     expect(assignments.get(fixtures[2]?.id ?? "")).toBeNull();
-    expect(assignments.get(fixtures[3]?.id ?? "")).toBe(defaultSandboxProfileId(orgA));
-    expect(assignments.get(fixtures[4]?.id ?? "")).toBe(defaultSandboxProfileId(orgB));
+    expect(assignments.get(fixtures[3]?.id ?? "")).toBe(builderSandboxProfileId(orgA));
+    expect(assignments.get(fixtures[4]?.id ?? "")).toBe(analysisSandboxProfileId(orgB));
     expect(assignments.get(fixtures[4]?.id ?? "")).not.toBe(defaultSandboxProfileId(orgA));
 
     await db

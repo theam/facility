@@ -2,6 +2,7 @@ import { newId } from "@facility/core";
 import {
   agentDefs,
   analysisSandboxProfileId,
+  builderSandboxProfileId,
   defaultSandboxProfileId,
   githubInstallations,
   projects,
@@ -416,6 +417,9 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
     const analysisSandbox =
       availableSandboxes.find((profile) => profile.id === analysisSandboxProfileId(orgId)) ??
       defaultSandbox;
+    const builderSandbox =
+      availableSandboxes.find((profile) => profile.id === builderSandboxProfileId(orgId)) ??
+      defaultSandbox;
     const productChain = byName.get("product-chain");
     const poContract = byName.get("po-agent");
     const learningContract = byName.get("learning-agent");
@@ -433,7 +437,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
     const crew = [
       {
         name: "architect",
-        sandbox: "full",
+        sandbox: "analysis",
         engine: "claude_code",
         model: { model: "claude-sonnet-5" },
         contract: "prompts/architect",
@@ -444,7 +448,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       },
       {
         name: "builder",
-        sandbox: "full",
+        sandbox: "builder",
         engine: "claude_code",
         model: { model: "claude-fable-5" },
         contract: "prompts/builder",
@@ -455,7 +459,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       },
       {
         name: "codex-architect",
-        sandbox: "full",
+        sandbox: "analysis",
         engine: "codex",
         model: { primary: "gpt-5.6-sol", reasoning_effort: "high" },
         contract: "prompts/architect",
@@ -466,7 +470,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       },
       {
         name: "codex-builder",
-        sandbox: "full",
+        sandbox: "builder",
         engine: "codex",
         model: { primary: "gpt-5.6-sol", reasoning_effort: "high" },
         contract: "prompts/builder",
@@ -485,7 +489,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       },
       {
         name: "address-review",
-        sandbox: "full",
+        sandbox: "builder",
         engine: "claude_code",
         model: { model: "claude-sonnet-5" },
         contract: "prompts/address-review",
@@ -493,7 +497,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       },
       {
         name: "ci-doctor",
-        sandbox: "full",
+        sandbox: "builder",
         engine: "claude_code",
         model: { model: "claude-sonnet-5" },
         contract: "prompts/doctor",
@@ -574,8 +578,14 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         triggers: [...spec.triggers],
         // This is a seed-time assignment, not run-time mode inference. Operators
         // can replace it through the existing agent/profile APIs. Keep the
-        // analysis set aligned with the runner's read-only repository modes.
-        sandboxProfileId: spec.sandbox === "analysis" ? analysisSandbox?.id : defaultSandbox?.id,
+        // managed sets aligned with read-only and delivery repository modes.
+        // Delivery agents retain nested Docker but provision services on demand.
+        sandboxProfileId:
+          spec.sandbox === "analysis"
+            ? analysisSandbox?.id
+            : spec.sandbox === "builder"
+              ? builderSandbox?.id
+              : defaultSandbox?.id,
         permissions: ["runs:read"],
         enabled: true,
       });

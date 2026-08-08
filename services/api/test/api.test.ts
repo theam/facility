@@ -10,6 +10,7 @@ import {
   analysisSandboxProfileId,
   auditEvents,
   budgets,
+  builderSandboxProfileId,
   conversationMessages,
   conversations,
   createDb,
@@ -639,19 +640,13 @@ describe("api", async () => {
     const profileByAgent = new Map(
       projectAgents.map((agent) => [agent.name, agent.sandboxProfileId]),
     );
-    for (const name of ["review", "security-sweep"]) {
+    for (const name of ["architect", "codex-architect", "review", "security-sweep"]) {
       expect(profileByAgent.get(name), name).toBe(analysisSandboxProfileId(orgId));
     }
-    for (const name of [
-      "builder",
-      "architect",
-      "codex-builder",
-      "codex-architect",
-      "address-review",
-      "ci-doctor",
-      "project-owner",
-      "learning",
-    ]) {
+    for (const name of ["builder", "codex-builder", "address-review", "ci-doctor"]) {
+      expect(profileByAgent.get(name), name).toBe(builderSandboxProfileId(orgId));
+    }
+    for (const name of ["project-owner", "learning"]) {
       expect(profileByAgent.get(name), name).toBe(defaultSandboxProfileId(orgId));
     }
     const analysisProfile = (
@@ -663,6 +658,17 @@ describe("api", async () => {
     )[0];
     expect(analysisProfile?.setup).toMatchObject({
       nested_docker: false,
+      provisioning: "deps_only",
+    });
+    const builderProfile = (
+      await db
+        .select()
+        .from(sandboxProfiles)
+        .where(eq(sandboxProfiles.id, builderSandboxProfileId(orgId)))
+        .limit(1)
+    )[0];
+    expect(builderProfile?.setup).toMatchObject({
+      nested_docker: true,
       provisioning: "deps_only",
     });
     let listedProject = false;
