@@ -36,7 +36,7 @@ RUN apt-get update \
   && tar -xzf "/tmp/${archive}" -C /tmp \
   && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /gh
 
-FROM node:24-trixie@sha256:66bb8d36ae1ddd72199ed235a089904874ca4079ee517936ca3adb80506a75c1 AS runner-base
+FROM node:25-trixie@sha256:b6cf8d20ee78aa10f0a6b98242e26d547869801abd6bc3f7094b0a54301dee02 AS runner-base
 
 # The digest-pinned Node base can lag Debian security uploads, while BuildKit
 # correctly caches an earlier apt upgrade against the unchanged base digest.
