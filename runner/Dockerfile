@@ -36,7 +36,11 @@ RUN apt-get update \
   && tar -xzf "/tmp/${archive}" -C /tmp \
   && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /gh
 
-FROM node:24-trixie@sha256:66bb8d36ae1ddd72199ed235a089904874ca4079ee517936ca3adb80506a75c1 AS runner-base
+# The full Node image inherits buildpack-deps and silently carries unrelated
+# database, image-processing, DNS, and web-server development stacks. Agents
+# need a native compiler toolchain, not that entire transitive surface, so start
+# from the official slim variant and install the small explicit toolchain below.
+FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS runner-base
 
 # The digest-pinned Node base can lag Debian security uploads, while BuildKit
 # correctly caches an earlier apt upgrade against the unchanged base digest.
@@ -48,8 +52,9 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
   && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    build-essential \
     busybox-static \
+    ca-certificates \
     curl \
     fonts-noto-color-emoji \
     fonts-freefont-ttf \
@@ -84,6 +89,8 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     libxfixes3 \
     libxkbcommon0 \
     libxrandr2 \
+    pkg-config \
+    python3 \
     ripgrep \
     slirp4netns \
     uidmap \
