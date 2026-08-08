@@ -947,8 +947,12 @@ export function createAwsCliAdapter({
           );
         }
 
+        // ECR used to expose enhanced scans as ACTIVE, but now also returns
+        // COMPLETE. The enhancedFindings collection is the stable response
+        // discriminator; status alone would misclassify the same Inspector
+        // result as a basic scan and block non-fixable distribution CVEs.
         enforceEcrScanPolicy(findings, {
-          enhanced: status === "ACTIVE",
+          enhanced: Array.isArray(findings?.enhancedFindings),
           repository: `${repository}@${digest}`,
         });
         return { done: true };

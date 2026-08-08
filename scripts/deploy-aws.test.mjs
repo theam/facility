@@ -971,7 +971,7 @@ if (service === "ecr" && operation === "describe-images") {
   );
 });
 
-test("AWS CLI adapter admits only non-fixable enhanced findings", async (t) => {
+test("AWS CLI adapter detects COMPLETE enhanced scans and admits only non-fixable findings", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "facility-aws-enhanced-image-scan-"));
   t.after(() => rm(directory, { force: true, recursive: true }));
   const command = join(directory, "aws");
@@ -988,7 +988,7 @@ if (service === "ecr" && operation === "describe-images") {
 } else if (service === "ecr" && operation === "describe-image-scan-findings") {
   const fixAvailable = repository.endsWith("/api") ? "NO" : repository.endsWith("/gateway") ? "YES" : undefined;
   process.stdout.write(JSON.stringify({
-    imageScanStatus: { status: "ACTIVE" },
+    imageScanStatus: { status: "COMPLETE" },
     imageScanFindings: {
       imageScanCompletedAt: "2026-08-07T00:00:00Z",
       findingSeverityCounts: { HIGH: 1 },
