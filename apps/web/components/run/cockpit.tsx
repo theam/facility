@@ -5,6 +5,7 @@ import { Button, Cell, cx, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } f
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RunTranscript } from "@/components/run/transcript";
 import type { Project, Run, RunEvent } from "@/lib/api";
+import { fetchRunEventPages } from "@/lib/run-event-pages";
 import { fmtCost, fmtDuration, fmtStatus } from "@/lib/run-format";
 
 const LIVE = new Set(["queued", "provisioning", "running", "awaiting_human"]);
@@ -318,6 +319,7 @@ export function RunCockpit({
   const [action, setAction] = useState<ActionState>(null);
   const [busy, setBusy] = useState<"cancel" | "retry" | "interrupt" | "resume" | null>(null);
   const lastSeq = useRef(initialEvents.at(-1)?.seq ?? 0);
+  const pulling = useRef(false);
   // Session identity lands on runs written after the resume infrastructure —
   // older rows simply don't offer resume.
   const engineSessionId = (run as { engineSessionId?: string | null }).engineSessionId ?? null;
@@ -342,14 +344,16 @@ export function RunCockpit({
   const artifacts = useMemo(() => githubArtifacts(run), [run]);
 
   const pull = useCallback(async () => {
-    const res = await fetch(`/api/v1/runs/${run.id}/events?afterSeq=${lastSeq.current}`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return;
-    const body = (await res.json()) as RunEvent[];
-    if (body.length) {
-      lastSeq.current = body.at(-1)?.seq ?? lastSeq.current;
-      setEvents((prev) => mergeEvents(prev, body));
+    if (pulling.current) return;
+    pulling.current = true;
+    try {
+      const body = await fetchRunEventPages(run.id, lastSeq.current);
+      if (body.length) {
+        lastSeq.current = Math.max(lastSeq.current, body.at(-1)?.seq ?? lastSeq.current);
+        setEvents((prev) => mergeEvents(prev, body));
+      }
+    } finally {
+      pulling.current = false;
     }
   }, [run.id]);
 

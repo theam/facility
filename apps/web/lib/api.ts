@@ -146,8 +146,8 @@ export const api = {
     apiFetch("GET", `/v1/projects/${projectId}/runs`, { query: queryFromParams(params) }),
   allRuns: (params = "") => apiFetch("GET", "/v1/runs", { query: queryFromParams(params) }),
   run: (id: string) => apiFetch("GET", `/v1/runs/${id}`),
-  runEvents: (id: string, afterSeq = 0) =>
-    apiFetch("GET", `/v1/runs/${id}/events`, { query: { afterSeq } }),
+  runEvents: (id: string, afterSeq = 0, limit = 500) =>
+    apiFetch("GET", `/v1/runs/${id}/events`, { query: { afterSeq, limit } }),
   // GET /v1/inbox returns { items, proposals, issues } — unwrap to the
   // proposals array both consumers expect (guarded so a bare array also works).
   inbox: async (): Promise<ApiResult<Proposal[]>> => {
