@@ -174,6 +174,12 @@ async function main() {
       );
     }
     await writeFile(transcriptFile, "");
+    const managedProgress = readOnlyEngineMode(activeBundle.mode)
+      ? readOnlyEngineProgress(false)
+      : null;
+    if (managedProgress) {
+      await emit([{ type: "agent_progress", data: { markdown: managedProgress } }]);
+    }
     progressStop = startAgentProgressPoll(cwdFor(bundle));
     const stopProgress = progressStop;
     const engineCode = await phases.measure(
@@ -184,8 +190,17 @@ async function main() {
       }),
     );
     const captured = await phases.measure("result_capture", async () => {
-      const progressPublished = await stopProgress();
+      const agentProgressPublished = await stopProgress();
       progressStop = undefined;
+      if (managedProgress) {
+        await emit([
+          {
+            type: "agent_progress",
+            data: { markdown: readOnlyEngineProgress(engineCode === 0) },
+          },
+        ]);
+      }
+      const progressPublished = managedProgress !== null || agentProgressPublished;
       const securityReport = isSecurityMode(activeBundle.mode)
         ? await readSecurityReport(
             join(cwdFor(activeBundle), ".agent-sdlc", "security-findings.json"),
@@ -900,7 +915,7 @@ export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boo
     "stream-json",
     "--verbose",
     "--permission-mode",
-    "bypassPermissions",
+    readOnlyEngineMode(bundle.mode) ? "plan" : "bypassPermissions",
     "--max-turns",
     "500",
   );
@@ -1424,6 +1439,19 @@ export function requiresAgentProgress(mode: string) {
     "po",
     "learning",
   ].includes(normalized);
+}
+
+function readOnlyEngineMode(mode: string) {
+  return normalizedMode(mode) === "architect";
+}
+
+export function readOnlyEngineProgress(completed: boolean) {
+  return [
+    "Preparing an implementation-ready plan from the repository in read-only mode.",
+    "",
+    "- [x] Prepare the isolated repository",
+    `${completed ? "- [x]" : "- [ ]"} Inspect the relevant code and produce the plan`,
+  ].join("\n");
 }
 
 export function deliveryFailure(
@@ -2399,9 +2427,10 @@ export function composedPrompt(bundle: RunBundle) {
   const objective = runObjectiveText(bundle.scope);
   const objectiveNote =
     bundle.scope.type !== "conversation" && objective ? `\n\n## Run objective\n${objective}` : "";
-  const progressNote = requiresAgentProgress(bundle.mode)
-    ? `\n\n## Live GitHub progress\nBefore substantive work, create \`.agent-sdlc/progress.md\` with a short task-specific context and a Markdown checkbox list of the steps you decided this task needs. Update it whenever you start or finish a step so a reviewer can understand real progress from GitHub. Keep it accurate and concise; do not put secrets, generic lifecycle milestones, or the final response in it. Facility transports this file into the existing GitHub progress comment.`
-    : "";
+  const progressNote =
+    requiresAgentProgress(bundle.mode) && !readOnlyEngineMode(bundle.mode)
+      ? `\n\n## Live GitHub progress\nBefore substantive work, create \`.agent-sdlc/progress.md\` with a short task-specific context and a Markdown checkbox list of the steps you decided this task needs. Update it whenever you start or finish a step so a reviewer can understand real progress from GitHub. Keep it accurate and concise; do not put secrets, generic lifecycle milestones, or the final response in it. Facility transports this file into the existing GitHub progress comment.`
+      : "";
   const repositoryOutputNote = bundle.repo.cloneUrl
     ? `\n\n## Repository output\nYour final response may be published directly on GitHub. Refer to repository files with relative paths or inline code. Never emit sandbox-local paths such as \`/work/repo/...\`.`
     : "";
@@ -2436,7 +2465,7 @@ export function buildCodexArgs(bundle: RunBundle) {
     "--json",
     "--ephemeral",
     "-s",
-    "danger-full-access",
+    readOnlyEngineMode(bundle.mode) ? "read-only" : "danger-full-access",
     "--config",
     `model_provider=${JSON.stringify(provider)}`,
     "--config",

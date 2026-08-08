@@ -34,6 +34,7 @@ import {
   readAgentDeliveryMetadata,
   readAgentProgress,
   readAgentUpdateMetadata,
+  readOnlyEngineProgress,
   readSecurityReport,
   requiresAgentProgress,
   resumeRecoveryPrompt,
@@ -798,6 +799,8 @@ describe("workspace preparation", () => {
     expect(requiresAgentProgress("codex-builder")).toBe(true);
     expect(requiresAgentProgress("ci-doctor")).toBe(true);
     expect(requiresAgentProgress("custom")).toBe(false);
+    expect(readOnlyEngineProgress(false)).toContain("- [ ] Inspect");
+    expect(readOnlyEngineProgress(true)).toContain("- [x] Inspect");
   });
 
   it("installs registry skills as discoverable SKILL.md packages for both engines", async () => {
@@ -1151,6 +1154,15 @@ describe("run prompt composition", () => {
 });
 
 describe("Claude resume controls", () => {
+  it("runs architects in native plan mode and keeps builders writable", () => {
+    const architectArgs = buildClaudeCodeArgs(bundle({ mode: "architect" }), false);
+    const builderArgs = buildClaudeCodeArgs(bundle({ mode: "builder" }), false);
+
+    expect(architectArgs.slice(architectArgs.indexOf("--permission-mode"), -2)).toContain("plan");
+    expect(architectArgs).not.toContain("bypassPermissions");
+    expect(builderArgs).toContain("bypassPermissions");
+  });
+
   it("uses --resume only after session state has been restored", () => {
     const runBundle = bundle({
       engine: "claude_code",
@@ -1274,6 +1286,16 @@ describe("Claude resume controls", () => {
 });
 
 describe("Codex model controls", () => {
+  it("runs architects in the read-only sandbox and keeps builders writable", () => {
+    const architectArgs = buildCodexArgs(bundle({ mode: "codex-architect" }));
+    const builderArgs = buildCodexArgs(bundle({ mode: "codex-builder" }));
+
+    expect(
+      architectArgs.slice(architectArgs.indexOf("-s"), architectArgs.indexOf("-s") + 2),
+    ).toEqual(["-s", "read-only"]);
+    expect(builderArgs).toContain("danger-full-access");
+  });
+
   it("applies the configured model and reasoning effort", () => {
     const args = buildCodexArgs(
       bundle({
