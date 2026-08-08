@@ -66,10 +66,13 @@ RUN pnpm --filter '@facility/core' --filter '@facility/db' \
 FROM build-service-packages AS build-api
 COPY services/api ./services/api
 RUN pnpm --filter '@facility/api' run build:runtime
-# Produce isolated production trees. `deploy --prod` keeps runtime workspace
-# dependencies and package assets (including DB migrations) while excluding
-# source workspaces, tests, build tools, and every devDependency.
-RUN pnpm --filter '@facility/api' deploy --prod --legacy /prod/api
+# Produce isolated production trees. Injected workspace packages keep the
+# deployed node_modules self-contained; legacy deploy leaves links back to the
+# build workspace, which break after /prod/* is copied into the runtime stage.
+# Production deploys retain package assets (including DB migrations) while
+# excluding source workspaces, tests, build tools, and every devDependency.
+RUN pnpm --config.inject-workspace-packages=true \
+      --filter '@facility/api' deploy --prod /prod/api
 # First-org seeding and repository kickstart both load bundled source assets at
 # runtime. Fail the image build if pnpm deployment ever omits either package's
 # payload instead of discovering it after a user begins onboarding.
@@ -81,17 +84,23 @@ RUN test -f /prod/api/node_modules/@facility/db/dist/seed-assets/packages/harnes
 FROM build-service-packages AS build-gateway
 COPY services/gateway ./services/gateway
 RUN pnpm --filter '@facility/gateway' run build:runtime
-RUN pnpm --filter '@facility/gateway' deploy --prod --legacy /prod/gateway
+RUN pnpm --config.inject-workspace-packages=true \
+      --filter '@facility/gateway' deploy --prod /prod/gateway
 
 # --- MCP build: keep SDK/MCP changes independent from API and gateway ---
 FROM build-service-packages AS build-mcp
 RUN pnpm --filter '@facility/mcp' run build:runtime
-RUN pnpm --filter '@facility/mcp' deploy --prod --legacy /prod/mcp
+RUN pnpm --config.inject-workspace-packages=true \
+      --filter '@facility/mcp' deploy --prod /prod/mcp
 
 # --- api (also serves the worker via `node dist/worker.js`) ---
 FROM runtime AS api
 ENV NODE_ENV=production
 COPY --from=build-api /prod/api /app
+# Validate the final runtime filesystem, after the build workspaces are gone.
+# This catches portable-deploy regressions that a build-stage file check cannot.
+RUN test -f /app/node_modules/@facility/db/dist/bin/deploy.js \
+  && node --input-type=module --eval 'await import("@facility/db/deploy")'
 # The CLI travels with the API image so operator commands can be run as one-shot
 # tasks inside the VPC. `facility instance bootstrap` needs the database, and in
 # a reference deployment the database accepts connections only from the service

@@ -280,7 +280,15 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     for (const sharedPackage of ["core", "db", "harness", "sdk"]) {
       assert.doesNotMatch(serviceBuild, new RegExp(`--filter '@facility/${sharedPackage}'`));
     }
+    assert.match(serviceBuild, /--config\.inject-workspace-packages=true/);
+    assert.match(serviceBuild, new RegExp(`deploy --prod /prod/${packageName}`));
+    assert.doesNotMatch(serviceBuild, /deploy --prod --legacy/);
   }
+  assert.ok(
+    controlDockerfile.indexOf("COPY --from=build-api /prod/api /app") <
+      controlDockerfile.indexOf('await import("@facility/db/deploy")'),
+    "the final API stage must import the deployed DB package after build workspaces are gone",
+  );
   assert.equal(
     controlDockerfile.match(/run build:runtime/g)?.length,
     4,
