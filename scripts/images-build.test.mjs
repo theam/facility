@@ -317,11 +317,19 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     }
   }
   assert.match(runnerDockerfile, /ARG NPM_VERSION=12\.0\.2/);
-  assert.ok(
-    runnerDockerfile.indexOf("FROM node:24-trixie@sha256:") <
-      runnerDockerfile.indexOf("ARG NPM_VERSION=12.0.2"),
-    "the patched npm runtime must be installed in the Node stage",
+  assert.match(
+    runnerDockerfile,
+    /^FROM node:24-trixie-slim@sha256:[0-9a-f]{64} AS runner-base$/m,
+    "the runner must use the digest-pinned official slim Node base",
   );
+  assert.doesNotMatch(runnerDockerfile, /^FROM node:24-trixie@sha256:/m);
+  for (const runtimePackage of ["build-essential", "pkg-config", "procps", "python3"]) {
+    assert.match(
+      runnerDockerfile,
+      new RegExp(`^    ${runtimePackage.replace("-", "\\-")} \\\\?$`, "m"),
+      `the slim runner must explicitly install ${runtimePackage}`,
+    );
+  }
   for (const patchedPackage of [
     "brace-expansion@5.0.9",
     "ip-address@10.3.1",

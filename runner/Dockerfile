@@ -90,6 +90,7 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     libxkbcommon0 \
     libxrandr2 \
     pkg-config \
+    procps \
     python3 \
     ripgrep \
     slirp4netns \
