@@ -122,8 +122,8 @@ export default async function SettingsPage() {
         <section className="flex max-w-2xl flex-col gap-4">
           <Eyebrow>providers</Eyebrow>
           <p className="text-sm leading-relaxed text-(--mut)">
-            Model provider credentials the gateway proxies every call through. Sealed at rest; the
-            secret is never shown again after you add it.
+            API keys or Claude subscription credentials the gateway proxies every call through.
+            Sealed at rest; the secret is never shown again after you add it.
           </p>
           {providers.ok ? (
             <ProvidersManager providers={providers.data} />

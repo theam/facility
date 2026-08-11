@@ -26,6 +26,7 @@ import {
   projects,
   proposalEvents,
   proposals,
+  providerCredentials,
   registryItems,
   registryVersions,
   repos,
@@ -1780,6 +1781,22 @@ async function buildRunBundle(
   // URL that must already include /v1.
   const gatewayBase = config.sandboxGatewayUrl.replace(/\/$/, "");
   const engine = normalizeEngine(agent.engine || run.engine);
+  const anthropicCredential =
+    engine === "claude_code"
+      ? (
+          await db
+            .select({ authMode: providerCredentials.authMode })
+            .from(providerCredentials)
+            .where(
+              and(
+                eq(providerCredentials.orgId, run.orgId),
+                eq(providerCredentials.provider, "anthropic"),
+              ),
+            )
+            .orderBy(providerCredentials.createdAt, providerCredentials.id)
+            .limit(1)
+        )[0]
+      : undefined;
   const bundle: RunBundle = {
     runId: run.id,
     mode: run.mode,
@@ -1807,6 +1824,9 @@ async function buildRunBundle(
       anthropic: `${gatewayBase}/anthropic`,
       openai: `${gatewayBase}/openai/v1`,
     },
+    ...(engine === "claude_code"
+      ? { anthropicAuthMode: anthropicCredential?.authMode === "oauth" ? "oauth" : "api_key" }
+      : {}),
     scope: objectOrEmpty(run.trigger),
     timeoutMin,
     harness: harnessFragmentForBundle({

@@ -105,7 +105,7 @@ const ADMIN_FLAGS = {
   ],
   conversations: ["agent", "title", ...WRITE_FLAGS],
   github: ["query", "state", "cursor", "agent", "limit", "repo", ...WRITE_FLAGS],
-  providers: ["provider", "name", "secret", "base-url", ...PAGE_FLAGS, ...WRITE_FLAGS],
+  providers: ["provider", "name", "secret", "auth-mode", "base-url", ...PAGE_FLAGS, ...WRITE_FLAGS],
   budgets: ["id", "scope", "project", "agent", "period", "limit-cents", "mode", "enabled", ...PAGE_FLAGS, ...WRITE_FLAGS],
   registry: [
     "kind",
@@ -233,7 +233,7 @@ const ADMIN_SUBCOMMAND_FLAGS = {
   providers: {
     __default: [...PAGE_FLAGS],
     list: [...PAGE_FLAGS],
-    create: ["provider", "name", "secret", "base-url", ...WRITE_FLAGS],
+    create: ["provider", "name", "secret", "auth-mode", "base-url", ...WRITE_FLAGS],
     delete: ["yes"],
   },
   budgets: {
@@ -722,9 +722,10 @@ async function github(args, ctx, flags) {
 async function providers(args, ctx, flags) {
   const sub = args[0] || "list";
   if (sub === "list") {
-    return list(ctx, await ctx.api("GET", "/v1/providers", { query: pageQuery(flags) }), ["id", "provider", "name", "base URL"], (row) => [
+    return list(ctx, await ctx.api("GET", "/v1/providers", { query: pageQuery(flags) }), ["id", "provider", "auth", "name", "base URL"], (row) => [
       row.id,
       row.provider,
+      row.authMode,
       row.name,
       row.baseUrl,
     ]);
@@ -740,6 +741,7 @@ async function providers(args, ctx, flags) {
           provider,
           name,
           secret,
+          authMode: stringFlag(flags["auth-mode"]),
           baseUrl: stringFlag(flags["base-url"]),
         },
       }),

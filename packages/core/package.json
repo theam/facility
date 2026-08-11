@@ -12,6 +12,7 @@
     "./ids": "./dist/ids.js",
     "./permissions": "./dist/permissions.js",
     "./pricing": "./dist/pricing.js",
+    "./provider-auth": "./dist/provider-auth.js",
     "./provider-url": "./dist/provider-url.js",
     "./render": "./dist/render.js",
     "./receipts": "./dist/receipts.js",
@@ -19,8 +20,8 @@
   },
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsup src/index.ts src/audit.ts src/crypto.ts src/detect.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/pricing.ts src/provider-url.ts src/render.ts src/receipts.ts src/roles.ts --format esm --dts && node scripts/copy-render-assets.mjs",
-    "build:runtime": "tsup src/index.ts src/audit.ts src/crypto.ts src/detect.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/pricing.ts src/provider-url.ts src/render.ts src/receipts.ts src/roles.ts --format esm && node scripts/copy-render-assets.mjs",
+    "build": "tsup src/index.ts src/audit.ts src/crypto.ts src/detect.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/pricing.ts src/provider-auth.ts src/provider-url.ts src/render.ts src/receipts.ts src/roles.ts --format esm --dts && node scripts/copy-render-assets.mjs",
+    "build:runtime": "tsup src/index.ts src/audit.ts src/crypto.ts src/detect.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/pricing.ts src/provider-auth.ts src/provider-url.ts src/render.ts src/receipts.ts src/roles.ts --format esm && node scripts/copy-render-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

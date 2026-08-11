@@ -26,6 +26,7 @@ import { newId } from "../src/ids.js";
 import { allowedModelsForEngine, CLAUDE_CODE_MODEL_POLICY_VERSION } from "../src/models.js";
 import { can } from "../src/permissions.js";
 import { costCents } from "../src/pricing.js";
+import { normalizeClaudeCodeOAuthToken } from "../src/provider-auth.js";
 import { validateProviderBaseUrl } from "../src/provider-url.js";
 import {
   parseLegacyAgentReceipt,
@@ -36,6 +37,30 @@ import {
 import { renderFacilityInit } from "../src/render.js";
 
 const masterKey = Buffer.alloc(32, 7).toString("base64");
+
+describe("Claude Code OAuth token normalization", () => {
+  const token = "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz";
+
+  it.each([
+    token,
+    `  ${token}\n`,
+    `CLAUDE_CODE_OAUTH_TOKEN=${token}`,
+    `export CLAUDE_CODE_OAUTH_TOKEN="${token}"`,
+    `export CLAUDE_CODE_OAUTH_TOKEN='${token}'`,
+  ])("accepts setup-token output without changing the bearer value", (input) => {
+    expect(normalizeClaudeCodeOAuthToken(input)).toBe(token);
+  });
+
+  it.each([
+    "",
+    "short",
+    `${token}\nsecond-line`,
+    `${token} injected`,
+    `export OTHER=${token}`,
+  ])("rejects malformed or header-breaking input", (input) => {
+    expect(normalizeClaudeCodeOAuthToken(input)).toBeNull();
+  });
+});
 
 describe("run-scoped model policy", () => {
   it("expands Claude Code's hybrid model into its concrete wire models", () => {

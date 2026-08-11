@@ -16,7 +16,15 @@ import { readConfig } from "./config.js";
 import { createEnvelopeStore } from "./envelope-store.js";
 import { GatewayError, providerEnvelope, sendProviderError } from "./errors.js";
 import { enqueueMetering, reserveHardBudgetsAndRecordPending } from "./metering.js";
-import type { GatewayConfig, GatewayDeps, Provider, RequestRecord, Usage } from "./types.js";
+import { claudeOAuthRequestProblem, providerRequestHeaders } from "./provider-auth.js";
+import type {
+  GatewayConfig,
+  GatewayDeps,
+  Provider,
+  ProviderCredential,
+  RequestRecord,
+  Usage,
+} from "./types.js";
 import { emptyUsage, UsageTee, usageFromJson } from "./usage.js";
 
 // `meteringSettled` lets a caller wait for usage writes that outlive the
@@ -264,8 +272,62 @@ async function handleProvider(
     return reply.status(403).send(responseBody);
   }
 
-  await emitSoftBudgetIssues(db, budgets, key);
   const upstreamBody = prepared ? prepared.raw : parsed.raw;
+  let credential: ProviderCredential;
+  try {
+    credential = await providerCredential(db, config, provider, key.orgId);
+  } catch (error) {
+    const record = baseRecord({
+      requestId,
+      provider,
+      model,
+      priced,
+      status: "error",
+      statusCode: 502,
+      startedAt,
+      key,
+      requestBody,
+      responseBody: { error: error instanceof Error ? error.message : "provider unavailable" },
+      budgets,
+      providerMayHaveCharged: false,
+      error: "upstream fetch failed",
+    });
+    await enqueueMetering(db, envelopeStore, request.log, record, now());
+    throw new GatewayError(502, "provider_error", "Upstream provider request failed", provider);
+  }
+
+  const oauthProblem =
+    credential.authMode === "oauth"
+      ? provider === "anthropic"
+        ? claudeOAuthRequestProblem(key, request.headers)
+        : "OAuth credentials are unsupported for this provider"
+      : null;
+  if (oauthProblem) {
+    const responseBody = providerEnvelope(
+      provider,
+      "blocked_policy",
+      "This subscription credential is restricted to platform Claude Code runs.",
+    );
+    const record = baseRecord({
+      requestId,
+      provider,
+      model,
+      priced,
+      status: "blocked_policy",
+      statusCode: 403,
+      startedAt,
+      key,
+      requestBody,
+      responseBody,
+      budgets,
+      providerMayHaveCharged: false,
+      error: oauthProblem,
+    });
+    await enqueueMetering(db, envelopeStore, request.log, record, now());
+    return reply.status(403).send(responseBody);
+  }
+
+  await emitSoftBudgetIssues(db, budgets, key);
   const pendingRecord = baseRecord({
     requestId,
     provider,
@@ -313,15 +375,14 @@ async function handleProvider(
     if (!reply.raw.writableEnded) controller.abort();
   });
 
+  const upstreamHeaders = providerRequestHeaders(
+    provider,
+    request.headers,
+    credential,
+    upstreamBody,
+  );
   let upstream: Response;
   try {
-    const credential = await providerCredential(db, config, provider, key.orgId);
-    const upstreamHeaders = providerHeaders(
-      provider,
-      request.headers,
-      credential.apiKey,
-      upstreamBody,
-    );
     // credential.baseUrl is already the normalized, SSRF-validated URL produced by
     // validateProviderBaseUrl when the credential was opened (auth.ts), and the
     // credential cache bounds its trust window. Re-validating here would repeat a
@@ -519,34 +580,6 @@ function providerSuffix(request: FastifyRequest, provider: Provider): string {
 function upstreamUrl(baseUrl: string, suffix: string, originalUrl: string): string {
   const query = originalUrl.includes("?") ? `?${originalUrl.split("?").slice(1).join("?")}` : "";
   return `${baseUrl.replace(/\/$/, "")}${suffix}${query}`;
-}
-
-function providerHeaders(
-  provider: Provider,
-  incoming: Record<string, unknown>,
-  apiKey: string,
-  body: Buffer,
-): Headers {
-  const headers = new Headers();
-  headers.set("content-type", "application/json");
-  headers.set("content-length", String(body.length));
-  const userAgent = incoming["user-agent"];
-  if (typeof userAgent === "string") headers.set("user-agent", userAgent);
-  if (provider === "anthropic") {
-    headers.set("x-api-key", apiKey);
-    const version = incoming["anthropic-version"];
-    if (typeof version === "string") headers.set("anthropic-version", version);
-    // Pass provider feature headers through — a transparent proxy must not
-    // strip beta flags the client set (e.g. Claude Code's context_management),
-    // or the upstream rejects the body fields those flags enable.
-    const beta = incoming["anthropic-beta"];
-    if (typeof beta === "string") headers.set("anthropic-beta", beta);
-  } else {
-    headers.set("authorization", `Bearer ${apiKey}`);
-    const openaiBeta = incoming["openai-beta"];
-    if (typeof openaiBeta === "string") headers.set("openai-beta", openaiBeta);
-  }
-  return headers;
 }
 
 function copyHeaders(upstream: Response, reply: FastifyReply) {

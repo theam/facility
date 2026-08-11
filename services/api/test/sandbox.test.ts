@@ -17,6 +17,7 @@ import {
   kbSpaces,
   migrate,
   projects,
+  providerCredentials,
   registryItems,
   registryVersions,
   repos,
@@ -413,6 +414,18 @@ describe("sandbox api", async () => {
     ] as const;
 
     for (const fixture of cases) {
+      const oauthCredentialId = fixture.engine === "claude_code" ? newId("prov") : null;
+      if (oauthCredentialId) {
+        await db.insert(providerCredentials).values({
+          id: oauthCredentialId,
+          orgId,
+          provider: "anthropic",
+          name: `claude-subscription-${suffix}`,
+          authMode: "oauth",
+          sealedSecret: await seal("sk-ant-oat01-sandbox-test", masterKey),
+          createdBy: "test",
+        });
+      }
       const agent = (
         await db
           .insert(agentDefs)
@@ -456,6 +469,13 @@ describe("sandbox api", async () => {
         .from(virtualKeys)
         .where(eq(virtualKeys.runId, run.id));
       expect(key?.allowedModels).toEqual(fixture.expected);
+      const [persistedRun] = await db.select().from(runs).where(eq(runs.id, run.id));
+      expect(readSandbox(persistedRun?.sandbox).bundle?.anthropicAuthMode).toBe(
+        fixture.engine === "claude_code" ? "oauth" : undefined,
+      );
+      if (oauthCredentialId) {
+        await db.delete(providerCredentials).where(eq(providerCredentials.id, oauthCredentialId));
+      }
     }
   });
 

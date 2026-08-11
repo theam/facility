@@ -5,9 +5,11 @@ import {
   createDb,
   llmRequests,
   migrate,
+  orgs,
   platformIssues,
   projects,
   providerCredentials,
+  runs,
   seed,
   spendCounters,
   virtualKeys,
@@ -143,6 +145,7 @@ function healthDb(execute: () => Promise<void>): FacilityDb {
 
 type StubState = {
   anthropicCalls: number;
+  lastAnthropicAuthorization: string | undefined;
   openaiCalls: number;
   lastOpenAiRequest: unknown;
   abortObserved: boolean;
@@ -175,6 +178,7 @@ describe("gateway", async () => {
   const envelopes = new MemoryEnvelopeStore();
   const stubState: StubState = {
     anthropicCalls: 0,
+    lastAnthropicAuthorization: undefined,
     openaiCalls: 0,
     lastOpenAiRequest: null,
     abortObserved: false,
@@ -198,6 +202,7 @@ describe("gateway", async () => {
   beforeEach(async () => {
     clearAuthCaches();
     stubState.anthropicCalls = 0;
+    stubState.lastAnthropicAuthorization = undefined;
     stubState.openaiCalls = 0;
     stubState.lastOpenAiRequest = null;
     stubState.abortObserved = false;
@@ -247,6 +252,108 @@ describe("gateway", async () => {
         .where(and(eq(llmRequests.virtualKeyId, setup.keyId), eq(llmRequests.status, "ok")))
     )[0];
     expect(counter?.spentCents).toBeCloseTo(charged?.costCents ?? 0, 6);
+  });
+
+  it("1b. Claude Code OAuth stays behind the run key, gateway policy, and metering", async () => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      authMode: "oauth",
+      runEngine: "claude_code",
+    });
+    const response = await postAnthropicOauth(setup.secret, {
+      model: "claude-sonnet-5",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(stubState.lastAnthropicAuthorization).toBe("Bearer real-anthropic-oauth");
+    await waitForRequestCount(1);
+    const [request] = await db
+      .select()
+      .from(llmRequests)
+      .where(eq(llmRequests.virtualKeyId, setup.keyId));
+    expect(request?.status).toBe("ok");
+    expect(request?.runId).toBeTruthy();
+  });
+
+  it.each([
+    { name: "project virtual key", runEngine: undefined, includeOauthBeta: true },
+    { name: "non-Claude run key", runEngine: "codex" as const, includeOauthBeta: true },
+    { name: "missing OAuth beta", runEngine: "claude_code" as const, includeOauthBeta: false },
+  ])("1c. rejects OAuth use by a $name before provider work", async ({
+    runEngine,
+    includeOauthBeta,
+  }) => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      authMode: "oauth",
+      runEngine,
+    });
+    const response = await postAnthropicOauth(
+      setup.secret,
+      { model: "claude-sonnet-5", messages: [] },
+      includeOauthBeta,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { type: "blocked_policy" } });
+    expect(stubState.anthropicCalls).toBe(0);
+  });
+
+  it.each([
+    "expired",
+    "revoked",
+  ] as const)("1d. passes an upstream %s OAuth denial through without retrying", async (authFailure) => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      authMode: "oauth",
+      runEngine: "claude_code",
+    });
+    const response = await postAnthropicOauth(setup.secret, {
+      model: "claude-sonnet-5",
+      messages: [],
+      authFailure,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { type: "authentication_error" } });
+    expect(stubState.anthropicCalls).toBe(1);
+  });
+
+  it("1e. never selects a cross-tenant OAuth credential", async () => {
+    const foreignOrgId = newId("org");
+    await db.insert(orgs).values({ id: foreignOrgId, name: "Foreign", slug: foreignOrgId });
+    await db.insert(providerCredentials).values({
+      id: newId("prov"),
+      orgId: foreignOrgId,
+      provider: "anthropic",
+      name: "foreign-subscription",
+      authMode: "oauth",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      sealedSecret: await seal("foreign-oauth-token", masterKey),
+      createdBy: "test",
+      createdAt: new Date("2000-01-01T00:00:00.000Z"),
+    });
+    try {
+      const setup = await setupVirtualKey({
+        provider: "anthropic",
+        baseUrl: `${stubOrigin}/anthropic/v1`,
+        authMode: "oauth",
+        runEngine: "claude_code",
+      });
+      const response = await postAnthropicOauth(setup.secret, {
+        model: "claude-sonnet-5",
+        messages: [],
+      });
+      expect(response.status).toBe(200);
+      expect(stubState.lastAnthropicAuthorization).toBe("Bearer real-anthropic-oauth");
+    } finally {
+      await db.delete(providerCredentials).where(eq(providerCredentials.orgId, foreignOrgId));
+      await db.delete(orgs).where(eq(orgs.id, foreignOrgId));
+    }
   });
 
   it("2. Anthropic SSE chunks pass through byte-exact and store an envelope", async () => {
@@ -632,6 +739,7 @@ describe("gateway", async () => {
       allowedModels: null,
       budgetId: setup.budgetId,
       agentDefId: null,
+      engine: null,
     };
     const meteringNow = new Date("2026-07-05T00:00:00.000Z");
     const budgetStates = await applicableBudgets(db, key, meteringNow);
@@ -714,6 +822,7 @@ describe("gateway", async () => {
       allowedModels: null,
       budgetId: setup.budgetId,
       agentDefId: null,
+      engine: null,
     };
     const logger = { ...gateway.log, warn: vi.fn() } as typeof gateway.log;
     const requestId = newId("evt");
@@ -860,7 +969,7 @@ describe("gateway", async () => {
         createdBy: "test",
       });
       // Warm the cache with v1.
-      expect((await providerCredential(owned.db, localConfig, "anthropic", orgId)).apiKey).toBe(
+      expect((await providerCredential(owned.db, localConfig, "anthropic", orgId)).secret).toBe(
         "secret-v1",
       );
       // Rotate the stored secret + NOTIFY exactly as the provider routes do.
@@ -875,7 +984,7 @@ describe("gateway", async () => {
       // eviction the stale v1 would persist until the 60s TTL and this would time out.
       await vi.waitFor(
         async () => {
-          expect((await providerCredential(owned.db, localConfig, "anthropic", orgId)).apiKey).toBe(
+          expect((await providerCredential(owned.db, localConfig, "anthropic", orgId)).secret).toBe(
             "secret-v2",
           );
         },
@@ -1004,6 +1113,8 @@ describe("gateway", async () => {
   async function setupVirtualKey(input: {
     provider: "anthropic" | "openai";
     baseUrl: string;
+    authMode?: "api_key" | "oauth";
+    runEngine?: "claude_code" | "codex";
     allowedModels?: string[];
     budgetMode?: "soft" | "hard";
     budgetLimitCents?: number;
@@ -1027,8 +1138,12 @@ describe("gateway", async () => {
       orgId,
       provider: input.provider,
       name: "default",
+      authMode: input.authMode ?? "api_key",
       baseUrl: input.baseUrl,
-      sealedSecret: await seal(`real-${input.provider}`, masterKey),
+      sealedSecret: await seal(
+        input.authMode === "oauth" ? "real-anthropic-oauth" : `real-${input.provider}`,
+        masterKey,
+      ),
       createdBy: "test",
     });
     const budget = (
@@ -1047,10 +1162,23 @@ describe("gateway", async () => {
         .returning()
     )[0];
     const key = await generateApiKey("fvk");
+    const runId = input.runEngine ? newId("run") : null;
+    if (runId) {
+      await db.insert(runs).values({
+        id: runId,
+        orgId,
+        projectId: project.id,
+        mode: "test",
+        engine: input.runEngine ?? "claude_code",
+        trigger: {},
+        createdBy: { type: "system", id: "gateway-test" },
+      });
+    }
     await db.insert(virtualKeys).values({
       id: key.id,
       orgId,
       projectId: project.id,
+      runId,
       name: "test key",
       prefix: key.lookup,
       last4: key.last4,
@@ -1069,6 +1197,23 @@ describe("gateway", async () => {
         "x-api-key": secret,
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function postAnthropicOauth(secret: string, body: unknown, includeOauthBeta = true) {
+    return fetch(`${gatewayOrigin}/anthropic/v1/messages`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${secret}`,
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": includeOauthBeta
+          ? "claude-code-20250219,oauth-2025-04-20,context-management-2025-06-27"
+          : "claude-code-20250219",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "x-app": "cli",
       },
       body: JSON.stringify(body),
     });
@@ -1125,13 +1270,28 @@ async function buildStub(state: StubState) {
 
   app.post("/anthropic/v1/messages", async (request, reply) => {
     state.anthropicCalls += 1;
-    expect(request.headers["x-api-key"]).toBe("real-anthropic");
+    state.lastAnthropicAuthorization = request.headers.authorization;
+    if (request.headers.authorization) {
+      expect(request.headers.authorization).toBe("Bearer real-anthropic-oauth");
+      expect(request.headers["x-api-key"]).toBeUndefined();
+      expect(request.headers["anthropic-beta"]).toContain("oauth-2025-04-20");
+      expect(request.headers["x-app"]).toBe("cli");
+    } else {
+      expect(request.headers["x-api-key"]).toBe("real-anthropic");
+    }
     const body = request.body as {
       model: string;
       stream?: boolean;
       abortStream?: boolean;
       tinyUsage?: boolean;
+      authFailure?: "expired" | "revoked";
     };
+    if (body.authFailure) {
+      return reply.status(401).send({
+        type: "error",
+        error: { type: "authentication_error", message: `${body.authFailure} oauth token` },
+      });
+    }
     if ((body as { slow?: boolean }).slow) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }

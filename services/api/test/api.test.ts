@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { hashKey, newId, seal } from "@facility/core";
+import { hashKey, newId, open, seal } from "@facility/core";
 import {
   actionTypes,
   agentDefs,
@@ -837,6 +837,76 @@ describe("api", async () => {
     });
     expect(allowed.statusCode).toBe(200);
     await db.delete(providerCredentials).where(eq(providerCredentials.id, allowed.json().id));
+  });
+
+  it("stores a normalized Claude Code OAuth token without returning it", async () => {
+    const token = "sk-ant-oat01-platform-integration-token";
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/providers",
+      headers: { cookie },
+      payload: {
+        provider: "anthropic",
+        name: `claude-subscription-${Date.now()}`,
+        authMode: "oauth",
+        secret: `export CLAUDE_CODE_OAUTH_TOKEN="${token}"`,
+      },
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({ provider: "anthropic", authMode: "oauth" });
+    expect(created.json()).not.toHaveProperty("secret");
+
+    const [stored] = await db
+      .select()
+      .from(providerCredentials)
+      .where(eq(providerCredentials.id, created.json().id));
+    expect(stored?.authMode).toBe("oauth");
+    expect(await open(stored?.sealedSecret ?? "", masterKey)).toBe(token);
+
+    const listed = await app.inject({ method: "GET", url: "/v1/providers", headers: { cookie } });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toContainEqual(
+      expect.objectContaining({ id: created.json().id, authMode: "oauth" }),
+    );
+
+    await db.delete(providerCredentials).where(eq(providerCredentials.id, created.json().id));
+  });
+
+  it.each([
+    {
+      name: "non-Anthropic provider",
+      payload: { provider: "openai", authMode: "oauth", secret: "sk-ant-oat01-valid-looking" },
+      code: "oauth_provider_unsupported",
+    },
+    {
+      name: "custom upstream URL",
+      payload: {
+        provider: "anthropic",
+        authMode: "oauth",
+        baseUrl: "https://api.anthropic.com/v1",
+        secret: "sk-ant-oat01-valid-looking",
+      },
+      code: "oauth_base_url_forbidden",
+    },
+    {
+      name: "multiline token",
+      payload: {
+        provider: "anthropic",
+        authMode: "oauth",
+        secret: "sk-ant-oat01-valid-looking\ninjected",
+      },
+      code: "invalid_provider_secret",
+    },
+  ])("rejects Claude Code OAuth for a $name", async ({ payload, code }) => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/providers",
+      headers: { cookie },
+      payload: { name: `oauth-denied-${Date.now()}-${Math.random()}`, ...payload },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe(code);
   });
 
   it("requires a resolved agent before enqueuing a run", async () => {

@@ -1,10 +1,10 @@
-import { generateApiKey, newId, seal } from "@facility/core";
+import { generateApiKey, newId, normalizeClaudeCodeOAuthToken, seal } from "@facility/core";
 import { budgets, providerCredentials, virtualKeys } from "@facility/db";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "../../budget-scope.js";
-import { notFound } from "../../errors.js";
+import { ApiError, notFound } from "../../errors.js";
 import type { Principal } from "../../types.js";
 import {
   assertBareRowProjectScope,
@@ -58,6 +58,7 @@ export async function registerProvidersBudgetsSpendRoutes(
         id: row.id,
         provider: row.provider,
         name: row.name,
+        authMode: row.authMode,
         baseUrl: row.baseUrl,
         createdAt: row.createdAt,
       }));
@@ -72,6 +73,7 @@ export async function registerProvidersBudgetsSpendRoutes(
         body: z.object({
           provider: z.enum(["anthropic", "openai"]),
           name: z.string().trim().min(1),
+          authMode: z.enum(["api_key", "oauth"]).default("api_key"),
           baseUrl: z.string().optional(),
           secret: z.string().min(1),
         }),
@@ -83,13 +85,38 @@ export async function registerProvidersBudgetsSpendRoutes(
       const body = request.body as {
         provider: "anthropic" | "openai";
         name: string;
+        authMode?: "api_key" | "oauth";
         baseUrl?: string;
         secret: string;
       };
+      const authMode = body.authMode ?? "api_key";
+      if (authMode === "oauth" && body.provider !== "anthropic") {
+        throw new ApiError(
+          400,
+          "oauth_provider_unsupported",
+          "Claude Code OAuth is only supported for the Anthropic provider",
+        );
+      }
+      if (authMode === "oauth" && body.baseUrl) {
+        throw new ApiError(
+          400,
+          "oauth_base_url_forbidden",
+          "Claude Code OAuth credentials can only be sent to Anthropic's default API URL",
+        );
+      }
+      const secret =
+        authMode === "oauth" ? normalizeClaudeCodeOAuthToken(body.secret) : body.secret;
+      if (!secret) {
+        throw new ApiError(
+          400,
+          "invalid_provider_secret",
+          "Claude Code OAuth token is malformed; paste the output from `claude setup-token`",
+        );
+      }
       const baseUrl = body.baseUrl
         ? await validateApiProviderBaseUrl(body.baseUrl, config.facilityInsecureDev)
         : undefined;
-      const sealedSecret = await seal(body.secret, config.secretMasterKey);
+      const sealedSecret = await seal(secret, config.secretMasterKey);
       const row = (
         await db
           .insert(providerCredentials)
@@ -98,6 +125,7 @@ export async function registerProvidersBudgetsSpendRoutes(
             orgId: p.orgId,
             provider: body.provider,
             name: body.name,
+            authMode,
             baseUrl,
             sealedSecret,
             createdBy: p.id,
@@ -117,6 +145,7 @@ export async function registerProvidersBudgetsSpendRoutes(
             id: row.id,
             provider: row.provider,
             name: row.name,
+            authMode: row.authMode,
             baseUrl: row.baseUrl,
             createdAt: row.createdAt,
           }

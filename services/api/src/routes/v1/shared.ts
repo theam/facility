@@ -377,6 +377,7 @@ export const ProviderPublicSchema = z.object({
   id: z.string(),
   provider: z.string(),
   name: z.string(),
+  authMode: z.enum(["api_key", "oauth"]),
   baseUrl: z.string().nullable(),
   createdAt: DateValue,
 });

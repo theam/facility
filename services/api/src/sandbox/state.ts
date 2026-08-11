@@ -22,6 +22,8 @@ export type RunBundle = {
   provisionCmd: string | null;
   checkCmds: string[];
   gatewayUrls: { anthropic: string; openai: string };
+  /** Optional for bundles persisted before provider auth modes were introduced. */
+  anthropicAuthMode?: "api_key" | "oauth";
   scope: Record<string, unknown>;
   timeoutMin: number;
   harness?: { files: Record<string, string> };

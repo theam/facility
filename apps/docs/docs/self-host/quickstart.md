@@ -93,9 +93,13 @@ at an external store and leave the profile off to run without MinIO.
 
 ## First real steps
 
-1. **Providers** — add your Anthropic/OpenAI keys (sealed at rest) with
-   `facility providers create --provider openai --name primary --secret …` or
-   `POST /v1/providers`.
+1. **Providers** — add Anthropic/OpenAI API keys (sealed at rest) with
+   `facility providers create --provider openai --name primary --secret …`, or
+   use a Claude Code Pro/Max subscription in platform runs with
+   `facility providers create --provider anthropic --name claude-subscription --auth-mode oauth --secret 'CLAUDE_CODE_OAUTH_TOKEN=…'`.
+   Both paths are also available through `POST /v1/providers`. Facility uses
+   the first-added credential for a provider; remove the active API key after
+   adding the subscription credential when switching an existing installation.
 2. **GitHub App** — create your own App installation using the
    [GitHub App guide](github-app) so kickstart, webhook triggers, outcomes, and
    repository delivery work against your organization.

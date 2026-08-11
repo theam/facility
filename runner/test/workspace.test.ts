@@ -886,6 +886,7 @@ describe("workspace preparation", () => {
     const root = await mkdtemp(join(tmpdir(), "facility-runner-"));
     const previousEnv = {
       anthropic: process.env.ANTHROPIC_API_KEY,
+      anthropicOauth: process.env.CLAUDE_CODE_OAUTH_TOKEN,
       openai: process.env.OPENAI_API_KEY,
       platform: process.env.FACILITY_PLATFORM_KEY,
     };
@@ -906,6 +907,7 @@ describe("workspace preparation", () => {
         readFile(join(root, "scratch", ".facility-engine-env"), "utf8"),
       ).rejects.toThrow();
       expect(process.env.ANTHROPIC_API_KEY).toBe("virtual-key-secret");
+      expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       expect(process.env.OPENAI_API_KEY).toBe("virtual-key-secret");
       expect(process.env.FACILITY_PLATFORM_KEY).toBe("platform-key-secret");
 
@@ -915,8 +917,37 @@ describe("workspace preparation", () => {
       expect(contents.join("\n")).not.toContain("platform-key-secret");
     } finally {
       restoreEnv("ANTHROPIC_API_KEY", previousEnv.anthropic);
+      restoreEnv("CLAUDE_CODE_OAUTH_TOKEN", previousEnv.anthropicOauth);
       restoreEnv("OPENAI_API_KEY", previousEnv.openai);
       restoreEnv("FACILITY_PLATFORM_KEY", previousEnv.platform);
+    }
+  });
+
+  it("uses mutually exclusive Claude Code OAuth virtual-key authentication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-oauth-"));
+    const previousApiKey = process.env.ANTHROPIC_API_KEY;
+    const previousOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    try {
+      process.env.ANTHROPIC_API_KEY = "inherited-api-key-must-be-removed";
+      await prepareWorkspace(
+        bundle({ engine: "claude_code", anthropicAuthMode: "oauth" }),
+        "fvk_oauth_virtual_key",
+        {
+          platformKey: null,
+          platformApiUrl: "https://api.test",
+          projectId: "proj_test",
+          repoToken: null,
+        },
+        root,
+      );
+
+      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("fvk_oauth_virtual_key");
+      expect(engineEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe("fvk_oauth_virtual_key");
+      expect(engineEnv().ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    } finally {
+      restoreEnv("ANTHROPIC_API_KEY", previousApiKey);
+      restoreEnv("CLAUDE_CODE_OAUTH_TOKEN", previousOauthToken);
     }
   });
 });

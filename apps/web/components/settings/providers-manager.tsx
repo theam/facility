@@ -12,6 +12,7 @@ import type { Provider } from "@/lib/api";
 export function ProvidersManager({ providers }: { providers: Provider[] }) {
   const router = useRouter();
   const [provider, setProvider] = useState("anthropic");
+  const [authMode, setAuthMode] = useState<"api_key" | "oauth">("api_key");
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [secret, setSecret] = useState("");
@@ -24,6 +25,9 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
+    const becomesStandby = providers.some(
+      (row) => row.provider === provider && !removedIds.has(row.id),
+    );
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -34,8 +38,9 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
         body: JSON.stringify({
           provider,
           name,
+          authMode,
           secret,
-          ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+          ...(authMode === "api_key" && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
         }),
       });
       if (!res.ok) {
@@ -47,7 +52,12 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
       setName("");
       setBaseUrl("");
       setSecret("");
-      setNotice(`added ${provider} credential`);
+      const credentialKind = authMode === "oauth" ? "Claude subscription" : "API key";
+      setNotice(
+        becomesStandby
+          ? `added ${provider} ${credentialKind} as standby; remove the active credential to switch`
+          : `added ${provider} ${credentialKind} as active`,
+      );
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed");
@@ -81,16 +91,46 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
   }
 
   const live = providers.filter((row) => !removedIds.has(row.id));
+  const activeIds = new Set<string>();
+  for (const providerName of new Set(live.map((row) => row.provider))) {
+    const [active] = live
+      .filter((row) => row.provider === providerName)
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      );
+    if (active) activeIds.add(active.id);
+  }
 
   return (
     <div className="flex flex-col gap-5">
       <form onSubmit={add} className="flex flex-wrap items-end gap-3">
         <Field label="provider">
-          <Select name="provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
+          <Select
+            name="provider"
+            value={provider}
+            onChange={(e) => {
+              const next = e.target.value;
+              setProvider(next);
+              if (next !== "anthropic") setAuthMode("api_key");
+            }}
+          >
             <option value="anthropic">anthropic</option>
             <option value="openai">openai</option>
           </Select>
         </Field>
+        {provider === "anthropic" ? (
+          <Field label="authentication">
+            <Select
+              name="provider-auth-mode"
+              value={authMode}
+              onChange={(e) => setAuthMode(e.target.value as "api_key" | "oauth")}
+            >
+              <option value="api_key">API key</option>
+              <option value="oauth">Claude subscription</option>
+            </Select>
+          </Field>
+        ) : null}
         <Field label="name" className="min-w-0 flex-1">
           <TextInput
             required
@@ -101,18 +141,20 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
             placeholder="default"
           />
         </Field>
-        <Field label="base url (optional)" className="min-w-0 flex-1">
-          <TextInput
-            type="url"
-            inputMode="url"
-            name="provider-base-url"
-            autoComplete="off"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.anthropic.com/v1"
-          />
-        </Field>
-        <Field label="secret">
+        {authMode === "api_key" ? (
+          <Field label="base url (optional)" className="min-w-0 flex-1">
+            <TextInput
+              type="url"
+              inputMode="url"
+              name="provider-base-url"
+              autoComplete="off"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://api.anthropic.com/v1"
+            />
+          </Field>
+        ) : null}
+        <Field label={authMode === "oauth" ? "setup token" : "secret"}>
           <TextInput
             required
             type="password"
@@ -120,7 +162,7 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
             autoComplete="new-password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            placeholder="sk-…"
+            placeholder={authMode === "oauth" ? "claude setup-token output" : "sk-…"}
           />
         </Field>
         <Button type="submit" variant="primary" disabled={busy || !name || !secret}>
@@ -150,6 +192,10 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
               className="flex min-w-0 items-center gap-4 border-b border-(--line) px-4 py-3 last:border-b-0"
             >
               <span className="shrink-0 text-[11px] font-medium text-(--dim)">{row.provider}</span>
+              <span className="shrink-0 font-mono text-[10.5px] text-(--dim)">
+                {activeIds.has(row.id) ? "active" : "standby"} ·{" "}
+                {row.authMode === "oauth" ? "Claude subscription" : "API key"}
+              </span>
               <span className="shrink-0 font-mono text-[13px] text-(--ink)">{row.name}</span>
               {row.baseUrl ? (
                 <span className="min-w-0 truncate font-mono text-[11px] text-(--dim)">

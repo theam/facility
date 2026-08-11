@@ -1,3 +1,4 @@
+import type { ProviderAuthMode } from "@facility/core";
 import type { FacilityDb } from "@facility/db";
 
 export type Provider = "anthropic" | "openai";
@@ -27,6 +28,7 @@ export type AuthedKey = {
   allowedModels: string[] | null;
   budgetId: string | null;
   agentDefId: string | null;
+  engine: string | null;
 };
 
 export type Usage = {
@@ -69,7 +71,8 @@ export type BudgetState = {
 };
 
 export type ProviderCredential = {
-  apiKey: string;
+  authMode: ProviderAuthMode;
+  secret: string;
   baseUrl: string;
 };
 

@@ -7,6 +7,7 @@ export * from "./models.js";
 export * from "./object-store.js";
 export * from "./permissions.js";
 export * from "./pricing.js";
+export * from "./provider-auth.js";
 export * from "./provider-url.js";
 export * from "./receipts.js";
 export * from "./render.js";

@@ -104,7 +104,8 @@ lifecycle reconciler instead of creating another scheduler or warm-pool service.
 Inside the sandbox: the repo checkout, the agent CLI (Claude Code, Codex, or
 your own), the operating contract, the project's skills, and a **run-scoped
 virtual key** whose only power is calling models through the gateway. Not
-inside: provider API keys, GitHub App credentials, platform secrets. The
+inside: provider API keys or subscription tokens, GitHub App credentials,
+platform secrets. The
 runner authenticates back to the platform with a one-time token and fetches
 exactly what the run needs.
 

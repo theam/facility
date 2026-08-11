@@ -499,7 +499,13 @@ export async function prepareWorkspace(
   }
   process.env.ANTHROPIC_BASE_URL = bundle.gatewayUrls.anthropic;
   process.env.OPENAI_BASE_URL = bundle.gatewayUrls.openai;
-  process.env.ANTHROPIC_API_KEY = virtualKey;
+  if (bundle.anthropicAuthMode === "oauth") {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = virtualKey;
+  } else {
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    process.env.ANTHROPIC_API_KEY = virtualKey;
+  }
   process.env.OPENAI_API_KEY = virtualKey;
   // Platform key for KB/task writes (Project Owner / learning agents).
   process.env.FACILITY_PROJECT_ID = platform.projectId;

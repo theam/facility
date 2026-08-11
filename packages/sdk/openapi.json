@@ -13492,6 +13492,13 @@
                       "name": {
                         "type": "string"
                       },
+                      "authMode": {
+                        "type": "string",
+                        "enum": [
+                          "api_key",
+                          "oauth"
+                        ]
+                      },
                       "baseUrl": {
                         "nullable": true,
                         "type": "string"
@@ -13505,6 +13512,7 @@
                       "id",
                       "provider",
                       "name",
+                      "authMode",
                       "baseUrl",
                       "createdAt"
                     ],
@@ -13629,6 +13637,14 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "authMode": {
+                    "default": "api_key",
+                    "type": "string",
+                    "enum": [
+                      "api_key",
+                      "oauth"
+                    ]
+                  },
                   "baseUrl": {
                     "type": "string"
                   },
@@ -13664,6 +13680,13 @@
                     "name": {
                       "type": "string"
                     },
+                    "authMode": {
+                      "type": "string",
+                      "enum": [
+                        "api_key",
+                        "oauth"
+                      ]
+                    },
                     "baseUrl": {
                       "nullable": true,
                       "type": "string"
@@ -13677,6 +13700,7 @@
                     "id",
                     "provider",
                     "name",
+                    "authMode",
                     "baseUrl",
                     "createdAt"
                   ],

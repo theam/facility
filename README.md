@@ -395,6 +395,12 @@ time. The **platform lane** runs the same contracts in an isolated sandbox and
 adds live streaming, steering, centralized credentials, and platform-enforced
 budgets. A project can move one trigger at a time between lanes.
 
+Platform-lane Anthropic credentials support both API-key billing and Claude
+Code Pro/Max subscription tokens. Add the latter in Settings → Providers or
+with `facility providers create --provider anthropic --auth-mode oauth ...`;
+the setup token remains sealed behind the gateway and the sandbox receives only
+its expiring run-scoped virtual key.
+
 Platform CI repair is limited to branches produced by that project's Facility
 builder runs. It retries the same SHA-stable failure at most twice and retains
 an absolute three-attempt branch ceiling by default; set the project setting

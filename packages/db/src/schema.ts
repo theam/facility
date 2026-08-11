@@ -627,6 +627,7 @@ export const providerCredentials = pgTable(
       .references(() => orgs.id),
     provider: text("provider").notNull(),
     name: text("name").notNull(),
+    authMode: text("auth_mode").notNull().default("api_key"),
     baseUrl: text("base_url"),
     sealedSecret: text("sealed_secret").notNull(),
     createdBy: text("created_by"),
@@ -637,6 +638,11 @@ export const providerCredentials = pgTable(
       table.orgId,
       table.provider,
       table.name,
+    ),
+    check("provider_credentials_auth_mode_check", sql`${table.authMode} in ('api_key', 'oauth')`),
+    check(
+      "provider_credentials_oauth_provider_check",
+      sql`${table.authMode} <> 'oauth' or ${table.provider} = 'anthropic'`,
     ),
   ],
 );

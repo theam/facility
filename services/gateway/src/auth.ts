@@ -1,4 +1,10 @@
-import { keyLookup, open, validateProviderBaseUrl, verifyKey } from "@facility/core";
+import {
+  isProviderAuthMode,
+  keyLookup,
+  open,
+  validateProviderBaseUrl,
+  verifyKey,
+} from "@facility/core";
 import type { FacilityDb } from "@facility/db";
 import { providerCredentials, runs, virtualKeys } from "@facility/db";
 import { and, eq, isNull } from "drizzle-orm";
@@ -89,6 +95,7 @@ async function loadVirtualKeyByPrefix(
         allowedModels: row.key.allowedModels,
         budgetId: row.key.budgetId,
         agentDefId: row.run?.agentDefId ?? null,
+        engine: row.run?.engine ?? null,
         hash: row.key.hash,
       },
     };
@@ -124,7 +131,8 @@ export async function providerCredential(
       throw new Error("dev provider key fallback refused in production");
     }
     const credential = {
-      apiKey: fallback,
+      authMode: "api_key" as const,
+      secret: fallback,
       baseUrl: await validateProviderBaseUrl(defaultBaseUrl(provider), {
         allowLocalhostHttp: config.facilityInsecureDev,
       }),
@@ -133,9 +141,11 @@ export async function providerCredential(
     return credential;
   }
   if (!row) throw new Error(`missing ${provider} provider credential`);
+  if (!isProviderAuthMode(row.authMode)) throw new Error(`invalid ${provider} auth mode`);
 
   const credential = {
-    apiKey: await open(row.sealedSecret, config.secretMasterKey),
+    authMode: row.authMode,
+    secret: await open(row.sealedSecret, config.secretMasterKey),
     baseUrl: await validateProviderBaseUrl(row.baseUrl ?? defaultBaseUrl(provider), {
       allowLocalhostHttp: config.facilityInsecureDev,
     }),

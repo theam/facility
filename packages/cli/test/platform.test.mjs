@@ -1299,6 +1299,46 @@ test("sessions expose transcripts, interrupt, and resume without the web applica
   ]);
 });
 
+test("provider setup forwards Claude subscription authentication explicitly", async () => {
+  let request;
+  const exit = await runPlatformCommand(
+    "providers",
+    [
+      "create",
+      "--provider",
+      "anthropic",
+      "--name",
+      "claude-subscription",
+      "--auth-mode",
+      "oauth",
+      "--secret",
+      "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test-token",
+    ],
+    {
+      config: config(),
+      stdout: sink(),
+      fetch: async (url, init = {}) => {
+        request = {
+          path: new URL(url).pathname,
+          body: init.body ? JSON.parse(init.body) : undefined,
+        };
+        return json({ id: "provider_oauth" });
+      },
+    },
+  );
+
+  assert.equal(exit, 0);
+  assert.deepEqual(request, {
+    path: "/v1/providers",
+    body: {
+      provider: "anthropic",
+      name: "claude-subscription",
+      secret: "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test-token",
+      authMode: "oauth",
+    },
+  });
+});
+
 test("conversations, GitHub issues, catalog, outcomes, and event history are first-class CLI surfaces", async () => {
   const calls = [];
   const repoQualifiedCalls = [];

@@ -9721,6 +9721,8 @@ export interface operations {
                         id: string;
                         provider: string;
                         name: string;
+                        /** @enum {string} */
+                        authMode: "api_key" | "oauth";
                         baseUrl: string | null;
                         /** Format: date-time */
                         createdAt: string;
@@ -9817,6 +9819,11 @@ export interface operations {
                     /** @enum {string} */
                     provider: "anthropic" | "openai";
                     name: string;
+                    /**
+                     * @default api_key
+                     * @enum {string}
+                     */
+                    authMode?: "api_key" | "oauth";
                     baseUrl?: string;
                     secret: string;
                 };
@@ -9833,6 +9840,8 @@ export interface operations {
                         id: string;
                         provider: string;
                         name: string;
+                        /** @enum {string} */
+                        authMode: "api_key" | "oauth";
                         baseUrl: string | null;
                         /** Format: date-time */
                         createdAt: string;

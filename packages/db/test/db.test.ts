@@ -742,6 +742,7 @@ describe("db", async () => {
         WHERE (table_name = 'llm_requests' AND column_name IN ('task_id', 'agent_def_id', 'priced', 'cost_cents'))
            OR (table_name = 'spend_counters' AND column_name = 'spent_cents')
            OR (table_name = 'analytics_daily' AND column_name IN ('cost_cents', 'outcomes_assessed', 'outcomes_accepted'))
+           OR (table_name = 'provider_credentials' AND column_name = 'auth_mode')
       `,
     )) as Iterable<{ table_name: string; column_name: string; data_type: string }>;
     const columnTypes = new Map(
@@ -755,6 +756,7 @@ describe("db", async () => {
     expect(columnTypes.get("analytics_daily.cost_cents")).toBe("numeric");
     expect(columnTypes.get("analytics_daily.outcomes_assessed")).toBe("integer");
     expect(columnTypes.get("analytics_daily.outcomes_accepted")).toBe("integer");
+    expect(columnTypes.get("provider_credentials.auth_mode")).toBe("text");
     const indexes = (await db.execute(
       sql`
         SELECT indexname
@@ -854,7 +856,26 @@ describe("db", async () => {
     // A developer database can include later migrations from another worktree;
     // assert this checkout's latest migration was applied without assuming it
     // is the newest row in that shared database.
-    expect(Array.from(applied).map((row) => row.name)).toContain("0039_vercel_sandbox_driver.sql");
+    expect(Array.from(applied).map((row) => row.name)).toContain(
+      "0040_provider_credential_auth_mode.sql",
+    );
+    const providerCredentialChecks = (await db.execute(
+      sql`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'provider_credentials'::regclass
+          AND conname IN (
+            'provider_credentials_auth_mode_check',
+            'provider_credentials_oauth_provider_check'
+          )
+      `,
+    )) as Iterable<{ conname: string }>;
+    expect(new Set(Array.from(providerCredentialChecks).map((row) => row.conname))).toEqual(
+      new Set([
+        "provider_credentials_auth_mode_check",
+        "provider_credentials_oauth_provider_check",
+      ]),
+    );
     const previewDriverConstraint = (await db.execute(
       sql`
         SELECT pg_get_constraintdef(oid) AS definition
