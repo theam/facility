@@ -17,8 +17,10 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { AiIdentity } from "@/components/ai-identity";
 import { Markdown } from "@/components/markdown";
 import { agentHealth, triggerSummary } from "@/lib/agent-view";
+import { engineIdentity, modelIdentity, providerIdentity } from "@/lib/ai-identity";
 import type {
   AgentDef,
   AgentStatus,
@@ -132,7 +134,7 @@ export function AgentDetail(props: Props) {
   const next = fmtIn(status?.nextRunAt ?? null);
 
   return (
-    <div className="flex flex-col gap-10">
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-10">
       <div className="flex flex-col gap-3">
         <Eyebrow>
           <Link href={`/projects/${projectId}/agents`} className="hover:text-(--ink)">
@@ -145,8 +147,16 @@ export function AgentDetail(props: Props) {
           <h1 className="font-mono text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
             {agent.name}
           </h1>
-          <PillTag>{agent.engine}</PillTag>
-          <PillTag>{modelOf(agent) ?? "engine default"}</PillTag>
+          <PillTag>
+            <AiIdentity identity={engineIdentity(agent.engine)} />
+          </PillTag>
+          <PillTag>
+            {modelOf(agent) ? (
+              <AiIdentity identity={modelIdentity(modelOf(agent) ?? "")} />
+            ) : (
+              "engine default"
+            )}
+          </PillTag>
           {!agent.enabled ? <PillTag>disabled</PillTag> : null}
           <span className="ml-auto flex items-center gap-3">
             <Button
@@ -420,12 +430,38 @@ function ContractSection({ item, act, busy, note }: SectionProps) {
               )}
             </div>
           ) : null}
-          <div className="border border-(--line) px-6 py-5">
-            <Markdown source={viewed.content} />
+          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="min-w-0 border border-(--line) px-5 py-6 sm:px-8 lg:px-10">
+              <div className="mx-auto max-w-[88ch]">
+                <Markdown source={viewed.content} />
+              </div>
+            </div>
+            <aside className="flex flex-col gap-5 border border-(--line) bg-(--bg-subtle) p-5 xl:sticky xl:top-6">
+              <Eyebrow>revision</Eyebrow>
+              <dl className="flex flex-col gap-3 text-[12.5px]">
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-(--dim)">version</dt>
+                  <dd className="font-mono text-(--ink)">v{viewed.version}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-(--dim)">status</dt>
+                  <dd className="font-medium text-(--ink)">{viewed.status}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-(--dim)">contract</dt>
+                  <dd className="min-w-0 break-words text-right font-mono text-(--mut)">
+                    {item.name}
+                  </dd>
+                </div>
+              </dl>
+              <div className="border-t border-(--line) pt-4">
+                <p className="mb-2 text-[11px] font-medium text-(--dim)">changelog</p>
+                <p className="text-pretty text-[12.5px] leading-relaxed text-(--mut)">
+                  {viewed.changelog ?? "No changelog was recorded for this revision."}
+                </p>
+              </div>
+            </aside>
           </div>
-          {viewed.changelog ? (
-            <p className="font-mono text-[11px] text-(--dim)">changelog: {viewed.changelog}</p>
-          ) : null}
         </div>
       ) : (
         <p className="text-sm text-(--dim)">
@@ -636,6 +672,7 @@ function RuntimeSection({
       </div>
       <div className="grid gap-4 sm:grid-cols-3">
         <Field label="engine">
+          <AiIdentity identity={engineIdentity(engine)} className="mb-2 text-[11px] text-(--dim)" />
           <Select value={engine} onChange={(e) => setEngine(e.target.value)}>
             {catalog.engines.map((eng) => (
               <option key={eng.id} value={eng.id}>
@@ -643,16 +680,22 @@ function RuntimeSection({
               </option>
             ))}
             {catalog.engines.some((e) => e.id === agent.engine) ? null : (
-              <option value={agent.engine}>{agent.engine}</option>
+              <option value={agent.engine}>{engineIdentity(agent.engine).label}</option>
             )}
           </Select>
         </Field>
         <Field label="model">
+          {modelChoice !== "__default" ? (
+            <AiIdentity
+              identity={modelIdentity(modelChoice === "__custom" ? customModel : modelChoice)}
+              className="mb-2 text-[11px] text-(--dim)"
+            />
+          ) : null}
           <Select value={modelChoice} onChange={(e) => setModelChoice(e.target.value)}>
             <option value="__default">engine default</option>
             {catalog.models.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.id} · {m.provider}
+                {modelIdentity(m.id).label} · {providerIdentity(m.provider).label}
               </option>
             ))}
             <option value="__custom">custom…</option>
@@ -689,9 +732,12 @@ function RuntimeSection({
         >
           {busy === "runtime" ? "saving…" : "save runtime"}
         </Button>
-        <span className="font-mono text-[11px] text-(--dim)">
-          {catalog.engines.find((e) => e.id === engine)?.note}
-          {price ? ` · $${price.inputPer1M}/M in, $${price.outputPer1M}/M out` : ""}
+        <span className="inline-flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-(--dim)">
+          <AiIdentity identity={engineIdentity(engine)} />
+          <span>
+            {catalog.engines.find((e) => e.id === engine)?.note}
+            {price ? ` · $${price.inputPer1M}/M in, $${price.outputPer1M}/M out` : ""}
+          </span>
         </span>
       </div>
     </section>

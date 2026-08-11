@@ -3,7 +3,9 @@
 import { PillTag, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { AiIdentity } from "@/components/ai-identity";
 import { agentHealth } from "@/lib/agent-view";
+import { engineIdentity, modelIdentity } from "@/lib/ai-identity";
 import type { AgentStatus } from "@/lib/api";
 import { fmtAgo, fmtStatus } from "@/lib/run-format";
 import { cronToWords, fmtIn } from "@/lib/schedule";
@@ -130,9 +132,17 @@ export function EngineLoop({
                   <span className="flex min-w-0 items-center gap-2.5">
                     <StatusDot tone={health.tone} pulse={health.pulse} />
                     <span className="truncate font-mono text-[13px] text-(--ink)">{row.name}</span>
-                    <span className="ml-auto hidden whitespace-nowrap font-mono text-[10px] text-(--dim) lg:inline">
-                      {row.engine}
-                      {modelOf(row) ? ` · ${modelOf(row)}` : ""}
+                    <span className="ml-auto hidden items-center gap-1.5 whitespace-nowrap font-mono text-[10px] text-(--dim) lg:flex">
+                      <AiIdentity identity={engineIdentity(row.engine)} iconClassName="size-3" />
+                      {modelOf(row) ? (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <AiIdentity
+                            identity={modelIdentity(modelOf(row) ?? "")}
+                            iconClassName="size-3"
+                          />
+                        </>
+                      ) : null}
                     </span>
                   </span>
                   {!compact && row.description ? (

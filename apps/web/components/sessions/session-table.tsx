@@ -3,6 +3,8 @@
 import { PillTag, StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { AiIdentity } from "@/components/ai-identity";
+import { engineIdentity } from "@/lib/ai-identity";
 import { fmtAgo, fmtCost, fmtDuration, fmtStatus } from "@/lib/run-format";
 
 export type SessionRow = {
@@ -163,7 +165,9 @@ export function SessionTable({
                       {row.mode}
                     </Link>
                   </td>
-                  <td className="px-5 py-3 font-mono text-[11px] text-(--dim)">{row.engine}</td>
+                  <td className="px-5 py-3 font-mono text-[11px] text-(--dim)">
+                    <AiIdentity identity={engineIdentity(row.engine)} />
+                  </td>
                   <td className="px-5 py-3 text-[12px] text-(--mut)">{fmtStatus(row.status)}</td>
                   <td className="px-5 py-3">
                     <span className="flex items-center gap-3">

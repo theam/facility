@@ -3,7 +3,9 @@
 import { isBuilderMode, runObjectiveText } from "@facility/run-objective";
 import { Button, Cell, cx, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } from "@facility/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AiIdentity } from "@/components/ai-identity";
 import { RunTranscript } from "@/components/run/transcript";
+import { engineIdentity } from "@/lib/ai-identity";
 import type { Project, Run, RunEvent } from "@/lib/api";
 import { fetchRunEventPages } from "@/lib/run-event-pages";
 import { fmtCost, fmtDuration, fmtStatus } from "@/lib/run-format";
@@ -515,7 +517,7 @@ export function RunCockpit({
                 </span>
               </div>
               <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[12px] text-(--dim)">
-                <span>{run.engine}</span>
+                <AiIdentity identity={engineIdentity(run.engine)} />
                 <span>{agentDisplayName ?? agentName(run)}</span>
                 <span>{project?.slug ?? run.projectId}</span>
               </div>

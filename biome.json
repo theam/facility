@@ -20,6 +20,7 @@
       "!**/build",
       "!**/node_modules",
       "!**/*.css",
+      "!apps/web/public/brands/*.svg",
       "!packages/sdk/openapi.json",
       "!packages/sdk/src/schema.d.ts"
     ]

@@ -1,8 +1,10 @@
 import { Cell, Divider, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
+import { AiIdentity } from "@/components/ai-identity";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { PipelineBoard } from "@/components/project/pipeline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { engineIdentity } from "@/lib/ai-identity";
 import { api, summarizeSpend } from "@/lib/api";
 import { pipelineStories, reviewablePullRequests, storyHref } from "@/lib/pipeline";
 import { fmtAgo, fmtCost, fmtDuration, fmtStatus } from "@/lib/runs";
@@ -297,9 +299,11 @@ export default async function ProjectOverviewPage({
               >
                 <StatusDot tone={toneFor(run.status)} pulse={run.status === "running"} />
                 <span className="font-mono text-[13px] text-(--ink)">{run.mode}</span>
-                <span className="hidden font-mono text-[11px] text-(--dim) sm:inline">
-                  {run.engine}
-                </span>
+                <AiIdentity
+                  identity={engineIdentity(run.engine)}
+                  className="hidden font-mono text-[11px] text-(--dim) sm:inline-flex"
+                  iconClassName="size-3"
+                />
                 <span className="text-[12px] text-(--mut)">{fmtStatus(run.status)}</span>
                 <span className="ml-auto font-mono text-[11px] text-(--mut)">
                   {fmtDuration(run.startedAt, null)}
@@ -395,9 +399,11 @@ export default async function ProjectOverviewPage({
                     >
                       {run.mode}
                     </Link>
-                    <span className="hidden font-mono text-[11px] text-(--dim) sm:inline">
-                      {run.engine}
-                    </span>
+                    <AiIdentity
+                      identity={engineIdentity(run.engine)}
+                      className="hidden font-mono text-[11px] text-(--dim) sm:inline-flex"
+                      iconClassName="size-3"
+                    />
                     {pr ? (
                       <a
                         href={pr}

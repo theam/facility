@@ -202,6 +202,18 @@ export function Markdown({
   const blocks: JSX.Element[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
   let code: string[] | null = null;
+  let paragraph: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    const key = `p-${blocks.length}`;
+    blocks.push(
+      <p key={key} className="text-(--mut)">
+        {renderInline(paragraph.map((line) => line.trim()).join(" "), key, linkArtifact)}
+      </p>,
+    );
+    paragraph = [];
+  };
 
   const flushList = () => {
     if (!list) return;
@@ -230,16 +242,21 @@ export function Markdown({
     });
     blocks.push(
       list.ordered ? (
-        <ol key={`ol-${blocks.length}`} className="ml-5 list-decimal space-y-1 text-(--mut)">
+        <ol key={`ol-${blocks.length}`} className="ml-5 list-decimal space-y-1.5 text-(--mut)">
           {items}
         </ol>
       ) : (
-        <ul key={`ul-${blocks.length}`} className="ml-5 list-disc space-y-1 text-(--mut)">
+        <ul key={`ul-${blocks.length}`} className="ml-5 list-disc space-y-1.5 text-(--mut)">
           {items}
         </ul>
       ),
     );
     list = null;
+  };
+
+  const flushFlow = () => {
+    flushParagraph();
+    flushList();
   };
 
   for (let i = 0; i < lines.length; i++) {
@@ -256,7 +273,7 @@ export function Markdown({
         );
         code = null;
       } else {
-        flushList();
+        flushFlow();
         code = [];
       }
       continue;
@@ -268,7 +285,7 @@ export function Markdown({
 
     // GFM pipe table: a header row followed by a separator row.
     if (raw.trim().startsWith("|") && isTableSeparator(lines[i + 1] ?? "")) {
-      flushList();
+      flushFlow();
       const header = splitRow(raw);
       const rows: string[][] = [];
       let j = i + 2;
@@ -318,10 +335,10 @@ export function Markdown({
 
     const heading = raw.match(/^(#{1,4})\s+(.*)$/);
     if (heading?.[2]) {
-      flushList();
+      flushFlow();
       const level = heading[1]?.length ?? 1;
-      const size = level === 1 ? "text-[17px]" : level === 2 ? "text-[15px]" : "text-[13.5px]";
-      const cls = `mt-2 font-semibold tracking-tight text-(--ink) ${size}`;
+      const size = level === 1 ? "text-[18px]" : level === 2 ? "text-[16px]" : "text-[14px]";
+      const cls = `scroll-mt-6 text-pretty font-semibold tracking-tight text-(--ink) ${size}`;
       const content = renderInline(heading[2], `h-${blocks.length}`, linkArtifact);
       const key = `h-${blocks.length}`;
       blocks.push(
@@ -349,6 +366,7 @@ export function Markdown({
     const ordered = raw.match(/^\s*\d+\.\s+(.*)$/);
     const bullet = raw.match(/^\s*[-*]\s+(.*)$/);
     if (ordered?.[1] !== undefined) {
+      flushParagraph();
       if (!list?.ordered) {
         flushList();
         list = { ordered: true, items: [] };
@@ -357,6 +375,7 @@ export function Markdown({
       continue;
     }
     if (bullet?.[1] !== undefined) {
+      flushParagraph();
       if (list?.ordered) flushList();
       if (!list) list = { ordered: false, items: [] };
       list.items.push(bullet[1]);
@@ -364,11 +383,11 @@ export function Markdown({
     }
 
     if (raw.trim().startsWith(">")) {
-      flushList();
+      flushFlow();
       blocks.push(
         <blockquote
           key={`q-${blocks.length}`}
-          className="border-l-2 border-(--line-strong) pl-3 text-(--mut) italic"
+          className="border-l-2 border-(--line-strong) pl-4 text-(--mut) italic"
         >
           {renderInline(raw.replace(/^\s*>\s?/, ""), `q-${blocks.length}`, linkArtifact)}
         </blockquote>,
@@ -377,28 +396,48 @@ export function Markdown({
     }
 
     if (raw.trim() === "") {
-      flushList();
+      flushFlow();
       continue;
     }
 
-    flushList();
-    blocks.push(
-      <p key={`p-${blocks.length}`} className="leading-relaxed text-(--mut)">
-        {renderInline(raw, `p-${blocks.length}`, linkArtifact)}
-      </p>,
-    );
+    if (/^<\/?[A-Za-z][\w:.-]*>$/.test(raw.trim())) {
+      flushFlow();
+      blocks.push(
+        <p
+          key={`tag-${blocks.length}`}
+          className="font-mono text-[12px] text-(--dim)"
+          translate="no"
+        >
+          {raw.trim()}
+        </p>,
+      );
+      continue;
+    }
+
+    if (list) {
+      const last = list.items.length - 1;
+      const previous = list.items[last];
+      if (previous !== undefined) list.items[last] = `${previous} ${raw.trim()}`;
+      continue;
+    }
+
+    paragraph.push(raw);
   }
-  flushList();
+  flushFlow();
   if (code) {
     blocks.push(
       <pre
         key={`pre-${blocks.length}`}
-        className="overflow-auto border border-(--line) bg-(--card) p-3 font-mono text-[12px] text-(--mut)"
+        className="max-w-full overflow-x-auto border border-(--line) bg-(--card) p-4 font-mono text-[12px] leading-relaxed text-(--code)"
       >
         {code.join("\n")}
       </pre>,
     );
   }
 
-  return <div className="flex flex-col gap-2 text-[13px]">{blocks}</div>;
+  return (
+    <div className="flex min-w-0 max-w-full flex-col gap-3 break-words text-[14px] leading-[1.65]">
+      {blocks}
+    </div>
+  );
 }

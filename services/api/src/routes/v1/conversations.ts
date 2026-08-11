@@ -68,7 +68,7 @@ export async function registerConversationsRoutes(app: FastifyInstance, context:
         throw new ApiError(400, "no_owner_agent", "Project has no project-owner agent");
       }
       if (agent.engine !== "claude_code") {
-        throw new ApiError(409, "engine_unsupported", "Conversation agents must use claude_code");
+        throw new ApiError(409, "engine_unsupported", "Conversation agents must use Claude Code");
       }
       const conversation = (
         await db

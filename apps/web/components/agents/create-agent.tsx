@@ -4,6 +4,8 @@ import { Button, Eyebrow, Field, Select, TextArea, TextInput } from "@facility/u
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { AiIdentity } from "@/components/ai-identity";
+import { engineIdentity, modelIdentity, providerIdentity } from "@/lib/ai-identity";
 import type { Catalog, RegistryItem, RegistryItemWithVersions } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import { PermissionMatrix } from "./permission-matrix";
@@ -161,6 +163,7 @@ export function CreateAgent({ projectId, catalog, myPermissions }: Props) {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Field label="engine">
+          <AiIdentity identity={engineIdentity(engine)} className="mb-2 text-[11px] text-(--dim)" />
           <Select value={engine} onChange={(e) => setEngine(e.target.value)}>
             {catalog.engines.map((eng) => (
               <option key={eng.id} value={eng.id}>
@@ -170,11 +173,17 @@ export function CreateAgent({ projectId, catalog, myPermissions }: Props) {
           </Select>
         </Field>
         <Field label="model">
+          {modelChoice !== "__default" ? (
+            <AiIdentity
+              identity={modelIdentity(modelChoice === "__custom" ? customModel : modelChoice)}
+              className="mb-2 text-[11px] text-(--dim)"
+            />
+          ) : null}
           <Select value={modelChoice} onChange={(e) => setModelChoice(e.target.value)}>
             <option value="__default">engine default</option>
             {catalog.models.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.id} · {m.provider}
+                {modelIdentity(m.id).label} · {providerIdentity(m.provider).label}
               </option>
             ))}
             <option value="__custom">custom…</option>

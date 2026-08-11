@@ -3,6 +3,8 @@
 import { Button, Field, Select, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { AiIdentity } from "@/components/ai-identity";
+import { providerIdentity } from "@/lib/ai-identity";
 import type { Provider } from "@/lib/api";
 
 /**
@@ -53,10 +55,11 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
       setBaseUrl("");
       setSecret("");
       const credentialKind = authMode === "oauth" ? "Claude subscription" : "API key";
+      const providerLabel = providerIdentity(provider).label;
       setNotice(
         becomesStandby
-          ? `added ${provider} ${credentialKind} as standby; remove the active credential to switch`
-          : `added ${provider} ${credentialKind} as active`,
+          ? `added ${providerLabel} ${credentialKind} as standby; remove the active credential to switch`
+          : `added ${providerLabel} ${credentialKind} as active`,
       );
       router.refresh();
     } catch (err) {
@@ -106,6 +109,10 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
     <div className="flex flex-col gap-5">
       <form onSubmit={add} className="flex flex-wrap items-end gap-3">
         <Field label="provider">
+          <AiIdentity
+            identity={providerIdentity(provider)}
+            className="mb-2 text-[11px] text-(--dim)"
+          />
           <Select
             name="provider"
             value={provider}
@@ -115,8 +122,8 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
               if (next !== "anthropic") setAuthMode("api_key");
             }}
           >
-            <option value="anthropic">anthropic</option>
-            <option value="openai">openai</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
           </Select>
         </Field>
         {provider === "anthropic" ? (
@@ -191,7 +198,10 @@ export function ProvidersManager({ providers }: { providers: Provider[] }) {
               key={row.id}
               className="flex min-w-0 items-center gap-4 border-b border-(--line) px-4 py-3 last:border-b-0"
             >
-              <span className="shrink-0 text-[11px] font-medium text-(--dim)">{row.provider}</span>
+              <AiIdentity
+                identity={providerIdentity(row.provider)}
+                className="shrink-0 text-[11px] font-medium text-(--dim)"
+              />
               <span className="shrink-0 font-mono text-[10.5px] text-(--dim)">
                 {activeIds.has(row.id) ? "active" : "standby"} ·{" "}
                 {row.authMode === "oauth" ? "Claude subscription" : "API key"}

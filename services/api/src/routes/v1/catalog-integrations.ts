@@ -96,7 +96,7 @@ const ENGINES = [
     label: "Claude Code",
     note: "Anthropic engine — resumable sessions, steering, conversations",
   },
-  { id: "codex", label: "Codex", note: "OpenAI gpt-5.5 engine for batch implementation" },
+  { id: "codex", label: "Codex", note: "OpenAI GPT-5.5 engine for batch implementation" },
   { id: "byo", label: "Bring your own", note: "your image, your engine — governed I/O only" },
 ] as const;
 
