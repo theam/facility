@@ -1,0 +1,13 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Facility mark: a unit of work traveling the pipeline between two human gates">
+  <!-- facility mark — the pipeline, two human gates, one unit of work in
+       flight. Yellow is reserved for agent work (site rule). -->
+  <!-- palette roles: void #0A0C10 · line #8B949E · gate #F0F3F6 · agent #FFD923 -->
+  <rect width="96" height="96" rx="4" fill="#0A0C10"/>
+  <!-- the pipeline -->
+  <line x1="12" y1="48" x2="84" y2="48" stroke="#8B949E" stroke-width="3"/>
+  <!-- two human gates -->
+  <line x1="32" y1="36" x2="32" y2="60" stroke="#F0F3F6" stroke-width="3"/>
+  <line x1="64" y1="36" x2="64" y2="60" stroke="#F0F3F6" stroke-width="3"/>
+  <!-- the unit of work, agent-built, mid-flight between the gates -->
+  <circle cx="48" cy="48" r="7" fill="#FFD923"/>
+</svg>
