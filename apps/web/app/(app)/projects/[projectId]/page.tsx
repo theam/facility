@@ -1,15 +1,14 @@
-import { Eyebrow, StatusDot, toneFor } from "@facility/ui";
+import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { AiIdentity } from "@/components/ai-identity";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { InFlightList } from "@/components/project/in-flight-list";
 import { PipelineBoard } from "@/components/project/pipeline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
-import { engineIdentity } from "@/lib/ai-identity";
 import { api } from "@/lib/api";
+import { buildInFlightRows } from "@/lib/in-flight";
 import type { PipelineStageState } from "@/lib/pipeline";
 import { pipelineStories } from "@/lib/pipeline";
-import { fmtDuration, fmtStatus } from "@/lib/runs";
 
 export const metadata = { title: "overview" };
 
@@ -75,14 +74,24 @@ export default async function ProjectOverviewPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [project, runs, health, inbox, pipelineResult, repos] = await Promise.all([
-    api.project(projectId),
-    api.runs(projectId),
-    api.projectHealth(projectId),
-    api.inboxFull(),
-    api.pipeline(projectId),
-    api.projectRepos(projectId),
-  ]);
+  const runsRequest = api.runs(projectId);
+  const recentEventsRequest = runsRequest.then(async (result) => {
+    if (!result.ok) return [];
+    const visibleLive = result.data.filter((run) => LIVE.has(run.status)).slice(0, 6);
+    return Promise.all(
+      visibleLive.map(async (run) => [run.id, await api.recentRunEvents(run.id)] as const),
+    );
+  });
+  const [project, runs, health, inbox, pipelineResult, repos, recentEventResults] =
+    await Promise.all([
+      api.project(projectId),
+      runsRequest,
+      api.projectHealth(projectId),
+      api.inboxFull(),
+      api.pipeline(projectId),
+      api.projectRepos(projectId),
+      recentEventsRequest,
+    ]);
 
   if (!project.ok) {
     return project.offline ? (
@@ -96,6 +105,10 @@ export default async function ProjectOverviewPage({
   const runsError = runs.ok ? null : runs.message;
   const items = runs.ok ? runs.data : [];
   const live = items.filter((run) => LIVE.has(run.status));
+  const visibleLive = live.slice(0, 6);
+  const eventsByRun = new Map(
+    recentEventResults.map(([runId, result]) => [runId, result.ok ? result.data : []]),
+  );
   const blocked = items.filter((run) => run.status === "awaiting_human");
   const proposals = inbox.ok
     ? inbox.data.proposals.filter(
@@ -107,6 +120,12 @@ export default async function ProjectOverviewPage({
     : [];
   const pipeline = pipelineResult.ok ? pipelineResult.data : null;
   const pipelineError = pipelineResult.ok ? null : pipelineResult.message;
+  const inFlightRows = buildInFlightRows({
+    projectId,
+    runs: visibleLive,
+    pipeline,
+    eventsByRun,
+  });
   const stories = pipeline ? pipelineStories(pipeline) : [];
   const stateCount = (state: PipelineStageState) =>
     stories.filter((story) => story.stageState === state).length;
@@ -307,35 +326,7 @@ export default async function ProjectOverviewPage({
             ) : null}
           </p>
         ) : (
-          <div className="flex flex-col border border-(--line)">
-            {live.slice(0, 6).map((run) => (
-              <Link
-                key={run.id}
-                href={`/projects/${projectId}/sessions/${run.id}`}
-                className="flex items-center gap-4 border-b border-(--line) px-5 py-3.5 transition-colors last:border-b-0 hover:bg-(--card)"
-              >
-                <StatusDot tone={toneFor(run.status)} pulse={run.status === "running"} />
-                <span className="font-mono text-[13px] text-(--ink)">{run.mode}</span>
-                <AiIdentity
-                  identity={engineIdentity(run.engine)}
-                  className="hidden font-mono text-[11px] text-(--dim) sm:inline-flex"
-                  iconClassName="size-3"
-                />
-                <span className="text-[12px] text-(--mut)">{fmtStatus(run.status)}</span>
-                <span className="ml-auto font-mono text-[11px] text-(--mut)">
-                  {fmtDuration(run.startedAt, null)}
-                </span>
-              </Link>
-            ))}
-            {live.length > 6 ? (
-              <Link
-                href={`/projects/${projectId}/sessions`}
-                className="px-5 py-3 text-[11.5px] text-(--dim) hover:text-(--ink)"
-              >
-                +{live.length - 6} more active sessions →
-              </Link>
-            ) : null}
-          </div>
+          <InFlightList projectId={projectId} rows={inFlightRows} total={live.length} />
         )}
       </section>
     </div>

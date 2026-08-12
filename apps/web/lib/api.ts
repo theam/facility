@@ -149,6 +149,8 @@ export const api = {
   run: (id: string) => apiFetch("GET", `/v1/runs/${id}`),
   runEvents: (id: string, afterSeq = 0, limit = 500) =>
     apiFetch("GET", `/v1/runs/${id}/events`, { query: { afterSeq, limit } }),
+  recentRunEvents: (id: string, tail = 20) =>
+    apiFetch("GET", `/v1/runs/${id}/events`, { query: { tail, limit: tail } }),
   // GET /v1/inbox returns { items, proposals, issues } — unwrap to the
   // proposals array both consumers expect (guarded so a bare array also works).
   inbox: async (): Promise<ApiResult<Proposal[]>> => {
