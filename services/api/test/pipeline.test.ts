@@ -144,7 +144,8 @@ describe("server-owned story pipeline", () => {
       ciUrl: "https://github.test/alice/alpha/pull/10/checks",
       ciFailureNames: [],
     });
-    expect(staged.get("review")?.find((story) => story.number === 2)).toMatchObject({
+    expect(staged.get("validating")?.find((story) => story.number === 2)).toMatchObject({
+      stageState: "checks_failed",
       ciState: "failure",
       ciFailureNames: ["guards", "typecheck"],
     });
