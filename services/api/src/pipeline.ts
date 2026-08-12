@@ -44,6 +44,7 @@ export type PipelinePullRequest = {
   headSha: string | null;
   ciState: "pending" | "success" | "failure" | null;
   ciHeadSha: string | null;
+  ciFailureNames: string[];
   createdAt: Date | null;
   closedAt: Date | null;
   mergedAt: Date | null;
@@ -75,8 +76,9 @@ export type PlacedPipelineStory = Omit<PipelineStoryInput, "linkedRuns"> & {
   runState: "live" | "failed" | null;
   currentRun: { id: string; mode: string; status: string; engine: string } | null;
   attemptCount: number;
-  ciState: "pending" | "failure" | null;
+  ciState: "pending" | "success" | "failure" | null;
   ciUrl: string | null;
+  ciFailureNames: string[];
 };
 
 export type PipelineIssueRecord = {
@@ -107,6 +109,7 @@ export type PipelinePullRequestRecord = {
   headSha: string;
   ciState: string | null;
   ciHeadSha: string | null;
+  ciFailureNames: string[];
   closingIssues: number[];
   ghCreatedAt: Date | null;
   ghUpdatedAt: Date | null;
@@ -271,6 +274,7 @@ export function assemblePipelineStories(input: {
             headSha: null,
             ciState: null,
             ciHeadSha: null,
+            ciFailureNames: [],
             createdAt: null,
             closedAt: null,
             mergedAt: null,
@@ -362,7 +366,8 @@ function placeBase(story: PipelineStoryInput): PlacedPipelineStory {
   const reviewablePulls = story.prs.filter((pull) => pull.state === "open" && !pull.draft);
   const failedPull = reviewablePulls.find(hasCurrentCiState("failure"));
   const pendingPull = reviewablePulls.find(hasCurrentCiState("pending"));
-  const ciPull = failedPull ?? pendingPull;
+  const successfulPull = reviewablePulls.find(hasCurrentCiState("success"));
+  const ciPull = failedPull ?? pendingPull ?? successfulPull;
   const { linkedRuns: _linkedRuns, ...fields } = story;
   return {
     ...fields,
@@ -371,12 +376,13 @@ function placeBase(story: PipelineStoryInput): PlacedPipelineStory {
       ? { id: current.id, mode: current.mode, status: current.status, engine: current.engine }
       : null,
     attemptCount: runs.length,
-    ciState: failedPull ? "failure" : pendingPull ? "pending" : null,
+    ciState: failedPull ? "failure" : pendingPull ? "pending" : successfulPull ? "success" : null,
     ciUrl: ciPull ? `${ciPull.url}/checks` : null,
+    ciFailureNames: failedPull?.ciFailureNames ?? [],
   };
 }
 
-function hasCurrentCiState(state: "pending" | "failure") {
+function hasCurrentCiState(state: "pending" | "success" | "failure") {
   return (pull: PipelinePullRequest) =>
     pull.ciState === state &&
     Boolean(pull.headSha) &&
@@ -409,6 +415,7 @@ function pullRequestOf(pull: PipelinePullRequestRecord): PipelinePullRequest {
         ? pull.ciState
         : null,
     ciHeadSha: pull.ciHeadSha,
+    ciFailureNames: pull.ciFailureNames,
     createdAt: pull.ghCreatedAt,
     closedAt: pull.closedAt,
     mergedAt: pull.mergedAt,

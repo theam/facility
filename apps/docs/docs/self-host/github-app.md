@@ -99,6 +99,11 @@ Then save the App settings. If one of those checkboxes is missing, return to
 **Permissions**, grant its required read permission, save, and open the App
 settings again.
 
+After deployment, run `facility doctor --platform` (or inspect the admin
+readiness doctor) to verify that the App still has **Checks: Read-only** and is
+subscribed to **Check run**. Facility reports a failing readiness check instead
+of leaving the Validating stage silently empty when either setting is missing.
+
 Every GitHub App receives `installation` events automatically; GitHub does not
 offer a checkbox for them. GitHub also sends installation-repository changes
 when repositories are added to or removed from the installation.

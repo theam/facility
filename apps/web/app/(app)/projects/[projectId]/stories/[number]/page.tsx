@@ -1,6 +1,7 @@
 import { Eyebrow, PillTag, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CiStatusLink } from "@/components/ci-status";
 import { Markdown } from "@/components/markdown";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -90,6 +91,7 @@ export default async function StoryPage({
     outcomes: outcomes.ok ? outcomes.data : [],
     comments,
     prs: activity.ok ? activityPrs : undefined,
+    ciEvents: activity.ok ? activity.data.ciEvents : undefined,
     allowLegacyProposalNumber,
     stageLabels,
   });
@@ -137,6 +139,13 @@ export default async function StoryPage({
             <span className="text-[12px] font-medium text-(--mut)">{story.state}</span>
           </span>
           {stage ? <PillTag>{stage.label}</PillTag> : null}
+          {story.ciState && story.ciUrl ? (
+            <CiStatusLink
+              state={story.ciState}
+              url={story.ciUrl}
+              failureNames={story.ciFailureNames}
+            />
+          ) : null}
           {story.labels.slice(0, 4).map((label) => (
             <span
               key={label}

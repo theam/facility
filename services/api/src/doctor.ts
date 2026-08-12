@@ -20,6 +20,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { verifyEnvelopeRoundTrip } from "./envelopes.js";
+import { createGithubAppMetadataReader, type GithubAppMetadataReader } from "./github/client.js";
 import { verifyStoredReceipts } from "./receipt-integrity.js";
 import { DockerSandboxDriver } from "./sandbox/docker.js";
 import type { AppConfig } from "./types.js";
@@ -81,8 +82,10 @@ export async function runReadinessDoctor(input: {
   now?: Date;
   codeBuildClient?: DoctorCodeBuildSender;
   vercelClient?: DoctorVercelClient;
+  githubAppMetadataReader?: GithubAppMetadataReader;
 }): Promise<DoctorResponse> {
   const now = input.now ?? new Date();
+  const githubApp = checkGithubApp(input.config);
   const checks = await Promise.all([
     checkDatabase(input.db),
     checkObjectStorage(input.config, input.orgId, now),
@@ -95,7 +98,8 @@ export async function runReadinessDoctor(input: {
     ...(input.config.sandboxDriver === "vercel"
       ? [checkVercelSandbox(input.config, input.vercelClient)]
       : []),
-    checkGithubApp(input.config),
+    githubApp,
+    checkGithubCheckRunSubscription(input.config, input.githubAppMetadataReader, githubApp),
     checkAuthConfig(input.config),
     checkPreviewProtection(input.config),
     checkAuditHashChain(input.db, input.orgId),
@@ -598,6 +602,68 @@ export function checkGithubApp(config: AppConfig): DoctorCheck {
     );
   }
   return pass("github_app", "GitHub App configuration", "Required GitHub App values are set.");
+}
+
+export async function checkGithubCheckRunSubscription(
+  config: AppConfig,
+  providedReader?: GithubAppMetadataReader,
+  appConfiguration = checkGithubApp(config),
+): Promise<DoctorCheck> {
+  if (appConfiguration.status !== "pass") {
+    return warn(
+      "github_check_run",
+      "GitHub Check run subscription",
+      "Check run delivery was not verified because the GitHub App is disabled or incomplete.",
+      "Configure the GitHub App first, then rerun facility doctor.",
+    );
+  }
+  try {
+    const metadata = await (providedReader ?? createGithubAppMetadataReader(config))();
+    const checksPermission = metadata.permissions?.checks?.toLowerCase();
+    const hasChecksPermission = checksPermission === "read" || checksPermission === "write";
+    const hasCheckRunEvent = metadata.events?.includes("check_run") === true;
+    if (!metadata.permissions || !metadata.events) {
+      return fail(
+        "github_check_run",
+        "GitHub Check run subscription",
+        "GitHub returned incomplete App permissions or event metadata, so Check run delivery cannot be verified.",
+        "Verify the GitHub App credentials and rerun facility doctor.",
+      );
+    }
+    if (!hasChecksPermission || !hasCheckRunEvent) {
+      const missing = [
+        !hasChecksPermission ? "Checks: Read permission" : null,
+        !hasCheckRunEvent ? "Check run event subscription" : null,
+      ].filter((value): value is string => value !== null);
+      return fail(
+        "github_check_run",
+        "GitHub Check run subscription",
+        `GitHub App is missing ${missing.join(" and ")}; CI rollups will not update from check runs.`,
+        "In the GitHub App settings, grant Repository permissions → Checks: Read-only, then subscribe to Check run under events.",
+      );
+    }
+    return pass(
+      "github_check_run",
+      "GitHub Check run subscription",
+      "GitHub App can read checks and is subscribed to Check run events.",
+    );
+  } catch (error) {
+    const status = httpStatus(error);
+    if (status === 401 || status === 403 || status === 404) {
+      return fail(
+        "github_check_run",
+        "GitHub Check run subscription",
+        `GitHub rejected App metadata verification (${status}).`,
+        "Verify GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY, then rerun facility doctor.",
+      );
+    }
+    return warn(
+      "github_check_run",
+      "GitHub Check run subscription",
+      "GitHub App permissions and event subscriptions could not be verified because of a transient provider error.",
+      "Retry facility doctor; if the warning persists, inspect GitHub service health and deployment egress.",
+    );
+  }
 }
 
 function checkAuthConfig(config: AppConfig): DoctorCheck {

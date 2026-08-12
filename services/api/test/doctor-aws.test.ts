@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkAwsSandbox,
   checkGithubApp,
+  checkGithubCheckRunSubscription,
   checkVercelSandbox,
   type DoctorCodeBuildSender,
   type DoctorVercelClient,
@@ -158,22 +159,61 @@ describe("AWS production doctor", () => {
 });
 
 describe("GitHub App production doctor", () => {
+  const privateKey = generateKeyPairSync("rsa", { modulusLength: 1024 })
+    .privateKey.export({ type: "pkcs8", format: "pem" })
+    .toString();
   const configured = {
     ...baseConfig,
     githubAppId: "1",
+    githubAppPrivateKey: privateKey,
     githubAppWebhookSecret: "webhook-secret",
     githubAppSlug: "facility",
   };
 
   it("accepts a parseable private key and rejects malformed key material without echoing it", () => {
-    const privateKey = generateKeyPairSync("rsa", { modulusLength: 1024 })
-      .privateKey.export({ type: "pkcs8", format: "pem" })
-      .toString();
-    expect(checkGithubApp({ ...configured, githubAppPrivateKey: privateKey }).status).toBe("pass");
+    expect(checkGithubApp(configured).status).toBe("pass");
 
     const invalid = checkGithubApp({ ...configured, githubAppPrivateKey: "private-secret" });
     expect(invalid.status).toBe("fail");
     expect(JSON.stringify(invalid)).not.toContain("private-secret");
+  });
+
+  it("verifies both Checks permission and the Check run event subscription", async () => {
+    await expect(
+      checkGithubCheckRunSubscription(configured, async () => ({
+        permissions: { checks: "read" },
+        events: ["check_run", "pull_request"],
+      })),
+    ).resolves.toMatchObject({ id: "github_check_run", status: "pass", ok: true });
+
+    await expect(
+      checkGithubCheckRunSubscription(configured, async () => ({
+        permissions: { checks: "read" },
+        events: ["pull_request"],
+      })),
+    ).resolves.toMatchObject({ id: "github_check_run", status: "fail", ok: false });
+    await expect(
+      checkGithubCheckRunSubscription(configured, async () => ({
+        permissions: { contents: "read" },
+        events: ["check_run"],
+      })),
+    ).resolves.toMatchObject({ id: "github_check_run", status: "fail", ok: false });
+  });
+
+  it("fails on rejected or malformed App metadata and warns on transient errors", async () => {
+    await expect(
+      checkGithubCheckRunSubscription(configured, async () => ({ events: ["check_run"] })),
+    ).resolves.toMatchObject({ status: "fail", ok: false });
+    await expect(
+      checkGithubCheckRunSubscription(configured, async () => {
+        throw Object.assign(new Error("revoked private key"), { status: 401 });
+      }),
+    ).resolves.toMatchObject({ status: "fail", ok: false });
+    await expect(
+      checkGithubCheckRunSubscription(configured, async () => {
+        throw new Error("provider unavailable");
+      }),
+    ).resolves.toMatchObject({ status: "warn", ok: true });
   });
 });
 

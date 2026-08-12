@@ -171,6 +171,48 @@ describe("GitHub pull-request snapshots", () => {
     await expect(client.getPullRequestSnapshot(3)).resolves.toMatchObject({ ciState: expected });
   });
 
+  it("adds bounded failed check names to focused snapshots without replacing the rollup", async () => {
+    const client = new FacilityGithubClient(
+      {
+        graphql: async () => ({
+          repository: {
+            pullRequest: {
+              number: 3,
+              title: "PR",
+              state: "OPEN",
+              headRefName: "feature",
+              headRefOid: "sha",
+              baseRefName: "main",
+              url: "https://github.test/octo/repo/pull/3",
+              commits: {
+                nodes: [{ commit: { oid: "sha", statusCheckRollup: { state: "FAILURE" } } }],
+              },
+            },
+          },
+        }),
+        rest: {
+          checks: {
+            listForRef: async () => ({
+              data: {
+                check_runs: [
+                  { name: "typecheck", conclusion: "failure" },
+                  { name: "guards", conclusion: "timed_out" },
+                  { name: "lint", conclusion: "success" },
+                ],
+              },
+            }),
+          },
+        },
+      } as never,
+      { owner: "octo", repo: "repo", defaultBranch: "main" },
+    );
+
+    await expect(client.getPullRequestSnapshot(3)).resolves.toMatchObject({
+      ciState: "failure",
+      ciFailureNames: ["guards", "typecheck"],
+    });
+  });
+
   it("paginates closing references instead of truncating a large linked set", async () => {
     const variables: Record<string, unknown>[] = [];
     const client = new FacilityGithubClient(

@@ -4,6 +4,7 @@ import type { Outcome, PipelineStageKey, Proposal, StoryDetail, StoryGithubActiv
 export type StoryRun = StoryDetail["runs"][number];
 export type StoryComment = StoryGithubActivity["comments"][number];
 export type StoryPr = StoryGithubActivity["prs"][number];
+export type StoryCiEvent = StoryGithubActivity["ciEvents"][number];
 
 // Timeline replay is intentionally not the current-state classifier, but it
 // must acknowledge every server-published stage when the generated union grows.
@@ -30,6 +31,7 @@ export type StoryItem =
   | { kind: "comment"; ts: string; comment: StoryComment }
   | { kind: "pr_opened"; ts: string; outcome: Outcome | null; pr: StoryPr }
   | { kind: "pr_closed"; ts: string; outcome: Outcome | null; pr: StoryPr }
+  | { kind: "ci"; ts: string; event: StoryCiEvent; pr: StoryPr }
   | { kind: "issue_closed"; ts: string }
   | { kind: "stage"; ts: string; stage: PipelineStageKey; label: string };
 
@@ -87,6 +89,8 @@ function stageEntered(item: StoryItem): PipelineStageKey | null {
       return item.pr.ciState === "pending" ? TIMELINE_STAGES.validating : TIMELINE_STAGES.review;
     case "pr_closed":
       return item.pr.state === "merged" ? TIMELINE_STAGES.shipped : null;
+    case "ci":
+      return item.event.state === "pending" ? TIMELINE_STAGES.validating : TIMELINE_STAGES.review;
     case "issue_closed":
       return TIMELINE_STAGES.shipped;
     default:
@@ -100,6 +104,7 @@ export function deriveStoryTimeline(input: {
   outcomes: Outcome[];
   comments?: StoryComment[];
   prs?: StoryPr[];
+  ciEvents?: StoryCiEvent[];
   allowLegacyProposalNumber: boolean;
   stageLabels: ReadonlyMap<PipelineStageKey, string>;
 }): StoryItem[] {
@@ -156,7 +161,10 @@ export function deriveStoryTimeline(input: {
       closedAt: stamp(pull.closedAt),
       mergedAt: stamp(pull.mergedAt),
       ciState: pull.ciState,
+      ciFailureNames: pull.ciFailureNames,
     }));
+  const ciEventPullNumbers = new Set((input.ciEvents ?? []).map((event) => event.pullNumber));
+  const timelinePullsByNumber = new Map(timelinePulls.map((pull) => [pull.number, pull]));
   for (const pr of timelinePulls) {
     const outcome = outcomesByPull.get(pr.number) ?? null;
     const detailPull = detailPulls.get(pr.number);
@@ -165,12 +173,20 @@ export function deriveStoryTimeline(input: {
         ? detailPull.ciState
         : null
       : pr.ciState;
-    const timelinePr = { ...pr, ciState: currentCiState };
+    const timelinePr = {
+      ...pr,
+      ciState: ciEventPullNumbers.has(pr.number) ? null : currentCiState,
+    };
     if (pr.createdAt) {
       items.push({ kind: "pr_opened", ts: pr.createdAt, outcome, pr: timelinePr });
     }
     const terminalAt = pr.mergedAt ?? pr.closedAt;
     if (terminalAt) items.push({ kind: "pr_closed", ts: terminalAt, outcome, pr: timelinePr });
+  }
+
+  for (const event of input.ciEvents ?? []) {
+    const pr = timelinePullsByNumber.get(event.pullNumber);
+    if (pr) items.push({ kind: "ci", ts: event.observedAt, event, pr });
   }
 
   const closed = stamp(detail.closedAt);

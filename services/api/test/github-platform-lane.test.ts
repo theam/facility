@@ -4,6 +4,7 @@ import {
   apiKeys,
   auditEvents,
   createDb,
+  ghCiEvents,
   ghIssues,
   ghPullRequests,
   githubInstallations,
@@ -865,8 +866,8 @@ describe("github platform lane", async () => {
     await insertPullRequest(repo.id, prNumber, {
       headRef: "feature/checks",
       headSha: "feature-sha",
-      ciState: "pending",
-      ciHeadSha: "feature-sha",
+      ciState: null,
+      ciHeadSha: null,
     });
     const integration = (
       await db
@@ -876,7 +877,7 @@ describe("github platform lane", async () => {
     )[0];
     if (!integration) throw new Error("integration fixture missing");
 
-    let rollupState: "PENDING" | "SUCCESS" | "FAILURE" = "FAILURE";
+    let rollupState: "PENDING" | "SUCCESS" | "FAILURE" = "PENDING";
     let refreshCalls = 0;
     const factory = async () =>
       ({
@@ -911,7 +912,21 @@ describe("github platform lane", async () => {
             },
           };
         },
-        rest: {},
+        rest: {
+          checks: {
+            listForRef: async () => ({
+              data: {
+                check_runs:
+                  rollupState === "FAILURE"
+                    ? [
+                        { name: "guards", conclusion: "failure" },
+                        { name: "typecheck", conclusion: "timed_out" },
+                      ]
+                    : [],
+              },
+            }),
+          },
+        },
       }) as never;
     const deliver = async (eventType: string, payload: Record<string, unknown>) => {
       const eventId = newId("evt");
@@ -948,10 +963,11 @@ describe("github platform lane", async () => {
       },
     });
     await deliver("status", { state: "pending", sha: "feature-sha" });
-    expect(refreshCalls).toBe(0);
+    expect(refreshCalls).toBe(3);
 
     // A green individual event still re-reads GitHub's red aggregate. The
     // empty PR array exercises fork delivery resolution by head SHA.
+    rollupState = "FAILURE";
     await deliver("check_run", {
       check_run: {
         name: "build",
@@ -962,12 +978,13 @@ describe("github platform lane", async () => {
         check_suite: { head_branch: "feature/checks", head_sha: "feature-sha" },
       },
     });
-    expect(refreshCalls).toBe(1);
+    expect(refreshCalls).toBe(4);
     let [mirrored] = await db
       .select()
       .from(ghPullRequests)
       .where(and(eq(ghPullRequests.repoId, repo.id), eq(ghPullRequests.number, prNumber)));
     expect(mirrored?.ciState).toBe("failure");
+    expect(mirrored?.ciFailureNames).toEqual(["guards", "typecheck"]);
     rollupState = "SUCCESS";
     await deliver("check_suite", {
       action: "completed",
@@ -977,7 +994,7 @@ describe("github platform lane", async () => {
         pull_requests: [{ number: prNumber }],
       },
     });
-    expect(refreshCalls).toBe(2);
+    expect(refreshCalls).toBe(5);
     [mirrored] = await db
       .select()
       .from(ghPullRequests)
@@ -986,12 +1003,26 @@ describe("github platform lane", async () => {
 
     rollupState = "FAILURE";
     await deliver("status", { state: "failure", sha: "feature-sha" });
-    expect(refreshCalls).toBe(3);
+    expect(refreshCalls).toBe(6);
     [mirrored] = await db
       .select()
       .from(ghPullRequests)
       .where(and(eq(ghPullRequests.repoId, repo.id), eq(ghPullRequests.number, prNumber)));
     expect(mirrored?.ciState).toBe("failure");
+    expect(
+      (
+        await db
+          .select()
+          .from(ghCiEvents)
+          .where(and(eq(ghCiEvents.repoId, repo.id), eq(ghCiEvents.pullNumber, prNumber)))
+          .orderBy(ghCiEvents.observedAt)
+      ).map((event) => [event.state, event.failureNames]),
+    ).toEqual([
+      ["pending", []],
+      ["failure", ["guards", "typecheck"]],
+      ["success", []],
+      ["failure", ["guards", "typecheck"]],
+    ]);
     expect(
       await db
         .select()
@@ -2031,6 +2062,37 @@ describe("github platform lane", async () => {
         },
       },
     });
+    const successfulIssueNumber = number + 11;
+    const successfulPullNumber = number + 12;
+    await insertIssue(repoA.id, successfulIssueNumber, "open", "2026-08-01T00:00:00Z");
+    await insertPullRequest(repoA.id, successfulPullNumber, {
+      title: "Checks passed",
+      closingIssues: [successfulIssueNumber],
+      ciState: "success",
+      ciHeadSha: `head-${successfulPullNumber}`,
+    });
+    await db.insert(ghCiEvents).values([
+      {
+        id: newId("evt"),
+        orgId,
+        projectId,
+        repoId: repoA.id,
+        pullNumber: successfulPullNumber,
+        headSha: `head-${successfulPullNumber}`,
+        state: "pending",
+        observedAt: new Date("2026-08-01T01:00:00Z"),
+      },
+      {
+        id: newId("evt"),
+        orgId,
+        projectId,
+        repoId: repoA.id,
+        pullNumber: successfulPullNumber,
+        headSha: `head-${successfulPullNumber}`,
+        state: "success",
+        observedAt: new Date("2026-08-01T01:02:00Z"),
+      },
+    ]);
     const legacyProposal = await app.inject({
       method: "POST",
       url: "/v1/proposals",
@@ -2057,6 +2119,7 @@ describe("github platform lane", async () => {
         storyType: string;
         currentRun: { id: string } | null;
         ciState: string | null;
+        ciFailureNames: string[];
         prs: Array<{ number: number; draft: boolean; ciState: string | null }>;
       }>;
     }>;
@@ -2108,6 +2171,34 @@ describe("github platform lane", async () => {
       stage: { key: pendingBoardStory?.stage },
       prs: pendingBoardStory?.prs,
     });
+    const successfulBoardStory = stories.find(
+      (story) => story.key === `${repoA.id}:issue:${successfulIssueNumber}`,
+    );
+    expect(successfulBoardStory).toMatchObject({
+      stage: "review",
+      ciState: "success",
+      ciFailureNames: [],
+    });
+    const successfulDetail = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/stories/${successfulIssueNumber}?${issueQuery}`,
+      headers: { cookie },
+    });
+    expect(successfulDetail.statusCode, successfulDetail.body).toBe(200);
+    expect(successfulDetail.json()).toMatchObject({
+      ciState: "success",
+      ciUrl: `https://github.com/o/r/pull/${successfulPullNumber}/checks`,
+    });
+    const successfulActivity = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/stories/${successfulIssueNumber}/github-activity?${issueQuery}`,
+      headers: { cookie },
+    });
+    expect(successfulActivity.statusCode, successfulActivity.body).toBe(200);
+    expect(successfulActivity.json().ciEvents).toEqual([
+      expect.objectContaining({ pullNumber: successfulPullNumber, state: "pending" }),
+      expect.objectContaining({ pullNumber: successfulPullNumber, state: "success" }),
+    ]);
     const draftBoardStory = stories.find(
       (story) => story.key === `${repoA.id}:issue:${draftIssueNumber}`,
     );

@@ -1,6 +1,7 @@
 import { newId } from "@facility/core";
 import {
   actionTypes,
+  ghCiEvents,
   ghIssues,
   ghPullRequests,
   githubInstallations,
@@ -124,6 +125,17 @@ const StoryGithubActivitySchema = z.object({
       closedAt: z.string().nullable(),
       mergedAt: z.string().nullable(),
       ciState: z.enum(["pending", "success", "failure"]).nullable(),
+      ciFailureNames: z.array(z.string()),
+    }),
+  ),
+  ciEvents: z.array(
+    z.object({
+      id: z.string(),
+      pullNumber: z.number().int(),
+      headSha: z.string(),
+      state: z.enum(["pending", "success", "failure"]),
+      failureNames: z.array(z.string()),
+      observedAt: z.string(),
     }),
   ),
 });
@@ -145,6 +157,7 @@ function activityPullFromPipeline(pull: PipelinePullRequest): StoryGithubPull {
     closedAt: pull.closedAt?.toISOString() ?? null,
     mergedAt: pull.mergedAt?.toISOString() ?? null,
     ciState: currentCiState,
+    ciFailureNames: currentCiState === "failure" ? pull.ciFailureNames : [],
   };
 }
 
@@ -171,6 +184,7 @@ const PipelinePullRequestSchema = z.object({
   headSha: z.string().nullable(),
   ciState: z.enum(["pending", "success", "failure"]).nullable(),
   ciHeadSha: z.string().nullable(),
+  ciFailureNames: z.array(z.string()),
   createdAt: DateValue.nullable(),
   closedAt: DateValue.nullable(),
   mergedAt: DateValue.nullable(),
@@ -199,8 +213,9 @@ const PipelineStorySchema = z.object({
     .nullable(),
   attemptCount: z.number().int(),
   prs: z.array(PipelinePullRequestSchema),
-  ciState: z.enum(["pending", "failure"]).nullable(),
+  ciState: z.enum(["pending", "success", "failure"]).nullable(),
   ciUrl: z.string().nullable(),
+  ciFailureNames: z.array(z.string()),
 });
 const PipelineResponseSchema = z.object({
   stages: z.array(
@@ -234,6 +249,9 @@ const StoryDetailSchema = z.object({
   ghUpdatedAt: DateValue.nullable(),
   closedAt: DateValue.nullable(),
   prs: z.array(PipelinePullRequestSchema),
+  ciState: z.enum(["pending", "success", "failure"]).nullable(),
+  ciUrl: z.string().nullable(),
+  ciFailureNames: z.array(z.string()),
   stage: z.object({ key: PipelineStageSchema, label: z.string() }).nullable(),
   pipelineStages: z.array(z.object({ key: PipelineStageSchema, label: z.string() })),
   allowLegacyProposalNumber: z.boolean(),
@@ -619,10 +637,16 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
       const stageDefinition = PIPELINE_STAGES.find((stage) =>
         (staged.get(stage.key) ?? []).some((story) => story.key === selected.key),
       );
+      const placedStory = stageDefinition
+        ? (staged.get(stageDefinition.key) ?? []).find((story) => story.key === selected.key)
+        : null;
       const { linkedRuns: _linkedRuns, ...story } = selected;
       return {
         ...story,
         bodyMd: bodyRow?.bodyMd ?? null,
+        ciState: placedStory?.ciState ?? null,
+        ciUrl: placedStory?.ciUrl ?? null,
+        ciFailureNames: placedStory?.ciFailureNames ?? [],
         stage: stageDefinition ? { key: stageDefinition.key, label: stageDefinition.label } : null,
         pipelineStages: PIPELINE_STAGES.map(({ key, label }) => ({ key, label })),
         allowLegacyProposalNumber: selected.storyType === "issue" && sameNumberIssues.length === 1,
@@ -685,6 +709,28 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
               ),
             )
         : [];
+      const ciEvents = pullNumbers.length
+        ? await db
+            .select()
+            .from(ghCiEvents)
+            .where(
+              and(
+                eq(ghCiEvents.orgId, p.orgId),
+                eq(ghCiEvents.projectId, projectId),
+                eq(ghCiEvents.repoId, story.repoId),
+                inArray(ghCiEvents.pullNumber, pullNumbers),
+              ),
+            )
+            .orderBy(ghCiEvents.observedAt, ghCiEvents.id)
+        : [];
+      const presentedCiEvents = ciEvents.map((event) => ({
+        id: event.id,
+        pullNumber: event.pullNumber,
+        headSha: event.headSha,
+        state: event.state as "pending" | "success" | "failure",
+        failureNames: event.failureNames,
+        observedAt: event.observedAt.toISOString(),
+      }));
       const prsByNumber = new Map<number, StoryGithubPull>(
         story.prs.map((pull) => [pull.number, activityPullFromPipeline(pull)]),
       );
@@ -704,6 +750,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           closedAt: pull.closedAt?.toISOString() ?? null,
           mergedAt: pull.mergedAt?.toISOString() ?? null,
           ciState: fallback?.ciState ?? null,
+          ciFailureNames: fallback?.ciFailureNames ?? [],
         });
       }
       const sortedPrs = () => [...prsByNumber.values()].sort((a, b) => a.number - b.number);
@@ -720,7 +767,9 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           )
           .limit(1)
       )[0];
-      if (!repo?.installationId) return { comments: [], prs: sortedPrs() };
+      if (!repo?.installationId) {
+        return { comments: [], prs: sortedPrs(), ciEvents: presentedCiEvents };
+      }
       try {
         const factory = app.githubClientFactory ?? createGithubClientFactory(config);
         const client = await createGithubClientForRepo(db, factory, repo);
@@ -794,7 +843,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           .filter((comment) => comment.authorType !== "Bot")
           .map(({ authorType: _authorType, body, ...rest }) => ({ ...rest, bodyMd: body }))
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        return { comments, prs: sortedPrs() };
+        return { comments, prs: sortedPrs(), ciEvents: presentedCiEvents };
       } catch (error) {
         // GitHub being unreachable degrades to the Facility-only timeline.
         request.log.warn(
@@ -808,7 +857,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           },
           "GitHub story activity unavailable; returning the Facility-only timeline",
         );
-        return { comments: [], prs: sortedPrs() };
+        return { comments: [], prs: sortedPrs(), ciEvents: presentedCiEvents };
       }
     },
   );

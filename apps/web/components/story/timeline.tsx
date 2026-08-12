@@ -1,5 +1,6 @@
 import { StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
+import { CiStatusLink } from "@/components/ci-status";
 import { ProposalCard } from "@/components/inbox/proposal-card";
 import { type LinkReference, Markdown } from "@/components/markdown";
 import { RunOutcome } from "@/components/story/run-outcome";
@@ -67,6 +68,8 @@ function keyOf(item: StoryItem): string {
       return `pr-open-${item.pr.number}`;
     case "pr_closed":
       return `pr-closed-${item.pr.number}`;
+    case "ci":
+      return `ci-${item.event.id}`;
     case "stage":
       return `stage-${item.stage}-${item.ts}`;
     default:
@@ -209,6 +212,18 @@ function TimelineItem({
           }`}
           tone={item.pr.state === "merged" ? "ok" : "machine"}
         />
+      );
+    case "ci":
+      return (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <CiStatusLink
+            state={item.event.state}
+            url={`${item.pr.url}/checks`}
+            failureNames={item.event.failureNames}
+          />
+          <span className="font-mono text-[10.5px] text-(--dim)">PR #{item.pr.number}</span>
+          <Stamp ts={item.ts} />
+        </div>
       );
     default:
       return null;

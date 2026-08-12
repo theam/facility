@@ -26,6 +26,7 @@ export const ID_PREFIXES = {
   iss: "iss",
   ghi: "ghi",
   ghp: "ghp",
+  cie: "cie",
   evt: "evt",
   int: "int",
   fp: "fp",

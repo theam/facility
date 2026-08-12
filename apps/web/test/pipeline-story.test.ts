@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { ciStatusLabel } from "@/components/ci-status";
 import type { PipelineStageKey, PipelineStory, Proposal, StoryDetail } from "@/lib/api";
 import { reviewablePullRequests, storyHref } from "@/lib/pipeline";
 import { deriveStoryTimeline, proposalsForStory } from "@/lib/story";
 
 describe("story presentation contract", () => {
+  it("uses the established CI grammar for green and named failures", () => {
+    expect(ciStatusLabel("success")).toBe("checks · passed");
+    expect(ciStatusLabel("failure", ["guards", "typecheck"])).toBe(
+      "checks · failed · guards, typecheck",
+    );
+  });
+
   it("keeps repository and story kind in every detail link", () => {
     expect(
       storyHref("project-1", {
@@ -26,6 +34,7 @@ describe("story presentation contract", () => {
         headSha: "head-22",
         ciState: "pending",
         ciHeadSha: "head-22",
+        ciFailureNames: [],
         createdAt: "2026-08-02T00:00:00Z",
         closedAt: "2026-08-03T00:00:00Z",
         mergedAt: "2026-08-03T00:00:00Z",
@@ -49,6 +58,7 @@ describe("story presentation contract", () => {
           closedAt: "2026-08-03T00:00:00Z",
           mergedAt: "2026-08-03T00:00:00Z",
           ciState: "pending",
+          ciFailureNames: [],
         },
       ],
       allowLegacyProposalNumber: true,
@@ -80,6 +90,7 @@ describe("story presentation contract", () => {
         headSha: "new-head",
         ciState: "pending",
         ciHeadSha: "old-head",
+        ciFailureNames: [],
         createdAt: "2026-08-02T00:00:00Z",
         closedAt: null,
         mergedAt: null,
@@ -103,6 +114,7 @@ describe("story presentation contract", () => {
           closedAt: null,
           mergedAt: null,
           ciState: "pending",
+          ciFailureNames: [],
         },
       ],
       allowLegacyProposalNumber: true,
@@ -135,6 +147,70 @@ describe("story presentation contract", () => {
     );
     expect(timeline).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "stage", stage: "review" })]),
+    );
+  });
+
+  it("replays every stored CI rollup transition with failed check detail", () => {
+    const detail = storyDetail();
+    detail.prs = [
+      pipelinePull(25, {
+        ciState: "failure",
+        ciHeadSha: "head-25",
+        ciFailureNames: ["guards", "typecheck"],
+      }),
+    ];
+    const timeline = deriveStoryTimeline({
+      detail,
+      proposals: [],
+      outcomes: [],
+      prs: undefined,
+      ciEvents: [
+        {
+          id: "cie-pending",
+          pullNumber: 25,
+          headSha: "head-25",
+          state: "pending",
+          failureNames: [],
+          observedAt: "2026-08-02T00:01:00Z",
+        },
+        {
+          id: "cie-success",
+          pullNumber: 25,
+          headSha: "head-25",
+          state: "success",
+          failureNames: [],
+          observedAt: "2026-08-02T00:02:00Z",
+        },
+        {
+          id: "cie-failure",
+          pullNumber: 25,
+          headSha: "head-25",
+          state: "failure",
+          failureNames: ["guards", "typecheck"],
+          observedAt: "2026-08-02T00:03:00Z",
+        },
+      ],
+      allowLegacyProposalNumber: true,
+      stageLabels: new Map([
+        ["review", "In review"],
+        ["validating", "Validating"],
+      ]),
+    });
+
+    expect(
+      timeline
+        .filter((item) => item.kind === "ci")
+        .map((item) => [item.event.state, item.event.failureNames]),
+    ).toEqual([
+      ["pending", []],
+      ["success", []],
+      ["failure", ["guards", "typecheck"]],
+    ]);
+    expect(timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "stage", stage: "validating" }),
+        expect.objectContaining({ kind: "stage", stage: "review" }),
+      ]),
     );
   });
 
@@ -224,6 +300,7 @@ function pipelinePull(
     headSha: `head-${number}`,
     ciState: null,
     ciHeadSha: null,
+    ciFailureNames: [],
     createdAt: "2026-08-02T00:00:00Z",
     closedAt: null,
     mergedAt: null,
@@ -252,6 +329,9 @@ function storyDetail(): StoryDetail {
     ghUpdatedAt: "2026-08-01T00:00:00Z",
     closedAt: null,
     prs: [],
+    ciState: null,
+    ciUrl: null,
+    ciFailureNames: [],
     stage: { key: "backlog", label: "Backlog" },
     pipelineStages: [
       { key: "backlog", label: "Backlog" },
