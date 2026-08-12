@@ -32,6 +32,8 @@ export type {
   KickstartAnswers,
   KickstartPreview,
   KickstartResult,
+  LlmRequest,
+  LlmRequestPage,
   Me,
   Member,
   MemberRow,
@@ -232,6 +234,8 @@ export const api = {
       query: { q, ...(type ? { type } : {}) } as never,
     }),
   spend: (params = "") => apiFetch("GET", "/v1/spend", { query: queryFromParams(params) }),
+  llmRequests: (params = "") =>
+    apiFetch("GET", "/v1/llm-requests", { query: queryFromParams(params) }),
   sandboxProfiles: () => apiFetch("GET", "/v1/sandbox-profiles"),
   members: () => apiFetch("GET", "/v1/members"),
   roles: () => apiFetch("GET", "/v1/roles"),

@@ -2,10 +2,12 @@ import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { DeliveryIntelligence } from "@/components/project/delivery-intelligence";
 import { InFlightList } from "@/components/project/in-flight-list";
 import { PipelineBoard } from "@/components/project/pipeline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
+import { buildDeliveryIntelligence } from "@/lib/delivery-intelligence";
 import { buildInFlightRows } from "@/lib/in-flight";
 import type { PipelineStageState } from "@/lib/pipeline";
 import { pipelineStories } from "@/lib/pipeline";
@@ -74,7 +76,11 @@ export default async function ProjectOverviewPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const runsRequest = api.runs(projectId);
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const monthStartIso = monthStart.toISOString();
+  const runsRequest = api.runs(projectId, "?limit=200");
   const recentEventsRequest = runsRequest.then(async (result) => {
     if (!result.ok) return [];
     const visibleLive = result.data.filter((run) => LIVE.has(run.status)).slice(0, 6);
@@ -82,16 +88,33 @@ export default async function ProjectOverviewPage({
       visibleLive.map(async (run) => [run.id, await api.recentRunEvents(run.id)] as const),
     );
   });
-  const [project, runs, health, inbox, pipelineResult, repos, recentEventResults] =
-    await Promise.all([
-      api.project(projectId),
-      runsRequest,
-      api.projectHealth(projectId),
-      api.inboxFull(),
-      api.pipeline(projectId),
-      api.projectRepos(projectId),
-      recentEventsRequest,
-    ]);
+  const [
+    project,
+    runs,
+    health,
+    inbox,
+    pipelineResult,
+    repos,
+    recentEventResults,
+    spend,
+    agentsStatus,
+    outcomes,
+    llmRequests,
+    catalog,
+  ] = await Promise.all([
+    api.project(projectId),
+    runsRequest,
+    api.projectHealth(projectId),
+    api.inboxFull(),
+    api.pipeline(projectId),
+    api.projectRepos(projectId),
+    recentEventsRequest,
+    api.spend(`?projectId=${projectId}&groupBy=agent&from=${encodeURIComponent(monthStartIso)}`),
+    api.agentsStatus(projectId),
+    api.outcomes(`?state=terminal&projectId=${projectId}&limit=50`),
+    api.llmRequests(`?projectId=${projectId}&from=${encodeURIComponent(monthStartIso)}&limit=500`),
+    api.catalog(),
+  ]);
 
   if (!project.ok) {
     return project.offline ? (
@@ -153,6 +176,17 @@ export default async function ProjectOverviewPage({
           ? "project health requires attention"
           : "health unavailable"));
   const repoList = repos.ok ? repos.data : [];
+  const delivery = buildDeliveryIntelligence({
+    projectId,
+    periodStart: monthStartIso,
+    spend: spend.ok ? spend.data : [],
+    agents: agentsStatus.ok ? agentsStatus.data : [],
+    runs: items,
+    outcomes: outcomes.ok ? outcomes.data : [],
+    requests: llmRequests.ok ? llmRequests.data.items : [],
+    pipeline,
+    catalog: catalog.ok ? catalog.data : null,
+  });
 
   return (
     <div className="flex flex-col gap-10">
@@ -216,6 +250,8 @@ export default async function ProjectOverviewPage({
           <ErrorNotice message={`Couldn't load the story pipeline — ${pipelineError}`} />
         )}
       </section>
+
+      <DeliveryIntelligence projectId={projectId} data={delivery} />
 
       {needsYou > 0 ? (
         <section className="flex flex-col gap-4">
