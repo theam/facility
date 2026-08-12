@@ -1,37 +1,16 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { AiIdentity } from "@/components/ai-identity";
-import { engineIdentity, modelIdentity, providerIdentity } from "@/lib/ai-identity";
+import { engineIdentity, modelProductLabel } from "@/lib/ai-identity";
 import type { DeliveryIntelligence as DeliveryData } from "@/lib/delivery-intelligence";
 import { fmtAgo, fmtCost } from "@/lib/runs";
 
-function Configuration({
-  engine,
-  provider,
-  model,
-  additionalModelCount,
-}: {
-  engine: string;
-  provider: string;
-  model: string;
-  additionalModelCount: number;
-}) {
+function Configuration({ engine, model }: { engine: string; model: string }) {
   return (
-    <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-(--dim)">
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-[10.5px] text-(--dim)">
       <AiIdentity identity={engineIdentity(engine)} iconClassName="size-3" />
-      <span aria-hidden className="text-(--line-strong)">
-        ·
-      </span>
-      <AiIdentity identity={providerIdentity(provider)} iconClassName="size-3" />
-      <span aria-hidden className="text-(--line-strong)">
-        ·
-      </span>
-      <AiIdentity identity={modelIdentity(model)} iconClassName="size-3" />
-      {additionalModelCount > 0 ? (
-        <span>
-          +{additionalModelCount} {additionalModelCount === 1 ? "model" : "models"}
-        </span>
-      ) : null}
+      <span aria-hidden>–</span>
+      <span className="truncate">{modelProductLabel(model)}</span>
     </span>
   );
 }
@@ -74,7 +53,7 @@ export function DeliveryIntelligence({
           <div>
             <h2 className="text-[13px] font-semibold text-(--ink)">Spend by configuration</h2>
             <p className="mt-1 text-[11.5px] leading-relaxed text-(--dim)">
-              Gateway cost attributed to the agent, provider, and model that did the work.
+              Gateway cost attributed to the agent and model that did the work.
             </p>
           </div>
 
@@ -149,7 +128,7 @@ export function DeliveryIntelligence({
           <div className="border-b border-(--line) p-4 sm:p-5">
             <h2 className="text-[13px] font-semibold text-(--ink)">Recently shipped</h2>
             <p className="mt-1 text-[11.5px] leading-relaxed text-(--dim)">
-              The story, accountable person, producing agent, exact model path, and run cost.
+              The story, accountable person, producing agent and model, and run cost.
             </p>
           </div>
           {data.shippedRows.length === 0 ? (

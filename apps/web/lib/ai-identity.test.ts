@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { engineIdentity, modelIdentity, providerIdentity } from "./ai-identity";
+import { engineIdentity, modelIdentity, modelProductLabel, providerIdentity } from "./ai-identity";
 
 describe("AI identity display", () => {
   it("humanizes known platform identifiers", () => {
@@ -32,6 +32,13 @@ describe("AI identity display", () => {
       brand: null,
       label: "local gateway",
     });
+  });
+
+  it("removes a redundant Claude prefix when the engine already carries the brand", () => {
+    expect(modelProductLabel("claude-opus-4-8")).toBe("Opus 4.8");
+    expect(modelProductLabel("claude-fable-5")).toBe("Fable 5");
+    expect(modelProductLabel("gpt-5.6-sol")).toBe("GPT-5.6 Sol");
+    expect(modelProductLabel("team_model-v2")).toBe("team_model-v2");
   });
 
   it("keeps the official vendor assets byte-identical", () => {

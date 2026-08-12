@@ -39,6 +39,11 @@ export function modelIdentity(value: string): AiIdentity {
   return MODEL_IDENTITIES[value] ?? { brand: null, label: value };
 }
 
+/** Model name when its surrounding engine identity already communicates the Claude brand. */
+export function modelProductLabel(value: string): string {
+  return modelIdentity(value).label.replace(/^Claude /, "");
+}
+
 /** Known provider slugs get product names; custom provider names remain verbatim. */
 export function providerIdentity(value: string): AiIdentity {
   return PROVIDER_IDENTITIES[value] ?? { brand: null, label: value };
