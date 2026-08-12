@@ -126,6 +126,30 @@ describe("server-owned story pipeline", () => {
     ]);
   });
 
+  it("carries successful CI and failed check names through the story rollup", () => {
+    const successful = storyWith({ ciState: "success", ciHeadSha: "head-10" });
+    const failed = storyWith({
+      ciState: "failure",
+      ciHeadSha: "head-10",
+      ciFailureNames: ["guards", "typecheck"],
+    });
+    const staged = classifyPipeline(
+      [successful, { ...failed, key: "repo_a:issue:2", number: 2 }],
+      new Set(),
+      NOW.getTime(),
+    );
+
+    expect(staged.get("review")?.find((story) => story.number === 1)).toMatchObject({
+      ciState: "success",
+      ciUrl: "https://github.test/alice/alpha/pull/10/checks",
+      ciFailureNames: [],
+    });
+    expect(staged.get("review")?.find((story) => story.number === 2)).toMatchObject({
+      ciState: "failure",
+      ciFailureNames: ["guards", "typecheck"],
+    });
+  });
+
   it("keeps draft pull requests in Building until they are reviewable", () => {
     const draft = storyWith({ ciState: "failure", ciHeadSha: "head-10", draft: true });
     const staged = classifyPipeline([draft], new Set(), NOW.getTime());
@@ -296,6 +320,7 @@ function pull(
     headSha: `head-${number}`,
     ciState: null,
     ciHeadSha: null,
+    ciFailureNames: [],
     closingIssues: [],
     ghCreatedAt: NOW,
     ghUpdatedAt: NOW,
@@ -325,6 +350,7 @@ function run(
 function storyWith(ci: {
   ciState?: "pending" | "success" | "failure" | null;
   ciHeadSha?: string | null;
+  ciFailureNames?: string[];
   draft?: boolean;
 }) {
   return {
@@ -356,6 +382,7 @@ function storyWith(ci: {
         headSha: "head-10",
         ciState: ci.ciState ?? null,
         ciHeadSha: ci.ciHeadSha ?? null,
+        ciFailureNames: ci.ciFailureNames ?? [],
         createdAt: NOW,
         closedAt: null,
         mergedAt: null,

@@ -1,6 +1,7 @@
 import { newId } from "@facility/core";
 import {
   type FacilityDb,
+  ghCiEvents,
   ghPullRequests,
   githubInstallations,
   repos,
@@ -18,6 +19,11 @@ const PR_WATERMARK_PREFIX = "github.pull_requests";
 const MAX_PAGES_PER_CONNECTION = 10;
 const SYNC_OVERLAP_MS = 2 * 60 * 1000;
 const INITIAL_WATERMARK = new Date(0);
+
+type CiObservation = {
+  sourceEventId?: string;
+  observedAt?: Date;
+};
 
 export type GithubPullRequestWebhookPayload = {
   action?: string;
@@ -80,6 +86,7 @@ export async function upsertGhPullRequestFromWebhook(
         mergedAt: values.mergedAt,
         ciState: sql`case when ${ghPullRequests.headSha} = ${values.headSha} then ${ghPullRequests.ciState} else null end`,
         ciHeadSha: sql`case when ${ghPullRequests.headSha} = ${values.headSha} then ${ghPullRequests.ciHeadSha} else null end`,
+        ciFailureNames: sql`case when ${ghPullRequests.headSha} = ${values.headSha} then ${ghPullRequests.ciFailureNames} else '{}'::text[] end`,
         ciUpdatedAt: sql`case when ${ghPullRequests.headSha} = ${values.headSha} then ${ghPullRequests.ciUpdatedAt} else null end`,
         syncedAt: values.syncedAt,
         updatedAt: values.updatedAt,
@@ -152,19 +159,20 @@ export async function refreshGhPullRequest(
   clientFactory: GithubClientFactory,
   repo: typeof repos.$inferSelect,
   number: number,
+  observation: CiObservation = {},
 ) {
   const client = await clientForRepo(db, clientFactory, repo);
   if (!client) return null;
   if (!client.supportsPullRequestSnapshots()) return null;
   const snapshot = await client.getPullRequestSnapshot(number);
-  return snapshot ? upsertPullRequestSnapshot(db, repo, snapshot) : null;
+  return snapshot ? upsertPullRequestSnapshot(db, repo, snapshot, observation) : null;
 }
 
 export async function refreshPullRequestsForSignal(
   db: FacilityDb,
   clientFactory: GithubClientFactory,
   repo: typeof repos.$inferSelect,
-  input: { headSha?: string | null; numbers?: number[] },
+  input: { headSha?: string | null; numbers?: number[] } & CiObservation,
 ) {
   const numbers = new Set((input.numbers ?? []).filter((number) => number > 0));
   if (input.headSha) {
@@ -181,7 +189,7 @@ export async function refreshPullRequestsForSignal(
     for (const row of rows) numbers.add(row.number);
   }
   for (const number of numbers) {
-    await refreshGhPullRequest(db, clientFactory, repo, number);
+    await refreshGhPullRequest(db, clientFactory, repo, number, input);
   }
   return numbers.size;
 }
@@ -190,65 +198,140 @@ export async function upsertPullRequestSnapshot(
   db: FacilityDb,
   repo: typeof repos.$inferSelect,
   pull: GithubPullRequestSnapshot,
+  observation: CiObservation = {},
 ) {
   const now = new Date();
-  const values = {
-    id: newId("ghp"),
-    orgId: repo.orgId,
-    projectId: repo.projectId,
-    repoId: repo.id,
-    number: pull.number,
-    title: pull.title,
-    state: pull.state,
-    draft: pull.draft,
-    author: pull.author,
-    headRef: pull.headRef,
-    headSha: pull.headSha,
-    baseRef: pull.baseRef,
-    htmlUrl: pull.url,
-    bodyMd: capBody(pull.body),
-    closingIssues: pull.closingIssues,
-    ciState: pull.ciState,
-    ciHeadSha: pull.ciHeadSha,
-    ciUpdatedAt: now,
-    ghCreatedAt: dateOrNull(pull.createdAt),
-    ghUpdatedAt: dateOrNull(pull.updatedAt),
-    closedAt: dateOrNull(pull.closedAt),
-    mergedAt: dateOrNull(pull.mergedAt),
-    syncedAt: now,
-    updatedAt: now,
-  };
-  const [row] = await db
-    .insert(ghPullRequests)
-    .values(values)
-    .onConflictDoUpdate({
-      target: [ghPullRequests.repoId, ghPullRequests.number],
-      set: {
-        orgId: values.orgId,
-        projectId: values.projectId,
-        title: values.title,
-        state: values.state,
-        draft: values.draft,
-        author: values.author,
-        headRef: values.headRef,
-        headSha: values.headSha,
-        baseRef: values.baseRef,
-        htmlUrl: values.htmlUrl,
-        bodyMd: values.bodyMd,
-        closingIssues: values.closingIssues,
-        ciState: values.ciState,
-        ciHeadSha: values.ciHeadSha,
-        ciUpdatedAt: values.ciUpdatedAt,
-        ghCreatedAt: values.ghCreatedAt,
-        ghUpdatedAt: values.ghUpdatedAt,
-        closedAt: values.closedAt,
-        mergedAt: values.mergedAt,
-        syncedAt: now,
-        updatedAt: now,
-      },
-    })
-    .returning();
-  return row ?? null;
+  return db.transaction(async (tx) => {
+    // Webhook delivery and scheduled reconciliation can refresh the same PR at once.
+    // Serialize the read/upsert/event sequence so the timeline records each transition once.
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`facility:github-ci:${repo.id}:${pull.number}`}, 0))`,
+    );
+    const [previous] = await tx
+      .select({
+        ciState: ghPullRequests.ciState,
+        ciHeadSha: ghPullRequests.ciHeadSha,
+        ciFailureNames: ghPullRequests.ciFailureNames,
+      })
+      .from(ghPullRequests)
+      .where(and(eq(ghPullRequests.repoId, repo.id), eq(ghPullRequests.number, pull.number)))
+      .limit(1);
+    const suppliedFailureNames = sanitizeFailureNames(pull.ciFailureNames ?? []);
+    const insertedFailureNames =
+      pull.ciState === "failure" && pull.ciFailureNames !== undefined ? suppliedFailureNames : [];
+    const values = {
+      id: newId("ghp"),
+      orgId: repo.orgId,
+      projectId: repo.projectId,
+      repoId: repo.id,
+      number: pull.number,
+      title: pull.title,
+      state: pull.state,
+      draft: pull.draft,
+      author: pull.author,
+      headRef: pull.headRef,
+      headSha: pull.headSha,
+      baseRef: pull.baseRef,
+      htmlUrl: pull.url,
+      bodyMd: capBody(pull.body),
+      closingIssues: pull.closingIssues,
+      ciState: pull.ciState,
+      ciHeadSha: pull.ciHeadSha,
+      ciFailureNames: insertedFailureNames,
+      ciUpdatedAt: now,
+      ghCreatedAt: dateOrNull(pull.createdAt),
+      ghUpdatedAt: dateOrNull(pull.updatedAt),
+      closedAt: dateOrNull(pull.closedAt),
+      mergedAt: dateOrNull(pull.mergedAt),
+      syncedAt: now,
+      updatedAt: now,
+    };
+    const [row] = await tx
+      .insert(ghPullRequests)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [ghPullRequests.repoId, ghPullRequests.number],
+        set: {
+          orgId: values.orgId,
+          projectId: values.projectId,
+          title: values.title,
+          state: values.state,
+          draft: values.draft,
+          author: values.author,
+          headRef: values.headRef,
+          headSha: values.headSha,
+          baseRef: values.baseRef,
+          htmlUrl: values.htmlUrl,
+          bodyMd: values.bodyMd,
+          closingIssues: values.closingIssues,
+          ciState: values.ciState,
+          ciHeadSha: values.ciHeadSha,
+          ciFailureNames:
+            pull.ciState !== "failure"
+              ? []
+              : pull.ciFailureNames !== undefined
+                ? suppliedFailureNames
+                : sql`case when ${ghPullRequests.headSha} = ${values.headSha} and ${ghPullRequests.ciHeadSha} = ${values.ciHeadSha} then ${ghPullRequests.ciFailureNames} else '{}'::text[] end`,
+          ciUpdatedAt: values.ciUpdatedAt,
+          ghCreatedAt: values.ghCreatedAt,
+          ghUpdatedAt: values.ghUpdatedAt,
+          closedAt: values.closedAt,
+          mergedAt: values.mergedAt,
+          syncedAt: now,
+          updatedAt: now,
+        },
+      })
+      .returning();
+    if (!row) return null;
+
+    const currentCiState =
+      pull.ciHeadSha === pull.headSha && pull.ciState !== null ? pull.ciState : null;
+    const transitioned =
+      currentCiState !== null &&
+      (previous?.ciState !== currentCiState || previous?.ciHeadSha !== pull.ciHeadSha);
+    if (transitioned && pull.ciHeadSha) {
+      const failureNames =
+        currentCiState === "failure"
+          ? pull.ciFailureNames !== undefined
+            ? suppliedFailureNames
+            : previous?.ciHeadSha === pull.ciHeadSha
+              ? previous.ciFailureNames
+              : []
+          : [];
+      await tx
+        .insert(ghCiEvents)
+        .values({
+          id: newId("cie"),
+          orgId: repo.orgId,
+          projectId: repo.projectId,
+          repoId: repo.id,
+          pullNumber: pull.number,
+          headSha: pull.ciHeadSha,
+          state: currentCiState,
+          failureNames,
+          sourceEventId: observation.sourceEventId,
+          observedAt: observation.observedAt ?? now,
+        })
+        .onConflictDoNothing();
+    }
+    return row;
+  });
+}
+
+function sanitizeFailureNames(names: string[]) {
+  return [
+    ...new Set(
+      names.flatMap((name) => {
+        const value = name
+          .replace(/[\r\n\t]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        return value ? [value.slice(0, 160)] : [];
+      }),
+    ),
+  ]
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, 20);
 }
 
 async function clientForRepo(

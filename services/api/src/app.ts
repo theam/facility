@@ -67,6 +67,7 @@ export async function buildApp(
   app.decorate("facilityDb", db);
   app.decorate("githubClientFactory", undefined);
   app.decorate("githubInstallationTokenFactory", undefined);
+  app.decorate("githubAppMetadataReader", undefined);
 
   // Producer-only pg-boss handle: routes enqueue, the worker consumes.
   const boss = new PgBoss({ connectionString: config.databaseUrl });

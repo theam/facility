@@ -8933,6 +8933,7 @@ export interface operations {
                                     /** @enum {string|null} */
                                     ciState: "pending" | "success" | "failure" | null;
                                     ciHeadSha: string | null;
+                                    ciFailureNames: string[];
                                     /** Format: date-time */
                                     createdAt: string | null;
                                     /** Format: date-time */
@@ -8941,8 +8942,9 @@ export interface operations {
                                     mergedAt: string | null;
                                 }[];
                                 /** @enum {string|null} */
-                                ciState: "pending" | "failure" | null;
+                                ciState: "pending" | "success" | "failure" | null;
                                 ciUrl: string | null;
+                                ciFailureNames: string[];
                             }[];
                         }[];
                     };
@@ -9213,6 +9215,7 @@ export interface operations {
                             /** @enum {string|null} */
                             ciState: "pending" | "success" | "failure" | null;
                             ciHeadSha: string | null;
+                            ciFailureNames: string[];
                             /** Format: date-time */
                             createdAt: string | null;
                             /** Format: date-time */
@@ -9220,6 +9223,10 @@ export interface operations {
                             /** Format: date-time */
                             mergedAt: string | null;
                         }[];
+                        /** @enum {string|null} */
+                        ciState: "pending" | "success" | "failure" | null;
+                        ciUrl: string | null;
+                        ciFailureNames: string[];
                         stage: {
                             /** @enum {string} */
                             key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped";
@@ -9364,6 +9371,16 @@ export interface operations {
                             mergedAt: string | null;
                             /** @enum {string|null} */
                             ciState: "pending" | "success" | "failure" | null;
+                            ciFailureNames: string[];
+                        }[];
+                        ciEvents: {
+                            id: string;
+                            pullNumber: number;
+                            headSha: string;
+                            /** @enum {string} */
+                            state: "pending" | "success" | "failure";
+                            failureNames: string[];
+                            observedAt: string;
                         }[];
                     };
                 };

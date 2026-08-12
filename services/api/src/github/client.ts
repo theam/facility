@@ -156,6 +156,11 @@ export type Octokit = {
 };
 
 export type GithubClientFactory = (installationId: number) => Promise<Octokit>;
+export type GithubAppMetadata = {
+  permissions?: Record<string, string>;
+  events?: string[];
+};
+export type GithubAppMetadataReader = () => Promise<GithubAppMetadata>;
 export type GithubInstallationTokenFactory = (input: {
   installationId: number;
   owner: string;
@@ -184,6 +189,34 @@ export function createGithubClientFactory(config: AppConfig): GithubClientFactor
   });
   return async (installationId: number) =>
     (await app.getInstallationOctokit(installationId)) as unknown as Octokit;
+}
+
+export function createGithubAppMetadataReader(config: AppConfig): GithubAppMetadataReader {
+  if (!config.githubAppId || !config.githubAppPrivateKey) {
+    throw new Error("GitHub App credentials are not configured");
+  }
+  const app = new App({
+    appId: config.githubAppId,
+    privateKey: config.githubAppPrivateKey,
+  });
+  return async () => {
+    const response = await app.octokit.request("GET /app");
+    const data = response.data as {
+      permissions?: Record<string, unknown>;
+      events?: unknown[];
+    };
+    const permissions = data.permissions
+      ? Object.fromEntries(
+          Object.entries(data.permissions).flatMap(([key, value]) =>
+            typeof value === "string" ? [[key, value]] : [],
+          ),
+        )
+      : undefined;
+    const events = Array.isArray(data.events)
+      ? data.events.filter((event): event is string => typeof event === "string")
+      : undefined;
+    return { permissions, events };
+  };
 }
 
 export function createGithubInstallationTokenFactory(
@@ -238,6 +271,8 @@ export type GithubPullRequestSnapshot = {
   closingIssues: number[];
   ciState: "pending" | "success" | "failure" | null;
   ciHeadSha: string | null;
+  /** Present on focused refreshes; omitted by bulk reconciliation snapshots. */
+  ciFailureNames?: string[];
   createdAt: string | null;
   updatedAt: string | null;
   closedAt: string | null;
@@ -592,10 +627,35 @@ export class FacilityGithubClient {
       repo: this.repo.repo,
       number,
     });
-    return pullRequestSnapshot(
+    const snapshot = pullRequestSnapshot(
       await this.completeClosingIssuePages(data.repository?.pullRequest ?? null),
       this.repo,
     );
+    if (!snapshot) return null;
+    const ciFailureNames = await this.getCurrentCiFailureNames(snapshot.headSha);
+    return ciFailureNames ? { ...snapshot, ciFailureNames } : snapshot;
+  }
+
+  private async getCurrentCiFailureNames(headSha: string): Promise<string[] | undefined> {
+    const listForRef = this.octokit.rest.checks?.listForRef;
+    if (!listForRef) return undefined;
+    try {
+      const pages = await boundedGithubPages("check runs", (page) =>
+        listForRef({
+          owner: this.repo.owner,
+          repo: this.repo.repo,
+          ref: headSha,
+          filter: "latest",
+          per_page: GITHUB_EVIDENCE_PAGE_SIZE,
+          page,
+        }).then((response) => response.data.check_runs ?? []),
+      );
+      return currentCiFailureNames(pages.flat());
+    } catch {
+      // Names are display detail. The aggregate rollup remains authoritative
+      // and must still refresh when the Checks REST endpoint is unavailable.
+      return undefined;
+    }
   }
 
   async createIssue(input: {
@@ -1237,6 +1297,33 @@ function githubCiState(value: string | null | undefined): "pending" | "success" 
   if (state === "FAILURE" || state === "ERROR") return "failure";
   if (state === "PENDING" || state === "EXPECTED") return "pending";
   return null;
+}
+
+const FAILURE_CONCLUSIONS = new Set([
+  "action_required",
+  "cancelled",
+  "failure",
+  "startup_failure",
+  "timed_out",
+]);
+
+function currentCiFailureNames(
+  checks: Array<{ name?: string | null; conclusion?: string | null }>,
+): string[] {
+  return [
+    ...new Set(
+      checks.flatMap((check) => {
+        if (!FAILURE_CONCLUSIONS.has(check.conclusion?.toLowerCase() ?? "")) return [];
+        const name = check.name
+          ?.replace(/[\r\n\t]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        return name ? [name.slice(0, 160)] : [];
+      }),
+    ),
+  ]
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, 20);
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

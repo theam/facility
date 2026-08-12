@@ -786,7 +786,10 @@ describe("db", async () => {
           'gh_pull_requests_repo_number_uidx',
           'gh_pull_requests_org_project_state_idx',
           'gh_pull_requests_repo_head_sha_idx',
-          'gh_pull_requests_closing_issues_idx'
+          'gh_pull_requests_closing_issues_idx',
+          'gh_ci_events_repo_pull_observed_idx',
+          'gh_ci_events_org_project_observed_idx',
+          'gh_ci_events_source_pull_uidx'
         )
       `,
     )) as Iterable<{ indexname: string }>;
@@ -825,6 +828,10 @@ describe("db", async () => {
         "gh_pull_requests_org_project_state_idx",
         "gh_pull_requests_repo_head_sha_idx",
         "gh_pull_requests_closing_issues_idx",
+        // Append-only CI rollup transitions for story timelines (migration 0041).
+        "gh_ci_events_repo_pull_observed_idx",
+        "gh_ci_events_org_project_observed_idx",
+        "gh_ci_events_source_pull_uidx",
       ]),
     );
     const pullRequestChecks = (await db.execute(
@@ -846,6 +853,17 @@ describe("db", async () => {
         "gh_pull_requests_repo_number_uidx",
       ]),
     );
+    const ciEventChecks = (await db.execute(
+      sql`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'gh_ci_events'::regclass
+          AND conname = 'gh_ci_events_state_check'
+      `,
+    )) as Iterable<{ conname: string }>;
+    expect(Array.from(ciEventChecks).map((row) => row.conname)).toEqual([
+      "gh_ci_events_state_check",
+    ]);
     const applied = (await db.execute(
       sql`
         SELECT name
@@ -856,9 +874,7 @@ describe("db", async () => {
     // A developer database can include later migrations from another worktree;
     // assert this checkout's latest migration was applied without assuming it
     // is the newest row in that shared database.
-    expect(Array.from(applied).map((row) => row.name)).toContain(
-      "0040_provider_credential_auth_mode.sql",
-    );
+    expect(Array.from(applied).map((row) => row.name)).toContain("0041_github_ci_story_events.sql");
     const providerCredentialChecks = (await db.execute(
       sql`
         SELECT conname

@@ -3999,6 +3999,7 @@ describe("api", async () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("test server did not bind");
+    const previousGithubAppMetadataReader = app.githubAppMetadataReader;
     const previous = {
       s3Bucket: config.s3Bucket,
       s3Endpoint: config.s3Endpoint,
@@ -4019,6 +4020,10 @@ describe("api", async () => {
     config.githubAppPrivateKey = githubAppTestKey;
     config.githubAppWebhookSecret = "secret";
     config.githubAppSlug = "facility-test";
+    app.githubAppMetadataReader = async () => ({
+      permissions: { checks: "read" },
+      events: ["check_run", "pull_request"],
+    });
     const first = await insertAuditEvent(db, {
       orgId,
       actor: { type: "system", id: "doctor-test" },
@@ -4051,6 +4056,7 @@ describe("api", async () => {
       expect(checkStatus(healthy.json(), "audit_hash_chain")).toBe("pass");
       expect(checkStatus(healthy.json(), "worker_heartbeat")).toBe("pass");
       expect(checkStatus(healthy.json(), "github_app")).toBe("pass");
+      expect(checkStatus(healthy.json(), "github_check_run")).toBe("pass");
       expect(
         healthy.json().checks.some((check: { id: string }) => check.id === "aws_sandbox"),
       ).toBe(false);
@@ -4073,6 +4079,22 @@ describe("api", async () => {
       expect(checkStatus(invalidGithubKey.json(), "github_app")).toBe("fail");
       expect(JSON.stringify(invalidGithubKey.json())).not.toContain("not-a-private-key");
       config.githubAppPrivateKey = githubAppTestKey;
+
+      app.githubAppMetadataReader = async () => ({
+        permissions: { checks: "read" },
+        events: ["pull_request"],
+      });
+      const missingCheckRun = await app.inject({
+        method: "GET",
+        url: "/v1/admin/doctor",
+        headers: { cookie },
+      });
+      expect(missingCheckRun.json().ok).toBe(false);
+      expect(checkStatus(missingCheckRun.json(), "github_check_run")).toBe("fail");
+      app.githubAppMetadataReader = async () => ({
+        permissions: { checks: "read" },
+        events: ["check_run"],
+      });
 
       await db.update(auditEvents).set({ hash: "broken" }).where(eq(auditEvents.id, second.id));
       const broken = await app.inject({
@@ -4106,6 +4128,7 @@ describe("api", async () => {
         .where(eq(auditEvents.id, second.id));
       await db.delete(schedulerWatermarks).where(eq(schedulerWatermarks.name, "agent.schedules"));
       Object.assign(config, previous);
+      app.githubAppMetadataReader = previousGithubAppMetadataReader;
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });

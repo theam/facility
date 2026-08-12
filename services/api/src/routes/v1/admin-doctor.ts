@@ -11,7 +11,12 @@ export async function registerAdminDoctorRoutes(app: FastifyInstance, context: V
     },
     async (request) => {
       const p = principal(request);
-      return runReadinessDoctor({ db: context.db, config: context.config, orgId: p.orgId });
+      return runReadinessDoctor({
+        db: context.db,
+        config: context.config,
+        orgId: p.orgId,
+        githubAppMetadataReader: app.githubAppMetadataReader,
+      });
     },
   );
 }

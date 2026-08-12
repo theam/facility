@@ -11808,6 +11808,12 @@
                                         "nullable": true,
                                         "type": "string"
                                       },
+                                      "ciFailureNames": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
                                       "createdAt": {
                                         "nullable": true,
                                         "type": "string",
@@ -11833,6 +11839,7 @@
                                       "headSha",
                                       "ciState",
                                       "ciHeadSha",
+                                      "ciFailureNames",
                                       "createdAt",
                                       "closedAt",
                                       "mergedAt"
@@ -11845,12 +11852,19 @@
                                   "type": "string",
                                   "enum": [
                                     "pending",
+                                    "success",
                                     "failure"
                                   ]
                                 },
                                 "ciUrl": {
                                   "nullable": true,
                                   "type": "string"
+                                },
+                                "ciFailureNames": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
                                 }
                               },
                               "required": [
@@ -11877,7 +11891,8 @@
                                 "attemptCount",
                                 "prs",
                                 "ciState",
-                                "ciUrl"
+                                "ciUrl",
+                                "ciFailureNames"
                               ],
                               "additionalProperties": false
                             }
@@ -12459,6 +12474,12 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "ciFailureNames": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
                           "createdAt": {
                             "nullable": true,
                             "type": "string",
@@ -12484,11 +12505,31 @@
                           "headSha",
                           "ciState",
                           "ciHeadSha",
+                          "ciFailureNames",
                           "createdAt",
                           "closedAt",
                           "mergedAt"
                         ],
                         "additionalProperties": false
+                      }
+                    },
+                    "ciState": {
+                      "nullable": true,
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "success",
+                        "failure"
+                      ]
+                    },
+                    "ciUrl": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "ciFailureNames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
                       }
                     },
                     "stage": {
@@ -12616,6 +12657,9 @@
                     "ghUpdatedAt",
                     "closedAt",
                     "prs",
+                    "ciState",
+                    "ciUrl",
+                    "ciFailureNames",
                     "stage",
                     "pipelineStages",
                     "allowLegacyProposalNumber",
@@ -12856,6 +12900,12 @@
                               "success",
                               "failure"
                             ]
+                          },
+                          "ciFailureNames": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
                           }
                         },
                         "required": [
@@ -12869,7 +12919,53 @@
                           "createdAt",
                           "closedAt",
                           "mergedAt",
-                          "ciState"
+                          "ciState",
+                          "ciFailureNames"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "ciEvents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "pullNumber": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "headSha": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "pending",
+                              "success",
+                              "failure"
+                            ]
+                          },
+                          "failureNames": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "observedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "pullNumber",
+                          "headSha",
+                          "state",
+                          "failureNames",
+                          "observedAt"
                         ],
                         "additionalProperties": false
                       }
@@ -12877,7 +12973,8 @@
                   },
                   "required": [
                     "comments",
-                    "prs"
+                    "prs",
+                    "ciEvents"
                   ],
                   "additionalProperties": false
                 }

@@ -4,6 +4,7 @@ import { Button, ButtonLink, StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { CiStatusLink } from "@/components/ci-status";
 import type { PipelineStory } from "@/lib/pipeline";
 import { storyHref } from "@/lib/pipeline";
 
@@ -225,26 +226,12 @@ export function IssueRow({
               PR #{pr.number} ↗
             </a>
           ))}
-          {story.ciState === "failure" && story.ciUrl ? (
-            <a
-              href={story.ciUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-2 font-mono text-[11px] text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
-            >
-              <StatusDot tone="bad" />
-              checks · failed
-            </a>
-          ) : story.ciState === "pending" && story.ciUrl ? (
-            <a
-              href={story.ciUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-2 font-mono text-[11px] text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
-            >
-              <StatusDot tone="info" />
-              checks · pending
-            </a>
+          {story.ciState && story.ciUrl ? (
+            <CiStatusLink
+              state={story.ciState}
+              url={story.ciUrl}
+              failureNames={story.ciFailureNames}
+            />
           ) : null}
         </div>
       ) : null}

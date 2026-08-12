@@ -22,9 +22,25 @@ import type { JSX } from "react";
  */
 export type LinkArtifact = (id: string) => string | null;
 
+export type GitHubReference = {
+  owner: string | null;
+  repo: string | null;
+  number: number;
+  githubUrl: string | null;
+};
+
+/**
+ * Optional resolver for GitHub issue and pull-request references. The caller
+ * owns repository context and decides whether a reference belongs inside
+ * Facility or should link back to GitHub.
+ */
+export type LinkReference = (reference: GitHubReference) => string | null;
+
 const ARTIFACT_TOKEN_RE = /(\[\[[^\]]+\]\]|\b(?:S|D|T|V|R|H|E|F|L|CR|SR)\d{3}\b)/g;
 const WIKILINK_RE = /^\[\[([^\]|#]+)(?:[|#]([^\]]*))?\]\]$/;
 const BARE_ID_RE = /^(?:S|D|T|V|R|H|E|F|L|CR|SR)\d{3}$/;
+const GITHUB_REFERENCE_RE =
+  /https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]+\/(?:issues|pull)\/[1-9]\d*(?![\w/-])|(?<![\w/@.])[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]+#[1-9]\d*(?![\w/-])|(?<![\w/])#[1-9]\d*(?![\w/-])/gi;
 
 /**
  * Code spans are lifted out before anything else — their contents must stay
@@ -46,14 +62,16 @@ function renderInline(
   text: string,
   key: string,
   linkArtifact?: LinkArtifact,
+  linkReference?: LinkReference,
 ): (string | JSX.Element)[] {
   const codes: string[] = [];
   const masked = text.replace(/`([^`]+)`/g, (_match, body: string) => {
     codes.push(body);
     return `${CODE_MARK}c${codes.length - 1}${CODE_MARK}`;
   });
-  // Order matters: artifact references, then links, then bold, then italic.
-  return renderArtifacts(masked, key, linkArtifact, codes);
+  // Order matters: artifact references and explicit links are protected before
+  // emphasis and GitHub references are expanded at the text leaves.
+  return renderArtifacts(masked, key, linkArtifact, linkReference, codes);
 }
 
 /** Expand code placeholders in a fully-parsed text leaf. */
@@ -87,15 +105,18 @@ function renderArtifacts(
   text: string,
   key: string,
   linkArtifact: LinkArtifact | undefined,
+  linkReference: LinkReference | undefined,
   codes: string[],
 ): (string | JSX.Element)[] {
-  if (!linkArtifact) return renderLinks(text, key, linkArtifact, codes);
+  if (!linkArtifact && !linkReference) {
+    return renderLinks(text, key, linkArtifact, linkReference, codes);
+  }
   const out: (string | JSX.Element)[] = [];
   let n = 0;
   for (const part of text.split(ARTIFACT_TOKEN_RE)) {
     const wiki = part.match(WIKILINK_RE);
     const id = wiki?.[1]?.trim() ?? (BARE_ID_RE.test(part) ? part : null);
-    if (id) {
+    if (id && linkArtifact) {
       const label = wiki?.[2]?.trim() || id;
       const href = linkArtifact(id);
       out.push(
@@ -115,7 +136,15 @@ function renderArtifacts(
       );
       continue;
     }
-    if (part) out.push(...renderLinks(part, `${key}-a${n++}`, linkArtifact, codes));
+    if (part) {
+      // Keep an unresolved wikilink intact. In particular, its #anchor is not
+      // a GitHub reference and must not reach the reference pass.
+      out.push(
+        ...(wiki
+          ? renderEmphasis(part, `${key}-a${n++}`, undefined, codes)
+          : renderLinks(part, `${key}-a${n++}`, linkArtifact, linkReference, codes)),
+      );
+    }
   }
   return out;
 }
@@ -124,6 +153,7 @@ function renderLinks(
   text: string,
   key: string,
   _linkArtifact: LinkArtifact | undefined,
+  linkReference: LinkReference | undefined,
   codes: string[],
 ): (string | JSX.Element)[] {
   const out: (string | JSX.Element)[] = [];
@@ -145,12 +175,17 @@ function renderLinks(
       );
       continue;
     }
-    out.push(...renderEmphasis(part, `${key}-l${n++}`, codes));
+    out.push(...renderEmphasis(part, `${key}-l${n++}`, linkReference, codes));
   }
   return out;
 }
 
-function renderEmphasis(text: string, key: string, codes: string[]): (string | JSX.Element)[] {
+function renderEmphasis(
+  text: string,
+  key: string,
+  linkReference: LinkReference | undefined,
+  codes: string[],
+): (string | JSX.Element)[] {
   const out: (string | JSX.Element)[] = [];
   let n = 0;
   for (const part of text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_)/g)) {
@@ -158,21 +193,79 @@ function renderEmphasis(text: string, key: string, codes: string[]): (string | J
       const bkey = `${key}-b${n++}`;
       out.push(
         <strong key={bkey} className="font-semibold text-(--ink)">
-          {renderCode(part.slice(2, -2), bkey, codes)}
+          {renderReferences(part.slice(2, -2), bkey, linkReference, codes)}
         </strong>,
       );
     } else if (/^\*[^*]+\*$/.test(part) || /^_[^_]+_$/.test(part)) {
       const ikey = `${key}-i${n++}`;
       out.push(
         <em key={ikey} className="italic">
-          {renderCode(part.slice(1, -1), ikey, codes)}
+          {renderReferences(part.slice(1, -1), ikey, linkReference, codes)}
         </em>,
       );
     } else if (part) {
-      out.push(...renderCode(part, `${key}-t${n++}`, codes));
+      out.push(...renderReferences(part, `${key}-t${n++}`, linkReference, codes));
     }
   }
   return out;
+}
+
+function renderReferences(
+  text: string,
+  key: string,
+  linkReference: LinkReference | undefined,
+  codes: string[],
+): (string | JSX.Element)[] {
+  if (!linkReference) return renderCode(text, key, codes);
+  const out: (string | JSX.Element)[] = [];
+  let cursor = 0;
+  let n = 0;
+  for (const match of text.matchAll(GITHUB_REFERENCE_RE)) {
+    const token = match[0];
+    const index = match.index;
+    if (index > cursor) out.push(...renderCode(text.slice(cursor, index), `${key}-r${n++}`, codes));
+    const reference = parseGitHubReference(token);
+    const href = reference ? linkReference(reference) : null;
+    const rkey = `${key}-r${n++}`;
+    if (href) {
+      out.push(
+        <a
+          key={rkey}
+          href={href}
+          target={href.startsWith("http") ? "_blank" : undefined}
+          rel="noreferrer"
+          className="text-(--info) underline underline-offset-4"
+        >
+          {renderCode(token, rkey, codes)}
+        </a>,
+      );
+    } else {
+      out.push(...renderCode(token, rkey, codes));
+    }
+    cursor = index + token.length;
+  }
+  if (cursor < text.length) out.push(...renderCode(text.slice(cursor), `${key}-r${n}`, codes));
+  return out;
+}
+
+function parseGitHubReference(token: string): GitHubReference | null {
+  const url = token.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/([1-9]\d*)$/i,
+  );
+  if (url?.[1] && url[2] && url[3]) {
+    return { owner: url[1], repo: url[2], number: Number(url[3]), githubUrl: token };
+  }
+  const qualified = token.match(/^([^/]+)\/([^/#]+)#([1-9]\d*)$/);
+  if (qualified?.[1] && qualified[2] && qualified[3]) {
+    return {
+      owner: qualified[1],
+      repo: qualified[2],
+      number: Number(qualified[3]),
+      githubUrl: `https://github.com/${qualified[1]}/${qualified[2]}/issues/${qualified[3]}`,
+    };
+  }
+  const local = token.match(/^#([1-9]\d*)$/);
+  return local?.[1] ? { owner: null, repo: null, number: Number(local[1]), githubUrl: null } : null;
 }
 
 const TASK_RE = /^\[([ xX])\]\s+(.*)$/;
@@ -192,9 +285,11 @@ function splitRow(line: string): string[] {
 export function Markdown({
   source,
   linkArtifact,
+  linkReference,
 }: {
   source: string;
   linkArtifact?: LinkArtifact;
+  linkReference?: LinkReference;
 }) {
   // Strip the code-span placeholder marker (see renderInline) so no document
   // can smuggle a forged placeholder past the masking pass.
@@ -209,7 +304,12 @@ export function Markdown({
     const key = `p-${blocks.length}`;
     blocks.push(
       <p key={key} className="text-(--mut)">
-        {renderInline(paragraph.map((line) => line.trim()).join(" "), key, linkArtifact)}
+        {renderInline(
+          paragraph.map((line) => line.trim()).join(" "),
+          key,
+          linkArtifact,
+          linkReference,
+        )}
       </p>,
     );
     paragraph = [];
@@ -229,14 +329,14 @@ export function Markdown({
               {done ? "☑" : "☐"}
             </span>
             <span className={done ? "text-(--dim) line-through" : undefined}>
-              {renderInline(task[2], key, linkArtifact)}
+              {renderInline(task[2], key, linkArtifact, linkReference)}
             </span>
           </li>
         );
       }
       return (
         <li key={key} className="leading-relaxed">
-          {renderInline(item, key, linkArtifact)}
+          {renderInline(item, key, linkArtifact, linkReference)}
         </li>
       );
     });
@@ -305,7 +405,7 @@ export function Markdown({
                     key={`${tkey}-h${c}`}
                     className="border border-(--line) bg-(--card) px-3 py-1.5 text-left font-mono text-[11px] font-medium text-(--ink)"
                   >
-                    {renderInline(cell, `${tkey}-h${c}`, linkArtifact)}
+                    {renderInline(cell, `${tkey}-h${c}`, linkArtifact, linkReference)}
                   </th>
                 ))}
               </tr>
@@ -320,7 +420,12 @@ export function Markdown({
                       key={`${tkey}-r${r}c${c}`}
                       className="border border-(--line) px-3 py-1.5 align-top text-(--mut)"
                     >
-                      {renderInline(cells[c] ?? "", `${tkey}-r${r}c${c}`, linkArtifact)}
+                      {renderInline(
+                        cells[c] ?? "",
+                        `${tkey}-r${r}c${c}`,
+                        linkArtifact,
+                        linkReference,
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -339,7 +444,7 @@ export function Markdown({
       const level = heading[1]?.length ?? 1;
       const size = level === 1 ? "text-[18px]" : level === 2 ? "text-[16px]" : "text-[14px]";
       const cls = `scroll-mt-6 text-pretty font-semibold tracking-tight text-(--ink) ${size}`;
-      const content = renderInline(heading[2], `h-${blocks.length}`, linkArtifact);
+      const content = renderInline(heading[2], `h-${blocks.length}`, linkArtifact, linkReference);
       const key = `h-${blocks.length}`;
       blocks.push(
         level === 1 ? (
@@ -389,7 +494,12 @@ export function Markdown({
           key={`q-${blocks.length}`}
           className="border-l-2 border-(--line-strong) pl-4 text-(--mut) italic"
         >
-          {renderInline(raw.replace(/^\s*>\s?/, ""), `q-${blocks.length}`, linkArtifact)}
+          {renderInline(
+            raw.replace(/^\s*>\s?/, ""),
+            `q-${blocks.length}`,
+            linkArtifact,
+            linkReference,
+          )}
         </blockquote>,
       );
       continue;

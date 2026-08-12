@@ -1,12 +1,15 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { Markdown } from "@/components/markdown";
+import { describe, expect, it, vi } from "vitest";
+import { type LinkReference, Markdown } from "@/components/markdown";
 
 const MARK = "\uE000";
 
-function render(source: string): string {
-  return renderToStaticMarkup(createElement(Markdown, { source }));
+function render(
+  source: string,
+  options: { linkReference?: LinkReference; linkArtifact?: (id: string) => string | null } = {},
+): string {
+  return renderToStaticMarkup(createElement(Markdown, { source, ...options }));
 }
 
 describe("Markdown inline parsing", () => {
@@ -96,5 +99,102 @@ The next paragraph remains separate.`);
     expect(html).toContain("vulnerable path reachable");
     expect(html).toContain('translate="no"');
     expect(html).toContain("&lt;/what_to_audit&gt;");
+  });
+});
+
+describe("Markdown GitHub references", () => {
+  it("links local, repository-qualified, and raw GitHub references", () => {
+    const linkReference = vi.fn<LinkReference>((reference) => `/stories/${reference.number}`);
+    const html = render(
+      "Closes #98, follows theam/facility#97 and https://github.com/theam/facility/pull/96.",
+      { linkReference },
+    );
+
+    expect(html.match(/<a/g)).toHaveLength(3);
+    expect(html).toContain('href="/stories/98"');
+    expect(html).toContain('href="/stories/97"');
+    expect(html).toContain('href="/stories/96"');
+    expect(linkReference).toHaveBeenNthCalledWith(1, {
+      owner: null,
+      repo: null,
+      number: 98,
+      githubUrl: null,
+    });
+    expect(linkReference).toHaveBeenNthCalledWith(2, {
+      owner: "theam",
+      repo: "facility",
+      number: 97,
+      githubUrl: "https://github.com/theam/facility/issues/97",
+    });
+    expect(linkReference).toHaveBeenNthCalledWith(3, {
+      owner: "theam",
+      repo: "facility",
+      number: 96,
+      githubUrl: "https://github.com/theam/facility/pull/96",
+    });
+  });
+
+  it("keeps reference-like text in code spans and fenced blocks literal", () => {
+    const linkReference = vi.fn<LinkReference>(() => "/unexpected");
+    const html = render("Use `#98` here.\n\n```\ntheam/facility#97\n```", { linkReference });
+
+    expect(html).toContain("<code");
+    expect(html).toContain("<pre");
+    expect(html).not.toContain("<a");
+    expect(linkReference).not.toHaveBeenCalled();
+  });
+
+  it("does not replace references inside an existing Markdown link", () => {
+    const linkReference = vi.fn<LinkReference>(() => "/unexpected");
+    const html = render(
+      "[#98](https://example.com) [PR](https://github.com/theam/facility/pull/97)",
+      {
+        linkReference,
+      },
+    );
+
+    expect(html.match(/<a/g)).toHaveLength(2);
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('href="https://github.com/theam/facility/pull/97"');
+    expect(linkReference).not.toHaveBeenCalled();
+  });
+
+  it("keeps a wikilink anchor ahead of the GitHub reference pass", () => {
+    const linkReference = vi.fn<LinkReference>(() => "/unexpected");
+    const plain = render("See [[page#123]].", { linkReference });
+    const linked = render("See [[page#123]].", {
+      linkReference,
+      linkArtifact: (id) => `/kb/${id}`,
+    });
+
+    expect(plain).toContain("[[page#123]]");
+    expect(plain).not.toContain("<a");
+    expect(linked).toContain('href="/kb/page"');
+    expect(linked).not.toContain("/unexpected");
+    expect(linkReference).not.toHaveBeenCalled();
+  });
+
+  it("preserves emphasis around a linked reference", () => {
+    const html = render("**Closes #98**", { linkReference: () => "/stories/98" });
+
+    expect(html).toContain("<strong");
+    expect(html).toContain('href="/stories/98"');
+    expect(html).not.toContain("**");
+  });
+
+  it("leaves a recognized reference as text when the resolver declines it", () => {
+    const html = render("Closes #98", { linkReference: () => null });
+
+    expect(html).toContain("Closes #98");
+    expect(html).not.toContain("<a");
+  });
+
+  it("does not find a repository reference inside another URL", () => {
+    const linkReference = vi.fn<LinkReference>(() => "/unexpected");
+    const html = render("https://example.com/theam/facility#98", { linkReference });
+
+    expect(html).toContain("https://example.com/theam/facility#98");
+    expect(html).not.toContain("<a");
+    expect(linkReference).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,8 @@
 import { StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
+import { CiStatusLink } from "@/components/ci-status";
 import { ProposalCard } from "@/components/inbox/proposal-card";
-import { Markdown } from "@/components/markdown";
+import { type LinkReference, Markdown } from "@/components/markdown";
 import { RunOutcome } from "@/components/story/run-outcome";
 import type { Proposal } from "@/lib/api";
 import { fmtCost, fmtDuration } from "@/lib/runs";
@@ -18,10 +19,12 @@ export function StoryTimeline({
   projectId,
   items,
   canDecide,
+  linkReference,
 }: {
   projectId: string;
   items: StoryItem[];
   canDecide: boolean;
+  linkReference: LinkReference;
 }) {
   if (items.length === 0) {
     return (
@@ -38,7 +41,12 @@ export function StoryTimeline({
             aria-hidden
             className="absolute top-1.5 -left-[3.5px] h-[7px] w-[7px] border border-(--line-strong) bg-(--bg)"
           />
-          <TimelineItem projectId={projectId} item={item} canDecide={canDecide} />
+          <TimelineItem
+            projectId={projectId}
+            item={item}
+            canDecide={canDecide}
+            linkReference={linkReference}
+          />
         </li>
       ))}
     </ol>
@@ -60,6 +68,8 @@ function keyOf(item: StoryItem): string {
       return `pr-open-${item.pr.number}`;
     case "pr_closed":
       return `pr-closed-${item.pr.number}`;
+    case "ci":
+      return `ci-${item.event.id}`;
     case "stage":
       return `stage-${item.stage}-${item.ts}`;
     default:
@@ -71,10 +81,12 @@ function TimelineItem({
   projectId,
   item,
   canDecide,
+  linkReference,
 }: {
   projectId: string;
   item: StoryItem;
   canDecide: boolean;
+  linkReference: LinkReference;
 }) {
   switch (item.kind) {
     case "story_opened":
@@ -122,7 +134,7 @@ function TimelineItem({
             </span>
           </div>
           <div className="text-[12.5px]">
-            <Markdown source={item.comment.bodyMd} />
+            <Markdown source={item.comment.bodyMd} linkReference={linkReference} />
           </div>
         </div>
       );
@@ -183,7 +195,7 @@ function TimelineItem({
                 PR description
               </summary>
               <div className="mt-2 border-t border-(--line) pt-3 text-[12.5px]">
-                <Markdown source={item.pr.bodyMd} />
+                <Markdown source={item.pr.bodyMd} linkReference={linkReference} />
               </div>
             </details>
           ) : null}
@@ -200,6 +212,18 @@ function TimelineItem({
           }`}
           tone={item.pr.state === "merged" ? "ok" : "machine"}
         />
+      );
+    case "ci":
+      return (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <CiStatusLink
+            state={item.event.state}
+            url={`${item.pr.url}/checks`}
+            failureNames={item.event.failureNames}
+          />
+          <span className="font-mono text-[10.5px] text-(--dim)">PR #{item.pr.number}</span>
+          <Stamp ts={item.ts} />
+        </div>
       );
     default:
       return null;

@@ -187,6 +187,7 @@ export async function processGithubWebhook(
             event.orgId,
             payload,
             factory ?? createGithubClientFactory(config),
+            { sourceEventId: event.id, observedAt: event.receivedAt },
           ),
         logger,
         pullRequestRefreshContext(event.id, event.orgId, event.eventType, payload),
@@ -220,6 +221,7 @@ export async function processGithubWebhook(
               event.orgId,
               payload,
               factory ?? createGithubClientFactory(config),
+              { sourceEventId: event.id, observedAt: event.receivedAt },
             ),
           logger,
           pullRequestRefreshContext(event.id, event.orgId, event.eventType, payload),
@@ -237,21 +239,20 @@ export async function processGithubWebhook(
           enqueue,
         );
       }
-      if (isTerminalPullRequestSignal(event.eventType, payload)) {
-        await refreshPullRequestsBestEffort(
-          () =>
-            refreshPullRequestsAndPromoteReady(
-              db,
-              event.orgId,
-              payload,
-              factory ?? createGithubClientFactory(config),
-            ),
-          logger,
-          pullRequestRefreshContext(event.id, event.orgId, event.eventType, payload),
-        );
-      }
+      await refreshPullRequestsBestEffort(
+        () =>
+          refreshPullRequestsAndPromoteReady(
+            db,
+            event.orgId,
+            payload,
+            factory ?? createGithubClientFactory(config),
+            { sourceEventId: event.id, observedAt: event.receivedAt },
+          ),
+        logger,
+        pullRequestRefreshContext(event.id, event.orgId, event.eventType, payload),
+      );
     } else if (event.eventType === "status") {
-      if (isTerminalPullRequestSignal(event.eventType, payload)) {
+      if (isPullRequestStatusSignal(payload)) {
         await refreshPullRequestsBestEffort(
           () =>
             refreshPullRequestsAndPromoteReady(
@@ -259,6 +260,7 @@ export async function processGithubWebhook(
               event.orgId,
               payload,
               factory ?? createGithubClientFactory(config),
+              { sourceEventId: event.id, observedAt: event.receivedAt },
             ),
           logger,
           pullRequestRefreshContext(event.id, event.orgId, event.eventType, payload),
@@ -307,6 +309,10 @@ function isTerminalPullRequestSignal(eventType: string, payload: WebhookPayload)
     return ["success", "failure", "error"].includes(payload.state?.toLowerCase() ?? "");
   }
   return false;
+}
+
+function isPullRequestStatusSignal(payload: WebhookPayload) {
+  return ["pending", "success", "failure", "error"].includes(payload.state?.toLowerCase() ?? "");
 }
 
 function pullRequestRefreshContext(
@@ -1540,6 +1546,7 @@ async function refreshPullRequestFromWebhook(
   orgId: string,
   payload: WebhookPayload,
   factory: GithubClientFactory,
+  observation: { sourceEventId: string; observedAt: Date },
 ) {
   const owner = payload.repository?.owner?.login;
   const name = payload.repository?.name;
@@ -1555,7 +1562,7 @@ async function refreshPullRequestFromWebhook(
   if (!repo) return;
   // The basic row is written first; callers keep this richer snapshot
   // best-effort so GraphQL availability cannot block webhook lifecycle work.
-  await refreshGhPullRequest(db, factory, repo, number);
+  await refreshGhPullRequest(db, factory, repo, number, observation);
 }
 
 async function refreshPullRequestsAndPromoteReady(
@@ -1563,6 +1570,7 @@ async function refreshPullRequestsAndPromoteReady(
   orgId: string,
   payload: WebhookPayload,
   factory: GithubClientFactory,
+  observation: { sourceEventId: string; observedAt: Date },
 ) {
   const owner = payload.repository?.owner?.login;
   const name = payload.repository?.name;
@@ -1590,7 +1598,11 @@ async function refreshPullRequestsAndPromoteReady(
     payload.check_suite?.head_sha ??
     payload.workflow_run?.head_sha ??
     payload.sha;
-  const refreshed = await refreshPullRequestsForSignal(db, factory, repo, { numbers, headSha });
+  const refreshed = await refreshPullRequestsForSignal(db, factory, repo, {
+    numbers,
+    headSha,
+    ...observation,
+  });
   await promotePassingFacilityDrafts(db, factory, repo, { numbers, headSha });
   return refreshed;
 }

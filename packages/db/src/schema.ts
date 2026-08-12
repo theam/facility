@@ -279,6 +279,7 @@ export const ghPullRequests = pgTable(
     closingIssues: integer("closing_issues").array().notNull().default(sql`'{}'::integer[]`),
     ciState: text("ci_state"),
     ciHeadSha: text("ci_head_sha"),
+    ciFailureNames: text("ci_failure_names").array().notNull().default(sql`'{}'::text[]`),
     ciUpdatedAt: timestamp("ci_updated_at", { withTimezone: true }),
     ghCreatedAt: timestamp("gh_created_at", { withTimezone: true }),
     ghUpdatedAt: timestamp("gh_updated_at", { withTimezone: true }),
@@ -297,6 +298,44 @@ export const ghPullRequests = pgTable(
       "gh_pull_requests_ci_state_check",
       sql`${table.ciState} is null or ${table.ciState} in ('pending', 'success', 'failure')`,
     ),
+  ],
+);
+
+export const ghCiEvents = pgTable(
+  "gh_ci_events",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repoId: text("repo_id")
+      .notNull()
+      .references(() => repos.id),
+    pullNumber: integer("pull_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    state: text("state").notNull(),
+    failureNames: text("failure_names").array().notNull().default(sql`'{}'::text[]`),
+    sourceEventId: text("source_event_id"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    check("gh_ci_events_state_check", sql`${table.state} in ('pending', 'success', 'failure')`),
+    index("gh_ci_events_repo_pull_observed_idx").on(
+      table.repoId,
+      table.pullNumber,
+      table.observedAt,
+    ),
+    index("gh_ci_events_org_project_observed_idx").on(
+      table.orgId,
+      table.projectId,
+      table.observedAt,
+    ),
+    uniqueIndex("gh_ci_events_source_pull_uidx")
+      .on(table.sourceEventId, table.repoId, table.pullNumber)
+      .where(sql`${table.sourceEventId} is not null`),
   ],
 );
 
