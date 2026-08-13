@@ -200,6 +200,7 @@ RUN mkdir -p /work/.facility-package-cache \
 # or recursive application hardening layer.
 COPY --chown=root:root --chmod=0555 \
   runner/runner-entrypoint.sh runner/codebuild-runner.sh runner/find-descendant.awk /app/
+COPY --chown=root:root --chmod=0555 runner/facility-delivery.sh /usr/local/bin/facility-delivery
 ENV HOME=/work
 WORKDIR /work
 ENTRYPOINT ["/app/runner-entrypoint.sh"]

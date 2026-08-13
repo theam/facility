@@ -5,6 +5,7 @@ import {
   appendFile,
   chmod,
   chown,
+  cp,
   lstat,
   mkdir,
   open,
@@ -40,7 +41,12 @@ const steerFile = join(runtimeRoot, "STEERING.md");
 const transcriptFile = join(runtimeRoot, "engine.stream.jsonl");
 const sessionStateDir = join(workRoot, ".claude");
 const sessionStateArchive = join(runtimeRoot, "claude-session-state.tgz");
+const resumeStateDir = join(workRoot, ".facility-resume");
+const resumeManifestFile = "manifest.json";
+const resumePatchFile = "tracked.patch";
+const resumeFilesDir = "files";
 const engineStderrFile = join(runtimeRoot, "engine.stderr.log");
+const DELIVERY_CLI = "/usr/local/bin/facility-delivery";
 const AGENT_PROGRESS_MAX_BYTES = 16 * 1024;
 const SECURITY_REPORT_MAX_BYTES = 256 * 1024;
 const SECURITY_EVIDENCE_MAX_BYTES = 256 * 1024;
@@ -100,6 +106,7 @@ async function main() {
   let steerStop: (() => void) | undefined;
   let progressStop: (() => Promise<boolean>) | undefined;
   let preparedSecuritySweep: PreparedSecuritySweepEvidence | null = null;
+  let restoredSessionState = false;
   secretsToRedact.add(runnerToken());
   try {
     phases.start("bootstrap");
@@ -125,6 +132,7 @@ async function main() {
       await grantWorkspaceToUntrusted();
       await prepareRunnerRuntime();
     });
+    restoredSessionState = await restoreSessionState(activeBundle);
     steerStop = startSteeringPoll();
     const packageInstallCmd = activeBundle.packageInstallCmd;
     if (packageInstallCmd) {
@@ -184,7 +192,7 @@ async function main() {
     const stopProgress = progressStop;
     const engineCode = await phases.measure(
       "agent",
-      () => runEngine(activeBundle, startedAt),
+      () => runEngine(activeBundle, startedAt, restoredSessionState),
       (code) => ({
         outcome: interruptRequested ? "canceled" : code === 0 ? "succeeded" : "failed",
       }),
@@ -509,6 +517,16 @@ export async function prepareWorkspace(
   process.env.OPENAI_API_KEY = virtualKey;
   // Platform key for KB/task writes (Project Owner / learning agents).
   process.env.FACILITY_PROJECT_ID = platform.projectId;
+  const deliveryKind = agentDeliveryKind(bundle.mode);
+  if (deliveryKind) {
+    process.env.FACILITY_DELIVERY_KIND = deliveryKind;
+    process.env.FACILITY_DELIVERY_REPOSITORY = cwd;
+    process.env.FACILITY_DELIVERY_BASE_BRANCH = bundle.repo.branch ?? "main";
+  } else {
+    delete process.env.FACILITY_DELIVERY_KIND;
+    delete process.env.FACILITY_DELIVERY_REPOSITORY;
+    delete process.env.FACILITY_DELIVERY_BASE_BRANCH;
+  }
   if (platform.platformKey) process.env.FACILITY_PLATFORM_KEY = platform.platformKey;
   // Register every injected secret for redaction from captured check output.
   for (const secret of [virtualKey, platform.platformKey, platform.repoToken]) {
@@ -526,13 +544,12 @@ async function pathExists(path: string) {
   }
 }
 
-async function runEngine(bundle: RunBundle, startedAt: number) {
+async function runEngine(bundle: RunBundle, startedAt: number, restoredSessionState: boolean) {
   const timeoutMin = bundle.timeoutMin;
   if (interruptRequested) return 130;
   if (bundle.engine === "claude_code") {
-    const restored = await restoreSessionState(bundle);
     await trustClaudeWorkspace(cwdFor(bundle));
-    const args = buildClaudeCodeArgs(bundle, restored);
+    const args = buildClaudeCodeArgs(bundle, restoredSessionState);
     addModelFlags(args, bundle.engineConfig);
     return runJsonProcess(
       "claude",
@@ -844,6 +861,116 @@ async function uploadTranscript() {
   }
 }
 
+type WorkspaceCheckpointManifest = {
+  version: 1;
+  baseBranch: string;
+  baseSha: string;
+  branch: string;
+  files: string[];
+};
+
+async function workspacePatch(cwd: string, baseBranch: string) {
+  return gitOutput(cwd, [
+    "diff",
+    "--binary",
+    "--full-index",
+    "--no-ext-diff",
+    `origin/${baseBranch}`,
+    "--",
+  ]);
+}
+
+export async function createWorkspaceCheckpoint(
+  cwd: string,
+  destination: string,
+  baseBranch: string,
+) {
+  existingGithubBranch(baseBranch);
+  await rm(destination, { recursive: true, force: true });
+  await mkdir(join(destination, resumeFilesDir), { recursive: true });
+  const baseSha = (await gitOutput(cwd, ["rev-parse", `origin/${baseBranch}`])).trim();
+  if (!/^[0-9a-f]{40}$/i.test(baseSha)) throw new Error("resume_workspace_base_invalid");
+  const branch =
+    (await gitOutput(cwd, ["branch", "--show-current"])).trim() || existingGithubBranch(baseBranch);
+  existingGithubBranch(branch);
+  const patch = await workspacePatch(cwd, baseBranch);
+  await writeFile(join(destination, resumePatchFile), patch, { mode: 0o600 });
+
+  const untracked = (await gitOutput(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]))
+    .split("\0")
+    .filter(Boolean);
+  const managedCandidates = [...FACILITY_MANAGED_REPOSITORY_FILES];
+  const managedPresence = await Promise.all(
+    managedCandidates.map((path) => pathExists(join(cwd, path))),
+  );
+  const managed = managedCandidates.filter((_, index) => managedPresence[index]);
+  const files = [...new Set([...untracked, ...managed])].sort();
+  for (const relativePath of files) {
+    safeRepositoryPath(relativePath);
+    const source = join(cwd, relativePath);
+    const target = join(destination, resumeFilesDir, relativePath);
+    await mkdir(dirname(target), { recursive: true });
+    await cp(source, target, { recursive: true, preserveTimestamps: true });
+  }
+  const manifest: WorkspaceCheckpointManifest = {
+    version: 1,
+    baseBranch,
+    baseSha,
+    branch,
+    files,
+  };
+  await writeFile(join(destination, resumeManifestFile), `${JSON.stringify(manifest, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  return manifest;
+}
+
+export async function restoreWorkspaceCheckpoint(
+  cwd: string,
+  source: string,
+  expectedBaseBranch: string,
+) {
+  const manifestPath = join(source, resumeManifestFile);
+  if (!(await pathExists(manifestPath))) return false;
+  const parsed: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
+  const root = objectValue(parsed);
+  if (
+    !hasExactObjectKeys(parsed, ["version", "baseBranch", "baseSha", "branch", "files"]) ||
+    root.version !== 1 ||
+    root.baseBranch !== expectedBaseBranch ||
+    typeof root.baseSha !== "string" ||
+    !/^[0-9a-f]{40}$/i.test(root.baseSha) ||
+    typeof root.branch !== "string" ||
+    !Array.isArray(root.files) ||
+    !root.files.every((path) => typeof path === "string")
+  ) {
+    throw new Error("resume_workspace_manifest_invalid");
+  }
+  const currentBaseSha = (
+    await gitOutput(cwd, ["rev-parse", `origin/${expectedBaseBranch}`])
+  ).trim();
+  if (currentBaseSha !== root.baseSha) throw new Error("resume_workspace_base_mismatch");
+  const branch = existingGithubBranch(root.branch);
+  const currentBranch = (await gitOutput(cwd, ["branch", "--show-current"])).trim();
+  if (branch !== currentBranch) await gitOutput(cwd, ["checkout", "-B", branch]);
+  const patchPath = join(source, resumePatchFile);
+  const patch = await readFile(patchPath, "utf8");
+  const existingPatch = await workspacePatch(cwd, expectedBaseBranch);
+  if (patch !== existingPatch) {
+    if (existingPatch.trim()) throw new Error("resume_workspace_conflict");
+    if (patch.trim()) await gitOutput(cwd, ["apply", "--binary", patchPath]);
+  }
+  for (const relativePath of root.files as string[]) {
+    safeRepositoryPath(relativePath);
+    const checkpointFile = join(source, resumeFilesDir, relativePath);
+    if (!(await pathExists(checkpointFile))) throw new Error("resume_workspace_file_missing");
+    const target = join(cwd, relativePath);
+    await mkdir(dirname(target), { recursive: true });
+    await cp(checkpointFile, target, { recursive: true, preserveTimestamps: true });
+  }
+  return true;
+}
+
 async function restoreSessionState(bundle: RunBundle) {
   if (bundle.engine !== "claude_code" || !bundle.resume) return false;
   try {
@@ -855,8 +982,17 @@ async function restoreSessionState(bundle: RunBundle) {
     }
     await writeFile(sessionStateArchive, Buffer.from(await response.arrayBuffer()));
     await rm(sessionStateDir, { recursive: true, force: true });
+    await rm(resumeStateDir, { recursive: true, force: true });
     await mkdir(workRoot, { recursive: true });
     await runCommand("tar", ["-xzf", sessionStateArchive, "-C", workRoot], workRoot);
+    if (bundle.repo.cloneUrl && agentDeliveryKind(bundle.mode)) {
+      const restoredWorkspace = await restoreWorkspaceCheckpoint(
+        cwdFor(bundle),
+        resumeStateDir,
+        bundle.repo.branch ?? "main",
+      );
+      if (!restoredWorkspace) throw new Error("resume_workspace_checkpoint_missing");
+    }
     return true;
   } catch (error) {
     await emit([
@@ -871,17 +1007,28 @@ async function restoreSessionState(bundle: RunBundle) {
 
 async function uploadSessionState(bundle: RunBundle) {
   if (bundle.engine !== "claude_code") return;
-  const size = await directorySize(sessionStateDir).catch(() => 0);
-  if (size === 0) return;
-  if (size > SESSION_STATE_MAX_BYTES) {
-    await emit([
-      { type: "artifact_error", data: { kind: "session_state_too_large", bytes: size } },
-    ]).catch(() => undefined);
-    return;
-  }
   try {
+    const archiveEntries = [".claude"];
+    if (bundle.repo.cloneUrl && agentDeliveryKind(bundle.mode)) {
+      await createWorkspaceCheckpoint(cwdFor(bundle), resumeStateDir, bundle.repo.branch ?? "main");
+      archiveEntries.push(".facility-resume");
+    }
+    const size = await Promise.all(
+      archiveEntries.map((entry) => directorySize(join(workRoot, entry)).catch(() => 0)),
+    ).then((sizes) => sizes.reduce((total, entrySize) => total + entrySize, 0));
+    if (size === 0) return;
+    if (size > SESSION_STATE_MAX_BYTES) {
+      await emit([
+        { type: "artifact_error", data: { kind: "session_state_too_large", bytes: size } },
+      ]).catch(() => undefined);
+      return;
+    }
     await rm(sessionStateArchive, { force: true });
-    await runCommand("tar", ["-czf", sessionStateArchive, "-C", workRoot, ".claude"], workRoot);
+    await runCommand(
+      "tar",
+      ["-czf", sessionStateArchive, "-C", workRoot, ...archiveEntries],
+      workRoot,
+    );
     const archiveSize = await stat(sessionStateArchive).then((info) => info.size);
     if (archiveSize > SESSION_STATE_MAX_BYTES) {
       await emit([
@@ -914,7 +1061,7 @@ async function uploadSessionState(bundle: RunBundle) {
 export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boolean) {
   const args =
     bundle.resume && restoredSessionState
-      ? ["-p", bundle.resume.prompt, "--resume", bundle.resume.sessionId]
+      ? ["-p", resumeContinuationPrompt(bundle), "--resume", bundle.resume.sessionId]
       : ["-p", resumeRecoveryPrompt(bundle)];
   args.push(
     "--output-format",
@@ -925,14 +1072,70 @@ export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boo
     "--max-turns",
     "500",
   );
+  const deliveryPrompt = deliverySystemPrompt(bundle.mode);
+  const deliverySettings = claudeDeliverySettings(bundle.mode);
+  if (deliveryPrompt) args.push("--append-system-prompt", deliveryPrompt);
+  if (deliverySettings) args.push("--settings", deliverySettings);
   return args;
+}
+
+export function deliverySystemPrompt(mode: string) {
+  const kind = agentDeliveryKind(mode);
+  if (!kind) return null;
+  if (kind === "repair") {
+    return `<facility_delivery>
+Facility owns the signed commit and GitHub publication. Never run git push, create a pull request, or depend on gh authentication. If and only if you make repository changes, create the required receipt with the runner-owned command before stopping:
+
+  facility-delivery write --branch "<existing PR branch>" --commit-message "fix: describe the correction"
+
+Then run \`facility-delivery validate\`. Do not write .agent-sdlc/delivery.json by hand. A Stop hook validates the receipt and will return actionable feedback while you can still correct it.
+</facility_delivery>`;
+  }
+  return `<facility_delivery>
+Facility owns the signed commit, push, and draft pull request. Never run git push, create a pull request, or depend on gh authentication. After completing and verifying repository changes, create the required receipt with the runner-owned command before stopping:
+
+  facility-delivery write --branch "feature/task-slug" --commit-message "feat: describe the change" --pr-title "feat: describe the change" --pr-body-file /tmp/facility-pr-body.md
+
+The PR body file must contain the complete team-lead-ready description. Then run \`facility-delivery validate\`. Do not write .agent-sdlc/delivery.json by hand. A Stop hook validates the receipt and will return actionable feedback while you can still correct it.
+</facility_delivery>`;
+}
+
+export function claudeDeliverySettings(mode: string) {
+  if (!agentDeliveryKind(mode)) return null;
+  return JSON.stringify({
+    disableAllHooks: false,
+    hooks: {
+      Stop: [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: DELIVERY_CLI,
+              args: ["hook"],
+              timeout: 10,
+            },
+          ],
+        },
+      ],
+    },
+  });
+}
+
+export function resumeContinuationPrompt(bundle: RunBundle) {
+  if (!bundle.resume) return composedPrompt(bundle);
+  const priorPrompt = composedPrompt({
+    ...bundle,
+    scope: bundle.resume.fallbackScope ?? bundle.scope,
+    resume: undefined,
+  });
+  return `${priorPrompt}\n\n## Restored continuation\nFacility restored both the prior Claude session and its governed workspace checkpoint from run ${bundle.resume.sessionStateFrom}. Re-read the original objective and approved plan above; they remain authoritative even if the conversation was compacted. Inspect the restored worktree before changing it, continue rather than restarting completed work, and re-run relevant verification before delivery.\n\n## Resume instruction\n${bundle.resume.prompt}`;
 }
 
 export function resumeRecoveryPrompt(bundle: RunBundle) {
   const fallbackScope = bundle.resume?.fallbackScope;
   if (!fallbackScope) return composedPrompt(bundle);
-  const priorPrompt = composedPrompt({ ...bundle, scope: fallbackScope });
-  return `${priorPrompt}\n\n## Resume recovery\nThe prior Claude session state from run ${bundle.resume?.sessionStateFrom} was unavailable. Continue from the governed objective above without assuming unrecorded prior work.\n\n## Resume instruction\n${bundle.resume?.prompt}`;
+  const priorPrompt = composedPrompt({ ...bundle, scope: fallbackScope, resume: undefined });
+  return `${priorPrompt}\n\n## Resume recovery\nThe prior Claude session or governed workspace checkpoint from run ${bundle.resume?.sessionStateFrom} was unavailable. Continue from the governed objective above without assuming unrecorded prior work.\n\n## Resume instruction\n${bundle.resume?.prompt}`;
 }
 
 export async function emitEngineEventsBestEffort(
@@ -1407,6 +1610,13 @@ export function requiresDelivery(mode: string) {
   return mode === "builder" || mode.endsWith("-builder");
 }
 
+type AgentDeliveryKind = "builder" | "repair";
+
+function agentDeliveryKind(mode: string): AgentDeliveryKind | null {
+  if (requiresDelivery(mode)) return "builder";
+  return repairRepositoryMode(normalizedMode(mode)) ? "repair" : null;
+}
+
 export function githubCiOwnsAcceptance(bundle: Pick<RunBundle, "mode" | "repo">): boolean {
   if (!bundle.repo.cloneUrl?.startsWith("https://github.com/")) return false;
   const mode = normalizedMode(bundle.mode);
@@ -1876,6 +2086,13 @@ export type AgentDeliveryMetadata = {
   pullRequest: { title: string; body: string };
 };
 
+function hasExactObjectKeys(value: unknown, keys: readonly string[]) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
 export async function readAgentDeliveryMetadata(path: string): Promise<AgentDeliveryMetadata> {
   let parsed: unknown;
   try {
@@ -1885,6 +2102,12 @@ export async function readAgentDeliveryMetadata(path: string): Promise<AgentDeli
   }
   const root = objectValue(parsed);
   const pullRequest = objectValue(root.pullRequest);
+  if (
+    !hasExactObjectKeys(parsed, ["branch", "commitMessage", "pullRequest"]) ||
+    !hasExactObjectKeys(root.pullRequest, ["title", "body"])
+  ) {
+    throw new Error("agent_delivery_metadata_shape_invalid");
+  }
   const branch = typeof root.branch === "string" ? root.branch.trim() : "";
   const commitMessage = typeof root.commitMessage === "string" ? root.commitMessage : "";
   const title = typeof pullRequest.title === "string" ? pullRequest.title : "";
@@ -1915,6 +2138,9 @@ export async function readAgentUpdateMetadata(
     throw new Error(`agent_delivery_metadata_missing_or_invalid: ${errorMessage(error)}`);
   }
   const root = objectValue(parsed);
+  if (!hasExactObjectKeys(parsed, ["branch", "commitMessage"])) {
+    throw new Error("agent_delivery_metadata_shape_invalid");
+  }
   const branch = typeof root.branch === "string" ? root.branch.trim() : "";
   const commitMessage = typeof root.commitMessage === "string" ? root.commitMessage : "";
   existingGithubBranch(branch);
@@ -1922,6 +2148,139 @@ export async function readAgentUpdateMetadata(
     throw new Error("agent_delivery_commit_not_conventional");
   }
   return { branch, commitMessage };
+}
+
+export type AgentDeliveryWriteInput = {
+  branch: string;
+  commitMessage: string;
+  pullRequest?: { title: string; body: string };
+};
+
+export async function writeAgentDeliveryReceipt(
+  path: string,
+  kind: AgentDeliveryKind,
+  input: AgentDeliveryWriteInput,
+) {
+  const receipt =
+    kind === "builder"
+      ? {
+          branch: input.branch,
+          commitMessage: input.commitMessage,
+          pullRequest: input.pullRequest,
+        }
+      : { branch: input.branch, commitMessage: input.commitMessage };
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  return kind === "builder" ? readAgentDeliveryMetadata(path) : readAgentUpdateMetadata(path);
+}
+
+function deliveryCliFlags(args: string[]) {
+  const flags = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const name = args[index];
+    const value = args[index + 1];
+    if (!name?.startsWith("--") || value === undefined || value.startsWith("--")) {
+      throw new Error(`facility_delivery_argument_invalid: ${name ?? "missing"}`);
+    }
+    if (flags.has(name)) throw new Error(`facility_delivery_argument_duplicate: ${name}`);
+    flags.set(name, value);
+  }
+  return flags;
+}
+
+function requiredDeliveryFlag(flags: Map<string, string>, name: string) {
+  const value = flags.get(name)?.trim();
+  if (!value) throw new Error(`facility_delivery_argument_missing: ${name}`);
+  return value;
+}
+
+async function deliveryTextFlag(flags: Map<string, string>, inlineName: string, fileName: string) {
+  const inline = flags.get(inlineName);
+  const file = flags.get(fileName);
+  if (inline !== undefined && file !== undefined) {
+    throw new Error(`facility_delivery_argument_conflict: ${inlineName}, ${fileName}`);
+  }
+  const value = file === undefined ? inline : await readFile(file, "utf8");
+  if (!value?.trim()) throw new Error(`facility_delivery_argument_missing: ${inlineName}`);
+  return value.trimEnd();
+}
+
+function facilityDeliveryEnvironment() {
+  const kind = process.env.FACILITY_DELIVERY_KIND;
+  if (kind !== "builder" && kind !== "repair") {
+    throw new Error("facility_delivery_not_configured");
+  }
+  const cwd = process.env.FACILITY_DELIVERY_REPOSITORY;
+  if (!cwd) throw new Error("facility_delivery_repository_missing");
+  return { kind, cwd } as const;
+}
+
+async function repositoryHasChanges(cwd: string) {
+  const baseBranch = process.env.FACILITY_DELIVERY_BASE_BRANCH ?? "main";
+  const tracked = await gitOutput(cwd, ["diff", "--name-only", `origin/${baseBranch}`, "--"]);
+  if (tracked.trim()) return true;
+  const untracked = await gitOutput(cwd, ["ls-files", "--others", "--exclude-standard"]);
+  return Boolean(untracked.trim());
+}
+
+async function validateConfiguredDelivery() {
+  const { kind, cwd } = facilityDeliveryEnvironment();
+  const path = join(cwd, ".agent-sdlc", "delivery.json");
+  return kind === "builder" ? readAgentDeliveryMetadata(path) : readAgentUpdateMetadata(path);
+}
+
+export async function deliveryHookDecision() {
+  try {
+    const { cwd } = facilityDeliveryEnvironment();
+    if (!(await repositoryHasChanges(cwd))) return null;
+    await validateConfiguredDelivery();
+    return null;
+  } catch (error) {
+    return {
+      decision: "block" as const,
+      reason: `Facility cannot accept this delivery receipt (${errorMessage(error)}). Use the runner-owned \`facility-delivery write ...\` command shown in your system instructions, then run \`facility-delivery validate\`. Do not write .agent-sdlc/delivery.json by hand.`,
+    };
+  }
+}
+
+export async function deliveryCliMain(args: string[]) {
+  const command = args[0];
+  if (command === "validate") {
+    await validateConfiguredDelivery();
+    process.stdout.write("Facility delivery receipt is valid.\n");
+    return;
+  }
+  if (command === "hook") {
+    const decision = await deliveryHookDecision();
+    if (decision) process.stdout.write(`${JSON.stringify(decision)}\n`);
+    return;
+  }
+  if (command !== "write") throw new Error("facility_delivery_usage: expected write or validate");
+  const { kind, cwd } = facilityDeliveryEnvironment();
+  const flags = deliveryCliFlags(args.slice(1));
+  const branch = requiredDeliveryFlag(flags, "--branch");
+  const commitMessage = await deliveryTextFlag(flags, "--commit-message", "--commit-message-file");
+  const pullRequest =
+    kind === "builder"
+      ? {
+          title: requiredDeliveryFlag(flags, "--pr-title"),
+          body: await deliveryTextFlag(flags, "--pr-body", "--pr-body-file"),
+        }
+      : undefined;
+  const allowed = new Set([
+    "--branch",
+    "--commit-message",
+    "--commit-message-file",
+    ...(kind === "builder" ? ["--pr-title", "--pr-body", "--pr-body-file"] : []),
+  ]);
+  const unknown = [...flags.keys()].find((name) => !allowed.has(name));
+  if (unknown) throw new Error(`facility_delivery_argument_unknown: ${unknown}`);
+  await writeAgentDeliveryReceipt(join(cwd, ".agent-sdlc", "delivery.json"), kind, {
+    branch,
+    commitMessage,
+    pullRequest,
+  });
+  process.stdout.write("Facility delivery receipt written and validated.\n");
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -2461,10 +2820,10 @@ export function composedPrompt(bundle: RunBundle) {
         .join("\n")}`
     : "";
   const deliveryNote = requiresDelivery(bundle.mode)
-    ? `\n\n## Agent-owned delivery\nFacility will create the signed commit, push, and draft pull request with the GitHub App after your engine exits. GitHub Actions is the authoritative acceptance boundary: do not duplicate the repository's full configured CI suite inside this sandbox. Run focused checks that help you iterate on the changed behavior, report their results accurately, and let the durable draft PR retain the work while CI and repair agents continue. You own all delivery metadata. Before finishing, create \`.agent-sdlc/delivery.json\` with exactly this shape:\n\n\`\`\`json\n{\n  "branch": "feature/task-slug",\n  "commitMessage": "feat: describe the change",\n  "pullRequest": {\n    "title": "feat: describe the change",\n    "body": "## Summary\\n- ...\\n\\n## Context\\n- ...\\n\\n## Verification\\n- ...\\n\\n## Linked issues\\n- Closes #123"\n  }\n}\n\`\`\`\n\nThe branch must be semantic; the commit and PR title must use Conventional Commits and have the same release impact. If the commit has a \`BREAKING CHANGE:\` footer, mark the PR title with \`!\` too. The PR body must be your complete team-lead-ready description. Do not commit this managed file. Do not require \`gh\`, a writable clone token, or a local signing key: Facility transports your exact metadata and fails closed if it is absent or invalid.`
+    ? `\n\n## Agent-owned delivery\nFacility will create the signed commit, push, and draft pull request with the GitHub App after your engine exits. GitHub Actions is the authoritative acceptance boundary: do not duplicate the repository's full configured CI suite inside this sandbox. Run focused checks that help you iterate on the changed behavior, report their results accurately, and let the durable draft PR retain the work while CI and repair agents continue. You own the delivery metadata values, while the runner owns their machine-readable representation. Write the complete PR body to a temporary file, then run \`facility-delivery write --branch "feature/task-slug" --commit-message "feat: describe the change" --pr-title "feat: describe the change" --pr-body-file /tmp/facility-pr-body.md\` followed by \`facility-delivery validate\`. Do not write or commit \`.agent-sdlc/delivery.json\` by hand. The branch must be semantic; the commit and PR title must use Conventional Commits and have the same release impact. If the commit has a \`BREAKING CHANGE:\` footer, mark the PR title with \`!\` too. The PR body must be your complete team-lead-ready description. Do not require \`gh\`, a writable clone token, or a local signing key: Facility transports the validated metadata and fails closed if it is absent or invalid.`
     : "";
   const repairDeliveryNote = repairRepositoryMode(normalizedMode(bundle.mode))
-    ? `\n\n## Agent-owned PR update\nIf and only if you make verified repository changes, create \`.agent-sdlc/delivery.json\` before finishing with exactly \`{"branch":"<the existing PR branch>","commitMessage":"<matching Conventional Commit type>: describe the correction"}\`. Facility will add a signed commit to that same branch through the GitHub App. The branch must exactly match the checked-out PR branch. Choose a truthful Conventional Commit type whose release impact is no greater than the existing pull request range; do not add \`!\` or a \`BREAKING CHANGE:\` footer unless that range is already breaking. If a truthful message would raise the impact, leave the manifest absent and report that the PR title must be updated first. Do not run \`git push\`, create another branch or pull request, force-push, or depend on \`gh\`. If no code change is needed, do not create the manifest.`
+    ? `\n\n## Agent-owned PR update\nIf and only if you make verified repository changes, run \`facility-delivery write --branch "<the existing PR branch>" --commit-message "<matching Conventional Commit type>: describe the correction"\` followed by \`facility-delivery validate\`. Do not write or commit \`.agent-sdlc/delivery.json\` by hand. Facility will add a signed commit to that same branch through the GitHub App. The branch must exactly match the checked-out PR branch. Choose a truthful Conventional Commit type whose release impact is no greater than the existing pull request range; do not add \`!\` or a \`BREAKING CHANGE:\` footer unless that range is already breaking. If a truthful message would raise the impact, leave the receipt absent and report that the PR title must be updated first. Do not run \`git push\`, create another branch or pull request, force-push, or depend on \`gh\`. If no code change is needed, do not create the receipt.`
     : "";
   return `${bundle.contract}\n\nScope:\n${JSON.stringify(bundle.scope, null, 2)}${harnessNote}${steeringNote}${conversationNote}${objectiveNote}${progressNote}${repositoryOutputNote}${githubEventNote}${projectSkillsNote}${deliveryNote}${repairDeliveryNote}`;
 }
@@ -2583,5 +2942,12 @@ function errorMessage(error: unknown) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main();
+  if (process.argv[2] === "delivery") {
+    deliveryCliMain(process.argv.slice(3)).catch((error) => {
+      process.stderr.write(`${errorMessage(error)}\n`);
+      process.exitCode = 1;
+    });
+  } else {
+    main();
+  }
 }

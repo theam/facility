@@ -1852,7 +1852,7 @@ async function resumeForRun(db: ReturnType<typeof createDb>["db"], run: RunRow) 
       sessionId: parent.engineSessionId,
       sessionStateFrom: parent.id,
       prompt: resumePrompt(trigger),
-      ...resumeFallbackScope(parent.trigger),
+      ...resumeFallbackScope(parent),
       ...resumeBranch(parent),
     };
   }
@@ -1883,7 +1883,7 @@ async function resumeForRun(db: ReturnType<typeof createDb>["db"], run: RunRow) 
       sessionId: conversation.engineSessionId,
       sessionStateFrom: parent.id,
       prompt: resumePrompt(trigger),
-      ...resumeFallbackScope(parent.trigger),
+      ...resumeFallbackScope(parent),
       ...resumeBranch(parent),
     };
   }
@@ -1928,9 +1928,15 @@ export function boundedResumeFallbackScope(value: unknown): Record<string, unkno
   }
 }
 
-function resumeFallbackScope(value: unknown) {
-  const fallbackScope = boundedResumeFallbackScope(value);
+function resumeFallbackScope(parent: RunRow) {
+  const fallbackScope = boundedResumeFallbackScope(
+    resumeFallbackScopeValue(parent.trigger, parent.sandbox),
+  );
   return fallbackScope ? { fallbackScope } : {};
+}
+
+export function resumeFallbackScopeValue(trigger: unknown, sandbox: unknown) {
+  return readSandbox(sandbox).bundle?.resume?.fallbackScope ?? trigger;
 }
 
 function resumeBranch(parent: RunRow) {

@@ -117,14 +117,28 @@ facility sessions watch <builder-run-id>
 
 The builder must clone the intended repository, provision it, implement the
 request on a non-protected branch, and run every configured check. Before it
-finishes, it must author `.agent-sdlc/delivery.json` with its semantic branch,
-Conventional Commit message, PR title, and complete PR body. Facility excludes
-that transport file from the diff, creates a GitHub-signed commit with the App,
-and opens the bot-authored PR using the agent's exact title and description.
-The platform never substitutes a generic title or body. A missing or invalid
-delivery manifest, failed engine, provision command, configured check, signed
-commit, branch publication, or PR creation must make the run fail; an agent's
-self-reported success is not enough.
+finishes, it must pass its semantic branch, Conventional Commit message, PR
+title, and complete PR body to the runner-owned `facility-delivery write`
+command. The command creates the exact machine-readable receipt and validates
+it immediately. A Stop hook blocks completion while repository changes exist
+without a valid receipt and returns the validation error to the agent so it can
+correct the values. Facility excludes that transport file from the diff,
+creates a GitHub-signed commit with the App, and opens the bot-authored PR using
+the agent's exact title and description. The platform never substitutes a
+generic title or body. A missing or invalid delivery receipt, failed engine,
+provision command, configured check, signed commit, branch publication, or PR
+creation must make the run fail; an agent's self-reported success is not enough.
+
+If a builder is interrupted or its model connection closes, Facility stores a
+bounded resume checkpoint alongside the Claude session. The checkpoint contains
+the worktree delta from the admitted base (including binary changes), untracked
+files, managed progress and delivery artifacts, and the local branch—but never
+the Git database, dependencies, or clone credentials. A resumed run verifies the
+same base commit, restores that checkpoint before package installation and
+provisioning, and re-injects the bounded original governed scope and approved
+plan even when Claude's conversation was compacted. Nested resumes continue
+carrying that original scope instead of replacing it with the previous `resume`
+instruction.
 
 The pull request is Gate 2. Confirm that review and receipt workflows complete,
 inspect their comments and artifacts, and merge only after a human accepts the

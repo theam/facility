@@ -16,9 +16,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildClaudeCodeArgs,
   buildCodexArgs,
+  claudeDeliverySettings,
   composedPrompt,
+  createWorkspaceCheckpoint,
+  deliveryCliMain,
+  deliveryHookDecision,
   deliveryReleaseImpact,
   deliveryStatusEvent,
+  deliverySystemPrompt,
   emitEngineEventsBestEffort,
   engineEnv,
   exitCode,
@@ -37,12 +42,15 @@ import {
   readOnlyEngineProgress,
   readSecurityReport,
   requiresAgentProgress,
+  restoreWorkspaceCheckpoint,
+  resumeContinuationPrompt,
   resumeRecoveryPrompt,
   runnerReceiptActivity,
   runPackageInstall,
   semanticDeliveryBranch,
   terminateChild,
   trustClaudeWorkspace,
+  writeAgentDeliveryReceipt,
 } from "../src/index.js";
 import type { RunBundle } from "../src/types.js";
 
@@ -456,6 +464,164 @@ describe("workspace preparation", () => {
       }),
     );
     await expect(readAgentDeliveryMetadata(path)).rejects.toThrow("branch_not_semantic");
+  });
+
+  it("rejects invented delivery fields instead of silently accepting a nearby schema", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-"));
+    const path = join(root, "delivery.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        issue: "acme/widget#2",
+        branch: "feature/2-integer-subtraction",
+        commit: { message: "feat: add integer subtraction" },
+        pullRequest: {
+          title: "feat: add integer subtraction",
+          body: "## Summary\n- Add subtraction.",
+        },
+      }),
+    );
+
+    await expect(readAgentDeliveryMetadata(path)).rejects.toThrow(
+      "agent_delivery_metadata_shape_invalid",
+    );
+  });
+
+  it("writes the exact governed receipt shape through the runner-owned writer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-"));
+    const path = join(root, ".agent-sdlc", "delivery.json");
+
+    await expect(
+      writeAgentDeliveryReceipt(path, "builder", {
+        branch: "feature/2-integer-subtraction",
+        commitMessage: "feat: add integer subtraction",
+        pullRequest: {
+          title: "feat: add integer subtraction",
+          body: "## Summary\n- Add subtraction.",
+        },
+      }),
+    ).resolves.toMatchObject({ branch: "feature/2-integer-subtraction" });
+    await expect(readFile(path, "utf8").then(JSON.parse)).resolves.toEqual({
+      branch: "feature/2-integer-subtraction",
+      commitMessage: "feat: add integer subtraction",
+      pullRequest: {
+        title: "feat: add integer subtraction",
+        body: "## Summary\n- Add subtraction.",
+      },
+    });
+  });
+
+  it("writes and validates a builder receipt through the agent-facing CLI", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-delivery-cli-"));
+    const bodyPath = join(root, "pr-body.md");
+    await writeFile(bodyPath, "## Summary\n- Add subtraction.\n");
+    const previous = {
+      kind: process.env.FACILITY_DELIVERY_KIND,
+      repository: process.env.FACILITY_DELIVERY_REPOSITORY,
+    };
+    process.env.FACILITY_DELIVERY_KIND = "builder";
+    process.env.FACILITY_DELIVERY_REPOSITORY = root;
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await deliveryCliMain([
+        "write",
+        "--branch",
+        "feature/2-integer-subtraction",
+        "--commit-message",
+        "feat: add integer subtraction",
+        "--pr-title",
+        "feat: add integer subtraction",
+        "--pr-body-file",
+        bodyPath,
+      ]);
+      await deliveryCliMain(["validate"]);
+      await expect(
+        readFile(join(root, ".agent-sdlc", "delivery.json"), "utf8").then(JSON.parse),
+      ).resolves.toEqual({
+        branch: "feature/2-integer-subtraction",
+        commitMessage: "feat: add integer subtraction",
+        pullRequest: {
+          title: "feat: add integer subtraction",
+          body: "## Summary\n- Add subtraction.",
+        },
+      });
+      expect(stdout).toHaveBeenCalledWith("Facility delivery receipt written and validated.\n");
+      expect(stdout).toHaveBeenCalledWith("Facility delivery receipt is valid.\n");
+    } finally {
+      stdout.mockRestore();
+      for (const [key, value] of [
+        ["FACILITY_DELIVERY_KIND", previous.kind],
+        ["FACILITY_DELIVERY_REPOSITORY", previous.repository],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("blocks Claude from stopping with changes until the governed receipt validates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-delivery-hook-"));
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: root });
+    await writeFile(join(root, "task.txt"), "before\n");
+    execFileSync("git", ["add", "task.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "chore: initialize fixture"], { cwd: root });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root });
+    await writeFile(join(root, "task.txt"), "after\n");
+
+    const previous = {
+      kind: process.env.FACILITY_DELIVERY_KIND,
+      repository: process.env.FACILITY_DELIVERY_REPOSITORY,
+      baseBranch: process.env.FACILITY_DELIVERY_BASE_BRANCH,
+    };
+    process.env.FACILITY_DELIVERY_KIND = "builder";
+    process.env.FACILITY_DELIVERY_REPOSITORY = root;
+    process.env.FACILITY_DELIVERY_BASE_BRANCH = "main";
+    try {
+      await expect(deliveryHookDecision()).resolves.toMatchObject({
+        decision: "block",
+      });
+      await writeAgentDeliveryReceipt(join(root, ".agent-sdlc", "delivery.json"), "builder", {
+        branch: "feature/task",
+        commitMessage: "feat: update task",
+        pullRequest: { title: "feat: update task", body: "## Summary\n- Update task." },
+      });
+      await expect(deliveryHookDecision()).resolves.toBeNull();
+    } finally {
+      for (const [key, value] of [
+        ["FACILITY_DELIVERY_KIND", previous.kind],
+        ["FACILITY_DELIVERY_REPOSITORY", previous.repository],
+        ["FACILITY_DELIVERY_BASE_BRANCH", previous.baseBranch],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("fails the Stop hook closed when receipt validation cannot run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-delivery-hook-invalid-"));
+    const previous = {
+      kind: process.env.FACILITY_DELIVERY_KIND,
+      repository: process.env.FACILITY_DELIVERY_REPOSITORY,
+    };
+    process.env.FACILITY_DELIVERY_KIND = "builder";
+    process.env.FACILITY_DELIVERY_REPOSITORY = root;
+    try {
+      await expect(deliveryHookDecision()).resolves.toMatchObject({
+        decision: "block",
+        reason: expect.stringContaining("Facility cannot accept this delivery receipt"),
+      });
+    } finally {
+      for (const [key, value] of [
+        ["FACILITY_DELIVERY_KIND", previous.kind],
+        ["FACILITY_DELIVERY_REPOSITORY", previous.repository],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("accepts style and punctuation scopes and rejects malformed conventional subjects", async () => {
@@ -1185,6 +1351,78 @@ describe("run prompt composition", () => {
 });
 
 describe("Claude resume controls", () => {
+  it("restores tracked, binary, untracked, managed, and branch state from a checkpoint", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-resume-"));
+    const source = join(root, "source");
+    const target = join(root, "target");
+    const checkpoint = join(root, "checkpoint");
+    await mkdir(source);
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: source });
+    execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: source });
+    await writeFile(join(source, ".gitignore"), "node_modules/\n");
+    await writeFile(join(source, "task.txt"), "before\n");
+    await writeFile(join(source, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    execFileSync("git", ["add", ".gitignore", "task.txt", "asset.bin"], { cwd: source });
+    execFileSync("git", ["commit", "-m", "chore: initialize resume fixture"], { cwd: source });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source });
+    execFileSync("git", ["checkout", "-b", "feature/resumed-task"], { cwd: source });
+    await writeFile(join(source, "task.txt"), "after\n");
+    await writeFile(join(source, "asset.bin"), Buffer.from([3, 2, 1, 0]));
+    await writeFile(join(source, "new-file.txt"), "new work\n");
+    await mkdir(join(source, "node_modules", "generated"), { recursive: true });
+    await writeFile(join(source, "node_modules", "generated", "cache.js"), "ignored\n");
+    await mkdir(join(source, ".agent-sdlc"));
+    await writeFile(join(source, ".agent-sdlc", "progress.md"), "- [x] restored work\n");
+    await writeFile(join(source, ".git", "info", "exclude"), ".agent-sdlc/progress.md\n", {
+      flag: "a",
+    });
+
+    await createWorkspaceCheckpoint(source, checkpoint, "main");
+    execFileSync("git", ["clone", "--branch", "main", source, target]);
+
+    await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).resolves.toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], { cwd: target, encoding: "utf8" }).trim(),
+    ).toBe("feature/resumed-task");
+    await expect(readFile(join(target, "task.txt"), "utf8")).resolves.toBe("after\n");
+    await expect(readFile(join(target, "asset.bin"))).resolves.toEqual(Buffer.from([3, 2, 1, 0]));
+    await expect(readFile(join(target, "new-file.txt"), "utf8")).resolves.toBe("new work\n");
+    await expect(lstat(join(target, "node_modules"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(target, ".agent-sdlc", "progress.md"), "utf8")).resolves.toBe(
+      "- [x] restored work\n",
+    );
+  });
+
+  it("rejects a workspace checkpoint when the admitted base changed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-resume-stale-"));
+    const source = join(root, "source");
+    const target = join(root, "target");
+    const checkpoint = join(root, "checkpoint");
+    await mkdir(source);
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: source });
+    execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: source });
+    await writeFile(join(source, "task.txt"), "before\n");
+    execFileSync("git", ["add", "task.txt"], { cwd: source });
+    execFileSync("git", ["commit", "-m", "chore: initialize stale fixture"], { cwd: source });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source });
+    await writeFile(join(source, "task.txt"), "resumable work\n");
+    await createWorkspaceCheckpoint(source, checkpoint, "main");
+
+    execFileSync("git", ["clone", "--branch", "main", source, target]);
+    execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: target });
+    execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: target });
+    await writeFile(join(target, "new-base.txt"), "new base\n");
+    execFileSync("git", ["add", "new-base.txt"], { cwd: target });
+    execFileSync("git", ["commit", "-m", "chore: advance admitted base"], { cwd: target });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: target });
+
+    await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).rejects.toThrow(
+      "resume_workspace_base_mismatch",
+    );
+  });
+
   it("runs architects in native plan mode and keeps builders writable", () => {
     const architectArgs = buildClaudeCodeArgs(bundle({ mode: "architect" }), false);
     const builderArgs = buildClaudeCodeArgs(bundle({ mode: "builder" }), false);
@@ -1192,6 +1430,14 @@ describe("Claude resume controls", () => {
     expect(architectArgs.slice(architectArgs.indexOf("--permission-mode"), -2)).toContain("plan");
     expect(architectArgs).not.toContain("bypassPermissions");
     expect(builderArgs).toContain("bypassPermissions");
+    expect(architectArgs).not.toContain("--append-system-prompt");
+    expect(builderArgs).toContain("--append-system-prompt");
+    expect(deliverySystemPrompt("builder")).toContain("facility-delivery write");
+    expect(deliverySystemPrompt("architect")).toBeNull();
+    expect(JSON.parse(claudeDeliverySettings("builder") ?? "null")).toMatchObject({
+      disableAllHooks: false,
+      hooks: { Stop: [{ hooks: [{ command: "/usr/local/bin/facility-delivery" }] }] },
+    });
   });
 
   it("uses --resume only after session state has been restored", () => {
@@ -1203,14 +1449,15 @@ describe("Claude resume controls", () => {
         prompt: "continue",
       },
     });
-    expect(buildClaudeCodeArgs(runBundle, true).slice(0, 4)).toEqual([
-      "-p",
-      "continue",
-      "--resume",
-      "sess_123",
-    ]);
+    const restoredArgs = buildClaudeCodeArgs(runBundle, true);
+    expect(restoredArgs.slice(0, 1)).toEqual(["-p"]);
+    expect(restoredArgs[1]).toContain("## Restored continuation");
+    expect(restoredArgs[1]).toContain("## Resume instruction\ncontinue");
+    expect(restoredArgs.slice(2, 4)).toEqual(["--resume", "sess_123"]);
     expect(buildClaudeCodeArgs(runBundle, false)).not.toContain("--resume");
     expect(buildClaudeCodeArgs(runBundle, false)).toContain(composedPrompt(runBundle));
+    expect(buildClaudeCodeArgs(runBundle, true)).toContain("--append-system-prompt");
+    expect(buildClaudeCodeArgs(runBundle, true)).toContain("--settings");
   });
 
   it("recovers the governed parent objective when session state is missing", () => {
@@ -1230,9 +1477,32 @@ describe("Claude resume controls", () => {
 
     const prompt = resumeRecoveryPrompt(runBundle);
     expect(prompt).toContain("Deduplicate the helpers described in issue 557");
-    expect(prompt).toContain("prior Claude session state from run run_parent was unavailable");
+    expect(prompt).toContain(
+      "prior Claude session or governed workspace checkpoint from run run_parent was unavailable",
+    );
     expect(prompt).toContain("## Resume instruction\nContinue the implementation");
     expect(buildClaudeCodeArgs(runBundle, false)).not.toContain("--resume");
+  });
+
+  it("reinjects the governed parent objective into a restored compacted session", () => {
+    const runBundle = bundle({
+      engine: "claude_code",
+      scope: { type: "resume", message: "Continue the implementation" },
+      resume: {
+        sessionId: "sess_123",
+        sessionStateFrom: "run_parent",
+        prompt: "Continue the implementation",
+        fallbackScope: {
+          approvedPlan: "Implement the complete approved hiring portal plan",
+          issue: { number: 937 },
+        },
+      },
+    });
+
+    const prompt = resumeContinuationPrompt(runBundle);
+    expect(prompt).toContain("Implement the complete approved hiring portal plan");
+    expect(prompt).toContain("remain authoritative even if the conversation was compacted");
+    expect(prompt).toContain("## Resume instruction\nContinue the implementation");
   });
 
   it("keeps live engine-event transport failures off the execution boundary", async () => {

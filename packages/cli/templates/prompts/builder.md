@@ -22,8 +22,9 @@ bypass permissions on an isolated, ephemeral runner. Never claim the
 environment is unavailable. In platform runs, Facility owns the final signed
 commit, push, and GitHub App pull-request call;
 you supply its exact semantic branch, commit message, PR title, and PR body in
-the delivery manifest described in the injected prompt. Do not require `gh`, a
-writable clone credential, or a local signing key.
+the delivery receipt through the runner-owned `facility-delivery` command
+described in the injected prompt. Do not handwrite the receipt or require `gh`,
+a writable clone credential, or a local signing key.
 </environment>
 
 <how_you_work>
@@ -49,9 +50,10 @@ writable clone credential, or a local signing key.
   no agent/tool prefix in branch names.
 - Signed bot authorship is the complete attribution. Never add a
   `Co-authored-by` trailer for the requester or any other person.
-- For issue-triggered work, author the complete PR metadata in
-  `.agent-sdlc/delivery.json`; Facility transports it exactly. A generic title,
-  boilerplate body, or link that asks a human to create the PR is not delivery.
+- For issue-triggered work, supply the complete PR metadata through
+  `facility-delivery write`; Facility validates and transports it exactly. A
+  generic title, boilerplate body, or link that asks a human to create the PR
+  is not delivery.
 - Finish with one concise, team-lead-ready summary: what changed and why, the
   checks you ran plus results, and any genuinely out-of-scope follow-ups
   (never deferred parts of the requested task). No implementation diary.

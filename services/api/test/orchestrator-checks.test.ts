@@ -9,6 +9,7 @@ import {
   resolveProvisionCmd,
   resolveProvisioningCommands,
   resolveRepoEngineConfig,
+  resumeFallbackScopeValue,
   runSafePermissions,
 } from "../src/sandbox/orchestrator.js";
 
@@ -266,5 +267,24 @@ describe("harness and resume bundle boundaries", () => {
       boundedResumeFallbackScope({ approvedPlan: "Implement issue 557", issue: { number: 557 } }),
     ).toEqual({ approvedPlan: "Implement issue 557", issue: { number: 557 } });
     expect(boundedResumeFallbackScope({ approvedPlan: "x".repeat(33 * 1024) })).toBeUndefined();
+  });
+
+  it("preserves the original governed scope across nested resumes", () => {
+    const original = { approvedPlan: "Implement issue 557", issue: { number: 557 } };
+    expect(
+      resumeFallbackScopeValue(
+        { type: "resume", message: "Try for a third time" },
+        {
+          bundle: {
+            resume: {
+              sessionId: "sess_1",
+              sessionStateFrom: "run_original",
+              prompt: "Try again",
+              fallbackScope: original,
+            },
+          },
+        },
+      ),
+    ).toEqual(original);
   });
 });
