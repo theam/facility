@@ -7,6 +7,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -1379,6 +1380,10 @@ describe("Claude resume controls", () => {
     });
 
     await createWorkspaceCheckpoint(source, checkpoint, "main");
+    // Checkpoint metadata is deliberately lifecycle-only. Restore must pass
+    // the patch over stdin instead of asking the untrusted Git process to open
+    // this root-owned 0600 path directly.
+    expect((await stat(join(checkpoint, "tracked.patch"))).mode & 0o777).toBe(0o600);
     execFileSync("git", ["clone", "--branch", "main", source, target]);
 
     await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).resolves.toBe(true);

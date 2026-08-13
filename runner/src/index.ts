@@ -958,7 +958,13 @@ export async function restoreWorkspaceCheckpoint(
   const existingPatch = await workspacePatch(cwd, expectedBaseBranch);
   if (patch !== existingPatch) {
     if (existingPatch.trim()) throw new Error("resume_workspace_conflict");
-    if (patch.trim()) await gitOutput(cwd, ["apply", "--binary", patchPath]);
+    // The lifecycle process extracts the checkpoint as root, while every Git
+    // command runs as the untrusted workspace user. Feed the already-read patch
+    // through stdin so a root-owned 0600 archive entry cannot make a valid
+    // checkpoint unreadable to `git apply`.
+    if (patch.trim()) {
+      await gitOutput(cwd, ["apply", "--binary", "-"], false, GIT_COMMAND_TIMEOUT_MS, patch);
+    }
   }
   for (const relativePath of root.files as string[]) {
     safeRepositoryPath(relativePath);
@@ -968,6 +974,10 @@ export async function restoreWorkspaceCheckpoint(
     await mkdir(dirname(target), { recursive: true });
     await cp(checkpointFile, target, { recursive: true, preserveTimestamps: true });
   }
+  // Node's lifecycle process performs the copies above and therefore owns new
+  // untracked files. Return the repository to the engine identity before
+  // Claude resumes, including recursively copied directories.
+  await grantPathToUntrusted(cwd);
   return true;
 }
 
@@ -2481,14 +2491,18 @@ export async function gitOutput(
   args: string[],
   trustedBootstrap = false,
   timeoutMs = GIT_COMMAND_TIMEOUT_MS,
+  input?: string | Buffer,
 ) {
   const child = spawn("git", ["-c", `safe.directory=${cwd}`, ...args], {
     cwd,
     env: trustedBootstrap ? process.env : engineEnv(),
-    stdio: ["ignore", "pipe", "pipe"],
+    // Always close a pipe for commands without input; this is equivalent to an
+    // ignored stdin while keeping the child streams statically non-null.
+    stdio: ["pipe", "pipe", "pipe"],
     detached: true,
     ...(trustedBootstrap ? {} : untrustedSpawnIdentity()),
   });
+  child.stdin.end(input);
   let timedOut = false;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const timeout = setTimeout(() => {
@@ -2700,6 +2714,13 @@ async function grantWorkspaceToUntrusted() {
   // directory created next to them.
   await chown(workRoot, 0, workspaceGid);
   await chmod(workRoot, 0o3770);
+}
+
+async function grantPathToUntrusted(path: string) {
+  const identity = untrustedSpawnIdentity();
+  if (identity.uid === undefined || identity.gid === undefined) return;
+  await runCommand("chown", ["-R", `${identity.uid}:${identity.gid}`, path], dirname(path));
+  await runCommand("chmod", ["-R", "u+rwX", path], dirname(path));
 }
 
 async function prepareRunnerRuntime() {
