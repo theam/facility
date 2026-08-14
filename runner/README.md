@@ -9,8 +9,10 @@ The AWS driver restores only pnpm's content-addressed store and npm's `_cacache`
 
 A run **succeeds only if the engine exits 0 AND every platform check passes** — a green agent report cannot make a red gate pass. Platform checks emit `check` events with `self_reported: false`, a pass/fail `status`, an `exit_code`, and (on failure) a capped, secret-redacted output tail; the agent's self-reports are flagged `self_reported: true` (the runner forces the flag, so provenance can't be spoofed). Check commands come from the sandbox profile's `setup.check_cmds`, falling back to the project's `settings.check_cmds`.
 
+Agent sessions have no Facility turn limit or wall-clock execution limit. They stop only at a manual cancellation or a governed policy boundary such as budget or security enforcement. Provider sandboxes still require finite leases (36 hours on CodeBuild and 5 hours on Vercel), so Facility requests the provider maximum, persists the engine session id as soon as it is observed, and uploads the Claude session plus governed workspace checkpoint every minute. A provider disconnect or lease boundary is therefore a resumable interruption, not a logical end to the work. Manual resume replays the checkpoint onto the current base; clean upstream changes are preserved and three-way conflicts remain in the worktree for the resumed agent to reconcile.
+
 ## Steering
 
 - `byo`: long-polls `/internal/runs/:id/steer`, appends delivered messages to `STEERING.md`, and emits a `steer` run event immediately. The BYO process can read that file.
-- `claude_code`: v1 baseline records steer messages in `STEERING.md` while the current `claude -p` turn runs. After the process exits, the next implementation can replay the queued text with `claude -p --resume <session_id>` when a session id is available; this runner does not pretend stdin turn injection works for the non-interactive CLI.
+- `claude_code`: records steer messages in `STEERING.md` while the current `claude -p` turn runs. A manual resume uses `claude -p --resume <session_id>` together with the latest periodic workspace checkpoint; this runner does not pretend stdin turn injection works for the non-interactive CLI.
 - `codex`: v1 baseline records steer messages in `STEERING.md` and emits audit events. `codex exec --json` is treated as a single non-interactive turn.

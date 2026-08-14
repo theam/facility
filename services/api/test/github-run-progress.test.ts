@@ -44,6 +44,22 @@ describe("GitHub run progress", () => {
     expect(body).toContain("`prop_validation`");
   });
 
+  it("shows the actual failure boundary instead of incomplete assistant prose", () => {
+    const body = renderGithubRunProgress({
+      runId: "run_interrupted",
+      mode: "builder",
+      command: "/builder",
+      phase: "failed",
+      issueNumber: 937,
+      finalText: "All checks pass. Now let's prepare the delivery command.",
+      error: '{"code":1,"engine_error":"engine_error_max_turns"}',
+    });
+
+    expect(body).toContain("engine\\_error\\_max\\_turns");
+    expect(body).toContain("Resume this run from its latest Facility checkpoint");
+    expect(body).not.toContain("All checks pass");
+  });
+
   it("reads only a numeric stored progress comment id", () => {
     expect(progressCommentId({ progressComment: { id: 123 } })).toBe(123);
     expect(progressCommentId({ progressComment: { id: "123" } })).toBeNull();

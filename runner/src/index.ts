@@ -51,6 +51,7 @@ const AGENT_PROGRESS_MAX_BYTES = 16 * 1024;
 const SECURITY_REPORT_MAX_BYTES = 256 * 1024;
 const SECURITY_EVIDENCE_MAX_BYTES = 256 * 1024;
 const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
+const SESSION_CHECKPOINT_INTERVAL_MS = 60_000;
 const RATE_LIMIT_RETRY_LIMIT = 8;
 const DEFAULT_RETRY_AFTER_MS = 1_000;
 const MAX_RETRY_AFTER_MS = 60_000;
@@ -67,6 +68,8 @@ const PRIVATE_REGISTRY_INSTALL_COMMANDS = new Set([
   "yarn install --immutable",
 ]);
 let engineSessionId: string | null = null;
+let engineTerminalError: string | null = null;
+let requestSessionCheckpoint: (() => void) | null = null;
 let activeEngineChild: ReturnType<typeof spawn> | null = null;
 let clearInterruptEscalation: (() => void) | null = null;
 let interruptRequested = false;
@@ -105,6 +108,7 @@ async function main() {
   let bundle: RunBundle | null = null;
   let steerStop: (() => void) | undefined;
   let progressStop: (() => Promise<boolean>) | undefined;
+  let checkpointStop: (() => Promise<void>) | undefined;
   let preparedSecuritySweep: PreparedSecuritySweepEvidence | null = null;
   let restoredSessionState = false;
   secretsToRedact.add(runnerToken());
@@ -190,9 +194,11 @@ async function main() {
     }
     progressStop = startAgentProgressPoll(cwdFor(bundle));
     const stopProgress = progressStop;
+    checkpointStop = startSessionCheckpointPoll(activeBundle);
+    const stopCheckpoint = checkpointStop;
     const engineCode = await phases.measure(
       "agent",
-      () => runEngine(activeBundle, startedAt, restoredSessionState),
+      () => runEngine(activeBundle, restoredSessionState),
       (code) => ({
         outcome: interruptRequested ? "canceled" : code === 0 ? "succeeded" : "failed",
       }),
@@ -251,7 +257,8 @@ async function main() {
         ]).catch(() => undefined);
       }
       await uploadTranscript();
-      await uploadSessionState(activeBundle);
+      await stopCheckpoint();
+      checkpointStop = undefined;
       return {
         progressPublished,
         securityReport,
@@ -381,7 +388,10 @@ async function main() {
       succeeded
         ? undefined
         : engineCode !== 0
-          ? { code: engineCode }
+          ? {
+              code: engineCode,
+              ...(engineTerminalError ? { engine_error: engineTerminalError } : {}),
+            }
           : !checksConfigured
             ? { code: "checks_not_configured" }
             : !progressConfigured
@@ -404,6 +414,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     await progressStop?.().catch(() => false);
+    await checkpointStop?.().catch(() => undefined);
     steerStop?.();
   }
 }
@@ -544,8 +555,7 @@ async function pathExists(path: string) {
   }
 }
 
-async function runEngine(bundle: RunBundle, startedAt: number, restoredSessionState: boolean) {
-  const timeoutMin = bundle.timeoutMin;
+async function runEngine(bundle: RunBundle, restoredSessionState: boolean) {
   if (interruptRequested) return 130;
   if (bundle.engine === "claude_code") {
     await trustClaudeWorkspace(cwdFor(bundle));
@@ -557,8 +567,6 @@ async function runEngine(bundle: RunBundle, startedAt: number, restoredSessionSt
       cwdFor(bundle),
       parseClaudeStreamJsonLine,
       parseClaudeSessionId,
-      timeoutMin,
-      startedAt,
     );
   }
   if (bundle.engine === "codex") {
@@ -568,13 +576,11 @@ async function runEngine(bundle: RunBundle, startedAt: number, restoredSessionSt
       cwdFor(bundle),
       parseCodexJsonlLine,
       parseCodexSessionId,
-      timeoutMin,
-      startedAt,
       composedPrompt(bundle),
     );
   }
   const cmd = typeof bundle.engineConfig.cmd === "string" ? bundle.engineConfig.cmd : "printf ''";
-  return runShell(cmd, cwdFor(bundle), "assistant", timeoutMin);
+  return runShell(cmd, cwdFor(bundle), "assistant");
 }
 
 function startSteeringPoll() {
@@ -614,8 +620,6 @@ async function runJsonProcess(
   cwd: string,
   parse: (line: string) => RunEvent | null,
   parseSessionId: (line: string) => string | null,
-  timeoutMin: number,
-  startedAt: number,
   stdin?: string,
 ) {
   const child = spawn(command, args, {
@@ -639,7 +643,6 @@ async function runJsonProcess(
   }
   const stderr = createWriteStream(engineStderrFile, { flags: "a" });
   stderrStream.pipe(stderr);
-  const clearTimers = armEngineTimeout(child, timeoutMin);
   const rl = createInterface({ input: stdout });
   for await (const line of rl) {
     await appendFile(transcriptFile, `${redactSecrets(line)}\n`);
@@ -647,6 +650,7 @@ async function runJsonProcess(
       const sessionId = parseSessionId(line);
       if (sessionId) {
         engineSessionId = sessionId;
+        requestSessionCheckpoint?.();
         if (
           !(await emitEngineEventsBestEffort(
             [{ type: "session", data: { engine_session_id: sessionId } }],
@@ -658,6 +662,8 @@ async function runJsonProcess(
       }
     }
     const event = parse(line);
+    const terminalError = engineResultError(event);
+    if (terminalError) engineTerminalError = terminalError;
     if (event && !(await emitEngineEventsBestEffort([event], emit))) {
       engineEventTransportDegraded = true;
     }
@@ -666,12 +672,23 @@ async function runJsonProcess(
   if (activeEngineChild === child) activeEngineChild = null;
   clearInterruptEscalation?.();
   clearInterruptEscalation = null;
-  clearTimers();
   if (interruptRequested) return 130;
-  if (Date.now() - startedAt >= Math.max(1, timeoutMin - 2) * 60_000) {
-    return 124;
-  }
   return code;
+}
+
+export function engineResultError(event: RunEvent | null) {
+  if (event?.type !== "engine_result") return null;
+  const data = event.data ?? {};
+  const subtype = typeof data.subtype === "string" ? data.subtype : null;
+  if (data.is_error !== true && !subtype?.startsWith("error_")) return null;
+  const errors = Array.isArray(data.errors)
+    ? data.errors.filter((value): value is string => typeof value === "string")
+    : [];
+  const reason =
+    errors[0] ??
+    (typeof data.terminal_reason === "string" ? data.terminal_reason : null) ??
+    subtype;
+  return reason ? `engine_${reason}` : "engine_failed";
 }
 
 function startAgentProgressPoll(cwd: string) {
@@ -949,30 +966,99 @@ export async function restoreWorkspaceCheckpoint(
   const currentBaseSha = (
     await gitOutput(cwd, ["rev-parse", `origin/${expectedBaseBranch}`])
   ).trim();
-  if (currentBaseSha !== root.baseSha) throw new Error("resume_workspace_base_mismatch");
   const branch = existingGithubBranch(root.branch);
   const currentBranch = (await gitOutput(cwd, ["branch", "--show-current"])).trim();
   if (branch !== currentBranch) await gitOutput(cwd, ["checkout", "-B", branch]);
   const patchPath = join(source, resumePatchFile);
   const patch = await readFile(patchPath, "utf8");
   const existingPatch = await workspacePatch(cwd, expectedBaseBranch);
-  if (patch !== existingPatch) {
-    if (existingPatch.trim()) throw new Error("resume_workspace_conflict");
+  if (existingPatch.trim() && patch !== existingPatch) throw new Error("resume_workspace_conflict");
+  const files = root.files as string[];
+  for (const relativePath of files) {
+    safeRepositoryPath(relativePath);
+    const checkpointFile = join(source, resumeFilesDir, relativePath);
+    if (!(await pathExists(checkpointFile))) throw new Error("resume_workspace_file_missing");
+  }
+
+  const applyCheckpoint = async (includePatch = true) => {
     // The lifecycle process extracts the checkpoint as root, while every Git
     // command runs as the untrusted workspace user. Feed the already-read patch
     // through stdin so a root-owned 0600 archive entry cannot make a valid
     // checkpoint unreadable to `git apply`.
-    if (patch.trim()) {
+    if (includePatch && patch.trim()) {
       await gitOutput(cwd, ["apply", "--binary", "-"], false, GIT_COMMAND_TIMEOUT_MS, patch);
     }
+    for (const relativePath of files) {
+      const checkpointFile = join(source, resumeFilesDir, relativePath);
+      const target = join(cwd, relativePath);
+      await mkdir(dirname(target), { recursive: true });
+      await cp(checkpointFile, target, { recursive: true, preserveTimestamps: true });
+    }
+  };
+
+  if (currentBaseSha === root.baseSha) {
+    await applyCheckpoint(patch !== existingPatch);
+  } else {
+    if (existingPatch.trim()) throw new Error("resume_workspace_conflict");
+    const currentHead = (await gitOutput(cwd, ["rev-parse", "HEAD"])).trim();
+    try {
+      await gitOutput(cwd, ["cat-file", "-e", `${root.baseSha}^{commit}`]);
+    } catch {
+      await gitOutput(cwd, ["fetch", "origin", root.baseSha], true);
+    }
+    await gitOutput(cwd, ["checkout", "--detach", root.baseSha]);
+    try {
+      await applyCheckpoint();
+      await grantPathToUntrusted(cwd);
+      await gitOutput(cwd, ["add", "-A"]);
+      const staged = (
+        await gitOutput(cwd, ["status", "--porcelain", "--untracked-files=all"])
+      ).trim();
+      if (!staged) {
+        await gitOutput(cwd, ["checkout", "-B", branch, currentHead]);
+        await grantPathToUntrusted(cwd);
+        return true;
+      }
+      await gitOutput(cwd, [
+        "-c",
+        "user.name=Facility checkpoint",
+        "-c",
+        "user.email=checkpoint@facility.invalid",
+        "commit",
+        "--no-gpg-sign",
+        "-m",
+        "chore: restore Facility checkpoint",
+      ]);
+      const checkpointCommit = (await gitOutput(cwd, ["rev-parse", "HEAD"])).trim();
+      await gitOutput(cwd, ["checkout", "-B", branch, currentHead]);
+      try {
+        await gitOutput(cwd, ["cherry-pick", "--no-commit", checkpointCommit]);
+      } catch (error) {
+        const conflicts = (await gitOutput(cwd, ["diff", "--name-only", "--diff-filter=U"]))
+          .split("\n")
+          .filter(Boolean);
+        // Conflicts are durable, useful continuation state. Leave the index and
+        // worktree intact so the resumed agent can reconcile upstream changes
+        // instead of silently losing either side of the checkpoint.
+        if (conflicts.length === 0) throw error;
+      }
+    } catch (error) {
+      const head = (await gitOutput(cwd, ["rev-parse", "HEAD"]).catch(() => "")).trim();
+      if (
+        head !== currentHead &&
+        !(await gitOutput(cwd, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "")).trim()
+      ) {
+        await gitOutput(cwd, ["checkout", "-B", branch, currentHead]).catch(() => undefined);
+      }
+      throw error;
+    }
   }
-  for (const relativePath of root.files as string[]) {
-    safeRepositoryPath(relativePath);
-    const checkpointFile = join(source, resumeFilesDir, relativePath);
-    if (!(await pathExists(checkpointFile))) throw new Error("resume_workspace_file_missing");
+
+  for (const relativePath of files) {
     const target = join(cwd, relativePath);
-    await mkdir(dirname(target), { recursive: true });
-    await cp(checkpointFile, target, { recursive: true, preserveTimestamps: true });
+    if (!(await pathExists(target))) {
+      throw new Error("resume_workspace_file_missing");
+    }
   }
   // Node's lifecycle process performs the copies above and therefore owns new
   // untracked files. Return the repository to the engine identity before
@@ -1068,6 +1154,36 @@ async function uploadSessionState(bundle: RunBundle) {
   }
 }
 
+export function startSessionCheckpointPoll(
+  bundle: RunBundle,
+  intervalMs = SESSION_CHECKPOINT_INTERVAL_MS,
+) {
+  let stopped = false;
+  let active = Promise.resolve();
+  const checkpoint = async () => {
+    // Claude does not create its session directory until it has started. Avoid
+    // uploading a workspace-only archive that cannot be resumed as a session.
+    if (!engineSessionId || !(await pathExists(sessionStateDir))) return;
+    await uploadSessionState(bundle);
+  };
+  const schedule = () => {
+    active = active.then(checkpoint).catch(() => undefined);
+  };
+  const timer = setInterval(() => {
+    if (!stopped) schedule();
+  }, intervalMs);
+  timer.unref();
+  requestSessionCheckpoint = schedule;
+  return async () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    if (requestSessionCheckpoint === schedule) requestSessionCheckpoint = null;
+    await active;
+    await checkpoint().catch(() => undefined);
+  };
+}
+
 export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boolean) {
   const args =
     bundle.resume && restoredSessionState
@@ -1079,8 +1195,6 @@ export function buildClaudeCodeArgs(bundle: RunBundle, restoredSessionState: boo
     "--verbose",
     "--permission-mode",
     readOnlyEngineMode(bundle.mode) ? "plan" : "bypassPermissions",
-    "--max-turns",
-    "500",
   );
   const deliveryPrompt = deliverySystemPrompt(bundle.mode);
   const deliverySettings = claudeDeliverySettings(bundle.mode);
@@ -1138,7 +1252,7 @@ export function resumeContinuationPrompt(bundle: RunBundle) {
     scope: bundle.resume.fallbackScope ?? bundle.scope,
     resume: undefined,
   });
-  return `${priorPrompt}\n\n## Restored continuation\nFacility restored both the prior Claude session and its governed workspace checkpoint from run ${bundle.resume.sessionStateFrom}. Re-read the original objective and approved plan above; they remain authoritative even if the conversation was compacted. Inspect the restored worktree before changing it, continue rather than restarting completed work, and re-run relevant verification before delivery.\n\n## Resume instruction\n${bundle.resume.prompt}`;
+  return `${priorPrompt}\n\n## Restored continuation\nFacility restored both the prior Claude session and its governed workspace checkpoint from run ${bundle.resume.sessionStateFrom}. Re-read the original objective and approved plan above; they remain authoritative even if the conversation was compacted. Inspect the restored worktree before changing it, continue rather than restarting completed work, and re-run relevant verification before delivery. The repository base may have advanced since the checkpoint. Inspect \`git status\` first; if Facility replayed the checkpoint with conflicts, resolve every conflict while preserving both the completed work and compatible upstream changes before continuing.\n\n## Resume instruction\n${bundle.resume.prompt}`;
 }
 
 export function resumeRecoveryPrompt(bundle: RunBundle) {
@@ -1220,7 +1334,7 @@ async function runShell(
   command: string,
   cwd: string,
   eventType: string,
-  timeoutMin: number,
+  timeoutMin?: number,
   envOverrides?: NodeJS.ProcessEnv,
 ) {
   const child = spawn("sh", ["-c", command], {
@@ -1229,7 +1343,8 @@ async function runShell(
     stdio: ["ignore", "pipe", "pipe"],
     ...untrustedSpawnIdentity(),
   });
-  const clearTimers = armEngineTimeout(child, timeoutMin);
+  const clearTimers =
+    timeoutMin === undefined ? () => undefined : armCommandTimeout(child, timeoutMin);
   const drains = [child.stdout, child.stderr].map((stream) => drainLineEvents(stream, eventType));
   const code = await exitCode(child);
   // Wait for both stream readers to finish draining before returning, so no
@@ -2760,10 +2875,9 @@ export function exitCode(child: ReturnType<typeof spawn>) {
   return new Promise<number>((resolve) => child.once("close", (code) => resolve(code ?? 1)));
 }
 
-// Arm the engine timeout: SIGTERM at (timeout - 2min), then escalate to SIGKILL
-// if the engine ignores it, so a process that traps/ignores SIGTERM cannot run
-// (and bill) unbounded. Returns a disposer that cancels both timers on clean exit.
-function armEngineTimeout(child: ReturnType<typeof spawn>, timeoutMin: number) {
+// Package installation and provisioning remain bounded setup commands. Agent
+// execution deliberately does not use this timer.
+function armCommandTimeout(child: ReturnType<typeof spawn>, timeoutMin: number) {
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const termTimer = setTimeout(
     () => {
@@ -2778,7 +2892,7 @@ function armEngineTimeout(child: ReturnType<typeof spawn>, timeoutMin: number) {
   };
 }
 
-// Like armEngineTimeout, but signals the child's whole PROCESS GROUP (negative
+// Like armCommandTimeout, but signals the child's whole PROCESS GROUP (negative
 // pid) — the child must have been spawned `detached: true`. Used for checks so a
 // hung command's descendants die with it instead of being orphaned. Falls back to
 // signalling just the child if the group is already gone.

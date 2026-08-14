@@ -125,7 +125,6 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
       last4: virtualKey.last4,
       hash: virtualKey.hash,
       allowedModels: allowedModelsForEngine(bundle.engine, bundle.engineConfig),
-      expiresAt: new Date(Date.now() + bundle.timeoutMin * 60_000),
     });
     // Track the moment it exists — before any further step that could throw.
     createdKeys.virtualKeyId = virtualKey.id;
@@ -153,10 +152,10 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
       projectId: run.projectId,
       roleId: harnessRoleId,
       createdBy: `run:${run.id}`,
-      // Same lifecycle as the virtual key: bound to the run, expires with it, so
-      // it can be swept on terminal + rejected once expired (no indefinite fak_).
+      // Same lifecycle as the virtual key: bound to the run and revoked on every
+      // terminal boundary. It deliberately has no wall-clock expiry because a
+      // healthy run has no time limit; terminal cleanup remains the security boundary.
       runId: run.id,
-      expiresAt: new Date(Date.now() + bundle.timeoutMin * 60_000),
     });
     createdKeys.platformKeyId = platformKey.id;
 
@@ -633,9 +632,7 @@ export async function updateGithubRunProgress(
           .limit(1)
       )[0]
     : undefined;
-  const finalText = ["succeeded", "failed", "canceled"].includes(phase)
-    ? await lastAssistantText(db, run)
-    : null;
+  const finalText = phase === "succeeded" ? await lastAssistantText(db, run) : null;
   const agentProgress = await lastAgentProgress(db, run);
   const commentId = progressCommentId(run.gh);
   if (!commentId) return false;
@@ -645,6 +642,7 @@ export async function updateGithubRunProgress(
       finalText,
       agentProgress,
       proposalId: proposal?.id,
+      error: phase === "failed" ? run.error : null,
     }),
   );
   return true;
@@ -657,6 +655,7 @@ function renderProgressForRun(
     finalText?: string | null;
     agentProgress?: string | null;
     proposalId?: string | null;
+    error?: string | null;
   } = {},
 ) {
   const gh = objectOrEmpty(run.gh);
@@ -678,6 +677,7 @@ function renderProgressForRun(
     sender: stringValue(progress.sender),
     agentProgress: result.agentProgress,
     finalText: result.finalText,
+    error: result.error,
     proposalId: result.proposalId,
     pullRequest: prNumber && prUrl ? { number: prNumber, url: prUrl } : null,
   });
@@ -1563,31 +1563,13 @@ export async function reconcileSandboxes(
       // whole tick (and skip the orphaned-key sweep below) — just skip that run.
       try {
         const sandbox = readSandbox(run.sandbox);
-        // In-process assistant turns have no sandbox driver. If the API died
-        // mid-turn (deploy, dev hot-reload) the run would stay "running" and
-        // its conversation locked forever — fail anything past its wall-clock.
+        // In-process assistant turns have no sandbox driver. They remain live
+        // until an operator or policy boundary terminates them.
         if (sandbox.inline === true) {
-          const startedAt = run.startedAt ? run.startedAt.getTime() : Number.NaN;
-          if (!Number.isNaN(startedAt) && Date.now() > startedAt + 10 * 60_000) {
-            await failRun(db, run.orgId, run.id, "assistant_timeout", "assistant_timeout");
-          }
           continue;
         }
         if (!sandbox.driver || !sandbox.ref) continue;
         const driver = await sandboxDriver(sandbox.driver);
-        // Hard cost cap / driver-level backstop: if a run has blown past its timeout
-        // (with grace beyond the runner's own SIGTERM→SIGKILL escalation), destroy
-        // the sandbox and fail the run — covers an engine that ignores signals or a
-        // wedged sandbox the in-container runner can't kill itself.
-        const launchedAt = sandbox.launchedAt ? Date.parse(sandbox.launchedAt) : Number.NaN;
-        const timeoutMin = Number(sandbox.bundle?.timeoutMin) || 60;
-        const deadline = Number.isNaN(launchedAt) ? null : launchedAt + (timeoutMin + 3) * 60_000;
-        if (deadline !== null && Date.now() > deadline) {
-          await driver.destroy(sandbox.ref).catch(() => undefined);
-          await failRun(db, run.orgId, run.id, "sandbox_timeout", "sandbox_timeout");
-          await updateGithubRunProgress(db, run.id, "failed", { config }).catch(() => undefined);
-          continue;
-        }
         const status = await driver.status(sandbox.ref);
         if (status === "exited" || status === "lost") {
           await failRun(db, run.orgId, run.id, "sandbox_lost", "sandbox_lost");

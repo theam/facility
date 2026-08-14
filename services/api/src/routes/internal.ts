@@ -188,6 +188,26 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         run.id,
         request.body as z.infer<typeof EventBatch>,
       );
+      const sessionId = events
+        .filter((event) => event.type === "session")
+        .map((event) =>
+          event.data && typeof event.data === "object" && !Array.isArray(event.data)
+            ? (event.data as Record<string, unknown>).engine_session_id
+            : undefined,
+        )
+        .find(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0 && value.length <= 255,
+        );
+      if (sessionId) {
+        // Persist the provider session as soon as it is observed. A provider
+        // lease can disappear before /result, but that must remain a resumable
+        // interruption rather than erase the continuation handle.
+        await db
+          .update(runs)
+          .set({ engineSessionId: sessionId.trim(), updatedAt: new Date() })
+          .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id), isNull(runs.engineSessionId)));
+      }
       if (events.some((event) => event.type === "agent_progress")) {
         await updateGithubRunProgress(db, run.id, "running", {
           config,
