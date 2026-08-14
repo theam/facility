@@ -13,8 +13,8 @@
   },
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsup src/index.ts src/chain.ts src/provenance.ts src/session.ts src/validate.ts src/wsjf.ts --format esm --dts",
-    "build:runtime": "tsup src/index.ts src/chain.ts src/provenance.ts src/session.ts src/validate.ts src/wsjf.ts --format esm",
+    "build": "node init && tsup src/index.ts src/chain.ts src/provenance.ts src/session.ts src/validate.ts src/wsjf.ts --format esm --dts",
+    "build:runtime": "node init && tsup src/index.ts src/chain.ts src/provenance.ts src/session.ts src/validate.ts src/wsjf.ts --format esm",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

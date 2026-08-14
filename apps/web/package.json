@@ -6,9 +6,9 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev --port 3400",
-    "build": "next build",
-    "start": "next start --port 3400",
+    "dev": "node init && next dev --port 3400",
+    "build": "node init && next build",
+    "start": "node init && next start --port 3400",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
