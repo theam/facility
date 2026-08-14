@@ -187,7 +187,7 @@ RUN for binary in /out/*; do \
 # database, image-processing, DNS, and web-server development stacks. Agents
 # need a native compiler toolchain, not that entire transitive surface, so start
 # from the official slim variant and install the small explicit toolchain below.
-FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS runner-base
+FROM node:26-trixie-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS runner-base
 
 # The digest-pinned Node base can lag Debian security uploads, while BuildKit
 # correctly caches an earlier apt upgrade against the unchanged base digest.
