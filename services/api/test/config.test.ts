@@ -173,6 +173,34 @@ describe("API configuration", () => {
     });
   });
 
+  it("boots when .env-template blanks leave optional non-empty vars empty", () => {
+    // .env.example ships these as `KEY=`, which dotenv delivers as empty
+    // strings — a fresh `pnpm dev` copies them verbatim, so blank must mean
+    // unset or the first boot crashes.
+    const config = readConfig({
+      ...validEnv,
+      VERCEL_TOKEN: "",
+      VERCEL_OIDC_TOKEN: "",
+      VERCEL_TEAM_ID: "",
+      VERCEL_PROJECT_ID: "",
+      PACKAGE_REGISTRY_TOKEN: "",
+      FACILITY_AWS_CODEBUILD_PROJECT: "",
+      FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: "",
+    });
+    expect(config.vercelToken).toBeUndefined();
+    expect(config.vercelTeamId).toBeUndefined();
+    expect(config.vercelProjectId).toBeUndefined();
+    expect(config.packageRegistryToken).toBeUndefined();
+    expect(config.awsCodeBuildProject).toBeUndefined();
+    expect(config.awsCodeBuildCacheBaseLocation).toBeUndefined();
+  });
+
+  it("treats whitespace-only optional non-empty vars as unset, matching absence", () => {
+    expect(readConfig({ ...validEnv, VERCEL_TOKEN: "   " }).vercelToken).toBe(
+      readConfig(validEnv).vercelToken,
+    );
+  });
+
   it("rejects the direct GitHub organization restriction in broker mode", () => {
     expect(() =>
       readConfig({

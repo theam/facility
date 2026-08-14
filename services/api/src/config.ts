@@ -23,6 +23,14 @@ const OptionalGithubOrganization = z.preprocess(
     .optional(),
 );
 
+// .env templates ship optional keys as blank assignments (KEY=), which dotenv
+// delivers as empty strings — those must parse as unset, while a value that is
+// actually set must still be non-empty.
+const OptionalNonEmpty = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).optional(),
+);
+
 const EnvSchema = z
   .object({
     DATABASE_URL: z.string().url(),
@@ -69,13 +77,13 @@ const EnvSchema = z
     S3_SECRET_KEY: z.string().optional(),
     S3_BUCKET: z.string().optional(),
     AWS_REGION: z.string().optional(),
-    FACILITY_AWS_CODEBUILD_PROJECT: z.string().trim().min(1).optional(),
-    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: z.string().trim().min(1).optional(),
-    VERCEL_TOKEN: z.string().trim().min(1).optional(),
-    VERCEL_OIDC_TOKEN: z.string().trim().min(1).optional(),
-    VERCEL_TEAM_ID: z.string().trim().min(1).optional(),
-    VERCEL_PROJECT_ID: z.string().trim().min(1).optional(),
-    PACKAGE_REGISTRY_TOKEN: z.string().trim().min(1).optional(),
+    FACILITY_AWS_CODEBUILD_PROJECT: OptionalNonEmpty,
+    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: OptionalNonEmpty,
+    VERCEL_TOKEN: OptionalNonEmpty,
+    VERCEL_OIDC_TOKEN: OptionalNonEmpty,
+    VERCEL_TEAM_ID: OptionalNonEmpty,
+    VERCEL_PROJECT_ID: OptionalNonEmpty,
+    PACKAGE_REGISTRY_TOKEN: OptionalNonEmpty,
     GITHUB_APP_ID: z.string().optional(),
     GITHUB_APP_PRIVATE_KEY: z.string().optional(),
     GITHUB_APP_WEBHOOK_SECRET: z.string().optional(),
