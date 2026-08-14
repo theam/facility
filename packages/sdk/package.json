@@ -11,8 +11,8 @@
   },
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
-    "build:runtime": "tsup src/index.ts --format esm",
+    "build": "node init && tsup src/index.ts --format esm --dts",
+    "build:runtime": "node init && tsup src/index.ts --format esm",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "generate": "openapi-typescript openapi.json -o src/schema.d.ts"
