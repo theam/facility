@@ -348,17 +348,33 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     runnerDockerfile,
     /^FROM docker:29-dind-rootless@sha256:[0-9a-f]{64} AS docker-tools$/m,
   );
+  assert.match(
+    runnerDockerfile,
+    /^FROM golang:1\.26\.6-trixie@sha256:[0-9a-f]{64} AS go-tools-base$/m,
+  );
+  for (const stage of [
+    "moby-build",
+    "docker-cli-build",
+    "containerd-build",
+    "rootlesskit-build",
+    "buildx-build",
+    "compose-build",
+    "runc-build",
+    "gh-build",
+  ]) {
+    assert.match(runnerDockerfile, new RegExp(`^FROM go-tools-base AS ${stage}$`, "m"));
+  }
+  assert.match(runnerDockerfile, /^FROM go-tools-base AS go-tools-audit$/m);
+  assert.match(runnerDockerfile, /go version -m "\$binary"[\s\S]*go1\.26\.6/);
+  assert.match(runnerDockerfile, /golang\.org\/x\/net[\s\S]*v0\.56\.0/);
+  assert.match(runnerDockerfile, /COPY --from=go-tools-audit[\s\S]*\/usr\/local\/bin\//);
   assert.match(runnerDockerfile, /COPY --from=docker-tools \/usr\/local\/bin\//);
   assert.doesNotMatch(runnerDockerfile, /^\s+docker\.io\s+\\$/m);
   assert.doesNotMatch(runnerDockerfile, /^\s+rootlesskit\s+\\$/m);
   assert.match(runnerDockerfile, /GH_VERSION=2\.97\.0/);
   assert.match(
     runnerDockerfile,
-    /a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112/,
-  );
-  assert.match(
-    runnerDockerfile,
-    /73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5/,
+    /GH_SOURCE_SHA256=c4ee0ab20406291616de45ad771c8b8a927bc8f3fd00ca61a50d0e8ffa582130/,
   );
   const riskRules = [
     ...runnerGrypePolicy.matchAll(
