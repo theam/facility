@@ -311,7 +311,8 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     [webDockerfile, ["web"]],
   ]) {
     assert.match(dockerfile, /FROM base AS runtime[\s\S]*runtime package manager remains/);
-    assert.match(dockerfile, /rm -rf \/usr\/local\/lib\/node_modules\/npm/);
+    assert.match(dockerfile, /rm -rf \/usr\/local\/include\/node/);
+    assert.match(dockerfile, /\/usr\/local\/lib\/node_modules\/npm/);
     for (const target of targets) {
       assert.match(dockerfile, new RegExp(`FROM runtime AS ${target}`));
     }

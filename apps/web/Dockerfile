@@ -10,7 +10,8 @@ WORKDIR /app
 # Removing their vendored dependencies keeps unused tooling out of the image
 # CVE inventory and makes a future base-layout change fail visibly at build time.
 FROM base AS runtime
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /pnpm \
+RUN rm -rf /usr/local/include/node \
+    /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /pnpm \
   && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/pnpm \
     /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     /usr/local/bin/corepack \
