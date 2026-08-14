@@ -25,6 +25,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libseccomp-dev pkg-config \
   && rm -rf /var/lib/apt/lists/*
 
+# Keep these stages in a dependency chain so BuildKit cannot materialize eight
+# complete Go source trees and compiler caches at once. Each successful stage
+# retains only /out before the next source build begins.
 FROM go-tools-base AS moby-build
 ARG MOBY_VERSION=29.7.2
 ARG MOBY_COMMIT=6a43e3d5afddf4111da0f864bbc7cae5d7e95001
@@ -33,7 +36,7 @@ RUN archive=/tmp/moby.tar.gz \
   && curl --fail --silent --show-error --location --retry 3 \
     "https://github.com/moby/moby/archive/${MOBY_COMMIT}.tar.gz" --output "$archive" \
   && printf '%s  %s\n' "$MOBY_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && VERSION="$MOBY_VERSION" DOCKER_GITCOMMIT="$MOBY_COMMIT" \
@@ -41,9 +44,10 @@ RUN archive=/tmp/moby.tar.gz \
     ./hack/make.sh binary-daemon binary-proxy \
   && install -m 0755 bundles/binary-daemon/dockerd /out/dockerd \
   && install -m 0755 bundles/binary-proxy/docker-proxy /out/docker-proxy \
-  && test "$(/out/dockerd --version | awk '{print $3}' | tr -d ',')" = "$MOBY_VERSION"
+  && test "$(/out/dockerd --version | awk '{print $3}' | tr -d ',')" = "$MOBY_VERSION" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
-FROM go-tools-base AS docker-cli-build
+FROM moby-build AS docker-cli-build
 ARG DOCKER_CLI_VERSION=29.7.2
 ARG DOCKER_CLI_COMMIT=a7dcaa6fdb6ed04aacbfdc76357fdae01605609e
 ARG DOCKER_CLI_SOURCE_SHA256=6e5c91d3a5a79db78cf989d07727d00e757aa0da4d135a3ce4b86061b83fb511
@@ -51,7 +55,7 @@ RUN archive=/tmp/docker-cli.tar.gz \
   && curl --fail --silent --show-error --location --retry 3 \
     "https://github.com/docker/cli/archive/${DOCKER_CLI_COMMIT}.tar.gz" --output "$archive" \
   && printf '%s  %s\n' "$DOCKER_CLI_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && mkdir -p /go/src/github.com/docker \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && ln -s /src /go/src/github.com/docker/cli \
@@ -60,9 +64,10 @@ RUN archive=/tmp/docker-cli.tar.gz \
     CGO_ENABLED=0 GO_LINKMODE=static DISABLE_WARN_OUTSIDE_CONTAINER=1 \
     SOURCE_DATE_EPOCH=1785456000 ./scripts/build/binary \
   && install -m 0755 "build/docker-linux-$(go env GOARCH)" /out/docker \
-  && test "$(/out/docker --version | awk '{print $3}' | tr -d ',')" = "$DOCKER_CLI_VERSION"
+  && test "$(/out/docker --version | awk '{print $3}' | tr -d ',')" = "$DOCKER_CLI_VERSION" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod /go/src/github.com/docker/cli
 
-FROM go-tools-base AS containerd-build
+FROM docker-cli-build AS containerd-build
 ARG CONTAINERD_VERSION=2.3.3
 ARG CONTAINERD_COMMIT=aad11006b869517fcd3009450b6f82da282e1a9b
 ARG CONTAINERD_SOURCE_SHA256=86793eec0b23ea8f7331ea61c5ef1e56ed6f8071de5ede9ce89b13310a1a072b
@@ -70,7 +75,7 @@ RUN archive=/tmp/containerd.tar.gz \
   && curl --fail --silent --show-error --location --retry 3 \
     "https://github.com/containerd/containerd/archive/${CONTAINERD_COMMIT}.tar.gz" --output "$archive" \
   && printf '%s  %s\n' "$CONTAINERD_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
@@ -78,9 +83,10 @@ RUN archive=/tmp/containerd.tar.gz \
     GO_BUILD_FLAGS='-mod=mod -trimpath' \
     bin/containerd bin/containerd-shim-runc-v2 bin/ctr \
   && install -m 0755 bin/containerd bin/containerd-shim-runc-v2 bin/ctr /out/ \
-  && test "$(/out/containerd --version | awk '{print $3}')" = "v${CONTAINERD_VERSION}"
+  && test "$(/out/containerd --version | awk '{print $3}')" = "v${CONTAINERD_VERSION}" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
-FROM go-tools-base AS rootlesskit-build
+FROM containerd-build AS rootlesskit-build
 ARG ROOTLESSKIT_COMMIT=19f94521be524ae7b61e380a814d2aa0a3ef40a9
 ARG ROOTLESSKIT_SOURCE_SHA256=ce3a9857719b83f669c5889a69965b9faaba09f36d720e27bcbe4abf288a3b22
 RUN archive=/tmp/rootlesskit.tar.gz \
@@ -88,14 +94,15 @@ RUN archive=/tmp/rootlesskit.tar.gz \
     "https://github.com/rootless-containers/rootlesskit/archive/${ROOTLESSKIT_COMMIT}.tar.gz" \
     --output "$archive" \
   && printf '%s  %s\n' "$ROOTLESSKIT_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags='-s -w' -o /out/rootlesskit ./cmd/rootlesskit \
-  && test "$(/out/rootlesskit --version | awk '{print $3}')" = "3.0.2"
+  && test "$(/out/rootlesskit --version | awk '{print $3}')" = "3.0.2" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
-FROM go-tools-base AS buildx-build
+FROM rootlesskit-build AS buildx-build
 ARG BUILDX_VERSION=v0.36.1
 ARG BUILDX_COMMIT=1d8dde89b8aba914e05e45366770736fea1fd690
 ARG BUILDX_SOURCE_SHA256=fb28b5c2a198d05482f0656dfb7ee161240a904e36697bf7108e5d517f23854b
@@ -103,7 +110,7 @@ RUN archive=/tmp/buildx.tar.gz \
   && curl --fail --silent --show-error --location --retry 3 \
     "https://github.com/docker/buildx/archive/${BUILDX_COMMIT}.tar.gz" --output "$archive" \
   && printf '%s  %s\n' "$BUILDX_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && CGO_ENABLED=0 go build -mod=vendor -trimpath \
@@ -111,9 +118,10 @@ RUN archive=/tmp/buildx.tar.gz \
       -X github.com/docker/buildx/version.Revision=${BUILDX_COMMIT} \
       -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
     -o /out/docker-buildx ./cmd/buildx \
-  && test "$(/out/docker-buildx version | awk '{print $2}')" = "$BUILDX_VERSION"
+  && test "$(/out/docker-buildx version | awk '{print $2}')" = "$BUILDX_VERSION" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
-FROM go-tools-base AS compose-build
+FROM buildx-build AS compose-build
 ARG COMPOSE_VERSION=v5.4.0
 ARG COMPOSE_COMMIT=ef61d7410a0c816a71705026e638ec256a591d69
 ARG COMPOSE_SOURCE_SHA256=19bf54c1e4f6effdcc6e3f81356f0ca1d2a1dd447458d7e2ac8138fc38b4148b
@@ -121,15 +129,16 @@ RUN archive=/tmp/compose.tar.gz \
   && curl --fail --silent --show-error --location --retry 3 \
     "https://github.com/docker/compose/archive/${COMPOSE_COMMIT}.tar.gz" --output "$archive" \
   && printf '%s  %s\n' "$COMPOSE_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && CGO_ENABLED=0 GOMAXPROCS=1 go build -p=1 -mod=mod -trimpath -tags=e2e \
     -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
     -o /out/docker-compose ./cmd \
-  && test "$(/out/docker-compose version --short)" = "${COMPOSE_VERSION#v}"
+  && test "$(/out/docker-compose version --short)" = "${COMPOSE_VERSION#v}" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
-FROM go-tools-base AS runc-build
+FROM compose-build AS runc-build
 ARG RUNC_COMMIT=bb14dabeb7185bb72c8c86735d090dcb20f36587
 ARG RUNC_SOURCE_SHA256=0128f07fa8bd2ce25d3debf7b52961a2cdc7fbd5fa2da6e76f460d280641fb1b
 RUN archive=/tmp/runc.tar.gz \
@@ -137,12 +146,14 @@ RUN archive=/tmp/runc.tar.gz \
     "https://github.com/opencontainers/runc/archive/${RUNC_COMMIT}.tar.gz" \
     --output "$archive" \
   && printf '%s  %s\n' "$RUNC_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && make -C /src runc \
-  && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.26.6"
+  && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.26.6" \
+  && install -m 0755 /src/runc /out/runc \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
-FROM go-tools-base AS gh-build
+FROM runc-build AS gh-build
 ARG GH_VERSION=2.97.0
 ARG GH_COMMIT=55dbb4dc6b7edb10b48e3d7fc5bccd32318d1b55
 ARG GH_SOURCE_SHA256=c4ee0ab20406291616de45ad771c8b8a927bc8f3fd00ca61a50d0e8ffa582130
@@ -150,27 +161,20 @@ RUN archive=/tmp/gh.tar.gz \
   && curl --fail --silent --show-error --location --retry 3 \
     "https://github.com/cli/cli/archive/${GH_COMMIT}.tar.gz" --output "$archive" \
   && printf '%s  %s\n' "$GH_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
-  && mkdir /src /out \
+  && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} \
       -X github.com/cli/cli/v2/internal/build.Date=2026-07-31" \
     -o /out/gh ./cmd/gh \
-  && test "$(/out/gh --version | awk 'NR == 1 {print $3}')" = "$GH_VERSION"
+  && test "$(/out/gh --version | awk 'NR == 1 {print $3}')" = "$GH_VERSION" \
+  && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
 # Keep the toolchain claim executable: fail the image build if any copied Go
 # binary was not produced by the patched compiler, or if the two projects that
 # pinned vulnerable x/net code did not resolve the reviewed replacement.
-FROM go-tools-base AS go-tools-audit
-COPY --from=moby-build /out/dockerd /out/docker-proxy /out/
-COPY --from=docker-cli-build /out/docker /out/
-COPY --from=containerd-build /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/
-COPY --from=rootlesskit-build /out/rootlesskit /out/
-COPY --from=buildx-build /out/docker-buildx /out/
-COPY --from=compose-build /out/docker-compose /out/
-COPY --from=runc-build /src/runc /out/
-COPY --from=gh-build /out/gh /out/
+FROM gh-build AS go-tools-audit
 RUN for binary in /out/*; do \
     test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.26.6"; \
   done \
