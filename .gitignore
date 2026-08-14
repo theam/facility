@@ -24,3 +24,6 @@ dist/
 *.tfstate
 *.tfstate.*
 crash.log
+
+# GitHub App private keys
+*.pem

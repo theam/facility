@@ -13,6 +13,11 @@ const OptionalUrl = z.preprocess(
   z.string().url().optional(),
 );
 
+const OptionalString = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).optional(),
+);
+
 const OptionalGithubOrganization = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
   z
@@ -69,13 +74,13 @@ const EnvSchema = z
     S3_SECRET_KEY: z.string().optional(),
     S3_BUCKET: z.string().optional(),
     AWS_REGION: z.string().optional(),
-    FACILITY_AWS_CODEBUILD_PROJECT: z.string().trim().min(1).optional(),
-    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: z.string().trim().min(1).optional(),
-    VERCEL_TOKEN: z.string().trim().min(1).optional(),
-    VERCEL_OIDC_TOKEN: z.string().trim().min(1).optional(),
-    VERCEL_TEAM_ID: z.string().trim().min(1).optional(),
-    VERCEL_PROJECT_ID: z.string().trim().min(1).optional(),
-    PACKAGE_REGISTRY_TOKEN: z.string().trim().min(1).optional(),
+    FACILITY_AWS_CODEBUILD_PROJECT: OptionalString,
+    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: OptionalString,
+    VERCEL_TOKEN: OptionalString,
+    VERCEL_OIDC_TOKEN: OptionalString,
+    VERCEL_TEAM_ID: OptionalString,
+    VERCEL_PROJECT_ID: OptionalString,
+    PACKAGE_REGISTRY_TOKEN: OptionalString,
     GITHUB_APP_ID: z.string().optional(),
     GITHUB_APP_PRIVATE_KEY: z.string().optional(),
     GITHUB_APP_WEBHOOK_SECRET: z.string().optional(),
