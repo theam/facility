@@ -352,19 +352,20 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     runnerDockerfile,
     /^FROM golang:1\.26\.6-trixie@sha256:[0-9a-f]{64} AS go-tools-base$/m,
   );
-  for (const stage of [
-    "moby-build",
-    "docker-cli-build",
-    "containerd-build",
-    "rootlesskit-build",
-    "buildx-build",
-    "compose-build",
-    "runc-build",
-    "gh-build",
+  for (const [parent, stage] of [
+    ["go-tools-base", "moby-build"],
+    ["moby-build", "docker-cli-build"],
+    ["docker-cli-build", "containerd-build"],
+    ["containerd-build", "rootlesskit-build"],
+    ["rootlesskit-build", "buildx-build"],
+    ["buildx-build", "compose-build"],
+    ["compose-build", "runc-build"],
+    ["runc-build", "gh-build"],
   ]) {
-    assert.match(runnerDockerfile, new RegExp(`^FROM go-tools-base AS ${stage}$`, "m"));
+    assert.match(runnerDockerfile, new RegExp(`^FROM ${parent} AS ${stage}$`, "m"));
   }
-  assert.match(runnerDockerfile, /^FROM go-tools-base AS go-tools-audit$/m);
+  assert.match(runnerDockerfile, /^FROM gh-build AS go-tools-audit$/m);
+  assert.equal((runnerDockerfile.match(/rm -rf \/src "\$archive"/g) ?? []).length, 8);
   assert.match(runnerDockerfile, /go version -m "\$binary"[\s\S]*go1\.26\.6/);
   assert.match(runnerDockerfile, /golang\.org\/x\/net[\s\S]*v0\.56\.0/);
   assert.match(runnerDockerfile, /COPY --from=go-tools-audit[\s\S]*\/usr\/local\/bin\//);
