@@ -112,23 +112,6 @@ export default async function ProjectStoriesPage({
         >
           all
         </Link>
-        {githubLogin ? (
-          <Link
-            href={
-              mineLogin
-                ? `/projects/${projectId}/stories${activeStage ? `?stage=${activeStage}` : ""}`
-                : `/projects/${projectId}/stories?mine=1${activeStage ? `&stage=${activeStage}` : ""}`
-            }
-            className={cx(
-              "border px-3 py-1.5 text-[12px] font-medium transition-colors",
-              mineLogin
-                ? "border-(--line-strong) text-(--ink)"
-                : "border-(--line) text-(--mut) hover:text-(--ink)",
-            )}
-          >
-            mine
-          </Link>
-        ) : null}
         {counts.map((s) => (
           <Link
             key={s.key}
@@ -166,6 +149,26 @@ export default async function ProjectStoriesPage({
               </Link>
             </span>
           </>
+        ) : null}
+        {githubLogin ? (
+          <div className="flex items-center gap-2">
+            <span className="h-4 w-px bg-(--line)" />
+            <Link
+              href={
+                mineLogin
+                  ? `/projects/${projectId}/stories${activeStage ? `?stage=${activeStage}` : ""}`
+                  : `/projects/${projectId}/stories?mine=1${activeStage ? `&stage=${activeStage}` : ""}`
+              }
+              className={cx(
+                "border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                mineLogin
+                  ? "border-(--line-strong) text-(--ink)"
+                  : "border-(--line) text-(--mut) hover:text-(--ink)",
+              )}
+            >
+              mine
+            </Link>
+          </div>
         ) : null}
       </div>
 
