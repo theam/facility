@@ -1620,6 +1620,47 @@ describe("Claude resume controls", () => {
     );
   });
 
+  it("interrupts before any ack, even when the event transport is down", async () => {
+    const calls: string[] = [];
+    await expect(
+      handleControlMessage(
+        { id: "msg_3", kind: "interrupt", body: "stop" },
+        {
+          appendSteer: async () => undefined,
+          emit: async () => {
+            calls.push("emit");
+            throw new Error("control plane down");
+          },
+          interrupt: async () => {
+            calls.push("interrupt");
+          },
+        },
+      ),
+    ).resolves.toBe("interrupt");
+    // The server marks a control message delivered on fetch, so it is never
+    // re-delivered: the kill must land before, and regardless of, the ack.
+    expect(calls[0]).toBe("interrupt");
+  });
+
+  it("applies a steer even when its ack cannot be delivered", async () => {
+    const steers: string[] = [];
+    await expect(
+      handleControlMessage(
+        { id: "msg_4", kind: "steer", body: "adjust" },
+        {
+          appendSteer: async (body) => {
+            steers.push(body);
+          },
+          emit: async () => {
+            throw new Error("control plane down");
+          },
+          interrupt: async () => undefined,
+        },
+      ),
+    ).resolves.toBe("steer");
+    expect(steers).toEqual(["adjust"]);
+  });
+
   it("signals SIGTERM before SIGKILL on interrupt termination", () => {
     const signals: string[] = [];
     const timers: Array<() => void> = [];

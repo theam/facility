@@ -1517,10 +1517,36 @@ async function ensureRunAgentRole(
   return row?.id ?? id;
 }
 
+// How long an exited/lost observation must persist before reconcile declares
+// the run sandbox_lost. The verdict is irreversible — it revokes the run's keys
+// and 409s every later runner call — so it must survive the situations issue
+// #35 hit: an API/worker restart while the runner rides out the outage, a
+// terminal result still in flight when the container exits, and a provider
+// status misreport on a single probe. With the 2-minute reconcile cron this
+// confirms on the next tick after the window, keeping genuinely dead sandboxes
+// visible within ~4 minutes. A worker that was down also cannot fail runs on
+// its first tick back: the first observation only starts the window.
+export const SANDBOX_LOSS_GRACE_MS = 90_000;
+
+export function sandboxLossConfirmed(
+  sandbox: RunSandboxState,
+  now: Date,
+  graceMs = SANDBOX_LOSS_GRACE_MS,
+) {
+  const observedAt = sandbox.lossObservedAt ? Date.parse(sandbox.lossObservedAt) : Number.NaN;
+  return Number.isFinite(observedAt) && now.getTime() - observedAt >= graceMs;
+}
+
+type ReconcileSandboxesDeps = {
+  sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
+};
+
 export async function reconcileSandboxes(
   config: AppConfig,
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+  deps: ReconcileSandboxesDeps = {},
 ) {
+  const resolveDriver = deps.sandboxDriver ?? sandboxDriver;
   const { db, client } = createDb(config.databaseUrl);
   try {
     // Dispatch-loss backstop: run rows are committed BEFORE their pg-boss
@@ -1569,11 +1595,42 @@ export async function reconcileSandboxes(
           continue;
         }
         if (!sandbox.driver || !sandbox.ref) continue;
-        const driver = await sandboxDriver(sandbox.driver);
+        const driver = await resolveDriver(sandbox.driver);
         const status = await driver.status(sandbox.ref);
         if (status === "exited" || status === "lost") {
-          await failRun(db, run.orgId, run.id, "sandbox_lost", "sandbox_lost");
-          await updateGithubRunProgress(db, run.id, "failed", { config }).catch(() => undefined);
+          if (sandboxLossConfirmed(sandbox, new Date())) {
+            await failRun(db, run.orgId, run.id, "sandbox_lost", "sandbox_lost");
+            await updateGithubRunProgress(db, run.id, "failed", { config }).catch(() => undefined);
+          } else if (!Number.isFinite(Date.parse(sandbox.lossObservedAt ?? ""))) {
+            // First (or unreadable) observation: start the grace window. The
+            // guarded jsonb_set leaves concurrent terminal transitions — a
+            // result landing right now — untouched, and the SQL-level null
+            // check keeps an overlapping tick holding a pre-stamp snapshot
+            // from moving an existing stamp later.
+            await db
+              .update(runs)
+              .set({
+                sandbox: sql`jsonb_set(coalesce(${runs.sandbox}, '{}'::jsonb), '{lossObservedAt}', to_jsonb(${new Date().toISOString()}::text))`,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(runs.id, run.id),
+                  inArray(runs.status, ["provisioning", "running"]),
+                  sql`${runs.sandbox}->>'lossObservedAt' is null`,
+                ),
+              );
+          }
+        } else if (sandbox.lossObservedAt !== undefined) {
+          // The sandbox came back (or the probe misreported): reset the window
+          // so an unrelated later loss starts its own grace period.
+          await db
+            .update(runs)
+            .set({
+              sandbox: sql`coalesce(${runs.sandbox}, '{}'::jsonb) - 'lossObservedAt'`,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(runs.id, run.id), inArray(runs.status, ["provisioning", "running"])));
         }
       } catch {
         // Driver unreachable for this run; leave it for the next tick.
@@ -1601,7 +1658,7 @@ export async function reconcileSandboxes(
       try {
         const sandbox = readSandbox(run.sandbox);
         if (!sandbox.driver || !sandbox.ref) continue;
-        const driver = await sandboxDriver(sandbox.driver);
+        const driver = await resolveDriver(sandbox.driver);
         await driver.destroy(sandbox.ref);
         await markSandboxDestroyed(db, run.id);
       } catch {

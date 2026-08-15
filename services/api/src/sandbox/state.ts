@@ -52,6 +52,11 @@ export type RunSandboxState = {
   finishedAt?: string;
   destroyedAt?: string;
   lastStatus?: string;
+  // First reconcile tick that observed the sandbox exited/lost while the run
+  // was still live. The verdict is only confirmed once the loss persists past
+  // the grace window — a single probe can race a restarting control plane, an
+  // in-flight terminal result, or a transient provider misreport.
+  lossObservedAt?: string;
   // True for in-process assistant turns: no container, no driver — the key
   // lifecycle and orphan sweeps still apply through virtualKeyId.
   inline?: boolean;

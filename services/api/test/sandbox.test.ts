@@ -43,6 +43,7 @@ import {
   reconcileSandboxes,
   repairExpectedHeadSha,
   runDeliveryRefMismatch,
+  SANDBOX_LOSS_GRACE_MS,
 } from "../src/sandbox/orchestrator.js";
 import { appendRunEvents, readSandbox } from "../src/sandbox/state.js";
 import type { AppConfig } from "../src/types.js";
@@ -1648,6 +1649,90 @@ describe("sandbox api", async () => {
     await db
       .update(runs)
       .set({ status: "canceled", endedAt: new Date() })
+      .where(eq(runs.id, runId));
+  });
+
+  it("gives a lost-looking sandbox a reconcile grace window before failing the run", async () => {
+    const runId = newId("run");
+    await insertRunnerRun("frt_grace_first", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_grace_first"),
+    });
+    const exitedDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async () => "exited",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => exitedDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    // A single "exited" probe must not fail the run: the runner may be riding
+    // out a control-plane restart, or the result may already be in flight.
+    expect(stored?.status).toBe("running");
+    expect(Number.isFinite(Date.parse(readSandbox(stored?.sandbox).lossObservedAt ?? ""))).toBe(
+      true,
+    );
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
+      .where(eq(runs.id, runId));
+  });
+
+  it("fails a run as sandbox_lost once the loss persists past the grace window", async () => {
+    const runId = newId("run");
+    await insertRunnerRun("frt_grace_confirm", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_grace_confirm"),
+      lossObservedAt: new Date(Date.now() - SANDBOX_LOSS_GRACE_MS - 60_000).toISOString(),
+    });
+    const exitedDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async () => "exited",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => exitedDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("failed");
+    expect(stored?.error).toBe("sandbox_lost");
+    await db.update(runs).set({ sandbox: {} }).where(eq(runs.id, runId));
+  });
+
+  it("clears the loss observation when the sandbox is seen alive again", async () => {
+    const runId = newId("run");
+    await insertRunnerRun("frt_grace_recover", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_grace_recover"),
+      lossObservedAt: new Date(Date.now() - 30_000).toISOString(),
+    });
+    const runningDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => runningDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    expect(readSandbox(stored?.sandbox).lossObservedAt).toBeUndefined();
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
       .where(eq(runs.id, runId));
   });
 

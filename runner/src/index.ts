@@ -55,6 +55,37 @@ const SESSION_CHECKPOINT_INTERVAL_MS = 60_000;
 const RATE_LIMIT_RETRY_LIMIT = 8;
 const DEFAULT_RETRY_AFTER_MS = 1_000;
 const MAX_RETRY_AFTER_MS = 60_000;
+// A control-plane restart (dev watch, deploy) must not kill an in-flight run:
+// the sandbox is an independent container and the API is stateless per request,
+// so the runner rides out the outage and resumes where it left off. The budget
+// bounds each call, so a genuinely dead control plane is abandoned after a
+// handful of budgeted calls rather than holding the sandbox indefinitely.
+const TRANSIENT_RETRY_BUDGET_MS = 3 * 60_000;
+const TRANSIENT_RETRY_BASE_DELAY_MS = 500;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 10_000;
+// The terminal result is the run's only record of its outcome — give it a
+// longer budget than ordinary calls before abandoning the control plane.
+const RESULT_RETRY_BUDGET_MS = 5 * 60_000;
+const STEER_POLL_RETRY_DELAY_MS = 5_000;
+const TRANSIENT_HTTP_STATUSES = new Set([500, 502, 503, 504]);
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  // A containerized control plane deregisters its DNS name while restarting
+  // (compose service names, K8s services), so name resolution loss is part of
+  // the same outage class as a refused connection.
+  "ENOTFOUND",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
 const GIT_COMMAND_TIMEOUT_MS = 2 * 60_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 const EVENT_BATCH_MAX = 50;
@@ -587,25 +618,47 @@ function startSteeringPoll() {
   let stopped = false;
   void (async () => {
     let afterId: string | undefined;
+    let failedPolls = 0;
     while (!stopped) {
-      const query = afterId ? `?afterId=${encodeURIComponent(afterId)}` : "";
-      const messages = await api<Array<{ id: string; body: string; kind?: string }>>(
-        `/internal/runs/${currentRunId()}/steer${query}`,
-      );
-      for (const message of messages) {
-        afterId = message.id;
-        await handleControlMessage(message, {
-          appendSteer: async (body) => {
-            await appendFile(steerFile, `\n\n## ${new Date().toISOString()}\n${body}\n`);
-          },
-          emit,
-          interrupt: async () => {
-            interruptRequested = true;
-            if (activeEngineChild && !clearInterruptEscalation) {
-              clearInterruptEscalation = terminateChild(activeEngineChild);
-            }
-          },
-        });
+      try {
+        const query = afterId ? `?afterId=${encodeURIComponent(afterId)}` : "";
+        const messages = await api<Array<{ id: string; body: string; kind?: string }>>(
+          `/internal/runs/${currentRunId()}/steer${query}`,
+        );
+        if (failedPolls > 0) {
+          // The transport was down while the polls failed, so the degradation
+          // can only be reported after the fact: steering messages sent in
+          // that window may have been delayed.
+          await emit([
+            {
+              type: "artifact_error",
+              data: { kind: "steer_poll_degraded", failures: failedPolls },
+            },
+          ]).catch(() => undefined);
+          failedPolls = 0;
+        }
+        for (const message of messages) {
+          afterId = message.id;
+          await handleControlMessage(message, {
+            appendSteer: async (body) => {
+              await appendFile(steerFile, `\n\n## ${new Date().toISOString()}\n${body}\n`);
+            },
+            emit,
+            interrupt: async () => {
+              interruptRequested = true;
+              if (activeEngineChild && !clearInterruptEscalation) {
+                clearInterruptEscalation = terminateChild(activeEngineChild);
+              }
+            },
+          });
+        }
+      } catch (error) {
+        // Steering and interrupts must survive the run: one poll exhausting
+        // its outage budget cannot be allowed to silence the channel for the
+        // rest of a possibly hours-long run. Only a terminal run ends it.
+        if (isRunTerminalConflict(error) || stopped) return;
+        failedPolls += 1;
+        await new Promise((resolve) => setTimeout(resolve, STEER_POLL_RETRY_DELAY_MS));
       }
     }
   })().catch(() => undefined);
@@ -1284,14 +1337,24 @@ type ControlHandlers = {
 };
 
 export async function handleControlMessage(message: ControlMessage, handlers: ControlHandlers) {
+  // The server marks a control message delivered when it is fetched, so it is
+  // never re-delivered. The durable action — the kill, the steer-file append —
+  // must land before, and regardless of, any ack the event transport may fail
+  // to carry mid-outage; a lost ack must not surface as a failed message.
   if (message.kind === "interrupt") {
-    await handlers.emit([{ type: "status", data: { message: "human interrupt" } }]);
     await handlers.interrupt();
-    await handlers.emit([{ type: "steer", data: { id: message.id, kind: "interrupt" } }]);
+    await handlers
+      .emit([
+        { type: "status", data: { message: "human interrupt" } },
+        { type: "steer", data: { id: message.id, kind: "interrupt" } },
+      ])
+      .catch(() => undefined);
     return "interrupt";
   }
   await handlers.appendSteer(message.body);
-  await handlers.emit([{ type: "steer", data: { id: message.id, applied: true } }]);
+  await handlers
+    .emit([{ type: "steer", data: { id: message.id, applied: true } }])
+    .catch(() => undefined);
   return "steer";
 }
 
@@ -1345,15 +1408,25 @@ async function runShell(
   });
   const clearTimers =
     timeoutMin === undefined ? () => undefined : armCommandTimeout(child, timeoutMin);
-  const drains = [child.stdout, child.stderr].map((stream) => drainLineEvents(stream, eventType));
-  const code = await exitCode(child);
-  // Wait for both stream readers to finish draining before returning, so no
-  // output line is emitted AFTER the caller records the run's result (a late
-  // event would be dropped as post-terminal). Previously these loops were
-  // fire-and-forget and could lose or reorder trailing output.
-  await Promise.all(drains);
-  clearTimers();
-  return code;
+  try {
+    const drains = [child.stdout, child.stderr].map((stream) => drainLineEvents(stream, eventType));
+    // A delivery failure can reject a drain while the command is still running,
+    // long before the `await` below. Mark both promises handled now so that
+    // rejection waits for the await instead of aborting the whole process as an
+    // unhandled rejection — which would exit without posting a terminal result.
+    for (const drain of drains) drain.catch(() => undefined);
+    const code = await exitCode(child);
+    // Wait for both stream readers to finish draining before returning, so no
+    // output line is emitted AFTER the caller records the run's result (a late
+    // event would be dropped as post-terminal). Previously these loops were
+    // fire-and-forget and could lose or reorder trailing output.
+    await Promise.all(drains);
+    return code;
+  } finally {
+    // Also on a drain rejection: the armed SIGKILL escalation is a live timer
+    // handle that would keep the process alive long after the result posts.
+    clearTimers();
+  }
 }
 
 export async function drainLineEvents(
@@ -1450,6 +1523,7 @@ export async function drainLineEvents(
     }
   };
 
+  let drained = false;
   try {
     for await (const line of lines) {
       if (eventType === "shell" && isTransientContainerProgressLine(line)) {
@@ -1473,9 +1547,16 @@ export async function drainLineEvents(
       if (activeDelivery) await activeDelivery;
     }
     if (deliveryError) throw deliveryError;
+    drained = true;
   } finally {
     clearFlushTimer();
     lines.close();
+    // A failed drain must not strand the producer: readline's close() pauses
+    // the source, and a child still writing into a full pipe would block
+    // forever — its exit code never observed, the run never resolved. Keep the
+    // stream flowing (discarding) so the command can finish and the delivery
+    // error can surface through the normal await.
+    if (!drained) stream.resume();
   }
 }
 
@@ -1641,33 +1722,51 @@ async function postResult(
 ) {
   const stderrTail = await readFile(engineStderrFile, "utf8").catch(() => "");
   const activity = await runnerReceiptActivity(bundle, status);
-  await api(`/internal/runs/${currentRunId()}/result`, {
-    method: "POST",
-    body: JSON.stringify({
-      status,
-      receipt: {
-        provider: receiptProvider(bundle?.engine),
-        mode: receiptMode(bundle?.mode),
-        model: configuredModel(bundle?.engineConfig),
-        result: status,
-        activity,
-        timing: {
-          started_at: new Date(startedAt).toISOString(),
-          ended_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
-        },
+  try {
+    await api(
+      `/internal/runs/${currentRunId()}/result`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          status,
+          receipt: {
+            provider: receiptProvider(bundle?.engine),
+            mode: receiptMode(bundle?.mode),
+            model: configuredModel(bundle?.engineConfig),
+            result: status,
+            activity,
+            timing: {
+              started_at: new Date(startedAt).toISOString(),
+              ended_at: new Date().toISOString(),
+              duration_ms: Date.now() - startedAt,
+            },
+          },
+          error:
+            typeof error === "string"
+              ? error
+              : error
+                ? redactSecrets(`${JSON.stringify(error)} ${stderrTail.slice(-2000)}`)
+                : undefined,
+          git,
+          engineSessionId: engineSessionId ?? undefined,
+          securityReport,
+        }),
       },
-      error:
-        typeof error === "string"
-          ? error
-          : error
-            ? redactSecrets(`${JSON.stringify(error)} ${stderrTail.slice(-2000)}`)
-            : undefined,
-      git,
-      engineSessionId: engineSessionId ?? undefined,
-      securityReport,
-    }),
-  });
+      undefined,
+      { budgetMs: RESULT_RETRY_BUDGET_MS },
+    );
+  } catch (postError) {
+    if (isRunTerminalConflict(postError)) {
+      // The control plane already holds a different terminal verdict and now
+      // rejects both /result and /events for this run, so the container log is
+      // the only place left to record what this attempt would have reported.
+      process.stderr.write(
+        `result_discarded_run_terminal attempted_status=${status} git=${JSON.stringify(git ?? null)}\n`,
+      );
+      return;
+    }
+    throw postError;
+  }
 }
 
 const FACILITY_MANAGED_REPOSITORY_FILES = new Set([
@@ -2693,6 +2792,7 @@ async function api<T>(
   path: string,
   init: RequestInit = {},
   bodyFactory?: () => RequestInit["body"],
+  retry?: TransientRetryOptions,
 ): Promise<T> {
   const headers: Record<string, string> = { authorization: `Bearer ${runnerToken()}` };
   if (init.body) headers["content-type"] = "application/json";
@@ -2706,6 +2806,7 @@ async function api<T>(
       },
     },
     bodyFactory,
+    retry,
   ) as Promise<T>;
 }
 
@@ -2726,25 +2827,149 @@ export function retryAfterMs(value: string | null, now = Date.now()) {
   return DEFAULT_RETRY_AFTER_MS;
 }
 
+export class FetchJsonError extends Error {
+  readonly status: number;
+  readonly body: string;
+
+  constructor(url: string, status: number, body: string) {
+    super(`${url} failed ${status}: ${body}`);
+    this.name = "FetchJsonError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export type TransientRetryOptions = {
+  budgetMs?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+};
+
+// Undici wraps the raising syscall error in `cause` chains (and AggregateError
+// members when it raced multiple address families), so the classification has
+// to walk the tree rather than inspect the top-level error.
+export function isTransientFetchError(error: unknown): boolean {
+  const seen = new Set<object>();
+  const pending: unknown[] = [error];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const { name, code, cause, errors } = current as {
+      name?: unknown;
+      code?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    // An abort is the caller's own decision to stop waiting — never replay it.
+    if (name === "AbortError" || name === "TimeoutError") return false;
+    if (typeof code === "string" && TRANSIENT_NETWORK_CODES.has(code)) return true;
+    if (cause) pending.push(cause);
+    if (Array.isArray(errors)) pending.push(...errors);
+  }
+  return false;
+}
+
+// Exponential backoff with equal jitter: half the window is deterministic so
+// retries always spread out, half is random so concurrent runners desynchronize
+// instead of stampeding a control plane that just came back.
+export function transientRetryDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+  random: () => number = Math.random,
+) {
+  const window = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+  return Math.round(window / 2 + random() * (window / 2));
+}
+
+// After a replayed result post, a 409 run_terminal means some prior attempt —
+// ours before a lost response, or an operator action — already recorded a
+// terminal state. The retry achieved its purpose, so shutdown proceeds cleanly
+// instead of reporting a spurious failure.
+export function isRunTerminalConflict(error: unknown): boolean {
+  if (!(error instanceof FetchJsonError) || error.status !== 409) return false;
+  try {
+    const parsed = JSON.parse(error.body) as { error?: { code?: unknown } };
+    return parsed.error?.code === "run_terminal";
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchJson(
   url: string,
   init: RequestInit = {},
   bodyFactory?: () => RequestInit["body"],
+  retry: TransientRetryOptions = {},
 ) {
-  for (let attempt = 0; ; attempt += 1) {
-    const response = await fetch(url, bodyFactory ? { ...init, body: bodyFactory() } : init);
-    if (response.ok) return response.json();
-    const body = await response.text();
-    if (response.status !== 429 || attempt >= RATE_LIMIT_RETRY_LIMIT) {
-      throw new Error(`${url} failed ${response.status}: ${body}`);
+  const budgetMs = retry.budgetMs ?? TRANSIENT_RETRY_BUDGET_MS;
+  const baseDelayMs = retry.baseDelayMs ?? TRANSIENT_RETRY_BASE_DELAY_MS;
+  const maxDelayMs = retry.maxDelayMs ?? TRANSIENT_RETRY_MAX_DELAY_MS;
+  const deadline = Date.now() + budgetMs;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let transientAttempt = 0;
+  let rateLimitAttempt = 0;
+  // Retrying makes these requests at-least-once: a request whose response was
+  // lost after the server committed can be replayed. That is safe for the
+  // terminal result (a replay answers 409 run_terminal, handled by callers via
+  // isRunTerminalConflict) and can at worst duplicate one already-accepted
+  // events batch in the narrow response-lost window — a display-level artifact,
+  // never state corruption. Connection-refused and DNS-loss replays (the whole
+  // restart case this exists for) never reached the server at all.
+  for (;;) {
+    let response: Response;
+    let body: string;
+    try {
+      response = await fetch(url, bodyFactory ? { ...init, body: bodyFactory() } : init);
+      // The body reads live inside the same classification: a control plane
+      // killed between flushing headers and body fails here, and that loss is
+      // the same outage as a reset before headers.
+      if (response.ok) return (await response.json()) as unknown;
+      body = await response.text();
+    } catch (error) {
+      // Anything without a transient cause — bad URL, aborted request, invalid
+      // JSON from a healthy server — stays fatal.
+      if (!isTransientFetchError(error)) throw error;
+      const remainingMs = deadline - Date.now();
+      // One retry is always granted: a single stalled attempt (undici's
+      // header/body timeouts run to minutes) can consume the whole budget by
+      // itself, and a slow failure must not become a guaranteed-fatal one.
+      if (remainingMs <= 0 && transientAttempt > 0) throw error;
+      const delayMs = transientRetryDelayMs(transientAttempt, baseDelayMs, maxDelayMs);
+      transientAttempt += 1;
+      // Cap the wait at the remaining budget so the declared budget is spent
+      // in full: the last attempt runs at the deadline, not before it.
+      await sleep(remainingMs > 0 ? Math.min(delayMs, remainingMs) : delayMs);
+      continue;
     }
-    // The global API limiter rejects the request before a route handler runs,
-    // so replaying the runner's JSON request after Retry-After cannot duplicate
-    // an accepted event or terminal result. Awaiting here applies backpressure
-    // to noisy child processes instead of turning a temporary 429 into a crash.
-    await new Promise((resolve) =>
-      setTimeout(resolve, retryAfterMs(response.headers.get("retry-after"))),
-    );
+    if (response.status === 429) {
+      if (rateLimitAttempt >= RATE_LIMIT_RETRY_LIMIT) {
+        throw new FetchJsonError(url, response.status, body);
+      }
+      // The global API limiter rejects the request before a route handler runs,
+      // so replaying the runner's JSON request after Retry-After cannot duplicate
+      // an accepted event or terminal result. Awaiting here applies backpressure
+      // to noisy child processes instead of turning a temporary 429 into a crash.
+      rateLimitAttempt += 1;
+      await sleep(retryAfterMs(response.headers.get("retry-after")));
+      continue;
+    }
+    if (TRANSIENT_HTTP_STATUSES.has(response.status)) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new FetchJsonError(url, response.status, body);
+      const retryAfter = response.headers.get("retry-after");
+      const backoffMs = transientRetryDelayMs(transientAttempt, baseDelayMs, maxDelayMs);
+      // Honor a server-requested wait, but never let "Retry-After: 0" from a
+      // recovering proxy defeat the jitter floor — synchronized zero-delay
+      // replays from every runner would stampede the API it is protecting.
+      const delayMs =
+        retryAfter !== null ? Math.max(retryAfterMs(retryAfter), backoffMs) : backoffMs;
+      transientAttempt += 1;
+      await sleep(Math.min(delayMs, remainingMs));
+      continue;
+    }
+    throw new FetchJsonError(url, response.status, body);
   }
 }
 
