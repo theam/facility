@@ -5,8 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CiStatusLink } from "@/components/ci-status";
+import { AssigneeChip } from "@/components/issues/assignee-chip";
 import type { PipelineStory } from "@/lib/pipeline";
-import { storyHref } from "@/lib/pipeline";
+import { assigneeSummary, storyHref } from "@/lib/pipeline";
 
 function fmtAgo(iso: string | null) {
   if (!iso) return "—";
@@ -194,6 +195,20 @@ export function IssueRow({
             {label}
           </span>
         ))}
+        {assigneeSummary(story.assignees).shown.map((login) => (
+          <AssigneeChip key={login} login={login} />
+        ))}
+        {assigneeSummary(story.assignees).extra > 0 ? (
+          <span
+            className="font-mono text-[11px] text-(--dim)"
+            title={story.assignees
+              .slice(1)
+              .map((login) => `@${login}`)
+              .join(", ")}
+          >
+            +{assigneeSummary(story.assignees).extra}
+          </span>
+        ) : null}
         <span className="font-mono text-[10.5px] text-(--dim)">{fmtAgo(story.ghUpdatedAt)}</span>
         {action()}
       </div>

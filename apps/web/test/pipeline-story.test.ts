@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ciStatusLabel } from "@/components/ci-status";
 import type { PipelineStageKey, PipelineStory, Proposal, StoryDetail } from "@/lib/api";
-import { reviewablePullRequests, storyHref } from "@/lib/pipeline";
+import {
+  assigneeInitial,
+  assigneeSummary,
+  githubAvatarUrl,
+  reviewablePullRequests,
+  storyHref,
+} from "@/lib/pipeline";
 import { deriveStoryTimeline, proposalsForStory } from "@/lib/story";
 
 describe("story presentation contract", () => {
@@ -286,6 +292,21 @@ describe("story presentation contract", () => {
     ];
 
     expect(reviewablePullRequests([story]).map(({ pull }) => pull.number)).toEqual([22]);
+  });
+
+  it("renders nothing for an unassigned story", () => {
+    expect(assigneeSummary([])).toEqual({ shown: [], extra: 0 });
+  });
+
+  it("shows the first assignee and collapses the rest as +N", () => {
+    expect(assigneeSummary(["ada"])).toEqual({ shown: ["ada"], extra: 0 });
+    expect(assigneeSummary(["ada", "grace", "linus"])).toEqual({ shown: ["ada"], extra: 2 });
+  });
+
+  it("builds the avatar URL from the login and falls back to the initial", () => {
+    expect(githubAvatarUrl("ada")).toBe("https://github.com/ada.png?size=40");
+    expect(assigneeInitial("ada")).toBe("A");
+    expect(assigneeInitial("grace")).toBe("G");
   });
 });
 
