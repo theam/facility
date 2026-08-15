@@ -1524,8 +1524,8 @@ async function ensureRunAgentRole(
 // terminal result still in flight when the container exits, and a provider
 // status misreport on a single probe. With the 2-minute reconcile cron this
 // confirms on the next tick after the window, keeping genuinely dead sandboxes
-// visible within ~4 minutes. A worker that was down also cannot fail runs on
-// its first tick back: the first observation only starts the window.
+// visible within ~4 minutes. A returning worker cannot fail a run it never
+// observed lost: a first observation only starts the window.
 export const SANDBOX_LOSS_GRACE_MS = 90_000;
 
 export function sandboxLossConfirmed(
@@ -1603,10 +1603,11 @@ export async function reconcileSandboxes(
             await updateGithubRunProgress(db, run.id, "failed", { config }).catch(() => undefined);
           } else if (!Number.isFinite(Date.parse(sandbox.lossObservedAt ?? ""))) {
             // First (or unreadable) observation: start the grace window. The
-            // guarded jsonb_set leaves concurrent terminal transitions — a
-            // result landing right now — untouched, and the SQL-level null
-            // check keeps an overlapping tick holding a pre-stamp snapshot
-            // from moving an existing stamp later.
+            // guards leave concurrent terminal transitions — a result landing
+            // right now — untouched, and the compare-and-set against the value
+            // this tick read keeps an overlapping tick holding a stale
+            // snapshot from moving an existing stamp later, while still
+            // letting a corrupt stamp (which could never confirm) be replaced.
             await db
               .update(runs)
               .set({
@@ -1617,7 +1618,7 @@ export async function reconcileSandboxes(
                 and(
                   eq(runs.id, run.id),
                   inArray(runs.status, ["provisioning", "running"]),
-                  sql`${runs.sandbox}->>'lossObservedAt' is null`,
+                  sql`${runs.sandbox}->>'lossObservedAt' is not distinct from ${sandbox.lossObservedAt ?? null}`,
                 ),
               );
           }

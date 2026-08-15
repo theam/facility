@@ -1671,8 +1671,6 @@ describe("sandbox api", async () => {
     await reconcileSandboxes(config, undefined, { sandboxDriver: async () => exitedDriver });
 
     const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
-    // A single "exited" probe must not fail the run: the runner may be riding
-    // out a control-plane restart, or the result may already be in flight.
     expect(stored?.status).toBe("running");
     expect(Number.isFinite(Date.parse(readSandbox(stored?.sandbox).lossObservedAt ?? ""))).toBe(
       true,
@@ -1706,6 +1704,69 @@ describe("sandbox api", async () => {
     expect(stored?.status).toBe("failed");
     expect(stored?.error).toBe("sandbox_lost");
     await db.update(runs).set({ sandbox: {} }).where(eq(runs.id, runId));
+  });
+
+  it("does not move an in-window loss stamp on a repeat observation", async () => {
+    const runId = newId("run");
+    const stamp = new Date(Date.now() - 30_000).toISOString();
+    await insertRunnerRun("frt_grace_hold", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_grace_hold"),
+      lossObservedAt: stamp,
+    });
+    const exitedDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async () => "exited",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => exitedDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    // Restamping on every tick would keep resetting the window and a genuinely
+    // dead sandbox could never be confirmed lost.
+    expect(readSandbox(stored?.sandbox).lossObservedAt).toBe(stamp);
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
+      .where(eq(runs.id, runId));
+  });
+
+  it("replaces an unreadable loss stamp so the grace window can still run", async () => {
+    const runId = newId("run");
+    await insertRunnerRun("frt_grace_corrupt", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_grace_corrupt"),
+      lossObservedAt: "not-a-date",
+    });
+    const exitedDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async () => "exited",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => exitedDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    const lossObservedAt = readSandbox(stored?.sandbox).lossObservedAt;
+    // A stamp that cannot be parsed can never confirm; leaving it in place
+    // would wedge the run live forever with a dead sandbox.
+    expect(lossObservedAt).not.toBe("not-a-date");
+    expect(Number.isFinite(Date.parse(lossObservedAt ?? ""))).toBe(true);
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
+      .where(eq(runs.id, runId));
   });
 
   it("clears the loss observation when the sandbox is seen alive again", async () => {
