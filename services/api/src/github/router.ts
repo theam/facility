@@ -12,6 +12,8 @@ import {
 } from "@facility/db";
 import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { ApiError } from "../errors.js";
+import { checksConfiguredForRepo } from "../sandbox/acceptance-gate.js";
+import { resolveDispatchCheckCmds } from "../sandbox/orchestrator.js";
 import { type FacilityGithubClient, GithubIssueContextTooLargeError } from "./client.js";
 import { syncRepoFacilityConfig } from "./kickstart.js";
 import { renderGithubRunProgress } from "./run-progress.js";
@@ -149,6 +151,24 @@ export async function routeTrigger(
       : null;
   if (accepted?.blockedRunId) {
     return { routed: false, reason: "plan_already_accepted", runId: accepted.blockedRunId };
+  }
+  // Refuse before inserting: a delivery-mode agent without acceptance checks
+  // can never deliver (its run would burn the sandbox and then fail at the
+  // runner's delivery gate). GitHub-backed repos are exempt — their CI owns
+  // acceptance of the draft pull request.
+  if (
+    !checksConfiguredForRepo({
+      mode: command,
+      checkCmds: await resolveDispatchCheckCmds(db, {
+        orgId: repo.orgId,
+        projectId: repo.projectId,
+        agent,
+        repo,
+      }),
+      repo,
+    })
+  ) {
+    return { routed: false, reason: "checks_not_configured" };
   }
   const githubTrigger = {
     type: "github_comment",

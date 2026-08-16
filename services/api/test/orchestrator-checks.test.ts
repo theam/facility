@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { harnessFragmentForBundle } from "../src/harness.js";
 import {
+  checksConfiguredForDispatch,
+  checksConfiguredForRepo,
+  githubCiOwnsAcceptance,
+  requiresDelivery,
+} from "../src/sandbox/acceptance-gate.js";
+import {
   boundedResumeFallbackScope,
   platformDeliveryFailure,
   renderRunContract,
@@ -19,6 +25,63 @@ describe("platform delivery boundaries", () => {
       "repository_changes_not_allowed",
     );
     expect(platformDeliveryFailure({ mode: "custom", gh: {} }, { changed: false })).toBeNull();
+  });
+});
+
+describe("dispatch acceptance gate — mirror of the runner delivery gate", () => {
+  const githubBundle = {
+    mode: "builder",
+    checkCmds: [],
+    repo: { cloneUrl: "https://github.com/acme/app.git" },
+  };
+  const bareBundle = { mode: "builder", checkCmds: [], repo: { cloneUrl: null } };
+
+  it("refuses a delivery-mode agent with no checks and no GitHub repo", () => {
+    expect(requiresDelivery("builder")).toBe(true);
+    expect(requiresDelivery("codex-builder")).toBe(true);
+    expect(checksConfiguredForDispatch(bareBundle)).toBe(false);
+    expect(checksConfiguredForDispatch({ ...bareBundle, mode: "codex-builder" })).toBe(false);
+  });
+
+  it("passes when checks are configured", () => {
+    expect(checksConfiguredForDispatch({ ...bareBundle, checkCmds: ["pnpm verify"] })).toBe(true);
+  });
+
+  it("exempts GitHub-backed repos, whose own CI owns acceptance", () => {
+    expect(githubCiOwnsAcceptance(githubBundle)).toBe(true);
+    expect(checksConfiguredForDispatch(githubBundle)).toBe(true);
+    expect(
+      checksConfiguredForDispatch({ mode: "ci_doctor", checkCmds: [], repo: githubBundle.repo }),
+    ).toBe(true);
+    expect(
+      checksConfiguredForDispatch({
+        mode: "address_review",
+        checkCmds: [],
+        repo: githubBundle.repo,
+      }),
+    ).toBe(true);
+  });
+
+  it("never gates non-delivery modes", () => {
+    expect(requiresDelivery("architect")).toBe(false);
+    expect(
+      checksConfiguredForDispatch({ mode: "architect", checkCmds: [], repo: { cloneUrl: null } }),
+    ).toBe(true);
+    expect(
+      checksConfiguredForDispatch({ mode: "custom", checkCmds: [], repo: { cloneUrl: null } }),
+    ).toBe(true);
+  });
+
+  it("keeps the same semantics through the repo-row trigger predicate", () => {
+    expect(
+      checksConfiguredForRepo({
+        mode: "builder",
+        checkCmds: [],
+        repo: { owner: "acme", name: "app" },
+      }),
+    ).toBe(true);
+    expect(checksConfiguredForRepo({ mode: "builder", checkCmds: [], repo: null })).toBe(false);
+    expect(checksConfiguredForRepo({ mode: "architect", checkCmds: [], repo: null })).toBe(true);
   });
 });
 

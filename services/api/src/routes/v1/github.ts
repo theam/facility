@@ -32,6 +32,12 @@ import {
   type PipelinePullRequest,
 } from "../../pipeline.js";
 import {
+  CHECKS_NOT_CONFIGURED,
+  CHECKS_NOT_CONFIGURED_MESSAGE,
+  checksConfiguredForRepo,
+} from "../../sandbox/acceptance-gate.js";
+import { resolveDispatchCheckCmds } from "../../sandbox/orchestrator.js";
+import {
   assertProjectScope,
   DateValue,
   IdParams,
@@ -977,6 +983,24 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
       // No GitHub userCanWrite check: platform RBAC `runs:trigger` is the authority
       // for control-plane-originated dispatch.
       // No execution_lane gate: an explicit control-plane trigger is platform-lane intent.
+      // Refuse before queueing: a delivery-mode agent without acceptance checks
+      // can never deliver (its run would burn the sandbox and then fail at the
+      // runner's delivery gate). GitHub-backed repos are exempt — their CI owns
+      // acceptance of the draft pull request.
+      if (
+        !checksConfiguredForRepo({
+          mode: body.agent,
+          checkCmds: await resolveDispatchCheckCmds(db, {
+            orgId: p.orgId,
+            projectId,
+            agent,
+            repo,
+          }),
+          repo,
+        })
+      ) {
+        throw new ApiError(409, CHECKS_NOT_CONFIGURED, CHECKS_NOT_CONFIGURED_MESSAGE);
+      }
       const run = (
         await db
           .insert(runs)

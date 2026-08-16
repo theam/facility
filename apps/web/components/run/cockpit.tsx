@@ -2,8 +2,10 @@
 
 import { isBuilderMode, runObjectiveText } from "@facility/run-objective";
 import { Button, Cell, cx, Eyebrow, HairlineGrid, Metric, StatusDot, toneFor } from "@facility/ui";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AiIdentity } from "@/components/ai-identity";
+import { runErrorPresentation } from "@/components/run/run-error";
 import { RunTranscript } from "@/components/run/transcript";
 import { engineIdentity } from "@/lib/ai-identity";
 import type { Project, Run, RunEvent } from "@/lib/api";
@@ -270,6 +272,24 @@ function githubArtifacts(run: Run) {
     pr ? { label: "PR", text: pr.text, href: pr.href } : null,
     issue ? { label: "issue", text: issue.text, href: issue.href } : null,
   ].filter((item): item is { label: string; text: string; href: string | null } => Boolean(item));
+}
+
+function RunErrorLine({ error, projectId }: { error: string; projectId: string | null }) {
+  const presentation = runErrorPresentation(error, projectId);
+  if (!presentation) return <p className="text-sm text-(--bad)">{error}</p>;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-sm text-(--bad)">{presentation.message}</p>
+      {presentation.href ? (
+        <Link
+          href={presentation.href}
+          className="text-[12px] text-(--info) underline-offset-4 hover:underline"
+        >
+          configure acceptance checks
+        </Link>
+      ) : null}
+    </div>
+  );
 }
 
 function checkItems(events: RunEvent[]) {
@@ -613,7 +633,7 @@ export function RunCockpit({
             </div>
           </div>
 
-          {run.error ? <p className="text-sm text-(--bad)">{run.error}</p> : null}
+          {run.error ? <RunErrorLine error={run.error} projectId={project?.id ?? null} /> : null}
         </div>
 
         <HairlineGrid cols="grid-cols-2 lg:grid-cols-5" className="border-0 border-b">
