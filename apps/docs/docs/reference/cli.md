@@ -71,7 +71,10 @@ Actions in the repository lane and by Facility in the platform lane.
 
 Run `facility doctor --run-guards --github` after committing. It checks the
 manifest, generated workflows, configured agent models and authentication,
-preview variables/secrets, deterministic guards, and branch protection.
+preview variables/secrets, deterministic guards, and branch protection. It does
+not check every setting the human gates depend on — see
+[repository settings that back the gates](../reference/security#repository-settings-that-back-the-gates)
+for the full list and for what the command does not yet cover.
 
 ## Platform lane
 

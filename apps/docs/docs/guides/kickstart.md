@@ -22,6 +22,10 @@ From zero to a working factory:
    `facility/kickstart` and opens a pull request. Manual steps that only you
    can do are in the PR body: create the agent token secret, protect the
    default branch, confirm App permissions, and complete preview configuration.
+   Work through the
+   [repository settings that back the gates](../reference/security#repository-settings-that-back-the-gates)
+   while you are there — several of the human gates are held up by repository
+   configuration rather than by Facility.
 6. **Configure a live PR preview.** Choose a Facility-owned preview or an
    external deployment adapter. For a native preview, provide an immutable
    image, optional command, internal port, readiness path, and TTL. Add
@@ -32,6 +36,11 @@ From zero to a working factory:
 7. **Merge it.** That's Gate 2 muscle memory from day zero. Validate the live
    preview, review the PR, and squash-merge it in GitHub. On merge the
    fingerprint baseline is recorded and the project reports **system ok**.
+
+Confirm the
+[repository settings that back the gates](../reference/security#repository-settings-that-back-the-gates)
+are in place before this point: the gates have to exist before the first agent
+run, not after the first surprise.
 
 Now open an issue and comment `/architect`. The agent's task-specific checklist
 and final plan appear in one comment. Continue entirely from GitHub: comment
