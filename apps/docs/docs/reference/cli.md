@@ -15,6 +15,24 @@ node /absolute/path/to/facility/packages/cli/bin/facility.mjs <command>
 alias facility='node /absolute/path/to/facility/packages/cli/bin/facility.mjs'
 ```
 
+## Runtime requirements
+
+Node.js 20 or newer — a lower floor than the platform's, so the installer runs
+against repositories the rest of Facility could not host.
+
+The package declares exactly one runtime dependency, `postgres`. Only
+`facility instance bootstrap` uses it: that command connects directly to the
+database rather than through the API, because it creates the first organization
+and owner that the API's own authentication depends on. Every other command
+either speaks HTTP to a Facility API or writes files locally.
+
+Two external tools are used where present rather than installed as
+dependencies: `init` reads repository details with `git`, and `doctor --github`
+queries secrets, variables and branch protection with the GitHub CLI. Neither
+is an npm dependency, and both degrade rather than fail — `git` detection falls
+back to empty answers, and `doctor` reports a warning instead of a failure when
+`gh` is absent or unauthenticated.
+
 ## Vendored lane (no platform required)
 
 | command | does |
