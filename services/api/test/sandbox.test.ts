@@ -40,6 +40,7 @@ import type { SandboxDriver } from "../src/sandbox/driver.js";
 import {
   dispatchRun,
   finishRun,
+  githubPullRequestMode,
   reconcileSandboxes,
   repairExpectedHeadSha,
   runDeliveryRefMismatch,
@@ -98,6 +99,30 @@ describe("run delivery integrity binding", () => {
       webhook,
     );
     expect(repairExpectedHeadSha("builder", { pullRequest: { headSha: webhook } })).toBeNull();
+  });
+
+  it("resolves pull-request roles identically for Claude and Codex agents", () => {
+    for (const role of ["review", "address-review", "ci-doctor"]) {
+      expect(githubPullRequestMode(role)).toBe(true);
+      expect(githubPullRequestMode(`codex-${role}`)).toBe(true);
+    }
+    expect(githubPullRequestMode("builder")).toBe(false);
+    expect(githubPullRequestMode("codex-builder")).toBe(false);
+    expect(githubPullRequestMode("codex-architect")).toBe(false);
+  });
+
+  it("keeps the checked-out branch and the pinned head in agreement for repair agents", () => {
+    // A repair agent that pins an admitted head must also be given the pull
+    // request's branch. Disagreement clones the default branch and then fails
+    // the runner's head verification with repository_head_sha_mismatch.
+    const admitted = "c".repeat(40);
+    for (const mode of ["address-review", "codex-address-review", "ci-doctor", "codex-ci-doctor"]) {
+      const pinsHead = Boolean(
+        repairExpectedHeadSha(mode, { ciDoctor: { admittedHeadSha: admitted } }),
+      );
+      expect(pinsHead).toBe(true);
+      expect(githubPullRequestMode(mode)).toBe(pinsHead);
+    }
   });
 });
 
