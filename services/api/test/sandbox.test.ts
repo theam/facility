@@ -940,6 +940,62 @@ describe("sandbox api", async () => {
     expect(stored).toEqual({ engineSessionId: "sess_early_123", status: "running" });
   });
 
+  it("records an authenticated runner workspace base once and accepts exact replays", async () => {
+    const token = "frt_workspace_base";
+    const run = await insertRunnerRun(token, "running");
+    const otherToken = "frt_workspace_other_run";
+    await insertRunnerRun(otherToken, "running");
+    const baseSha = "A".repeat(40);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha: "not-a-commit" },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const crossRun = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: { baseSha },
+    });
+    expect(crossRun.statusCode).toBe(401);
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha },
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toEqual({ baseSha: "a".repeat(40) });
+
+    const replay = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha: "a".repeat(40) },
+    });
+    expect(replay.statusCode, replay.body).toBe(200);
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha: "b".repeat(40) },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toMatchObject({ error: { code: "workspace_base_mismatch" } });
+
+    const [stored] = await db
+      .select({ workspaceBaseSha: runs.workspaceBaseSha })
+      .from(runs)
+      .where(eq(runs.id, run.id));
+    expect(stored?.workspaceBaseSha).toBe("a".repeat(40));
+  });
+
   it("finishRun synchronizes only trusted qualifying security findings", async () => {
     const suffix = Date.now();
     const installation = (
@@ -1238,6 +1294,8 @@ describe("sandbox api", async () => {
   it("stores actual check outcomes and provenance in the run receipt", async () => {
     const token = "frt_receipt_checks";
     const run = await insertRunnerRun(token, "running");
+    const workspaceBaseSha = "c".repeat(40);
+    await db.update(runs).set({ workspaceBaseSha }).where(eq(runs.id, run.id));
     await appendRunEvents(db, orgId, run.id, [
       {
         type: "check",
@@ -1266,6 +1324,9 @@ describe("sandbox api", async () => {
       { name: "pnpm test", status: "passed", source: "platform", exit_code: 0 },
       { name: "agent smoke", status: "skipped", source: "agent" },
     ]);
+    expect((finished?.receipt as { github?: { base_sha?: string } })?.github?.base_sha).toBe(
+      workspaceBaseSha,
+    );
     expect((finished?.receipt as { checks_truncated?: boolean })?.checks_truncated).toBe(false);
   });
 

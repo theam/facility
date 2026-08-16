@@ -440,6 +440,7 @@ describe.sequential("signed GitHub delivery integration", () => {
     expect(result).toEqual({
       branch: "feature/task",
       headSha: "signed_sha",
+      baseSha: fixture.baseSha,
       changed: true,
       pullRequestTitle: "fix!: deliver signed task",
       pullRequestBody: "## Summary\n\n- Deliver the signed task.",
@@ -579,7 +580,12 @@ describe.sequential("signed GitHub delivery integration", () => {
       githubFetch: github.githubFetch,
     });
 
-    expect(result).toEqual({ branch: "feature/task", headSha: "signed_sha", changed: true });
+    expect(result).toEqual({
+      branch: "feature/task",
+      headSha: "signed_sha",
+      baseSha: fixture.baseSha,
+      changed: true,
+    });
     expect(facilityRequests(facility.requests, "/push-token")).toHaveLength(1);
     expect(github.originalUrls).toEqual(["https://api.github.com/graphql"]);
     expect(github.committed()).toBe(true);
@@ -606,7 +612,12 @@ describe.sequential("signed GitHub delivery integration", () => {
       githubFetch: github.githubFetch,
     });
 
-    expect(result).toEqual({ branch: "feature/task", headSha: "signed_sha", changed: true });
+    expect(result).toEqual({
+      branch: "feature/task",
+      headSha: "signed_sha",
+      baseSha: fixture.baseSha,
+      changed: true,
+    });
     expect(facilityRequests(facility.requests, "/push-token")).toHaveLength(1);
     expect(github.originalUrls).toEqual(["https://api.github.com/graphql"]);
     expect(github.committed()).toBe(true);

@@ -6639,6 +6639,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "workspaceBaseSha": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "error": {
                         "nullable": true,
                         "type": "string"
@@ -6685,6 +6689,7 @@
                       "engineSessionId",
                       "transcriptUri",
                       "sessionStateUri",
+                      "workspaceBaseSha",
                       "error",
                       "queuedAt",
                       "startedAt",
@@ -6968,6 +6973,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -7014,6 +7023,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -7463,6 +7473,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -7509,6 +7523,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -7923,6 +7938,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "workspaceBaseSha": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "error": {
                         "nullable": true,
                         "type": "string"
@@ -7989,6 +8008,7 @@
                       "engineSessionId",
                       "transcriptUri",
                       "sessionStateUri",
+                      "workspaceBaseSha",
                       "error",
                       "queuedAt",
                       "startedAt",
@@ -8234,6 +8254,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -8280,6 +8304,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -8534,6 +8559,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -8580,6 +8609,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -9809,6 +9839,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -9855,6 +9889,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -13420,6 +13455,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -13466,6 +13505,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",

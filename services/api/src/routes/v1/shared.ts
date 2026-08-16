@@ -202,6 +202,7 @@ export const RunSchema = z.object({
   engineSessionId: z.string().nullable(),
   transcriptUri: z.string().nullable(),
   sessionStateUri: z.string().nullable(),
+  workspaceBaseSha: z.string().nullable(),
   error: z.string().nullable(),
   queuedAt: DateValue,
   startedAt: DateValue.nullable(),
