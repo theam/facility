@@ -310,6 +310,21 @@ export async function kickstartRepo(args: {
     execution_lane: args.answers.execution_lane ?? { architect: "repo", builder: "repo" },
   };
   const render = await renderFacilityInit(renderAnswers, { existingFiles: existing });
+  const currentAnswers =
+    args.repo.renderAnswers &&
+    typeof args.repo.renderAnswers === "object" &&
+    !Array.isArray(args.repo.renderAnswers)
+      ? (args.repo.renderAnswers as Record<string, unknown>)
+      : {};
+  const persistedRenderAnswers = {
+    ...renderAnswers,
+    ...(currentAnswers.execution_lane_override
+      ? { execution_lane_override: currentAnswers.execution_lane_override }
+      : {}),
+    ...(currentAnswers.command_prefix !== undefined
+      ? { command_prefix: currentAnswers.command_prefix }
+      : {}),
+  };
   const branch = "facility/kickstart";
   const baseSha = await client.getDefaultBranchSha();
   const baseCommit = await client.getCommit(baseSha);
@@ -327,7 +342,7 @@ export async function kickstartRepo(args: {
     .set({
       fingerprintStatus: "pending_merge",
       fingerprint: { ...render.manifest, files: render.manifest.files },
-      renderAnswers,
+      renderAnswers: persistedRenderAnswers,
       updatedAt: new Date(),
     })
     .where(eq(repos.id, args.repo.id));

@@ -125,6 +125,32 @@ describe("scheduled agents", async () => {
     expect(stored?.lastScheduledAt?.toISOString()).toBe(now.toISOString());
   });
 
+  it("does not arm or dispatch scheduled agents for observe-first projects", async () => {
+    const now = new Date("2026-07-06T06:01:30.000Z");
+    const agent = await insertAgent("observe-gated", {
+      triggers: [{ type: "schedule", config: { cron: "* * * * *", timezone: "UTC" } }],
+      lastScheduledAt: new Date("2026-07-06T06:00:00.000Z"),
+    });
+    await db
+      .update(projects)
+      .set({ settings: { autonomy_mode: "observe" } })
+      .where(eq(projects.id, agent.projectId));
+    const enqueued: unknown[] = [];
+    const result = await runScheduledAgents(
+      config,
+      async (queue, data) => {
+        enqueued.push({ queue, data });
+      },
+      { now },
+    );
+    expect(result.dispatched).toEqual([]);
+    expect(enqueued).toEqual([]);
+    const stored = (
+      await db.select().from(agentDefs).where(eq(agentDefs.id, agent.id)).limit(1)
+    )[0];
+    expect(stored?.lastScheduledAt?.toISOString()).toBe("2026-07-06T06:00:00.000Z");
+  });
+
   it("skips due agents with a live run but still advances last_scheduled_at", async () => {
     const now = new Date("2026-07-06T06:01:30.000Z");
     const agent = await insertAgent("live-skip", {

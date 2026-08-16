@@ -705,6 +705,88 @@ describe("api", async () => {
       payload: { description: "updated" },
     });
     expect(patched.json().description).toBe("updated");
+
+    const governanceRepoId = newId("repo");
+    await db.insert(repos).values({
+      id: governanceRepoId,
+      orgId,
+      projectId,
+      owner: "octo",
+      name: `governance-${Date.now()}`,
+      defaultBranch: "main",
+      renderAnswers: { execution_lane: { architect: "repo" }, preserved: true },
+    });
+    const governed = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}`,
+      headers: { cookie },
+      payload: {
+        settings: {
+          autonomy_mode: "observe",
+          observe_summary: false,
+          execution_lane_override: { architect: "platform", builder: "repo" },
+          command_prefix: "fx",
+        },
+      },
+    });
+    expect(governed.statusCode).toBe(200);
+    const [governedRepo] = await db.select().from(repos).where(eq(repos.id, governanceRepoId));
+    expect(governedRepo?.renderAnswers).toMatchObject({
+      execution_lane: { architect: "repo" },
+      execution_lane_override: { architect: "platform", builder: "repo" },
+      command_prefix: "fx",
+      preserved: true,
+    });
+
+    const invalid = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}`,
+      headers: { cookie },
+      payload: { settings: { command_prefix: "Not Valid" } },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.code).toBe("invalid_project_governance");
+  });
+
+  it("requires repository write authority before changing repository governance", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const restrictedRoleId = newId("role");
+    const restrictedUserId = newId("user");
+    await db.insert(roles).values({
+      id: restrictedRoleId,
+      orgId,
+      name: `project-only-${suffix}`,
+      permissions: ["projects:write"],
+    });
+    await db.insert(users).values({
+      id: restrictedUserId,
+      email: `project-only-${suffix}@example.com`,
+      status: "active",
+    });
+    await db.insert(orgMembers).values({
+      id: newId("member"),
+      orgId,
+      userId: restrictedUserId,
+      roleId: restrictedRoleId,
+    });
+    const restrictedCookie = `facility_session=${await mintSessionCookie(
+      config,
+      restrictedUserId,
+      orgId,
+    )}`;
+    const denied = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}`,
+      headers: { cookie: restrictedCookie },
+      payload: {
+        settings: {
+          execution_lane_override: { architect: "platform" },
+          command_prefix: "fx",
+        },
+      },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error.code).toBe("forbidden");
   });
 
   it("replays idempotent creates and rejects key reuse with different input", async () => {
@@ -2882,6 +2964,36 @@ describe("api", async () => {
           body: expect.stringContaining(`run ${issueRun?.id}`),
         }),
       ]);
+
+      await db
+        .update(projects)
+        .set({ settings: { autonomy_mode: "observe", observe_summary: false } })
+        .where(eq(projects.id, target.projectId));
+      await db.insert(ghIssues).values({
+        id: newId("evt"),
+        orgId,
+        projectId: target.projectId,
+        repoId: repo?.id ?? "",
+        number: 42,
+        title: "Observe without touching GitHub",
+        state: "open",
+        htmlUrl: `https://github.com/${repo?.owner}/${repo?.name}/issues/42`,
+      });
+      await execute("facility_trigger_github_issue", "runs:trigger", {
+        projectId: target.projectId,
+        repoId: repo?.id,
+        number: 42,
+        agentName: target.agent.name,
+      });
+      const observeRun = (
+        await db
+          .select()
+          .from(runs)
+          .where(sql`${runs.projectId} = ${target.projectId} and ${runs.gh}->>'issueNumber' = '42'`)
+          .limit(1)
+      )[0];
+      expect(observeRun?.trigger).toMatchObject({ githubFeedback: "silent" });
+      expect(comments).toHaveLength(1);
     } finally {
       app.enqueue = originalEnqueue;
       app.githubClientFactory = originalFactory;
@@ -5092,6 +5204,26 @@ describe("api", async () => {
     expect(
       caughtUpRuns.map((run) => (run.trigger as { scheduledFor: string }).scheduledFor).sort(),
     ).toEqual(["2026-07-16T12:28:00.000Z", "2026-07-16T12:29:00.000Z", "2026-07-16T12:30:00.000Z"]);
+  });
+
+  it("gates catch-up scheduling while a project is observe-first", async () => {
+    await db.delete(schedulerWatermarks);
+    const target = await createProjectWithAgent("Observe Scheduled Gate");
+    await db
+      .update(projects)
+      .set({ settings: { autonomy_mode: "observe" } })
+      .where(eq(projects.id, target.projectId));
+    await db
+      .update(agentDefs)
+      .set({ triggers: [{ type: "schedule", config: { cron: "* * * * *", timezone: "UTC" } }] })
+      .where(eq(agentDefs.id, target.agent.id));
+    await runAgentSchedules(
+      config,
+      async () => null,
+      new Date("2026-07-16T12:30:42.000Z"),
+    );
+    const scheduled = await db.select().from(runs).where(eq(runs.agentDefId, target.agent.id));
+    expect(scheduled).toEqual([]);
   });
 
   it("creates a greenfield GitHub repo through the App and connects the repo row", async () => {

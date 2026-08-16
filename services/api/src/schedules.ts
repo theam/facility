@@ -11,6 +11,7 @@ import {
 } from "@facility/db";
 import { and, eq, not, sql } from "drizzle-orm";
 import { laneFor } from "./github/router.js";
+import { scheduledAutonomyAllowed } from "./project-policy.js";
 import type { AppConfig } from "./types.js";
 
 type Enqueue = (
@@ -62,7 +63,8 @@ export async function runAgentSchedules(config: AppConfig, enqueue: Enqueue, now
     )[0];
     const instants = catchUpMinutes(watermark?.lastTick, currentMinute);
     let created = 0;
-    for (const { agent } of rows) {
+    for (const { agent, project } of rows) {
+      if (!scheduledAutonomyAllowed(project.settings)) continue;
       if (
         REPOSITORY_SCHEDULED_AGENTS.has(agent.name) &&
         !projectRepos.some(

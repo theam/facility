@@ -24,7 +24,9 @@ import { parseFacilityRepoManifest, syncRepoFacilityConfig } from "../src/github
 import { githubEventMatches, processGithubWebhook } from "../src/github/processor.js";
 import {
   assertGithubRequestContextSize,
+  commandPrefixFor,
   githubRequestContext,
+  laneFor,
   resolveSlashCommand,
   routeTrigger,
 } from "../src/github/router.js";
@@ -819,6 +821,26 @@ describe("github integration", async () => {
       agentCommand: "codex-builder",
       ambiguous: false,
     });
+    expect(resolveSlashCommand("/fx architect\n\nkeep the current process")).toEqual({
+      command: "architect",
+      agentCommand: "architect",
+      prefix: "fx",
+      ambiguous: false,
+    });
+    expect(resolveSlashCommand("/fx architect\n/architect")).toEqual({ ambiguous: true });
+  });
+
+  it("applies operator lane overrides and command namespaces", () => {
+    const repo = {
+      renderAnswers: {
+        execution_lane: { architect: "repo" },
+        execution_lane_override: { architect: "platform" },
+        command_prefix: "fx",
+      },
+    } as never;
+    expect(laneFor(repo, "architect")).toBe("platform");
+    expect(laneFor(repo, "builder")).toBe("repo");
+    expect(commandPrefixFor(repo)).toBe("fx");
   });
 
   it("routes only creation actions and denies replay-prone GitHub updates", async () => {

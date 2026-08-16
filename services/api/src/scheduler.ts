@@ -1,11 +1,12 @@
 import { newId } from "@facility/core";
-import { agentDefs, createDb, insertAuditEvent, runEvents, runs } from "@facility/db";
+import { agentDefs, createDb, insertAuditEvent, projects, runEvents, runs } from "@facility/db";
 // Default-import: cron-parser is CJS and its named exports aren't statically
 // visible to Node's ESM loader (tsx runs the worker in real ESM mode).
 import cronParser from "cron-parser";
 import { and, eq, not, notInArray, sql } from "drizzle-orm";
 import { TERMINAL_RUN_STATUSES } from "./sandbox/state.js";
 import type { AppConfig } from "./types.js";
+import { scheduledAutonomyAllowed } from "./project-policy.js";
 
 type Enqueue = (queue: string, data: Record<string, unknown>) => Promise<unknown>;
 
@@ -29,8 +30,9 @@ export async function runScheduledAgents(
     await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('agents.schedule'))`);
       const agents = await tx
-        .select()
+        .select({ agent: agentDefs, project: projects })
         .from(agentDefs)
+        .innerJoin(projects, eq(projects.id, agentDefs.projectId))
         .where(
           and(
             eq(agentDefs.enabled, true),
@@ -38,7 +40,8 @@ export async function runScheduledAgents(
             sql`${agentDefs.triggers} @> '[{"type":"schedule"}]'::jsonb`,
           ),
         );
-      for (const agent of agents) {
+      for (const { agent, project } of agents) {
+        if (!scheduledAutonomyAllowed(project.settings)) continue;
         // The bespoke learning.nightly packet job owns learning agents because it
         // assembles a daily packet before dispatch; the generic scheduler skips them.
         const trigger = dueScheduleTrigger(agent.triggers, agent.lastScheduledAt, now);
