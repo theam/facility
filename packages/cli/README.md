@@ -18,7 +18,10 @@ One binary with two jobs, and you rarely need both:
 npx @theagilemonkeys/facility --help
 ```
 
-Node.js 20 or newer. Zero configuration to read; one dependency.
+Node.js 20 or newer. Zero configuration to read; one runtime dependency —
+`postgres`, which `facility instance bootstrap` uses to connect directly to a
+Facility database. `init` also shells out to `git`, and `doctor --github` to the
+GitHub CLI, where those are on the `PATH`.
 
 **Early software.** Facility is published while it is still being built: the
 API is young, generated files change shape between `0.x` releases, and no

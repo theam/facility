@@ -55,8 +55,13 @@ To delegate setup to Claude Code or Codex:
   when committing; maintainers squash and merge pull requests.
 - Add or update tests for behavior changes. Never relax, skip, or delete a test,
   guard, or check to make a change pass.
-- Keep the CLI and everything it vendors into user repositories free of runtime
-  dependencies. A new dependency becomes part of every adopter's supply chain.
+- Keep everything the CLI vendors into user repositories free of runtime
+  dependencies, and add one to the CLI package itself only when a command
+  cannot work without it. A new dependency becomes part of every adopter's
+  supply chain. The package declares exactly one today — `postgres`, which
+  `facility instance bootstrap` uses to reach the database directly, because it
+  creates the first organization and owner that the API's own authentication
+  depends on. Do not drop it without also removing that command.
 - Treat files under `packages/cli/templates/` and `packages/cli/modules/` as
   product surfaces. Comments should explain why a constraint exists, not
   narrate the code.

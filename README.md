@@ -212,7 +212,7 @@ pnpm exec facility instance bootstrap \
   --github-account-type organization
 ```
 
-The command connects to the local database, is idempotent for the same
+The command connects directly to PostgreSQL, is idempotent for the same
 binding, and refuses to modify a database bound to a different instance.
 
 ### 6. Sign in
@@ -265,7 +265,7 @@ For the rest of the platform, follow the
 ## Operate without the web application
 
 Every control-plane workflow is available over the versioned REST API and the
-zero-dependency CLI; AI clients use the same permissions through MCP.
+CLI; AI clients use the same permissions through MCP.
 
 ```bash
 # REST/OpenAPI
