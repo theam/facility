@@ -101,4 +101,69 @@ Agents never approve, never merge, never push to protected branches. Every
 outward action carries a named principal. Every merge carries a human
 decision.
 
+## Repository settings that back the gates
+
+Facility enforces part of the paragraph above — generated workflows declare their
+own least-privilege `permissions:` block, refuse bot-authored events, skip fork
+heads, and pin every action to a SHA. The rest is GitHub repository
+configuration, which Facility cannot enforce from inside a workflow. The split is
+invisible: a repository can run the whole loop, produce plans and pull requests
+and reviews, look completely correct, and still let an automated actor satisfy a
+human gate. Configure these before the first agent run.
+
+| setting | required value | enforced by | what skipping it costs |
+|---|---|---|---|
+| **Allow GitHub Actions to create and approve pull requests** (organization and repository) | disabled | the setting | Breaks *agents never approve*. The review workflow only comments — but that is a prompt, and the job runs with `pull-requests: write`. With this enabled, `GITHUB_TOKEN` can submit an approving review and satisfy the required human approval on its own pull request. |
+| **Workflow permissions** — the default `GITHUB_TOKEN` scope | read repository contents and packages permissions | the setting, for workflows you add later; Facility, for the ones it generates | Every generated workflow declares an explicit job-level `permissions:` block, so this default does not change what the crew receives. It governs the next workflow added without one, which otherwise gets write access to everything. |
+| **Default branch protected, pull request required** | enabled | the setting | Breaks *agents never push to protected branches* by making the sentence vacuous. Facility commits kickstart to `facility/kickstart` and builders push semantic branches, but the address-review and doctor workflows hold `contents: write`. Nothing structural stops a push to an unprotected default branch. |
+| **Required approvals** | at least 1 | the setting | Breaks *every merge carries a human decision*. The count alone is not enough: pair it with the Actions-approval setting above, or a token can satisfy it. |
+| **Dismiss stale approvals when new commits are pushed** | enabled | the setting | The address-review agent pushes commits to the pull request branch after a human reviews it. Without dismissal, an approval given for one diff silently covers code the approver never read. |
+| **Required status checks**, with branches up to date (or a merge queue) | the repository's own checks, plus the guards runner | Facility runs them; the setting makes them blocking | The agent verified the change against these checks. Unless they are required, nothing stops a merge that ignores that verification — and a green check against a stale base is not evidence about what lands. |
+| **Restrict who can push, and who can bypass required pull requests** | humans and teams only — never the Facility GitHub App | the setting | Breaks *agents never merge*. The App installation holds `Contents: Read and write`; a bypass entry converts that permission into merge authority over the default branch. |
+| **Do not allow bypassing the above settings** | enabled | the setting | An administrator, or an App acting with administrative rights, otherwise skips every row in this table. |
+
+Rulesets are the modern equivalent of branch protection and satisfy the same
+rows. Audit their **bypass list** with equal suspicion: a bypass entry is the
+setting saying "except for this actor".
+
+### Checking them through the API
+
+| setting | endpoint and field | needs |
+|---|---|---|
+| Actions may approve pull requests; default `GITHUB_TOKEN` scope | `GET /repos/{owner}/{repo}/actions/permissions/workflow` → `can_approve_pull_request_reviews` must be `false`, `default_workflow_permissions` must be `"read"` | repository admin |
+| The same two, organization-wide | `GET /orgs/{org}/actions/permissions/workflow` | organization admin, and an `admin:org` token scope |
+| Approvals, stale dismissal, required checks, push restrictions, admin enforcement | `GET /repos/{owner}/{repo}/branches/{branch}/protection` → `required_pull_request_reviews.required_approving_review_count`, `.dismiss_stale_reviews`, `required_status_checks.contexts` and `.strict`, `restrictions`, `enforce_admins` | repository admin |
+| The rules actually in force on a branch, including rulesets | `GET /repos/{owner}/{repo}/rules/branches/{branch}` | read access — no admin required |
+
+The organization setting constrains the repository one: if the organization
+disables Actions approving pull requests, a repository cannot re-enable it. Check
+both before concluding a repository is safe.
+
+Two `404` responses from the protection endpoint mean different things, and the
+message body is the difference: `Branch not protected` is an answer, `Not Found`
+means the caller is not an admin and learned nothing.
+
+### What `facility doctor --github` covers today
+
+The command verifies that the required secrets and variables exist, and that the
+default branch returns a branch-protection response at all. It does not read that
+response. Worth adding, in rough priority order — each is a field in a call the
+command already makes, or one extra call:
+
+- `can_approve_pull_request_reviews` and `default_workflow_permissions`, from a
+  single `actions/permissions/workflow` call. Neither is checked today, and the
+  first is the setting that most directly defeats an advertised gate.
+- The organization-level values of those two fields when the token carries
+  `admin:org`, reported as unknown rather than as a pass when it does not.
+- `required_approving_review_count`, `dismiss_stale_reviews`, the required check
+  contexts, `strict`, `restrictions`, and `enforce_admins` — all already present
+  in the protection response the check fetches and discards.
+- `GET /repos/{owner}/{repo}/rules/branches/{branch}` as a fallback: a branch
+  protected purely by a ruleset returns `404` from the classic endpoint, so the
+  command currently reports a correctly protected repository as a failure.
+- Distinguishing `Branch not protected` from `Not Found`, so a non-administrator
+  does not get the same failure as a genuinely unprotected branch.
+
+---
+
 Report vulnerabilities per [SECURITY.md](https://github.com/theam/facility/blob/main/SECURITY.md).
