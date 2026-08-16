@@ -205,7 +205,7 @@ export default function KickstartPage() {
             name: name.trim(),
             slug: effectiveSlug,
             description: description.trim() || undefined,
-            settings: { check_cmds: [] },
+            settings: { check_cmds: [], autonomy_mode: "observe", observe_summary: false },
           }),
         }));
       setProject(created);

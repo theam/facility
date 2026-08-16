@@ -58,6 +58,7 @@ import {
   toHarnessSpace,
 } from "./harness.js";
 import { MCP_TOOL_PERMISSIONS } from "./mcp-policy.js";
+import { githubFeedbackMode } from "./project-policy.js";
 import { createNextDraftVersion, publishRegistryVersion } from "./registry.js";
 import { cancelRun } from "./sandbox/orchestrator.js";
 import { appendRunEvents, TERMINAL_RUN_STATUSES } from "./sandbox/state.js";
@@ -892,6 +893,15 @@ async function executeKnownMcpTool(
     const number = requiredNumber(args.number, "number");
     const repoId = optionalString(args.repoId);
     const agentName = requiredString(args.agentName, "agentName");
+    const project = (
+      await db
+        .select()
+        .from(projects)
+        .where(and(eq(projects.orgId, orgId), eq(projects.id, projectId)))
+        .limit(1)
+    )[0];
+    if (!project) throw new Error("project_not_found");
+    const feedback = githubFeedbackMode(project.settings);
     const issues = await db
       .select()
       .from(ghIssues)
@@ -930,6 +940,7 @@ async function executeKnownMcpTool(
           engine: agent.engine,
           trigger: {
             type: "mcp_issue",
+            githubFeedback: feedback,
             repo: { id: repo.id, owner: repo.owner, name: repo.name },
             issue: { number },
           },
@@ -952,7 +963,7 @@ async function executeKnownMcpTool(
       (options.config?.githubAppId && options.config.githubAppPrivateKey
         ? createGithubClientFactory(options.config)
         : undefined);
-    if (factory) {
+    if (feedback === "live" && factory) {
       try {
         const github = await createGithubClientForRepo(db, factory, repo);
         await github.createIssueComment(

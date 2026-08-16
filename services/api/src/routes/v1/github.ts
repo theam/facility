@@ -11,11 +11,13 @@ import {
   runEvents,
   runs,
   users,
+  withOrg,
 } from "@facility/db";
 import { and, desc, eq, gte, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
+import { githubFeedbackMode } from "../../project-policy.js";
 import { createGithubClientFactory, type GithubClientFactory } from "../../github/client.js";
 import { createGithubClientForRepo, syncRepoFacilityConfig } from "../../github/kickstart.js";
 import {
@@ -919,6 +921,9 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
       const { repoId } = request.query as { repoId?: string };
       assertProjectScope(p, projectId);
       const body = request.body as { agent: string };
+      const project = await withOrg(db, p.orgId).projects.byId(projectId);
+      if (!project) throw notFound("Project not found");
+      const feedback = githubFeedbackMode(project.settings);
       const issue = await loadIssue(db, p.orgId, projectId, number, repoId);
       const repo = (
         await db
@@ -989,6 +994,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
             engine: agent.engine,
             trigger: {
               type: "web_issue",
+              githubFeedback: feedback,
               ...(p.githubLogin ? { githubLogin: p.githubLogin } : {}),
               repo: { id: repo.id, owner: repo.owner, name: repo.name },
               issue: { number },
@@ -1008,7 +1014,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
         data: { queue: "runs.dispatch" },
       });
       await app.enqueue("runs.dispatch", { runId: run.id, orgId: p.orgId });
-      if (p.type === "user") {
+      if (feedback === "live" && p.type === "user") {
         await assignIssueBestEffort(
           db,
           githubFactory,
@@ -1019,7 +1025,9 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           { type: p.type, id: p.id },
         );
       }
-      await ackIssueQueued(db, githubFactory, repo, number, body.agent, run.id);
+      if (feedback === "live") {
+        await ackIssueQueued(db, githubFactory, repo, number, body.agent, run.id);
+      }
       await insertAuditEvent(db, {
         orgId: p.orgId,
         projectId,
