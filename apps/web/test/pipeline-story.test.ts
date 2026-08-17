@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { ciStatusLabel } from "@/components/ci-status";
 import type { PipelineStageKey, PipelineStory, Proposal, StoryDetail } from "@/lib/api";
 import {
+  avatarInitial,
+  avatarUrlFor,
   boardHref,
   mineFilterOn,
   ownedBy,
@@ -306,6 +308,43 @@ describe("story presentation contract", () => {
 
   it("trims whitespace around an assignee's login", () => {
     expect(storyOwner(["  a  "])).toEqual({ login: "a", extra: 0 });
+  });
+
+  it("builds a GitHub avatar URL from a login, at twice the drawn size", () => {
+    expect(avatarUrlFor("octocat")).toBe("https://github.com/octocat.png?size=40");
+  });
+
+  it("trims a login before building its avatar URL", () => {
+    expect(avatarUrlFor("  octocat  ")).toBe("https://github.com/octocat.png?size=40");
+  });
+
+  it("escapes a login rather than letting it shape the avatar URL", () => {
+    expect(avatarUrlFor("a/b?c")).toBe("https://github.com/a%2Fb%3Fc.png?size=40");
+  });
+
+  it("has no avatar URL to offer for a blank login", () => {
+    expect(avatarUrlFor("")).toBeNull();
+    expect(avatarUrlFor("   ")).toBeNull();
+  });
+
+  it("falls back to the first letter of a login, uppercased", () => {
+    expect(avatarInitial("octocat")).toBe("O");
+    expect(avatarInitial("Octocat")).toBe("O");
+  });
+
+  it("falls back to the first letter of an email when there is no login", () => {
+    expect(avatarInitial("ada@example.test")).toBe("A");
+  });
+
+  it("keeps an astral first character whole in the fallback", () => {
+    expect(avatarInitial("😀nn")).toBe("😀");
+  });
+
+  it("shows a question mark rather than an empty box when there is nothing to draw", () => {
+    expect(avatarInitial("")).toBe("?");
+    expect(avatarInitial("   ")).toBe("?");
+    expect(avatarInitial(null)).toBe("?");
+    expect(avatarInitial(undefined)).toBe("?");
   });
 
   it("does not count draft pull requests as waiting for human review", () => {
