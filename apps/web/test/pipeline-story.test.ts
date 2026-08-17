@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { ciStatusLabel } from "@/components/ci-status";
 import type { PipelineStageKey, PipelineStory, Proposal, StoryDetail } from "@/lib/api";
-import { reviewablePullRequests, storyHref } from "@/lib/pipeline";
+import {
+  boardHref,
+  mineFilterOn,
+  ownedBy,
+  reviewablePullRequests,
+  storyHref,
+  storyOwner,
+} from "@/lib/pipeline";
 import { deriveStoryTimeline, proposalsForStory } from "@/lib/story";
 
 describe("story presentation contract", () => {
@@ -277,6 +284,30 @@ describe("story presentation contract", () => {
     expect(proposalsForStory([linked, unrelated], detail, false)).toEqual([linked]);
   });
 
+  it("names no owner for an unassigned story", () => {
+    expect(storyOwner([])).toBeNull();
+  });
+
+  it("names the sole assignee with nothing left over", () => {
+    expect(storyOwner(["a"])).toEqual({ login: "a", extra: 0 });
+  });
+
+  it("counts the remaining assignees past the first", () => {
+    expect(storyOwner(["a", "b", "c"])).toEqual({ login: "a", extra: 2 });
+  });
+
+  it("keeps GitHub's assignee order rather than sorting it", () => {
+    expect(storyOwner(["zoe", "adam"])).toEqual({ login: "zoe", extra: 1 });
+  });
+
+  it("drops empty and blank assignees before naming an owner", () => {
+    expect(storyOwner(["", " ", "a"])).toEqual({ login: "a", extra: 0 });
+  });
+
+  it("trims whitespace around an assignee's login", () => {
+    expect(storyOwner(["  a  "])).toEqual({ login: "a", extra: 0 });
+  });
+
   it("does not count draft pull requests as waiting for human review", () => {
     const story = storyDetail();
     story.prs = [
@@ -286,6 +317,60 @@ describe("story presentation contract", () => {
     ];
 
     expect(reviewablePullRequests([story]).map(({ pull }) => pull.number)).toEqual([22]);
+  });
+
+  it("never counts a story as owned when the viewer has no GitHub login", () => {
+    expect(ownedBy(["alice"], undefined)).toBe(false);
+    expect(ownedBy([], undefined)).toBe(false);
+  });
+
+  it("matches an assignee to the viewer's login regardless of case", () => {
+    expect(ownedBy(["Alice"], "alice")).toBe(true);
+  });
+
+  it("finds no owner in an empty assignee list", () => {
+    expect(ownedBy([], "alice")).toBe(false);
+  });
+
+  it("does not match an assignee who isn't the viewer", () => {
+    expect(ownedBy(["bob"], "alice")).toBe(false);
+  });
+
+  it("builds a mine-only board link with no other filters", () => {
+    expect(boardHref("project-1", { mine: true })).toBe("/projects/project-1/stories?mine=1");
+  });
+
+  it("combines the stage and mine filters in one board link", () => {
+    expect(boardHref("project-1", { stage: "backlog", mine: true })).toBe(
+      "/projects/project-1/stories?stage=backlog&mine=1",
+    );
+  });
+
+  it("omits the mine key entirely when mine is off", () => {
+    expect(boardHref("project-1", { mine: false })).toBe("/projects/project-1/stories");
+  });
+
+  it("keeps mine on when the all chip clears the stage", () => {
+    expect(boardHref("project-1", { stage: "backlog", status: "ready_to_plan", mine: true })).toBe(
+      "/projects/project-1/stories?stage=backlog&status=ready_to_plan&mine=1",
+    );
+    expect(boardHref("project-1", { mine: true })).toBe("/projects/project-1/stories?mine=1");
+  });
+
+  it("turns the mine filter on only when the viewer has a GitHub login to match against", () => {
+    expect(mineFilterOn("1", "alice")).toBe(true);
+    expect(mineFilterOn("1", undefined)).toBe(false);
+    expect(mineFilterOn(undefined, "alice")).toBe(false);
+    expect(mineFilterOn(undefined, undefined)).toBe(false);
+  });
+
+  it("recovers a login-less viewer who arrives with ?mine=1 already in the URL", () => {
+    // A shared link, bookmark, or browser history can carry `mine=1` for a
+    // viewer with no GitHub login. The derived flag must stay off so the
+    // board renders normally and the all chip offers a clean way out.
+    const mineOn = mineFilterOn("1", undefined);
+    expect(mineOn).toBe(false);
+    expect(boardHref("project-1", { mine: mineOn })).toBe("/projects/project-1/stories");
   });
 });
 

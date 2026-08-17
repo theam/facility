@@ -9,7 +9,7 @@ import { PullRequestLinks } from "@/components/story/pull-request-links";
 import { StoryTimeline } from "@/components/story/timeline";
 import { StoryTriggerButtons } from "@/components/story/trigger-buttons";
 import { api } from "@/lib/api";
-import { pipelineStories } from "@/lib/pipeline";
+import { pipelineStories, storyOwner } from "@/lib/pipeline";
 import {
   detachablePullRequests,
   linkableIssues,
@@ -102,6 +102,7 @@ export default async function StoryPage({
     stageLabels,
   });
   const stage = story.stage;
+  const owner = storyOwner(story.assignees);
 
   const prLinks = new Map<number, string>();
   for (const pr of story.prs) prLinks.set(pr.number, pr.url);
@@ -165,6 +166,12 @@ export default async function StoryPage({
               {label}
             </span>
           ))}
+          {owner ? (
+            <span className="font-mono text-[11px] text-(--dim)">
+              @{owner.login}
+              {owner.extra > 0 ? ` +${owner.extra}` : ""}
+            </span>
+          ) : null}
           <a
             href={story.htmlUrl}
             target="_blank"

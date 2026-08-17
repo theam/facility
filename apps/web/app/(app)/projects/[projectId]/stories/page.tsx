@@ -8,7 +8,13 @@ import { StageSection } from "@/components/project/stage-section";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
 import type { PipelineStageKey, PipelineStageKind, PipelineStageState } from "@/lib/pipeline";
-import { pipelineStageStateLabel, pipelineStories } from "@/lib/pipeline";
+import {
+  boardHref,
+  mineFilterOn,
+  ownedBy,
+  pipelineStageStateLabel,
+  pipelineStories,
+} from "@/lib/pipeline";
 
 export const metadata = { title: "stories" };
 
@@ -35,9 +41,9 @@ export default async function ProjectStoriesPage({
   searchParams,
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ stage?: string; status?: string }>;
+  searchParams: Promise<{ stage?: string; status?: string; mine?: string }>;
 }) {
-  const [{ projectId }, { stage, status }] = await Promise.all([params, searchParams]);
+  const [{ projectId }, { stage, status, mine }] = await Promise.all([params, searchParams]);
   const [pipelineResult, me] = await Promise.all([api.pipeline(projectId), api.me()]);
 
   if (!pipelineResult.ok && pipelineResult.offline) return <Offline />;
@@ -45,18 +51,30 @@ export default async function ProjectStoriesPage({
   const permissions = me.ok ? me.data.permissions : [];
   const canTrigger = hasPermission(permissions, "runs:trigger");
   const canSync = hasPermission(permissions, "repos:write");
+  const viewerLogin = me.ok ? me.data.principal.githubLogin : undefined;
+  const mineOn = mineFilterOn(mine, viewerLogin);
   const stages = pipelineResult.ok ? pipelineResult.data.stages : [];
   const stageKeys = new Set(stages.map((candidate) => candidate.key));
   const activeStage =
     stage && stageKeys.has(stage as PipelineStageKey) ? (stage as PipelineStageKey) : null;
+  // Validated against every story, not just the mine-scoped set, so a status filter
+  // never silently drops out of the URL when "mine" empties the board.
   const items = pipelineResult.ok ? pipelineStories(pipelineResult.data) : [];
   const stageStates = new Set(items.map((story) => story.stageState));
   const activeStatus =
     activeStage && status && stageStates.has(status as PipelineStageState)
       ? (status as PipelineStageState)
       : null;
-  const counts = [...stages].reverse();
-  const activeOpenStoryCount = items.filter((story) => story.state === "open").length;
+  const scoped = mineOn
+    ? stages.map((s) => ({
+        ...s,
+        stories: s.stories.filter((story) => ownedBy(story.assignees, viewerLogin)),
+      }))
+    : stages;
+  const counts = [...scoped].reverse();
+  const activeOpenStoryCount = scoped
+    .flatMap((s) => s.stories)
+    .filter((story) => story.state === "open").length;
 
   const stageFiltered = activeStage
     ? counts.filter((candidate) => candidate.key === activeStage)
@@ -95,7 +113,7 @@ export default async function ProjectStoriesPage({
 
       <div className="flex flex-wrap items-center gap-2">
         <Link
-          href={`/projects/${projectId}/stories`}
+          href={boardHref(projectId, { mine: mineOn })}
           className={cx(
             "border px-3 py-1.5 text-[12px] font-medium transition-colors",
             !activeStage
@@ -108,7 +126,7 @@ export default async function ProjectStoriesPage({
         {counts.map((s) => (
           <Link
             key={s.key}
-            href={`/projects/${projectId}/stories?stage=${s.key}`}
+            href={boardHref(projectId, { stage: s.key, mine: mineOn })}
             className={cx(
               "inline-flex items-center gap-2 border px-3 py-1.5 text-[12px] font-medium transition-colors",
               activeStage === s.key
@@ -121,10 +139,10 @@ export default async function ProjectStoriesPage({
             <span
               className={cx(
                 "font-mono text-[11px]",
-                s.count > 0 ? FILTER_COUNT_TONE[s.kind] : "text-(--dim)",
+                s.stories.length > 0 ? FILTER_COUNT_TONE[s.kind] : "text-(--dim)",
               )}
             >
-              {s.count}
+              {s.stories.length}
             </span>
           </Link>
         ))}
@@ -134,7 +152,7 @@ export default async function ProjectStoriesPage({
             <span className="inline-flex items-center gap-2 border border-(--line-strong) px-3 py-1.5 text-[12px] font-medium text-(--ink)">
               {activeStatusLabel}
               <Link
-                href={`/projects/${projectId}/stories?stage=${activeStage}`}
+                href={boardHref(projectId, { stage: activeStage, mine: mineOn })}
                 aria-label="clear status filter"
                 className="text-(--dim) hover:text-(--ink)"
               >
@@ -142,6 +160,19 @@ export default async function ProjectStoriesPage({
               </Link>
             </span>
           </>
+        ) : null}
+        {viewerLogin ? (
+          <Link
+            href={boardHref(projectId, { stage: activeStage, status: activeStatus, mine: !mineOn })}
+            className={cx(
+              "border px-3 py-1.5 text-[12px] font-medium transition-colors",
+              mineOn
+                ? "border-(--line-strong) text-(--ink)"
+                : "border-(--line) text-(--mut) hover:text-(--ink)",
+            )}
+          >
+            mine
+          </Link>
         ) : null}
       </div>
 
