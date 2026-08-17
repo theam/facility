@@ -8945,6 +8945,13 @@ export interface operations {
                                 ghUpdatedAt: string | null;
                                 /** Format: date-time */
                                 closedAt: string | null;
+                                wsjf: {
+                                    value: number;
+                                    time: number;
+                                    risk: number;
+                                    effort: number;
+                                    score: number;
+                                } | null;
                                 /** @enum {string} */
                                 stageState: "ready_to_plan" | "needs_attention" | "in_progress" | "needs_review" | "ready_to_build" | "failed" | "draft_pr" | "checks_running" | "checks_failed" | "awaiting_review" | "shipped_recently";
                                 /** @enum {string|null} */
@@ -9239,6 +9246,13 @@ export interface operations {
                         ghUpdatedAt: string | null;
                         /** Format: date-time */
                         closedAt: string | null;
+                        wsjf: {
+                            value: number;
+                            time: number;
+                            risk: number;
+                            effort: number;
+                            score: number;
+                        } | null;
                         prs: {
                             number: number;
                             title: string;

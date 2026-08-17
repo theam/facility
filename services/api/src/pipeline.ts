@@ -1,5 +1,9 @@
 /** Server-owned story assembly and pipeline classification. */
 
+import { parseWsjfValueSection, type WsjfInput } from "@facility/harness";
+
+export type StoryWsjf = WsjfInput & { score: number };
+
 export type PipelineStage =
   | "backlog"
   | "planning"
@@ -80,6 +84,7 @@ export type PipelineStoryInput = {
   ghCreatedAt: Date | null;
   ghUpdatedAt: Date | null;
   closedAt: Date | null;
+  wsjf: StoryWsjf | null;
   linkedRuns: PipelineRun[];
   prs: PipelinePullRequest[];
 };
@@ -104,6 +109,7 @@ export type PipelineIssueRecord = {
   assignees: unknown;
   author: string | null;
   htmlUrl: string;
+  bodyMd: string | null;
   commentsCount: number;
   ghCreatedAt: Date | null;
   ghUpdatedAt: Date | null;
@@ -199,6 +205,7 @@ export function assemblePipelineStories(input: {
       ghCreatedAt: issue.ghCreatedAt,
       ghUpdatedAt: issue.ghUpdatedAt,
       closedAt: issue.closedAt,
+      wsjf: parseWsjfValueSection(issue.bodyMd),
       linkedRuns: [],
       prs: [],
     });
@@ -242,6 +249,7 @@ export function assemblePipelineStories(input: {
         ghCreatedAt: pull.ghCreatedAt,
         ghUpdatedAt: pull.ghUpdatedAt,
         closedAt: pull.mergedAt ?? pull.closedAt,
+        wsjf: null,
         linkedRuns: [],
         prs: [pullRequestOf(pull)],
       });
@@ -332,15 +340,38 @@ export function classifyPipeline(
       stages.get("shipped")?.push(placeBase(story, "shipped_recently"));
     }
   }
-  for (const placed of stages.values()) {
-    placed.sort(
-      (left, right) =>
-        (right.ghUpdatedAt?.getTime() ?? 0) - (left.ghUpdatedAt?.getTime() ?? 0) ||
-        right.number - left.number ||
-        right.repoId.localeCompare(left.repoId),
-    );
+  for (const [stage, placed] of stages) {
+    placed.sort(stage === "shipped" ? byRecency : byPriority);
   }
   return stages;
+}
+
+/** Shipped is a log, not a queue: most recently touched on top. */
+function byRecency(left: PlacedPipelineStory, right: PlacedPipelineStory) {
+  return (
+    (right.ghUpdatedAt?.getTime() ?? 0) - (left.ghUpdatedAt?.getTime() ?? 0) ||
+    right.number - left.number ||
+    right.repoId.localeCompare(left.repoId)
+  );
+}
+
+/**
+ * Active stages order by the WSJF judgement mirrored in the issue body, not by
+ * last activity — a comment, a label, or Facility's own acknowledgement must
+ * not reorder a stage. Unscored stories sit below scored ones and keep
+ * GitHub's own newest-created-first grammar.
+ */
+function byPriority(left: PlacedPipelineStory, right: PlacedPipelineStory) {
+  if (left.wsjf || right.wsjf) {
+    if (!right.wsjf) return -1;
+    if (!left.wsjf) return 1;
+    if (right.wsjf.score !== left.wsjf.score) return right.wsjf.score - left.wsjf.score;
+  }
+  return (
+    (right.ghCreatedAt?.getTime() ?? 0) - (left.ghCreatedAt?.getTime() ?? 0) ||
+    right.number - left.number ||
+    right.repoId.localeCompare(left.repoId)
+  );
 }
 
 function placeOpen(

@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { productChain, researchChain } from "../src/chain.js";
 import { buildHarnessBundle } from "../src/session.js";
 import { validate } from "../src/validate.js";
-import { rankByWsjf, wsjfScore } from "../src/wsjf.js";
+import { parseWsjfValueSection, rankByWsjf, wsjfScore, wsjfValueSection } from "../src/wsjf.js";
 
 const created = "2026-07-03";
 
@@ -86,6 +86,40 @@ it("scores and ranks WSJF", () => {
       { id: "b", wsjf: { value: 9, time: 1, risk: 0, effort: 2 } },
     ])[0]?.id,
   ).toBe("b");
+});
+
+it("round-trips a WSJF judgement through the issue-body Value section", () => {
+  const wsjf = { value: 8, time: 5, risk: 2, effort: 4 };
+  const body = `Task body.
+
+${wsjfValueSection(wsjf)}
+
+## KB trace
+
+- task: pot_1
+`;
+  expect(parseWsjfValueSection(body)).toEqual({ ...wsjf, score: 3.75 });
+});
+
+it("treats missing or malformed Value sections as unscored, never as errors", () => {
+  expect(parseWsjfValueSection(null)).toBeNull();
+  expect(parseWsjfValueSection("Plain hand-written issue body.")).toBeNull();
+  expect(parseWsjfValueSection("## Value\n\nno fenced block here")).toBeNull();
+  expect(parseWsjfValueSection("## Value\n\n```json\nnot json\n```")).toBeNull();
+  expect(
+    parseWsjfValueSection('## Value\n\n```json\n{ "value": 1, "time": 1, "risk": 1 }\n```'),
+  ).toBeNull();
+  expect(
+    parseWsjfValueSection(
+      '## Value\n\n```json\n{ "value": 1, "time": 1, "risk": 1, "effort": 0 }\n```',
+    ),
+  ).toBeNull();
+  // A fence in a later section is not a Value block.
+  expect(
+    parseWsjfValueSection(
+      '## Value\n\nprose only\n\n## KB trace\n\n```json\n{ "value": 1, "time": 1, "risk": 1, "effort": 1 }\n```',
+    ),
+  ).toBeNull();
 });
 
 it("builds session recovery bundle text", () => {

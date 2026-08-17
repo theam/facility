@@ -248,6 +248,43 @@ describe("server-owned story pipeline", () => {
     ]);
   });
 
+  it("orders active stages by the mirrored WSJF judgement, immune to activity bumps", () => {
+    const hour = 60 * 60 * 1000;
+    const scoredHigh = issue("repo_a", 1, {
+      bodyMd: valueBody({ value: 8, time: 5, risk: 3, effort: 2 }), // score 8
+      ghUpdatedAt: new Date(NOW.getTime() - 72 * hour), // stale activity must not demote it
+    });
+    const scoredLow = issue("repo_a", 2, {
+      bodyMd: valueBody({ value: 2, time: 1, risk: 1, effort: 2 }), // score 2
+      ghUpdatedAt: NOW, // touched just now — a comment must not promote it
+    });
+    const unscoredNew = issue("repo_a", 3, {
+      ghCreatedAt: new Date(NOW.getTime() - 2 * hour),
+      ghUpdatedAt: new Date(NOW.getTime() - 2 * hour),
+    });
+    const unscoredOldButTouched = issue("repo_a", 4, {
+      ghCreatedAt: new Date(NOW.getTime() - 48 * hour),
+      ghUpdatedAt: NOW, // freshly commented, but arrival order still governs unscored
+    });
+    const malformed = issue("repo_a", 5, {
+      bodyMd: "## Value\n\n```json\nnot json\n```",
+      ghCreatedAt: new Date(NOW.getTime() - 96 * hour),
+      ghUpdatedAt: new Date(NOW.getTime() - 96 * hour),
+    });
+
+    const assembly = assemblePipelineStories({
+      issues: [scoredLow, unscoredOldButTouched, malformed, scoredHigh, unscoredNew],
+      pullRequests: [],
+      repos: [{ id: "repo_a", owner: "alice", name: "alpha" }],
+      runs: [],
+    });
+    const backlog = classifyPipeline(assembly.stories, new Set(), NOW.getTime()).get("backlog");
+
+    expect(backlog?.map((story) => story.number)).toEqual([1, 2, 3, 4, 5]);
+    expect(backlog?.[0]?.wsjf).toEqual({ value: 8, time: 5, risk: 3, effort: 2, score: 8 });
+    expect(backlog?.slice(2).every((story) => story.wsjf === null)).toBe(true);
+  });
+
   it("ships recent closed issues and merged orphan PRs, but not abandoned PRs", () => {
     const recent = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
     const issueStory = { ...storyWith({}), state: "closed" as const, closedAt: recent, prs: [] };
@@ -286,7 +323,11 @@ describe("server-owned story pipeline", () => {
   });
 });
 
-function issue(repoId: string, number: number): PipelineIssueRecord {
+function issue(
+  repoId: string,
+  number: number,
+  overrides: Partial<PipelineIssueRecord> = {},
+): PipelineIssueRecord {
   return {
     id: `ghi_${repoId}_${number}`,
     repoId,
@@ -297,11 +338,28 @@ function issue(repoId: string, number: number): PipelineIssueRecord {
     assignees: [],
     author: "octocat",
     htmlUrl: `https://github.test/${repoId}/issues/${number}`,
+    bodyMd: null,
     commentsCount: 0,
     ghCreatedAt: NOW,
     ghUpdatedAt: NOW,
     closedAt: null,
+    ...overrides,
   };
+}
+
+function valueBody(wsjf: { value: number; time: number; risk: number; effort: number }) {
+  return `Task body.
+
+## Value
+
+\`\`\`json
+${JSON.stringify(wsjf, null, 2)}
+\`\`\`
+
+## KB trace
+
+- task: pot_1
+`;
 }
 
 function pull(
@@ -372,6 +430,7 @@ function storyWith(ci: {
     ghCreatedAt: NOW,
     ghUpdatedAt: NOW,
     closedAt: null,
+    wsjf: null,
     linkedRuns: [] as PipelineRunRecord[],
     prs: [
       {

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CiStatusLink } from "@/components/ci-status";
 import type { PipelineStory } from "@/lib/pipeline";
-import { storyHref } from "@/lib/pipeline";
+import { storyHref, wsjfBreakdown } from "@/lib/pipeline";
 
 function fmtAgo(iso: string | null) {
   if (!iso) return "—";
@@ -194,6 +194,14 @@ export function IssueRow({
             {label}
           </span>
         ))}
+        {story.wsjf ? (
+          <span
+            title={wsjfBreakdown(story.wsjf)}
+            className="border border-(--line) px-1.5 py-0.5 font-mono text-[10px] text-(--mut)"
+          >
+            wsjf {story.wsjf.score}
+          </span>
+        ) : null}
         <span className="font-mono text-[10.5px] text-(--dim)">{fmtAgo(story.ghUpdatedAt)}</span>
         {action()}
       </div>
