@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { harnessFragmentForBundle } from "../src/harness.js";
+import { deliveryRepoConfigured, requiresDelivery } from "../src/sandbox/delivery-gate.js";
 import {
   boundedResumeFallbackScope,
   platformDeliveryFailure,
@@ -22,7 +23,35 @@ describe("platform delivery boundaries", () => {
   });
 });
 
-describe("resolveCheckCmds — acceptance-gate source of truth", () => {
+describe("dispatch delivery repository preflight", () => {
+  const githubBuilderBundle = {
+    mode: "builder",
+    checkCmds: [],
+    repo: { cloneUrl: "https://github.com/acme/app.git" },
+  };
+  const noRepoBuilderBundle = { mode: "builder", checkCmds: [], repo: { cloneUrl: null } };
+
+  it("refuses delivery-mode agents without a repository", () => {
+    expect(requiresDelivery("builder")).toBe(true);
+    expect(requiresDelivery("codex-builder")).toBe(true);
+    expect(deliveryRepoConfigured(noRepoBuilderBundle)).toBe(false);
+    expect(deliveryRepoConfigured({ ...noRepoBuilderBundle, mode: "codex-builder" })).toBe(false);
+    const noRepoBuilderWithChecks = { ...noRepoBuilderBundle, checkCmds: ["pnpm verify"] };
+    expect(deliveryRepoConfigured(noRepoBuilderWithChecks)).toBe(false);
+  });
+
+  it("allows a connected GitHub repository when check commands are empty", () => {
+    expect(deliveryRepoConfigured(githubBuilderBundle)).toBe(true);
+  });
+
+  it("allows non-delivery modes without a repository", () => {
+    expect(requiresDelivery("architect")).toBe(false);
+    expect(deliveryRepoConfigured({ mode: "architect", repo: { cloneUrl: null } })).toBe(true);
+    expect(deliveryRepoConfigured({ mode: "custom", repo: { cloneUrl: null } })).toBe(true);
+  });
+});
+
+describe("resolveCheckCmds — runner acceptance command source of truth", () => {
   it("uses the project's configured checks when the sandbox profile has none", () => {
     expect(resolveCheckCmds({ setup: {} }, {}, { check_cmds: ["pnpm test", "pnpm lint"] })).toEqual(
       ["pnpm test", "pnpm lint"],

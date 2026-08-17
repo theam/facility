@@ -277,6 +277,20 @@ describe("sandbox api", async () => {
         config: {},
       }),
     ]);
+    const permissionRepo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId,
+          owner: `sandbox-permissions-${suffix}`,
+          name: "repo",
+          defaultBranch: "main",
+        })
+        .returning()
+    )[0];
+    if (!permissionRepo) throw new Error("permission repository fixture missing");
     const driver: SandboxDriver = {
       name: "docker",
       launch: async (spec) => ({ ref: `fake-${spec.runId}` }),
@@ -357,6 +371,127 @@ describe("sandbox api", async () => {
       { virtual: null, platform: null },
       { virtual: null, platform: null },
     ]);
+    await db.delete(repos).where(eq(repos.id, permissionRepo.id));
+  });
+
+  it("fails a builder dispatch before provisioning when no delivery repository is configured", async () => {
+    const suffix = Date.now();
+    const gateProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: `Gate Refusal Project ${suffix}`,
+          slug: `gate-refusal-${suffix}`,
+          settings: {},
+        })
+        .returning()
+    )[0];
+    if (!gateProject) throw new Error("gate refusal project fixture missing");
+    const contract = (
+      await db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          scope: "project",
+          projectId: gateProject.id,
+          kind: "agent_contract",
+          name: `gate-contract-${suffix}`,
+          latestVersion: 1,
+        })
+        .returning()
+    )[0];
+    if (!contract) throw new Error("gate refusal contract fixture missing");
+    await db.insert(registryVersions).values({
+      id: newId("ver"),
+      orgId,
+      itemId: contract.id,
+      version: 1,
+      content: "Exercise the dispatch gate.",
+      contentHash: `gate-refusal-${suffix}`,
+      status: "active",
+    });
+    const profile = (
+      await db
+        .insert(sandboxProfiles)
+        .values({
+          id: newId("sbx"),
+          orgId,
+          projectId: gateProject.id,
+          name: `gate-refusal-${suffix}`,
+          driver: "docker",
+          image: "facility-runner:test",
+          resources: { timeout_min: 5 },
+        })
+        .returning()
+    )[0];
+    if (!profile) throw new Error("gate refusal profile fixture missing");
+    const agent = (
+      await db
+        .insert(agentDefs)
+        .values({
+          id: newId("agent"),
+          orgId,
+          projectId: gateProject.id,
+          name: `gate-builder-${suffix}`,
+          engine: "byo",
+          model: { cmd: "true" },
+          contractItemId: contract.id,
+          sandboxProfileId: profile.id,
+          triggers: [],
+          permissions: [],
+          enabled: true,
+        })
+        .returning()
+    )[0];
+    if (!agent) throw new Error("gate refusal agent fixture missing");
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: gateProject.id,
+          agentDefId: agent.id,
+          mode: "builder",
+          engine: "byo",
+          trigger: {},
+          createdBy: { type: "user", id: "gate-test" },
+        })
+        .returning()
+    )[0];
+    if (!run) throw new Error("gate refusal run fixture missing");
+    const launched: string[] = [];
+    const driver: SandboxDriver = {
+      name: "docker",
+      launch: async (spec) => {
+        launched.push(spec.runId);
+        return { ref: `fake-${spec.runId}` };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await dispatchRun(config, { runId: run.id, orgId }, { sandboxDriver: async () => driver });
+
+    const [failed] = await db.select().from(runs).where(eq(runs.id, run.id));
+    expect(failed?.status).toBe("failed");
+    expect(failed?.error).toBe('{"code":"delivery_repo_not_configured"}');
+    expect(failed?.sandbox).toEqual({});
+    await expect(
+      db.select().from(virtualKeys).where(eq(virtualKeys.runId, run.id)),
+    ).resolves.toEqual([]);
+    await expect(db.select().from(apiKeys).where(eq(apiKeys.runId, run.id))).resolves.toEqual([]);
+    expect(launched).toEqual([]);
+    const events = await db
+      .select({ type: runEvents.type })
+      .from(runEvents)
+      .where(eq(runEvents.runId, run.id));
+    expect(events.map((event) => event.type)).toEqual(["result"]);
   });
 
   it("dispatch persists engine-specific model policy on each run key", async () => {

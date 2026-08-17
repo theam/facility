@@ -150,6 +150,9 @@ export async function routeTrigger(
   if (accepted?.blockedRunId) {
     return { routed: false, reason: "plan_already_accepted", runId: accepted.blockedRunId };
   }
+  // The connected repository is already resolved here. GitHub CI owns
+  // acceptance for this lane; dispatchRun remains the universal preflight for
+  // repo-less delivery runs from other entry points.
   const githubTrigger = {
     type: "github_comment",
     githubLogin: sender,
