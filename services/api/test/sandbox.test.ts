@@ -16,6 +16,7 @@ import {
   githubInstallations,
   kbSpaces,
   migrate,
+  orgs,
   projects,
   providerCredentials,
   registryItems,
@@ -26,9 +27,10 @@ import {
   runs,
   sandboxProfiles,
   seed,
+  steerMessages,
   virtualKeys,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -870,6 +872,334 @@ describe("sandbox api", async () => {
       .where(eq(runEvents.runId, run.id));
     expect(stored).toMatchObject({ type: "phase", data: payload });
     expect(stored?.ts).toBeInstanceOf(Date);
+  });
+
+  it("returns a control message without marking it delivered", async () => {
+    const token = "frt_steer_pending";
+    const run = await insertRunnerRun(token, "running");
+    const message = await insertSteerMessage(run.id, "interrupt", "human_interrupt");
+    const poll = {
+      method: "GET" as const,
+      url: `/internal/runs/${run.id}/steer`,
+      headers: { authorization: `Bearer ${token}` },
+    };
+
+    const first = await app.inject(poll);
+
+    expect(first.statusCode).toBe(200);
+    expect(steerIds(first)).toEqual([message.id]);
+    // A response lost on the wire must leave the row pending, otherwise the
+    // retry filters out a message the runner never saw and the operator's
+    // interrupt disappears with no error surfaced anywhere.
+    expect(await steerDeliveries(run.id)).toEqual([{ id: message.id, deliveredAt: null }]);
+    const retry = await app.inject(poll);
+    expect(steerIds(retry)).toEqual([message.id]);
+  });
+
+  it("marks delivered exactly the acknowledged ids", async () => {
+    const token = "frt_steer_ack";
+    const run = await insertRunnerRun(token, "running");
+    const handled = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const skipped = await insertSteerMessage(run.id, "steer", "and rerun the checks");
+    const alsoHandled = await insertSteerMessage(run.id, "steer", "then push");
+
+    const response = await app.inject({
+      method: "GET",
+      // Two acked ids straddling an unacked one: the runner handled the first
+      // and the third and could not apply the second. Only an exact-id ack can
+      // express that, and the runner's poison-message bound produces it.
+      url: `/internal/runs/${run.id}/steer?ack=${handled.id},${alsoHandled.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: handled.id, deliveredAt: expect.any(Date) },
+      { id: skipped.id, deliveredAt: null },
+      { id: alsoHandled.id, deliveredAt: expect.any(Date) },
+    ]);
+    // Delivery, not an id comparison, is what filters the next batch, so the
+    // unacked message keeps coming back until the runner acknowledges it.
+    expect(steerIds(response)).toEqual([skipped.id]);
+  });
+
+  it("does not mark delivered a message it never returned", async () => {
+    const token = "frt_steer_below_cursor";
+    const run = await insertRunnerRun(token, "running");
+    // Two API tasks generate ids from independent uuidv7 counters, so a message
+    // committed second can still sort first. `late` stands in for that row: it
+    // becomes visible only after the runner already handled `handled`. A shared
+    // stem with hand-picked last bytes fixes that order, which newId() cannot
+    // express, while keeping each id unique and shaped like a real one.
+    const stem = newId("evt").slice(0, -2);
+    const handled = await insertSteerMessage(run.id, "steer", "tighten", `${stem}b2`);
+    const late = await insertSteerMessage(run.id, "interrupt", "stop", `${stem}a1`);
+    const later = await insertSteerMessage(run.id, "steer", "rerun", `${stem}c3`);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${handled.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    // An ack covers the ids the runner handled, nothing else. Matching exact ids
+    // rather than a cursor is what leaves `late` alone: a range ack would mark it
+    // delivered without it ever having been served to anyone, which is the
+    // silently dropped interrupt this route exists to prevent.
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: late.id, deliveredAt: null },
+      { id: handled.id, deliveredAt: expect.any(Date) },
+      { id: later.id, deliveredAt: null },
+    ]);
+    expect(steerIds(response)).toEqual([late.id, later.id]);
+  });
+
+  it("does not resurrect an acknowledged message", async () => {
+    const token = "frt_steer_acked";
+    const run = await insertRunnerRun(token, "running");
+    const acked = await insertSteerMessage(run.id, "interrupt", "human_interrupt");
+    const pending = await insertSteerMessage(run.id, "steer", "keep going");
+
+    const ack = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${acked.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(ack.statusCode).toBe(200);
+
+    // The runner polls again carrying no ack — the shape of the poll that
+    // follows an ack whose response arrived. The recorded delivery is the only
+    // thing keeping the already-applied interrupt from being applied twice.
+    const restarted = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(steerIds(restarted)).toEqual([pending.id]);
+  });
+
+  it("rejects a malformed acknowledgment without mutating deliveries", async () => {
+    const token = "frt_steer_bad_ack";
+    const run = await insertRunnerRun(token, "running");
+    const pending = await insertSteerMessage(run.id, "interrupt", "human_interrupt");
+    // The shapes a buggy or hostile caller reaches for: a prefix with no id
+    // ('evt_z' also sorts above every real id under this database's en_US.utf8
+    // collation), an empty entry, a non-id, a real id with a suffix, a real id
+    // upper-cased, a valid id with one bad entry beside it, and a list longer
+    // than a served batch can be. The route takes only ids it could have issued,
+    // so each list is refused whole and nothing is marked delivered.
+    const malformed = [
+      "evt_z",
+      "",
+      "not-an-id",
+      `${pending.id}x`,
+      pending.id.toUpperCase(),
+      `${pending.id},evt_z`,
+      Array.from({ length: 33 }, () => pending.id).join(","),
+    ];
+    for (const ack of malformed) {
+      const rejected = await app.inject({
+        method: "GET",
+        url: `/internal/runs/${run.id}/steer?ack=${encodeURIComponent(ack)}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(rejected.statusCode).toBe(400);
+      expect(await steerDeliveries(run.id)).toEqual([{ id: pending.id, deliveredAt: null }]);
+    }
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(steerIds(response)).toEqual([pending.id]);
+  });
+
+  it("accepts a repeated ack parameter", async () => {
+    const token = "frt_steer_repeated_ack";
+    const run = await insertRunnerRun(token, "running");
+    const first = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const second = await insertSteerMessage(run.id, "steer", "and rerun the checks");
+    const pending = await insertSteerMessage(run.id, "steer", "then push");
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${first.id}&ack=${second.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(steerIds(response)).toEqual([pending.id]);
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: first.id, deliveredAt: expect.any(Date) },
+      { id: second.id, deliveredAt: expect.any(Date) },
+      { id: pending.id, deliveredAt: null },
+    ]);
+  });
+
+  it("ignores an acknowledgment for another run's message", async () => {
+    const token = "frt_steer_foreign_ack";
+    const run = await insertRunnerRun(token, "running");
+    const other = await insertRunnerRun("frt_steer_foreign_other", "running");
+    const foreign = await insertSteerMessage(other.id, "interrupt", "human_interrupt");
+    const handled = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const pending = await insertSteerMessage(run.id, "steer", "keep going");
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${foreign.id},${handled.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(steerIds(response)).toEqual([pending.id]);
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: handled.id, deliveredAt: expect.any(Date) },
+      { id: pending.id, deliveredAt: null },
+    ]);
+    // The ack is scoped to the polling run, so one runner's token can never
+    // burn another run's interrupt even when it names a well-formed id.
+    expect(await steerDeliveries(other.id)).toEqual([{ id: foreign.id, deliveredAt: null }]);
+  });
+
+  it("leaves another org's message on this run untouched and unserved", async () => {
+    const token = "frt_steer_cross_org_ack";
+    const run = await insertRunnerRun(token, "running");
+    const otherOrgId = newId("org");
+    await db
+      .insert(orgs)
+      .values({ id: otherOrgId, name: "Steer Ack Other Org", slug: `steer-ack-${Date.now()}` });
+    // steer_messages carries its own org_id and no constraint ties it to the
+    // org of the run it names, so a row like this one is reachable through a
+    // mis-scoped writer. Both statements on this route stay inside the polling
+    // run's org, like every other runner-scoped query in this file.
+    const foreignOrg = (
+      await db
+        .insert(steerMessages)
+        .values({
+          id: newId("evt"),
+          orgId: otherOrgId,
+          runId: run.id,
+          kind: "interrupt",
+          body: "human_interrupt",
+        })
+        .returning()
+    )[0];
+    if (!foreignOrg) throw new Error("failed to insert cross-org steer message");
+    const handled = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const pending = await insertSteerMessage(run.id, "steer", "keep going");
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${foreignOrg.id},${handled.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: foreignOrg.id, deliveredAt: null },
+      { id: handled.id, deliveredAt: expect.any(Date) },
+      { id: pending.id, deliveredAt: null },
+    ]);
+    // Never served either: a message this run's org cannot be shown is also a
+    // message it can never acknowledge, so serving it would wedge the channel
+    // on a row that comes back on every poll.
+    expect(steerIds(response)).toEqual([pending.id]);
+  });
+
+  it("records delivery from the select for a poll carrying only the retired cursor", async () => {
+    const token = "frt_steer_cursor";
+    const run = await insertRunnerRun(token, "running");
+    const seen = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const next = await insertSteerMessage(run.id, "steer", "and rerun the checks");
+    const poll = {
+      method: "GET" as const,
+      url: `/internal/runs/${run.id}/steer?afterId=${seen.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    };
+
+    const response = await app.inject(poll);
+
+    expect(response.statusCode).toBe(200);
+    expect(steerIds(response)).toEqual([next.id]);
+    // A runner started before the ack existed polls with this cursor, applies
+    // whatever comes back and starts the next poll with no delay of its own. The
+    // delivery this response records is the only thing that retires the row for
+    // it: without it the same body is served again on the very next poll, and on
+    // every poll after that for the rest of the run.
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: seen.id, deliveredAt: null },
+      { id: next.id, deliveredAt: expect.any(Date) },
+    ]);
+    const later = await insertSteerMessage(run.id, "steer", "then push");
+    const second = await app.inject(poll);
+    expect(steerIds(second)).toEqual([later.id]);
+  });
+
+  it("does not record delivery from the select when a poll carries an acknowledgment", async () => {
+    const token = "frt_steer_ack_select";
+    const run = await insertRunnerRun(token, "running");
+    const handled = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const served = await insertSteerMessage(run.id, "interrupt", "human_interrupt");
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${handled.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(steerIds(response)).toEqual([served.id]);
+    // The served interrupt stays pending until its own ack: a runner that speaks
+    // the ack protocol must lose nothing to a response that drops on the wire.
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: handled.id, deliveredAt: expect.any(Date) },
+      { id: served.id, deliveredAt: null },
+    ]);
+  });
+
+  it("rejects a malformed cursor without mutating deliveries", async () => {
+    const token = "frt_steer_bad_cursor";
+    const run = await insertRunnerRun(token, "running");
+    const pending = await insertSteerMessage(run.id, "interrupt", "human_interrupt");
+    // A request carrying the cursor marks rows delivered, so the cursor is held
+    // to the same rule as an ack: only an id this route could have issued, and a
+    // refusal touches nothing.
+    const malformed = ["evt_z", "", "not-an-id", `${pending.id}x`, pending.id.toUpperCase()];
+    for (const afterId of malformed) {
+      const rejected = await app.inject({
+        method: "GET",
+        url: `/internal/runs/${run.id}/steer?afterId=${encodeURIComponent(afterId)}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(rejected.statusCode).toBe(400);
+      expect(await steerDeliveries(run.id)).toEqual([{ id: pending.id, deliveredAt: null }]);
+    }
+  });
+
+  it("takes the acknowledgment path when a poll carries both", async () => {
+    const token = "frt_steer_ack_and_cursor";
+    const run = await insertRunnerRun(token, "running");
+    const handled = await insertSteerMessage(run.id, "steer", "tighten the diff");
+    const served = await insertSteerMessage(run.id, "steer", "and rerun the checks");
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/internal/runs/${run.id}/steer?ack=${handled.id}&afterId=${handled.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(steerIds(response)).toEqual([served.id]);
+    // An ack names a runner that handles the acked ids itself, so the cursor
+    // beside it changes nothing: the served row is not marked from the select,
+    // which a cursor poll would have done.
+    expect(await steerDeliveries(run.id)).toEqual([
+      { id: handled.id, deliveredAt: expect.any(Date) },
+      { id: served.id, deliveredAt: null },
+    ]);
   });
 
   it("aws driver fails loudly as not_configured when env is missing", async () => {
@@ -1797,6 +2127,236 @@ describe("sandbox api", async () => {
       .where(eq(runs.id, runId));
   });
 
+  it("does not fail a run whose loss stamp was cleared while the probe was in flight", async () => {
+    const runId = newId("run");
+    const virtualKeyId = newId("vkey");
+    await insertRunnerRun("frt_loss_race", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_loss_race"),
+      virtualKeyId,
+      lossObservedAt: new Date(Date.now() - SANDBOX_LOSS_GRACE_MS - 60_000).toISOString(),
+    });
+    await db.insert(virtualKeys).values({
+      id: virtualKeyId,
+      orgId,
+      projectId,
+      runId,
+      name: "loss race run key",
+      prefix: `lossrace_${Date.now()}`,
+      last4: "0000",
+      hash: "loss-race-hash",
+      // Far-future expiry, so a null revokedAt proves nothing revoked the key
+      // rather than proving it merely outlived its own lifetime.
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    // driver.status() is a provider round trip, so an overlapping tick can see
+    // the sandbox alive and clear the stamp while this tick waits inside it.
+    // Keyed on the ref because the tick probes every live run through this same
+    // driver, and only this run's probe may move this run's row.
+    const recoveringDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async (ref) => {
+        if (ref !== `fake-${runId}`) return "running";
+        await db
+          .update(runs)
+          .set({ sandbox: sql`coalesce(${runs.sandbox}, '{}'::jsonb) - 'lossObservedAt'` })
+          .where(eq(runs.id, runId));
+        return "lost";
+      },
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => recoveringDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    // sandbox_lost is irreversible: the run goes terminal and its keys are
+    // revoked, so a stale verdict must not land on a recovered sandbox.
+    const [vkey] = await db.select().from(virtualKeys).where(eq(virtualKeys.id, virtualKeyId));
+    expect(vkey?.revokedAt).toBeNull();
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
+      .where(eq(runs.id, runId));
+  });
+
+  it("does not delete a loss stamp written after this tick read the run", async () => {
+    const runId = newId("run");
+    const newerStamp = new Date(Date.now() - 5_000).toISOString();
+    await insertRunnerRun("frt_clear_race", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_clear_race"),
+      lossObservedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    // Keyed on the ref: the tick probes every live run through this driver, so
+    // an unkeyed hook would let a later run's probe restamp this row and hide a
+    // clear that did land.
+    const restampingDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async (ref) => {
+        if (ref !== `fake-${runId}`) return "running";
+        await db
+          .update(runs)
+          .set({
+            sandbox: sql`jsonb_set(coalesce(${runs.sandbox}, '{}'::jsonb), '{lossObservedAt}', to_jsonb(${newerStamp}::text))`,
+          })
+          .where(eq(runs.id, runId));
+        return "running";
+      },
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => restampingDriver });
+
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    // Erasing a newer observation with this tick's stale snapshot would discard
+    // the one the grace window runs on, pushing the verdict out by another window
+    // each time this interleaving recurs.
+    expect(readSandbox(stored?.sandbox).lossObservedAt).toBe(newerStamp);
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
+      .where(eq(runs.id, runId));
+  });
+
+  it("still fails a run whose loss stamp is unchanged past the grace window", async () => {
+    const runId = newId("run");
+    const virtualKeyId = newId("vkey");
+    await insertRunnerRun("frt_loss_unchanged", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_loss_unchanged"),
+      virtualKeyId,
+      lossObservedAt: new Date(Date.now() - SANDBOX_LOSS_GRACE_MS - 60_000).toISOString(),
+    });
+    await db.insert(virtualKeys).values({
+      id: virtualKeyId,
+      orgId,
+      projectId,
+      runId,
+      name: "loss unchanged run key",
+      prefix: `lossdead_${Date.now()}`,
+      last4: "0000",
+      hash: "loss-unchanged-hash",
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    // Keyed on the ref, like the sibling races above: the tick probes every live
+    // run through this driver, so reporting one status for all of them would let
+    // this run's verdict rest on another run's probe.
+    const lostDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async (ref) => (ref === `fake-${runId}` ? "lost" : "running"),
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, { sandboxDriver: async () => lostDriver });
+
+    // Guards the compare-and-set from the opposite failure: matching the stamp
+    // it read must still let a genuinely dead sandbox reach the verdict.
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("failed");
+    expect(stored?.error).toBe("sandbox_lost");
+    const [vkey] = await db.select().from(virtualKeys).where(eq(virtualKeys.id, virtualKeyId));
+    expect(vkey?.revokedAt).not.toBeNull();
+    await db.update(runs).set({ sandbox: {} }).where(eq(runs.id, runId));
+  });
+
+  it("does not mark GitHub progress failed when the failure claim is lost", async () => {
+    const suffix = Date.now();
+    const installation = (
+      await db
+        .insert(githubInstallations)
+        .values({
+          id: newId("int"),
+          orgId,
+          installationId: Math.floor(Math.random() * 2_000_000_000) + 1,
+          accountLogin: `progress-${suffix}`,
+          targetType: "Organization",
+        })
+        .returning()
+    )[0];
+    await db.insert(repos).values({
+      id: newId("repo"),
+      orgId,
+      projectId,
+      installationId: installation?.id,
+      owner: `progress-${suffix}`,
+      name: "repo",
+      defaultBranch: "main",
+    });
+    const runId = newId("run");
+    const commentId = 424_242;
+    await insertRunnerRun("frt_progress_race", "running", runId, {
+      driver: "docker",
+      ref: `fake-${runId}`,
+      runnerTokenHash: await hashKey("frt_progress_race"),
+      lossObservedAt: new Date(Date.now() - SANDBOX_LOSS_GRACE_MS - 60_000).toISOString(),
+    });
+    await db
+      .update(runs)
+      .set({
+        gh: {
+          owner: `progress-${suffix}`,
+          repo: "repo",
+          progressComment: { id: commentId },
+        },
+      })
+      .where(eq(runs.id, runId));
+    const updates: Array<{ comment_id: number; body: string }> = [];
+    const githubClientFactory = (async () => ({
+      rest: {
+        issues: {
+          updateComment: async (input: { comment_id: number; body: string }) => {
+            updates.push(input);
+            return { data: {} };
+          },
+        },
+      },
+    })) as never;
+    const recoveringDriver: SandboxDriver = {
+      name: "docker",
+      launch: async () => ({ ref: `fake-${runId}` }),
+      status: async (ref) => {
+        if (ref !== `fake-${runId}`) return "running";
+        await db
+          .update(runs)
+          .set({ sandbox: sql`coalesce(${runs.sandbox}, '{}'::jsonb) - 'lossObservedAt'` })
+          .where(eq(runs.id, runId));
+        return "lost";
+      },
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await reconcileSandboxes(config, undefined, {
+      sandboxDriver: async () => recoveringDriver,
+      githubClientFactory,
+    });
+
+    // The progress comment is the issue thread's public record of the run;
+    // rewriting it to Failed on a lost claim contradicts a live run.
+    expect(updates.filter((update) => update.comment_id === commentId)).toEqual([]);
+    const [stored] = await db.select().from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date(), sandbox: {} })
+      .where(eq(runs.id, runId));
+  });
+
   it("rejects an expired run-scoped platform key at authentication", async () => {
     const roleId = newId("key");
     await db
@@ -1989,5 +2549,28 @@ describe("sandbox api", async () => {
     )[0];
     if (!row) throw new Error("failed to insert runner run");
     return row;
+  }
+
+  async function insertSteerMessage(runId: string, kind: string, body: string, id?: string) {
+    const row = (
+      await db
+        .insert(steerMessages)
+        .values({ id: id ?? newId("evt"), orgId, runId, kind, body })
+        .returning()
+    )[0];
+    if (!row) throw new Error("failed to insert steer message");
+    return row;
+  }
+
+  async function steerDeliveries(runId: string) {
+    return await db
+      .select({ id: steerMessages.id, deliveredAt: steerMessages.deliveredAt })
+      .from(steerMessages)
+      .where(eq(steerMessages.runId, runId))
+      .orderBy(asc(steerMessages.id));
+  }
+
+  function steerIds(response: Awaited<ReturnType<typeof app.inject>>) {
+    return (response.json() as Array<{ id: string }>).map((message) => message.id);
   }
 });
