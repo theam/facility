@@ -37,7 +37,7 @@ import {
   sandboxProfiles,
   virtualKeys,
 } from "@facility/db";
-import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, or, type SQL, sql } from "drizzle-orm";
 import {
   createGithubClientFactory,
   FacilityGithubClient,
@@ -1517,10 +1517,49 @@ async function ensureRunAgentRole(
   return row?.id ?? id;
 }
 
+// How long an exited/lost observation must persist before reconcile declares
+// the run sandbox_lost. That verdict is irreversible: failRun takes the run
+// terminal and revokes its keys, and every later runner call then fails the
+// terminal check in the internal routes with a 409. So a single probe must not
+// decide it — a provider status misreport, a worker restart while the runner
+// rides out a control-plane outage, and a terminal result still in flight as the
+// container exits all look alike on one tick. The reconcile cron runs every two
+// minutes (worker.ts schedules "sandbox.reconcile" at */2), and a window shorter
+// than that interval confirms on the tick after the one that stamped it: a
+// genuinely dead sandbox goes terminal within two ticks, so ~4 minutes.
+// The window is paid for in key lifetime. While it is open the run is still
+// non-terminal, so no terminal path has revoked its virtual key (gateway spend)
+// or its run-scoped platform key: both authenticate on a null revokedAt, neither
+// is minted with a wall-clock expiry, and the orphaned-key sweep below only
+// reaches runs already terminal. Measured against a verdict on the first probe,
+// that leaves a genuinely dead sandbox's two keys live 120s longer at worst —
+// one reconcile interval, because confirmation is only ever evaluated on a tick
+// and the next tick lands 120s after the one that stamped — and 90s longer at
+// best, which takes offset overlapping ticks to put one right at the edge of the
+// window. A returning worker cannot fail a run it never observed lost, because a
+// first observation only starts the window.
+export const SANDBOX_LOSS_GRACE_MS = 90_000;
+
+export function sandboxLossConfirmed(
+  sandbox: RunSandboxState,
+  now: Date,
+  graceMs = SANDBOX_LOSS_GRACE_MS,
+) {
+  const observedAt = sandbox.lossObservedAt ? Date.parse(sandbox.lossObservedAt) : Number.NaN;
+  return Number.isFinite(observedAt) && now.getTime() - observedAt >= graceMs;
+}
+
+type ReconcileSandboxesDeps = {
+  sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
+  githubClientFactory?: GithubClientFactory;
+};
+
 export async function reconcileSandboxes(
   config: AppConfig,
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+  deps: ReconcileSandboxesDeps = {},
 ) {
+  const resolveDriver = deps.sandboxDriver ?? sandboxDriver;
   const { db, client } = createDb(config.databaseUrl);
   try {
     // Dispatch-loss backstop: run rows are committed BEFORE their pg-boss
@@ -1569,11 +1608,86 @@ export async function reconcileSandboxes(
           continue;
         }
         if (!sandbox.driver || !sandbox.ref) continue;
-        const driver = await sandboxDriver(sandbox.driver);
+        const driver = await resolveDriver(sandbox.driver);
+        // Every write below compare-and-sets on the stamp exactly as this tick
+        // read it. driver.status() is a provider round trip, and nothing
+        // serializes reconcile ticks — the queue carries no singleton policy and
+        // more than one worker task can be live at once (a rolling deploy
+        // overlaps them) — so an overlapping tick can clear the stamp,
+        // certifying the sandbox alive, or record a fresher loss while this one
+        // waits inside the probe. Without the predicate this tick would then act
+        // on a snapshot the row no longer holds, and failRun's own notInArray
+        // guard cannot catch that: a run the other tick just certified is still
+        // "running".
+        const stampUnchanged = sql`${runs.sandbox}->>'lossObservedAt' is not distinct from ${sandbox.lossObservedAt ?? null}`;
         const status = await driver.status(sandbox.ref);
         if (status === "exited" || status === "lost") {
-          await failRun(db, run.orgId, run.id, "sandbox_lost", "sandbox_lost");
-          await updateGithubRunProgress(db, run.id, "failed", { config }).catch(() => undefined);
+          if (sandboxLossConfirmed(sandbox, new Date())) {
+            const failed = await failRun(
+              db,
+              run.orgId,
+              run.id,
+              "sandbox_lost",
+              "sandbox_lost",
+              stampUnchanged,
+            );
+            // Only the tick that actually claimed the failure may rewrite the
+            // progress comment: the comment is the issue thread's public record
+            // of the run, so posting "Failed" on a lost claim would contradict a
+            // run that is still live.
+            if (failed) {
+              await updateGithubRunProgress(db, run.id, "failed", {
+                config,
+                githubClientFactory: deps.githubClientFactory,
+              }).catch(() => undefined);
+            }
+          } else if (!Number.isFinite(Date.parse(sandbox.lossObservedAt ?? ""))) {
+            // First (or unreadable) observation: start the grace window. The
+            // guards leave concurrent terminal transitions — a result landing
+            // right now — untouched, and the compare-and-set keeps an
+            // overlapping tick holding a stale snapshot from moving an existing
+            // stamp later, while still letting a corrupt stamp (which could
+            // never confirm) be replaced.
+            await db
+              .update(runs)
+              .set({
+                sandbox: sql`jsonb_set(coalesce(${runs.sandbox}, '{}'::jsonb), '{lossObservedAt}', to_jsonb(${new Date().toISOString()}::text))`,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(runs.id, run.id),
+                  inArray(runs.status, ["provisioning", "running"]),
+                  stampUnchanged,
+                ),
+              );
+          }
+        } else if (sandbox.lossObservedAt !== undefined) {
+          // The sandbox came back (or the probe misreported): reset the window
+          // so an unrelated later loss starts its own grace period. The
+          // compare-and-set keeps this clear from erasing a loss another tick
+          // observed after this one read the row. That takes more than any two
+          // overlapping ticks: this tick's probe has to report the sandbox alive,
+          // and the branch above writes only over an absent or unparseable stamp,
+          // so the value this tick read has to have left the row before another
+          // tick could put a fresher one there. Declining the clear then leaves
+          // that fresher stamp for the next tick, which clears it if the sandbox
+          // is still up, whereas clearing unconditionally would discard the
+          // observation the window runs on and push the verdict out by another
+          // window each time the interleaving recurs.
+          await db
+            .update(runs)
+            .set({
+              sandbox: sql`coalesce(${runs.sandbox}, '{}'::jsonb) - 'lossObservedAt'`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(runs.id, run.id),
+                inArray(runs.status, ["provisioning", "running"]),
+                stampUnchanged,
+              ),
+            );
         }
       } catch {
         // Driver unreachable for this run; leave it for the next tick.
@@ -1601,7 +1715,7 @@ export async function reconcileSandboxes(
       try {
         const sandbox = readSandbox(run.sandbox);
         if (!sandbox.driver || !sandbox.ref) continue;
-        const driver = await sandboxDriver(sandbox.driver);
+        const driver = await resolveDriver(sandbox.driver);
         await driver.destroy(sandbox.ref);
         await markSandboxDestroyed(db, run.id);
       } catch {
@@ -2033,7 +2147,12 @@ export async function failRun(
   runId: string,
   message: string,
   kind: string,
-) {
+  // Extra condition ANDed into the atomic claim, for callers whose decision to
+  // fail rests on state they read earlier: the run being non-terminal proves
+  // nothing about that state still holding. Returns whether the claim landed so
+  // the caller can skip the side effects that only the winner owns.
+  guard?: SQL,
+): Promise<boolean> {
   // Claim the failure atomically: only a non-terminal run transitions, so a
   // concurrent finish/cancel/fail cannot be clobbered and cleanup runs once.
   const [failed] = await db
@@ -2044,10 +2163,14 @@ export async function failRun(
         eq(runs.orgId, orgId),
         eq(runs.id, runId),
         notInArray(runs.status, [...TERMINAL_RUN_STATUSES]),
+        ...(guard ? [guard] : []),
       ),
     )
     .returning({ projectId: runs.projectId, sandbox: runs.sandbox, trigger: runs.trigger });
-  if (!failed) return; // already terminal — another path handled it.
+  // Already terminal, or the caller's guard no longer holds — another path owns
+  // this run, so touch nothing: revoking the keys of a run that is still live
+  // would strand the path still driving it.
+  if (!failed) return false;
   // Reclaim the run's credentials + sandbox so a failed run can't keep calling
   // the gateway or the platform API.
   await revokeRunKeys(db, readSandbox(failed.sandbox));
@@ -2073,6 +2196,7 @@ export async function failRun(
   await appendRunEvents(db, orgId, runId, [
     { type: "result", data: { status: "failed", kind, error: message } },
   ]);
+  return true;
 }
 
 /** Free a conversation's turn lock when its run failed before finishRun ran. */

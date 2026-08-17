@@ -5,7 +5,13 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { deliveryFailure, emitRunEvents, prepareWorkspace, shipGitChanges } from "../src/index.js";
+import {
+  deliveryFailure,
+  emitRunEvents,
+  postResult,
+  prepareWorkspace,
+  shipGitChanges,
+} from "../src/index.js";
 import { RunPhaseRecorder } from "../src/phases.js";
 import type { RunBundle } from "../src/types.js";
 
@@ -129,7 +135,7 @@ async function startJsonServer(
   };
 }
 
-async function startFacilityServer(token: string) {
+async function startFacilityServer(token: string, resultReply?: JsonReply) {
   return startJsonServer((request) => {
     if (request.method === "POST" && request.path === "/internal/runs/run_integration/push-token") {
       if (request.headers.authorization !== "Bearer runner-integration-token") {
@@ -143,8 +149,31 @@ async function startFacilityServer(token: string) {
       }
       return { body: {} };
     }
+    if (request.method === "POST" && request.path === "/internal/runs/run_integration/result") {
+      if (request.headers.authorization !== "Bearer runner-integration-token") {
+        return { status: 401, body: { message: "invalid runner token" } };
+      }
+      return resultReply ?? { body: {} };
+    }
     return { status: 404, body: { message: `unexpected Facility route ${request.path}` } };
   });
+}
+
+// The discard log is the runner's last resort once the control plane refuses both
+// /result and /events, so the assertions below read the real stderr stream rather
+// than a return value. Restoring the original write is registered as a fixture
+// cleanup so a failing expectation cannot leave the reporter's output captured.
+function captureStderr() {
+  const written: string[] = [];
+  const original = process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  }) as typeof process.stderr.write;
+  cleanups.push(async () => {
+    process.stderr.write = original;
+  });
+  return written;
 }
 
 type GithubScenario =
@@ -736,6 +765,50 @@ describe.sequential("signed GitHub delivery integration", () => {
     expect(failureEvent(facility.requests)).toContain("missing_commit_oid");
     expect(facility.handlerErrors).toEqual([]);
     expect(github.handlerErrors).toEqual([]);
+  });
+
+  it("logs only the conflict coordinates when the control plane holds a terminal verdict", async () => {
+    const facility = await startFacilityServer("installation-token-run-terminal", {
+      status: 409,
+      body: { error: { code: "run_terminal", message: "Run is terminal" } },
+    });
+    configureRunner(facility.origin);
+    const stderr = captureStderr();
+
+    await postResult(null, "succeeded", Date.now(), undefined, {
+      changed: true,
+      branch: "feature/task",
+      headSha: "signed_sha",
+      pullRequestTitle: "fix: rewrite the auth handler",
+      pullRequestBody: "## Summary\n\n- Deliver the signed task.",
+    });
+
+    expect(facilityRequests(facility.requests, "/result")).toHaveLength(1);
+    expect(stderr).toHaveLength(1);
+    expect(stderr[0]).toContain("result_discarded_run_terminal attempted_status=succeeded");
+    expect(stderr[0]).toContain("branch=feature/task");
+    expect(stderr[0]).toContain("head_sha=signed_sha");
+    expect(stderr[0]).not.toContain("Summary");
+    expect(stderr[0]).not.toContain("Deliver the signed task");
+    expect(stderr[0]).not.toContain("rewrite the auth handler");
+    expect(facility.handlerErrors).toEqual([]);
+  });
+
+  it("still raises a result conflict that is not the terminal-run verdict", async () => {
+    const facility = await startFacilityServer("installation-token-other-conflict", {
+      status: 409,
+      body: { error: { code: "virtual_key_revealed", message: "Virtual key already revealed" } },
+    });
+    configureRunner(facility.origin);
+    const stderr = captureStderr();
+
+    await expect(postResult(null, "failed", Date.now(), { code: "checks_failed" })).rejects.toThrow(
+      /failed 409/,
+    );
+
+    expect(facilityRequests(facility.requests, "/result")).toHaveLength(1);
+    expect(stderr).toEqual([]);
+    expect(facility.handlerErrors).toEqual([]);
   });
 
   it("keeps the delivery manifest excluded from the repository diff", async () => {

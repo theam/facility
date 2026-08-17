@@ -55,6 +55,146 @@ const SESSION_CHECKPOINT_INTERVAL_MS = 60_000;
 const RATE_LIMIT_RETRY_LIMIT = 8;
 const DEFAULT_RETRY_AFTER_MS = 1_000;
 const MAX_RETRY_AFTER_MS = 60_000;
+// What a control-plane restart (dev watch, deploy) costs an in-flight run. The
+// sandbox is an independent container and the API is stateless per request, so
+// the runner keeps working through the gap and its next call lands on the
+// restarted process. What this budget guarantees is the restart whose failures
+// all prove nothing was delivered — a refused connection, a deregistered DNS
+// name — because those are replayed for every endpoint: such a restart, finished
+// inside the budget, does not touch the run.
+//
+// What it does not guarantee is a restart that kills a request already on the
+// wire. That loss is ambiguous, and an endpoint whose handler cannot absorb a
+// duplicate refuses to replay it: /events above all, plus /hello and
+// /push-token. A batch lost that way while a shell command's output is being
+// drained fails that drain, and the failure reaches main's catch, which posts
+// "failed" — the engine's own event stream is best-effort and survives the same
+// loss. A restart that outlasts the budget ends a run the same way. Nothing here
+// resumes a run that already failed; that is /resume, which starts a fresh run
+// id.
+const TRANSIENT_RETRY_BUDGET_MS = 3 * 60_000;
+const TRANSIENT_RETRY_BASE_DELAY_MS = 500;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 10_000;
+// The terminal result is the run's only record of its outcome — give it a
+// longer budget than ordinary calls before abandoning the control plane.
+const RESULT_RETRY_BUDGET_MS = 5 * 60_000;
+const STEER_POLL_RETRY_DELAY_MS = 5_000;
+// Pacing for the one poll that has nothing of its own to wait on: a batch the
+// steer route answers again at once because nothing in it reached the ack. The
+// delay doubles from the base and stops at the max, so a message left pending for
+// the rest of the run costs one poll every 7.5 to 15 seconds at worst, rather
+// than as many as the control plane can answer. Which cases reach that, and why
+// the handled path stays unpaced, is documented at the pacing in
+// steeringPollLoop.
+const STEER_STALLED_POLL_BASE_DELAY_MS = 1_000;
+const STEER_STALLED_POLL_MAX_DELAY_MS = 15_000;
+const TRANSIENT_HTTP_STATUSES = new Set([500, 502, 503, 504]);
+// These codes fire before the request could reach a route handler: the name did
+// not resolve, no route to the host existed, the port refused the connection, or
+// the connection never completed at all. Nothing was committed, so a replay
+// cannot duplicate an effect and every caller gets one — this is precisely the
+// control-plane-restart case.
+const UNDELIVERED_NETWORK_CODES = new Set([
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  // A containerized control plane deregisters its DNS name while restarting
+  // (compose service names, K8s services), so name resolution loss is part of
+  // the same outage class as a refused connection.
+  "ENOTFOUND",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+// These codes do not prove the request was never delivered: it may have been on
+// the wire, and the handler may have run and committed before the response was
+// lost. Replaying is at-least-once delivery and only a caller whose endpoint
+// absorbs a duplicate may ask for it.
+const AMBIGUOUS_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+// Whether an ambiguous loss may be replayed is a property of the handler on the
+// far end, not of the code that happens to be calling it, so it is declared once
+// per endpoint here and api() looks it up from the path. Keeping it out of the
+// call sites is what makes it reviewable: api() takes no policy argument at all,
+// so every control-plane call it makes is classified by this table, and an
+// endpoint nobody has classified gets ENDPOINT_RETRY_POLICY_DEFAULT rather than
+// whatever its caller felt like.
+//
+// Keys are the endpoint's last path segment. Two calls do not go through api(),
+// and each reads its entry from this table by name rather than inventing one:
+//   - `bundle`: /hello hands back an absolute bundleUrl on the sandbox-facing
+//     origin, so it cannot resolve its path against FACILITY_API_URL the way
+//     api() does. It calls fetchJson with the entry passed as an argument.
+//   - `session-state` on the restore side: it reads a gzip archive, so it needs
+//     the byte reader instead of api()'s JSON one. fetchSessionStateArchive
+//     passes the entry the same way. (The upload half is an ordinary api() POST.)
+// So every control-plane call in this file is classified, and all of them share
+// one transport — the retry loop fetchJson and fetchSessionStateArchive both
+// wrap. What this table cannot see is a call that reaches the control plane
+// without that transport at all, which is why the derivation test in the
+// runner's retry suite also refuses any bare request beyond the loop's own.
+export const ENDPOINT_RETRY_POLICIES = {
+  // The handshake is one-shot by design: it claims the provisioning→running
+  // transition and stamps virtualKeyRevealedAt, so a replay after a lost response
+  // answers 409 virtual_key_revealed. Retrying an ambiguous loss would only turn
+  // it into a more confusing failure.
+  hello: { replaySafe: false },
+  // The handler only reads the stored bundle back, so there is no effect for a
+  // second delivery to duplicate.
+  bundle: { replaySafe: true },
+  // Delivery is marked from the ack the next poll carries, not from the select,
+  // so a poll whose response was lost leaves its messages pending and the replay
+  // serves them to this same runner again.
+  steer: { replaySafe: true },
+  // The handler overwrites one object keyed by run id and points the run row at
+  // it, so a second delivery of the same bytes lands on the same state.
+  transcript: { replaySafe: true },
+  // Same last-writer-wins upload as the transcript, and losing the archive costs
+  // the next run its warm session, so the replay is worth taking.
+  "session-state": { replaySafe: true },
+  // A replay that lands after a committed first post answers 409 run_terminal,
+  // which postResult absorbs, so the ambiguous case is already handled and losing
+  // the outcome entirely is the worse failure. The run's only record of its
+  // outcome also gets a longer budget than ordinary calls.
+  result: { budgetMs: RESULT_RETRY_BUDGET_MS, replaySafe: true },
+  // Every call mints a fresh GitHub installation token with contents:write and
+  // writes an audit row, with no idempotency guard. A replay after a lost response
+  // leaves a second live token held by nobody — nothing here revokes one, so it
+  // stays live until it expires — and two audit rows for one delivery.
+  "push-token": { replaySafe: false },
+  // Appending is unguarded, so a replay duplicates the batch. The run's receipt
+  // counts run_events rows and lists the check events among them before it is
+  // sealed with a digest chained to the previous receipt, so a duplicate is a
+  // wrong receipt rather than a cosmetic artifact — this needs server-side
+  // idempotency before it can opt in.
+  events: { replaySafe: false },
+} as const satisfies Record<string, TransientRetryOptions>;
+// An unclassified endpoint fails on an ambiguous loss instead of replaying it.
+// Every way of getting here is safe in that direction: a new route whose handler
+// nobody has read yet, or a renamed one whose entry no longer matches, degrades
+// to a lost response failing the run rather than to a duplicated effect.
+export const ENDPOINT_RETRY_POLICY_DEFAULT: TransientRetryOptions = { replaySafe: false };
+
+export function endpointRetryPolicy(path: string): TransientRetryOptions {
+  // Query and fragment are per-call arguments (the steer poll's acks), not part
+  // of the endpoint's identity. hasOwn keeps an inherited property of the table's
+  // prototype from being read as a classification.
+  const endpoint =
+    path
+      .replace(/[?#][\s\S]*$/, "")
+      .replace(/\/+$/, "")
+      .split("/")
+      .pop() ?? "";
+  return Object.hasOwn(ENDPOINT_RETRY_POLICIES, endpoint)
+    ? ENDPOINT_RETRY_POLICIES[endpoint as keyof typeof ENDPOINT_RETRY_POLICIES]
+    : ENDPOINT_RETRY_POLICY_DEFAULT;
+}
 const GIT_COMMAND_TIMEOUT_MS = 2 * 60_000;
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 const EVENT_BATCH_MAX = 50;
@@ -117,9 +257,12 @@ async function main() {
     const hello = await api<Record<string, unknown>>(`/internal/runs/${currentRunId()}/hello`, {
       method: "POST",
     });
-    bundle = (await fetchJson(String(hello.bundleUrl), {
-      headers: { authorization: `Bearer ${runnerToken()}` },
-    })) as RunBundle;
+    bundle = (await fetchJson(
+      String(hello.bundleUrl),
+      { headers: { authorization: `Bearer ${runnerToken()}` } },
+      undefined,
+      ENDPOINT_RETRY_POLICIES.bundle,
+    )) as RunBundle;
     const activeBundle = bundle;
     await phases.finish({ outcome: "succeeded" });
     const runtimeEvent = sandboxRuntimeEvent();
@@ -583,32 +726,189 @@ async function runEngine(bundle: RunBundle, restoredSessionState: boolean) {
   return runShell(cmd, cwdFor(bundle), "assistant");
 }
 
+// The request one poll of the control channel issues, ack included. The ids the
+// runner reports handling are what the server records delivery from, so this
+// string is the runner's half of that contract and is built here, apart from the
+// loop, to be driven by a test on its own.
+//
+// The server splits `ack` on commas and refuses the whole request unless every
+// id matches its ACK_ID shape, so each id is encoded individually: the separator
+// has to stay literal between ids while a comma or an `&` inside one is escaped
+// rather than read as another id or another query parameter.
+export function steerPollPath(runId: string, ack: string[]) {
+  const query = ack.length > 0 ? `?ack=${ack.map(encodeURIComponent).join(",")}` : "";
+  return `/internal/runs/${runId}/steer${query}`;
+}
+
+// The shape the steer route's ack accepts, which is exactly what newId("evt")
+// produces. The route refuses an ack whole unless every id in it matches, so an
+// id of any other shape has to be kept out of the ack rather than echoed back:
+// one refused ack takes the good ids in the same request down with it, and every
+// later ack this runner sends carries them again, so the channel stays refused
+// for the rest of the run. Nothing writes a steer row with another shape today —
+// the filter exists so one row could not do that, and a test pins this literal
+// against the route's own, because a filter disagreeing with the route would
+// wedge the channel exactly the way it is here to prevent.
+export const ACKABLE_STEER_ID = /^evt_[0-9a-f]{32}$/;
+
+export function ackableSteerIds(ids: string[]) {
+  return ids.filter((id) => ACKABLE_STEER_ID.test(id));
+}
+
+type SteeringPollLoopOptions = {
+  poll: (ack: string[]) => Promise<ControlMessage[]>;
+  handlers: ControlHandlers;
+  isStopped: () => boolean;
+  sleep?: (ms: number) => Promise<unknown>;
+  random?: () => number;
+};
+
+// One poll of the control channel, applied, acked, repeated until the run ends.
+// Separate from startSteeringPoll — which owns the process-wide engine state the
+// interrupt handler touches — so the orderings that matter can be driven by a
+// test: a batch nothing in it could ack, an id the ack cannot carry, and a poll
+// that failed on the transport.
+export async function steeringPollLoop({
+  poll,
+  handlers,
+  isStopped,
+  sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+  random = Math.random,
+}: SteeringPollLoopOptions) {
+  // The ids handled but not yet known to be recorded. Cleared only once a poll
+  // carrying them came back, so an ack whose response was lost is re-sent
+  // rather than assumed.
+  let ack: string[] = [];
+  const failures = new Map<string, number>();
+  // Ids served in a shape the ack cannot carry: reported once each, and — for a
+  // steer, whose append is not idempotent — applied once each, because the route
+  // has no ack that would retire them and keeps serving them.
+  const reportedUnackable = new Set<string>();
+  const appliedUnackable = new Set<string>();
+  let failedPolls = 0;
+  let stalledPolls = 0;
+  while (!isStopped()) {
+    try {
+      const messages = await poll(ack);
+      ack = [];
+      if (failedPolls > 0) {
+        // The transport was down while the polls failed, so the degradation
+        // can only be reported after the fact: steering messages sent in
+        // that window may have been delayed.
+        await handlers
+          .emit([
+            {
+              type: "artifact_error",
+              data: { kind: "steer_poll_degraded", failures: failedPolls },
+            },
+          ])
+          .catch(() => undefined);
+        failedPolls = 0;
+      }
+      const deliverable: ControlMessage[] = [];
+      for (const message of messages) {
+        if (ACKABLE_STEER_ID.test(message.id)) {
+          deliverable.push(message);
+          continue;
+        }
+        if (!reportedUnackable.has(message.id)) {
+          reportedUnackable.add(message.id);
+          await handlers
+            .emit([
+              {
+                type: "artifact_error",
+                data: { kind: "steer_ack_id_unacceptable", id: message.id },
+              },
+            ])
+            .catch(() => undefined);
+        }
+        // An interrupt is applied on every redelivery: an operator's stop must
+        // not be dropped over the shape of an id, and the handler absorbs a
+        // repeat. A steer's append is not idempotent, so once its action landed
+        // the redeliveries are skipped instead of appending the same body to the
+        // steer file for the rest of the run. The row stays pending either way,
+        // since only an ack retires one, and the route serves the oldest pending
+        // rows up to its batch limit — so enough such rows would crowd newer
+        // messages out of every batch. Nothing this side can fix that; what it
+        // can do is keep the channel working for every other message.
+        if (message.kind === "interrupt" || !appliedUnackable.has(message.id)) {
+          deliverable.push(message);
+        }
+      }
+      const applied = await applyControlMessages(deliverable, handlers, failures);
+      for (const id of applied.handled) {
+        if (!ACKABLE_STEER_ID.test(id)) appliedUnackable.add(id);
+      }
+      ack = ackableSteerIds(applied.handled);
+      // applied.error is deliberately not rethrown. A durable action that
+      // failed is not a transport outage, so it must not be counted into the
+      // degraded-poll report; the message stays unacked and the next poll is
+      // served it again. A steer that keeps failing is reported and retired
+      // after CONTROL_MESSAGE_MAX_ATTEMPTS; an interrupt is retried for as long
+      // as the run lasts, which the handler above absorbs — it re-sets the flag
+      // and starts the escalation only while none is pending, so a second
+      // application signals nothing twice.
+      //
+      // Pacing, and only for the batch that made no progress. The route
+      // long-polls while nothing is pending and answers the instant something
+      // is, so a batch no id of which reached the ack is served again on the
+      // next poll immediately: without this the loop would poll as fast as the
+      // control plane can answer, for the rest of the run. Reachable two ways —
+      // an interrupt whose kill keeps throwing, which is deliberately never
+      // retired, and a message whose id the ack cannot carry. The counter resets
+      // as soon as any id newly reaches the ack, so the poll that follows a batch
+      // which made progress is not delayed. The sleep is not free, though: it
+      // runs before the next poll, so anything created while the loop is stalled
+      // — an interrupt included — waits out the rest of it before the poll that
+      // would fetch it even starts. The window doubles from
+      // STEER_STALLED_POLL_BASE_DELAY_MS and stops at
+      // STEER_STALLED_POLL_MAX_DELAY_MS, and each delay is drawn from the top
+      // half of its window, so that wait is at most 15 seconds, and 7.5 to 15
+      // seconds from the fifth consecutive stalled poll on. That is what not
+      // hammering the control plane costs while a message it will keep serving
+      // cannot be retired.
+      if (messages.length > 0 && ack.length === 0) {
+        stalledPolls += 1;
+        await sleep(
+          transientRetryDelayMs(
+            stalledPolls - 1,
+            STEER_STALLED_POLL_BASE_DELAY_MS,
+            STEER_STALLED_POLL_MAX_DELAY_MS,
+            random,
+          ),
+        );
+      } else {
+        stalledPolls = 0;
+      }
+    } catch (error) {
+      // Steering and interrupts must survive the run: one poll exhausting
+      // its outage budget cannot be allowed to silence the channel for the
+      // rest of a possibly hours-long run. Only a terminal run ends it.
+      if (isRunTerminalConflict(error) || isStopped()) return;
+      failedPolls += 1;
+      await sleep(STEER_POLL_RETRY_DELAY_MS);
+    }
+  }
+}
+
 function startSteeringPoll() {
   let stopped = false;
-  void (async () => {
-    let afterId: string | undefined;
-    while (!stopped) {
-      const query = afterId ? `?afterId=${encodeURIComponent(afterId)}` : "";
-      const messages = await api<Array<{ id: string; body: string; kind?: string }>>(
-        `/internal/runs/${currentRunId()}/steer${query}`,
-      );
-      for (const message of messages) {
-        afterId = message.id;
-        await handleControlMessage(message, {
-          appendSteer: async (body) => {
-            await appendFile(steerFile, `\n\n## ${new Date().toISOString()}\n${body}\n`);
-          },
-          emit,
-          interrupt: async () => {
-            interruptRequested = true;
-            if (activeEngineChild && !clearInterruptEscalation) {
-              clearInterruptEscalation = terminateChild(activeEngineChild);
-            }
-          },
-        });
-      }
-    }
-  })().catch(() => undefined);
+  void steeringPollLoop({
+    poll: (ack) => api<ControlMessage[]>(steerPollPath(currentRunId(), ack)),
+    handlers: {
+      appendSteer: async (body) => {
+        await appendFile(steerFile, `\n\n## ${new Date().toISOString()}\n${body}\n`);
+      },
+      emit,
+      interrupt: async () => {
+        interruptRequested = true;
+        if (activeEngineChild && !clearInterruptEscalation) {
+          clearInterruptEscalation = terminateChild(activeEngineChild);
+        }
+      },
+    },
+    isStopped: () => stopped,
+  }).catch(() => undefined);
   return () => {
     stopped = true;
   };
@@ -1070,13 +1370,11 @@ export async function restoreWorkspaceCheckpoint(
 async function restoreSessionState(bundle: RunBundle) {
   if (bundle.engine !== "claude_code" || !bundle.resume) return false;
   try {
-    const response = await fetch(`${apiUrl()}/internal/runs/${currentRunId()}/session-state`, {
-      headers: { authorization: `Bearer ${runnerToken()}` },
-    });
-    if (!response.ok) {
-      throw new Error(`session state restore failed ${response.status}`);
-    }
-    await writeFile(sessionStateArchive, Buffer.from(await response.arrayBuffer()));
+    // A pure GET read of one stored object: no handler effect exists for a
+    // replay to duplicate, so it takes the classified path like every other
+    // control-plane call. A run with no archive answers 404, which is a cold
+    // start rather than an outage and surfaces below without spending a budget.
+    await writeFile(sessionStateArchive, await fetchSessionStateArchive(currentRunId()));
     await rm(sessionStateDir, { recursive: true, force: true });
     await rm(resumeStateDir, { recursive: true, force: true });
     await mkdir(workRoot, { recursive: true });
@@ -1284,15 +1582,108 @@ type ControlHandlers = {
 };
 
 export async function handleControlMessage(message: ControlMessage, handlers: ControlHandlers) {
+  // The durable action — the kill, the steer-file append — must land before,
+  // and regardless of, any ack the event transport may fail to carry
+  // mid-outage; a lost ack must not surface as a failed message. The steer
+  // event is observability; the id this message is acked under on the next poll
+  // is what records delivery.
   if (message.kind === "interrupt") {
-    await handlers.emit([{ type: "status", data: { message: "human interrupt" } }]);
     await handlers.interrupt();
-    await handlers.emit([{ type: "steer", data: { id: message.id, kind: "interrupt" } }]);
+    await handlers
+      .emit([
+        { type: "status", data: { message: "human interrupt" } },
+        { type: "steer", data: { id: message.id, kind: "interrupt" } },
+      ])
+      .catch(() => undefined);
     return "interrupt";
   }
   await handlers.appendSteer(message.body);
-  await handlers.emit([{ type: "steer", data: { id: message.id, applied: true } }]);
+  await handlers
+    .emit([{ type: "steer", data: { id: message.id, applied: true } }])
+    .catch(() => undefined);
   return "steer";
+}
+
+// How many times a steer whose durable action keeps throwing — an appendSteer
+// onto a full workspace disk is the reachable case — is retried before it is
+// acked anyway. Were it left unacked instead, the select would keep returning it
+// as the oldest pending row of every batch, so the poll loop would retry it for
+// the rest of the run.
+//
+// The bound retires a steer only. An interrupt is the message this channel
+// exists to not lose: it is retried for the life of the run, however many times
+// its kill fails, so a broken attempt can never retire an operator's stop. What
+// the bound does for it is fire the diagnostic once — the attempt counter keeps
+// climbing past it, so the report lands on the attempt that reaches it and never
+// repeats.
+export const CONTROL_MESSAGE_MAX_ATTEMPTS = 3;
+
+export async function applyControlMessages(
+  messages: ControlMessage[],
+  handlers: ControlHandlers,
+  // Consecutive failures per message id, owned by the caller so the count
+  // survives the redeliveries that produce it. A handled id is dropped from it;
+  // a failing one keeps counting up, which is what makes the diagnostic below
+  // fire on one attempt only.
+  failures: Map<string, number> = new Map(),
+  maxAttempts = CONTROL_MESSAGE_MAX_ATTEMPTS,
+): Promise<{ handled: string[]; error?: unknown }> {
+  const handled: string[] = [];
+  let error: unknown;
+  for (const message of messages) {
+    // An interrupt is never retired, so the bound governs its diagnostic only.
+    const retirable = message.kind !== "interrupt";
+    const attempted = failures.get(message.id) ?? 0;
+    if (retirable && attempted >= maxAttempts) {
+      // Already retired and reported; this copy exists because the ack that
+      // retired it was lost. Re-ack without retrying the action or re-emitting.
+      handled.push(message.id);
+      continue;
+    }
+    try {
+      await handleControlMessage(message, handlers);
+      failures.delete(message.id);
+      // Only an id whose durable action landed goes into the ack, so anything
+      // else is served again on the next poll.
+      handled.push(message.id);
+    } catch (caught) {
+      error = caught;
+      const attempts = attempted + 1;
+      failures.set(message.id, attempts);
+      // Exactly at the bound, never past it: an interrupt keeps counting up from
+      // here, and one diagnostic per undeliverable message is the whole point.
+      if (attempts === maxAttempts) {
+        await handlers
+          .emit([
+            {
+              type: "artifact_error",
+              data: {
+                kind: "steer_undeliverable",
+                id: message.id,
+                attempts,
+                error: errorMessage(caught),
+              },
+            },
+          ])
+          .catch(() => undefined);
+      }
+      // A retired message is acked so the server stops serving it. An interrupt
+      // stays out of the ack whatever its count, which is what keeps it pending
+      // and retried for the life of the run.
+      if (retirable && attempts >= maxAttempts) handled.push(message.id);
+    }
+    // Deliberately no early return: a message that cannot be applied must not
+    // hold the line in front of the rest of the batch. An operator's interrupt
+    // sitting behind a steer that will never land has to reach the engine now,
+    // not after that steer starts succeeding — which it may never do.
+  }
+  // Handling is exactly-once in the ordinary case and at-least-once whenever a
+  // message comes back — a poll response lost after the batch was applied, or an
+  // interrupt this never acks — so the same runner re-applies it. There is no
+  // second runner in this picture — dispatch claims the run before launching a
+  // sandbox, a confirmed sandbox loss fails the run outright, and /resume starts
+  // a fresh run id whose steer rows are its own.
+  return error === undefined ? { handled } : { handled, error };
 }
 
 export function terminateChild(
@@ -1346,14 +1737,37 @@ async function runShell(
   const clearTimers =
     timeoutMin === undefined ? () => undefined : armCommandTimeout(child, timeoutMin);
   const drains = [child.stdout, child.stderr].map((stream) => drainLineEvents(stream, eventType));
-  const code = await exitCode(child);
-  // Wait for both stream readers to finish draining before returning, so no
-  // output line is emitted AFTER the caller records the run's result (a late
-  // event would be dropped as post-terminal). Previously these loops were
-  // fire-and-forget and could lose or reorder trailing output.
-  await Promise.all(drains);
-  clearTimers();
-  return code;
+  return awaitCommandStreams(exitCode(child), drains, clearTimers);
+}
+
+// Waits out one command: its exit first, then both stream drains. Separate from
+// runShell — which owns a real child process nothing can inject into — so the two
+// orderings this exists for can be driven directly by a test: a drain that
+// rejects while the command is still running, and a timer that has to be disarmed
+// on that rejection as well as on a clean exit.
+export async function awaitCommandStreams(
+  exit: Promise<number>,
+  drains: Promise<unknown>[],
+  clearTimers: () => void,
+) {
+  // A delivery failure can reject a drain while the command is still running,
+  // long before the `await` below. Mark both promises handled now so that
+  // rejection waits for the await instead of aborting the whole process as an
+  // unhandled rejection — which would exit without posting a terminal result.
+  for (const drain of drains) drain.catch(() => undefined);
+  try {
+    const code = await exit;
+    // Wait for both stream readers to finish draining before returning, so no
+    // output line is emitted AFTER the caller records the run's result (a late
+    // event would be dropped as post-terminal). Previously these loops were
+    // fire-and-forget and could lose or reorder trailing output.
+    await Promise.all(drains);
+    return code;
+  } finally {
+    // Also on a drain rejection: the armed SIGKILL escalation is a live timer
+    // handle that would keep the process alive long after the result posts.
+    clearTimers();
+  }
 }
 
 export async function drainLineEvents(
@@ -1450,6 +1864,7 @@ export async function drainLineEvents(
     }
   };
 
+  let drained = false;
   try {
     for await (const line of lines) {
       if (eventType === "shell" && isTransientContainerProgressLine(line)) {
@@ -1473,9 +1888,16 @@ export async function drainLineEvents(
       if (activeDelivery) await activeDelivery;
     }
     if (deliveryError) throw deliveryError;
+    drained = true;
   } finally {
     clearFlushTimer();
     lines.close();
+    // A failed drain must not strand the producer: readline's close() pauses
+    // the source, and a child still writing into a full pipe would block
+    // forever — its exit code never observed, the run never resolved. Keep the
+    // stream flowing (discarding) so the command can finish and the delivery
+    // error can surface through the normal await.
+    if (!drained) stream.resume();
   }
 }
 
@@ -1631,7 +2053,7 @@ export async function runCheckCommand(
   return { code, tail: tail.trim() };
 }
 
-async function postResult(
+export async function postResult(
   bundle: RunBundle | null,
   status: "succeeded" | "failed" | "canceled",
   startedAt: number,
@@ -1641,33 +2063,51 @@ async function postResult(
 ) {
   const stderrTail = await readFile(engineStderrFile, "utf8").catch(() => "");
   const activity = await runnerReceiptActivity(bundle, status);
-  await api(`/internal/runs/${currentRunId()}/result`, {
-    method: "POST",
-    body: JSON.stringify({
-      status,
-      receipt: {
-        provider: receiptProvider(bundle?.engine),
-        mode: receiptMode(bundle?.mode),
-        model: configuredModel(bundle?.engineConfig),
-        result: status,
-        activity,
-        timing: {
-          started_at: new Date(startedAt).toISOString(),
-          ended_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
+  try {
+    await api(`/internal/runs/${currentRunId()}/result`, {
+      method: "POST",
+      body: JSON.stringify({
+        status,
+        receipt: {
+          provider: receiptProvider(bundle?.engine),
+          mode: receiptMode(bundle?.mode),
+          model: configuredModel(bundle?.engineConfig),
+          result: status,
+          activity,
+          timing: {
+            started_at: new Date(startedAt).toISOString(),
+            ended_at: new Date().toISOString(),
+            duration_ms: Date.now() - startedAt,
+          },
         },
-      },
-      error:
-        typeof error === "string"
-          ? error
-          : error
-            ? redactSecrets(`${JSON.stringify(error)} ${stderrTail.slice(-2000)}`)
-            : undefined,
-      git,
-      engineSessionId: engineSessionId ?? undefined,
-      securityReport,
-    }),
-  });
+        error:
+          typeof error === "string"
+            ? error
+            : error
+              ? redactSecrets(`${JSON.stringify(error)} ${stderrTail.slice(-2000)}`)
+              : undefined,
+        git,
+        engineSessionId: engineSessionId ?? undefined,
+        securityReport,
+      }),
+    });
+  } catch (postError) {
+    if (isRunTerminalConflict(postError)) {
+      // A terminal verdict is already recorded for this run, and it is most
+      // often this very post: /result is on the replaySafe policy, so an attempt
+      // whose response was lost after the handler committed is replayed by the
+      // retry loop and answered 409 — the recorded verdict is then identical to
+      // the one below, not a different one. It can also be another party's, in
+      // which case it differs: /v1/runs/:runId/cancel records "canceled", and
+      // failRun records "failed" when the control plane concludes the sandbox is
+      // gone. Either way the run is terminal, so /events is refused from here on
+      // too and the container log is the only place left to record what this
+      // attempt carried.
+      process.stderr.write(runTerminalDiscardLog(status, git));
+      return;
+    }
+    throw postError;
+  }
 }
 
 const FACILITY_MANAGED_REPOSITORY_FILES = new Set([
@@ -1764,6 +2204,68 @@ export function deliveryStatusEvent(
   };
 }
 
+// shipGitChanges' return value carries pullRequestTitle and pullRequestBody
+// copied verbatim out of the agent-written .agent-sdlc/delivery.json, which
+// readAgentDeliveryMetadata admits at up to 256 and 60000 characters of prose.
+// Serializing that object whole would push both into the container's stderr —
+// Docker logs, CloudWatch — where infrastructure log access replaces the
+// runs:read gate that gets run_events, and where none of the central redaction in
+// emit() applies. So the record is assembled from an allowlist of scalar
+// coordinates: enough to say which delivery lost the race, with the two unbounded
+// agent-authored fields left out.
+//
+// That is the whole of the claim. push_error is in the allowlist and is
+// errorMessage over captured Git stderr, so it can quote text the agent chose —
+// the branch or path it named comes back inside Git's own message. What holds it
+// is that shipGitChanges already assigns it as redactSecrets(errorMessage),
+// DISCARD_LOG_FIELD_MAX_CHARS below bounds it rather than trusting Git's message
+// to be short, and once the run is terminal the control plane refuses /events
+// too, so this line is the last place a failed push can be recorded at all.
+//
+// The finished string passes through redactSecrets again as defense in depth.
+// Every coordinate here is data the agent had a hand in: in repair mode the
+// branch is whatever existingGithubBranch accepted, which admits any ref name up
+// to 255 characters that avoids Git's own metacharacters — a branch named after a
+// token qualifies.
+//
+// Enough of a message to identify the failure, and short enough that no field can
+// turn this record into a wall of agent-influenced text in the container log.
+const DISCARD_LOG_FIELD_MAX_CHARS = 512;
+
+export function runTerminalDiscardLog(
+  status: "succeeded" | "failed" | "canceled",
+  git: Record<string, unknown> | undefined,
+  secrets: Iterable<string> = secretsToRedact,
+): string {
+  // A missing or non-string coordinate renders as "-" so the record keeps its
+  // field count and never prints the literal "undefined" or "null" — four of
+  // postResult's five call sites pass no git object at all. Whitespace collapses
+  // because a push error is a captured Git stderr message that can span lines,
+  // and a record split across lines defeats a single-line operator grep.
+  const coordinate = (value: unknown) => {
+    if (typeof value !== "string" || !value.trim()) return "-";
+    // Redact before bounding, never after: a secret straddling the cut would
+    // leave the prefix the bound kept, and no later redaction pass can match a
+    // token it only has half of. The line-level pass below stays as it was.
+    const collapsed = redactSecrets(value.replace(/\s+/g, " ").trim(), secrets);
+    // The marker carries no space, so the record keeps parsing as one field per
+    // token, and it is in the output rather than truncating silently — an
+    // operator reading the line can tell the message continued.
+    return collapsed.length > DISCARD_LOG_FIELD_MAX_CHARS
+      ? `${collapsed.slice(0, DISCARD_LOG_FIELD_MAX_CHARS)}...[truncated]`
+      : collapsed;
+  };
+  const line = [
+    "result_discarded_run_terminal",
+    `attempted_status=${status}`,
+    `changed=${git?.changed === true}`,
+    `branch=${coordinate(git?.branch)}`,
+    `head_sha=${coordinate(git?.headSha)}`,
+    `push_error=${coordinate(git?.pushError)}`,
+  ].join(" ");
+  return `${redactSecrets(line, secrets)}\n`;
+}
+
 function isSecurityMode(mode: string) {
   return ["security", "security_sweep"].includes(normalizedMode(mode));
 }
@@ -1825,6 +2327,19 @@ export function deliveryFailure(
     return "delivery_pr_body_missing";
   }
   return null;
+}
+
+// The only place a GitHub push token is acquired. It is a named function rather
+// than a line inside shipGitChanges so the request — and therefore the policy
+// api() resolves for it — can be driven by a test without a git fixture. Each
+// call mints a live contents:write token, and nothing in this codebase revokes an
+// installation token, so a second delivery has to be a test failure and not a
+// code review's job.
+export async function requestPushToken(runId: string): Promise<string> {
+  const { token } = await api<{ token: string }>(`/internal/runs/${runId}/push-token`, {
+    method: "POST",
+  });
+  return token;
 }
 
 export type ShipGitOptions = {
@@ -1891,9 +2406,7 @@ export async function shipGitChanges(
         runId,
       );
     }
-    const { token } = await api<{ token: string }>(`/internal/runs/${runId}/push-token`, {
-      method: "POST",
-    });
+    const token = await requestPushToken(runId);
     secretsToRedact.add(token);
     const published = repairRepositoryMode(mode)
       ? await publishVerifiedGithubBranchUpdate({
@@ -2689,6 +3202,9 @@ async function emit(events: RunEvent[]) {
 
 export { emit as emitRunEvents };
 
+// The retry policy is deliberately not a parameter: it belongs to the endpoint
+// being called, ENDPOINT_RETRY_POLICIES declares it, and resolving it here means
+// no call site can hand this function a policy of its own.
 async function api<T>(
   path: string,
   init: RequestInit = {},
@@ -2706,6 +3222,7 @@ async function api<T>(
       },
     },
     bodyFactory,
+    endpointRetryPolicy(path),
   ) as Promise<T>;
 }
 
@@ -2726,25 +3243,197 @@ export function retryAfterMs(value: string | null, now = Date.now()) {
   return DEFAULT_RETRY_AFTER_MS;
 }
 
+export class FetchJsonError extends Error {
+  readonly status: number;
+  readonly body: string;
+
+  constructor(url: string, status: number, body: string) {
+    super(`${url} failed ${status}: ${body}`);
+    this.name = "FetchJsonError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export type TransientRetryOptions = {
+  budgetMs?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  // Whether this endpoint absorbs a second delivery of the same request, set per
+  // endpoint in ENDPOINT_RETRY_POLICIES. It defaults to false so an endpoint
+  // nobody has classified is conservative until someone has read its handler:
+  // opting in wrongly duplicates an already-committed effect, and the only cost
+  // of leaving it off is a lost response failing the run.
+  replaySafe?: boolean;
+};
+
+// Undici wraps the raising syscall error in `cause` chains (and AggregateError
+// members when it raced multiple address families), so the classification has
+// to walk the tree rather than inspect the top-level error.
+export function isTransientFetchError(error: unknown, replaySafe = false): boolean {
+  const seen = new Set<object>();
+  const pending: unknown[] = [error];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const { name, code, cause, errors } = current as {
+      name?: unknown;
+      code?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    // An abort is the caller's own decision to stop waiting — never replay it.
+    if (name === "AbortError" || name === "TimeoutError") return false;
+    if (typeof code === "string") {
+      if (UNDELIVERED_NETWORK_CODES.has(code)) return true;
+      if (replaySafe && AMBIGUOUS_NETWORK_CODES.has(code)) return true;
+    }
+    if (cause) pending.push(cause);
+    if (Array.isArray(errors)) pending.push(...errors);
+  }
+  return false;
+}
+
+// Exponential backoff with equal jitter: half the window is deterministic so
+// retries always spread out, half is random so concurrent runners desynchronize
+// instead of stampeding a control plane that just came back.
+export function transientRetryDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+  random: () => number = Math.random,
+) {
+  const window = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+  return Math.round(window / 2 + random() * (window / 2));
+}
+
+// After a replayed result post, a 409 run_terminal means some prior attempt —
+// ours before a lost response, or an operator action — already recorded a
+// terminal state. The retry achieved its purpose, so shutdown proceeds cleanly
+// instead of reporting a spurious failure.
+export function isRunTerminalConflict(error: unknown): boolean {
+  if (!(error instanceof FetchJsonError) || error.status !== 409) return false;
+  try {
+    const parsed = JSON.parse(error.body) as { error?: { code?: unknown } };
+    return parsed.error?.code === "run_terminal";
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchJson(
   url: string,
   init: RequestInit = {},
   bodyFactory?: () => RequestInit["body"],
-) {
-  for (let attempt = 0; ; attempt += 1) {
-    const response = await fetch(url, bodyFactory ? { ...init, body: bodyFactory() } : init);
-    if (response.ok) return response.json();
-    const body = await response.text();
-    if (response.status !== 429 || attempt >= RATE_LIMIT_RETRY_LIMIT) {
-      throw new Error(`${url} failed ${response.status}: ${body}`);
+  retry: TransientRetryOptions = {},
+): Promise<unknown> {
+  return await fetchWithTransientRetry(url, init, bodyFactory, retry, (response) =>
+    response.json(),
+  );
+}
+
+// The session-state restore, the one control-plane read whose response is bytes
+// rather than JSON. It shares the loop below so it shares the classification:
+// the policy is the table's own session-state entry, passed as an argument
+// because this call cannot go through api()'s JSON reader.
+export async function fetchSessionStateArchive(runId: string) {
+  return await fetchWithTransientRetry(
+    `${apiUrl()}/internal/runs/${runId}/session-state`,
+    { headers: { authorization: `Bearer ${runnerToken()}` } },
+    undefined,
+    ENDPOINT_RETRY_POLICIES["session-state"],
+    async (response) => Buffer.from(await response.arrayBuffer()),
+  );
+}
+
+// The one place the runner reaches the control plane. Reading the response is a
+// parameter so a caller that needs bytes does not need a transport of its own:
+// a second transport would be a second retry policy nobody classified.
+async function fetchWithTransientRetry<T>(
+  url: string,
+  init: RequestInit,
+  bodyFactory: (() => RequestInit["body"]) | undefined,
+  retry: TransientRetryOptions,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  const budgetMs = retry.budgetMs ?? TRANSIENT_RETRY_BUDGET_MS;
+  const baseDelayMs = retry.baseDelayMs ?? TRANSIENT_RETRY_BASE_DELAY_MS;
+  const maxDelayMs = retry.maxDelayMs ?? TRANSIENT_RETRY_MAX_DELAY_MS;
+  const replaySafe = retry.replaySafe ?? false;
+  const deadline = Date.now() + budgetMs;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let transientAttempt = 0;
+  let rateLimitAttempt = 0;
+  // Retrying makes a request at-least-once, so the replay rule follows what the
+  // failure proves. A refused connection or a lost DNS name proves no handler
+  // ran — the whole restart case this exists for — so replaying costs nothing
+  // and every caller gets it. Anything that leaves delivery open (a reset, a
+  // stall timeout, a 5xx) may have committed before the response was lost, so
+  // replaying it is a decision per endpoint, which
+  // ENDPOINT_RETRY_POLICIES records as replaySafe. Left off, a lost response
+  // fails the run; turned on where the handler is not idempotent, a replayed
+  // /push-token mints a second live contents:write token that nobody holds and
+  // nothing here revokes.
+  for (;;) {
+    let response: Response;
+    let body: string;
+    try {
+      response = await fetch(url, bodyFactory ? { ...init, body: bodyFactory() } : init);
+      // The body reads live inside the same classification: a control plane
+      // killed between flushing headers and body fails here, and that loss is
+      // the same outage as a reset before headers.
+      if (response.ok) return await read(response);
+      body = await response.text();
+    } catch (error) {
+      // Anything without a transient cause — bad URL, aborted request, invalid
+      // JSON from a healthy server, or an ambiguous loss this caller did not
+      // declare replay-safe — stays fatal.
+      if (!isTransientFetchError(error, replaySafe)) throw error;
+      const remainingMs = deadline - Date.now();
+      // One retry is always granted: a single stalled attempt (undici's
+      // header/body timeouts run to minutes) can consume the whole budget by
+      // itself, and a slow failure must not become a guaranteed-fatal one.
+      if (remainingMs <= 0 && transientAttempt > 0) throw error;
+      const delayMs = transientRetryDelayMs(transientAttempt, baseDelayMs, maxDelayMs);
+      transientAttempt += 1;
+      // Cap the wait at the remaining budget so the declared budget is spent
+      // in full: the last attempt runs at the deadline, not before it.
+      await sleep(remainingMs > 0 ? Math.min(delayMs, remainingMs) : delayMs);
+      continue;
     }
-    // The global API limiter rejects the request before a route handler runs,
-    // so replaying the runner's JSON request after Retry-After cannot duplicate
-    // an accepted event or terminal result. Awaiting here applies backpressure
-    // to noisy child processes instead of turning a temporary 429 into a crash.
-    await new Promise((resolve) =>
-      setTimeout(resolve, retryAfterMs(response.headers.get("retry-after"))),
-    );
+    if (response.status === 429) {
+      if (rateLimitAttempt >= RATE_LIMIT_RETRY_LIMIT) {
+        throw new FetchJsonError(url, response.status, body);
+      }
+      // The global API limiter rejects the request before a route handler runs,
+      // so replaying the runner's JSON request after Retry-After cannot duplicate
+      // an accepted event or terminal result. Awaiting here applies backpressure
+      // to noisy child processes instead of turning a temporary 429 into a crash.
+      rateLimitAttempt += 1;
+      await sleep(retryAfterMs(response.headers.get("retry-after")));
+      continue;
+    }
+    // A 5xx is as ambiguous as a lost response and takes the same opt-in. The
+    // status alone does not say whether a route handler ran: a 500 can be raised
+    // after it committed, while a 502 or 503 can come from a proxy that never
+    // forwarded the request. Unable to tell those apart, a conservative caller
+    // falls through to the fatal throw below.
+    if (replaySafe && TRANSIENT_HTTP_STATUSES.has(response.status)) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new FetchJsonError(url, response.status, body);
+      const retryAfter = response.headers.get("retry-after");
+      const backoffMs = transientRetryDelayMs(transientAttempt, baseDelayMs, maxDelayMs);
+      // Honor a server-requested wait, but never let "Retry-After: 0" from a
+      // recovering proxy defeat the jitter floor — synchronized zero-delay
+      // replays from every runner would stampede the API it is protecting.
+      const delayMs =
+        retryAfter !== null ? Math.max(retryAfterMs(retryAfter), backoffMs) : backoffMs;
+      transientAttempt += 1;
+      await sleep(Math.min(delayMs, remainingMs));
+      continue;
+    }
+    throw new FetchJsonError(url, response.status, body);
   }
 }
 

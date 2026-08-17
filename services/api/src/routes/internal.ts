@@ -24,6 +24,35 @@ import {
 import type { AppConfig } from "../types.js";
 
 const Params = z.object({ runId: z.string() });
+// Exactly what newId("evt") produces. An ack names rows to mutate, so this
+// route takes only ids it could have issued: a list carrying anything else is
+// refused whole, before any of it reaches a query.
+const ACK_ID = /^evt_[0-9a-f]{32}$/;
+// An ack can only name ids from a batch this route served, and STEER_BATCH caps
+// a batch. The bound stays above that so it remains a sanity limit on the query
+// rather than something a change to the batch size silently invalidates.
+export const STEER_ACK_MAX = 32;
+const STEER_BATCH = 10;
+// One ack parameter, or several, each holding a comma-separated list. Exported
+// so the id rule can be tested as a rule: from outside the route every refusal
+// is the same 400, which says nothing about which shapes the rule refuses.
+export const SteerAck = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((value) =>
+    value === undefined
+      ? []
+      : (Array.isArray(value) ? value : [value]).flatMap((entry) => entry.split(",")),
+  )
+  .refine(
+    (ids) => ids.length <= STEER_ACK_MAX && ids.every((id) => ACK_ID.test(id)),
+    `ack takes up to ${STEER_ACK_MAX} comma-separated message ids`,
+  );
+// The cursor this route took before the ack. A request carrying it marks rows
+// delivered, so it is held to the same id rule for the same reason: only an id
+// this route could have issued reaches a query, and a list — which the cursor
+// never was — is refused outright.
+const SteerAfterId = z.string().regex(ACK_ID).optional();
 const TRANSCRIPT_MAX_BYTES = 50 * 1024 * 1024;
 const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
 const EventBatch = z.array(
@@ -225,37 +254,105 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       preHandler: authenticate,
       schema: {
         params: Params,
-        querystring: z.object({ afterId: z.string().optional() }),
+        querystring: z.object({ ack: SteerAck, afterId: SteerAfterId }),
         response: { 200: z.array(z.record(z.string(), z.unknown())) },
       },
     },
     async (request) => {
       const run = (request as RunnerRequest).runnerRun;
       if (!run) throw notFound("Run not found");
-      const { afterId } = request.query as { afterId?: string };
+      const { ack, afterId } = request.query as { ack: string[]; afterId?: string };
+      if (ack.length > 0) {
+        // Delivery is recorded from the ack, not from the select that served the
+        // batch: marking on the select loses a message whenever the response
+        // drops on the wire — an operator's stop goes with it, and no error
+        // surfaces anywhere. What the server enforces is exactly this much — a
+        // row flips to delivered when a poll authenticated for its run names its
+        // exact id inside that run's org. That the runner names an id only once
+        // the message's durable action landed is the runner's half of the
+        // contract: assumed here, not checked. Redelivery reaches that same
+        // runner, because dispatch claims a run out of "queued" before launching
+        // one sandbox for it, and /resume starts a new run id whose steer rows
+        // are separate. Exact ids also spare a row that became visible only
+        // after this ack was earned: ids come from per-process uuidv7 counters,
+        // so two API tasks can commit one run's messages in an order that
+        // disagrees with their id order, and a range ack would mark such a row
+        // delivered without ever serving it.
+        await db
+          .update(steerMessages)
+          .set({ deliveredAt: new Date() })
+          .where(
+            and(
+              eq(steerMessages.orgId, run.orgId),
+              eq(steerMessages.runId, run.id),
+              isNull(steerMessages.deliveredAt),
+              inArray(steerMessages.id, ack),
+            ),
+          );
+      }
+      // Transitional, and deletable once no sandbox launched before this change
+      // shipped can still be polling. A run keeps the runner image dispatch
+      // launched its sandbox with, so during the deploy that ships this route
+      // every run already in flight speaks the protocol this branch replaced: it
+      // polls with afterId, applies what comes back, and starts the next poll
+      // with no delay of its own, relying on the response to have retired the
+      // rows it just applied. Served by the ack path alone, that poll marks
+      // nothing, so it is handed the same rows again on every iteration — one
+      // more copy of the same steer body appended per iteration, as fast as this
+      // route can answer. So a request that names no ack and does carry the
+      // cursor — which no runner built after this change sends — gets the
+      // previous semantics back for that request: rows above the cursor, marked
+      // delivered by the select that served them. Anything carrying an ack is a
+      // runner that retires its own rows by id and takes the path above, cursor
+      // beside it or not.
+      const cursor = ack.length > 0 ? undefined : afterId;
       const deadline = Date.now() + 25_000;
       while (Date.now() < deadline) {
-        const clauses = [eq(steerMessages.runId, run.id), isNull(steerMessages.deliveredAt)];
-        if (afterId) clauses.push(gt(steerMessages.id, afterId));
         const messages = await db
           .select()
           .from(steerMessages)
-          .where(and(...clauses))
-          .orderBy(asc(steerMessages.createdAt))
-          .limit(10);
+          // Served under the same org scope the ack mutates: a row this run's
+          // org cannot acknowledge is a row it must not be handed either, or the
+          // channel wedges on a message that returns on every poll.
+          .where(
+            and(
+              eq(steerMessages.orgId, run.orgId),
+              eq(steerMessages.runId, run.id),
+              isNull(steerMessages.deliveredAt),
+              // Where the pre-ack route's id comparison lives now: on the
+              // compatibility path and nowhere else, so what an ack poll is
+              // served still depends on delivery alone.
+              ...(cursor ? [gt(steerMessages.id, cursor)] : []),
+            ),
+          )
+          // Send order, which is the order the agent must read them in. An ack
+          // poll filters on deliveredAt alone, so the ordering no longer has to
+          // double as a delivery filter. createdAt comes from now(), which rows
+          // committed by a single transaction share exactly; id breaks that tie
+          // so a batch at the limit below is deterministic.
+          .orderBy(asc(steerMessages.createdAt), asc(steerMessages.id))
+          .limit(STEER_BATCH);
         if (messages.length > 0) {
-          await db
-            .update(steerMessages)
-            .set({ deliveredAt: new Date() })
-            .where(
-              and(
-                eq(steerMessages.runId, run.id),
-                inArray(
-                  steerMessages.id,
-                  messages.map((message) => message.id),
+          if (cursor) {
+            // The compatibility path's mark-on-select, scoped exactly like the
+            // ack update above. A poll that predates the ack has no other way to
+            // say what it handled, so this response is the only thing that can
+            // retire these rows for it.
+            await db
+              .update(steerMessages)
+              .set({ deliveredAt: new Date() })
+              .where(
+                and(
+                  eq(steerMessages.orgId, run.orgId),
+                  eq(steerMessages.runId, run.id),
+                  isNull(steerMessages.deliveredAt),
+                  inArray(
+                    steerMessages.id,
+                    messages.map((message) => message.id),
+                  ),
                 ),
-              ),
-            );
+              );
+          }
           return messages;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
