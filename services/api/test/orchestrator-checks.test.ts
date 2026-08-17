@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { harnessFragmentForBundle } from "../src/harness.js";
-import {
-  checksConfiguredForDispatch,
-  checksConfiguredForRepo,
-  githubCiOwnsAcceptance,
-  requiresDelivery,
-} from "../src/sandbox/acceptance-gate.js";
+import { deliveryRepoConfigured, requiresDelivery } from "../src/sandbox/delivery-gate.js";
 import {
   boundedResumeFallbackScope,
   platformDeliveryFailure,
@@ -28,64 +23,35 @@ describe("platform delivery boundaries", () => {
   });
 });
 
-describe("dispatch acceptance gate — mirror of the runner delivery gate", () => {
-  const githubBundle = {
+describe("dispatch delivery repository preflight", () => {
+  const githubBuilderBundle = {
     mode: "builder",
     checkCmds: [],
     repo: { cloneUrl: "https://github.com/acme/app.git" },
   };
-  const bareBundle = { mode: "builder", checkCmds: [], repo: { cloneUrl: null } };
+  const noRepoBuilderBundle = { mode: "builder", checkCmds: [], repo: { cloneUrl: null } };
 
-  it("refuses a delivery-mode agent with no checks and no GitHub repo", () => {
+  it("refuses delivery-mode agents without a repository", () => {
     expect(requiresDelivery("builder")).toBe(true);
     expect(requiresDelivery("codex-builder")).toBe(true);
-    expect(checksConfiguredForDispatch(bareBundle)).toBe(false);
-    expect(checksConfiguredForDispatch({ ...bareBundle, mode: "codex-builder" })).toBe(false);
+    expect(deliveryRepoConfigured(noRepoBuilderBundle)).toBe(false);
+    expect(deliveryRepoConfigured({ ...noRepoBuilderBundle, mode: "codex-builder" })).toBe(false);
+    const noRepoBuilderWithChecks = { ...noRepoBuilderBundle, checkCmds: ["pnpm verify"] };
+    expect(deliveryRepoConfigured(noRepoBuilderWithChecks)).toBe(false);
   });
 
-  it("passes when checks are configured", () => {
-    expect(checksConfiguredForDispatch({ ...bareBundle, checkCmds: ["pnpm verify"] })).toBe(true);
+  it("allows a connected GitHub repository when check commands are empty", () => {
+    expect(deliveryRepoConfigured(githubBuilderBundle)).toBe(true);
   });
 
-  it("exempts GitHub-backed repos, whose own CI owns acceptance", () => {
-    expect(githubCiOwnsAcceptance(githubBundle)).toBe(true);
-    expect(checksConfiguredForDispatch(githubBundle)).toBe(true);
-    expect(
-      checksConfiguredForDispatch({ mode: "ci_doctor", checkCmds: [], repo: githubBundle.repo }),
-    ).toBe(true);
-    expect(
-      checksConfiguredForDispatch({
-        mode: "address_review",
-        checkCmds: [],
-        repo: githubBundle.repo,
-      }),
-    ).toBe(true);
-  });
-
-  it("never gates non-delivery modes", () => {
+  it("allows non-delivery modes without a repository", () => {
     expect(requiresDelivery("architect")).toBe(false);
-    expect(
-      checksConfiguredForDispatch({ mode: "architect", checkCmds: [], repo: { cloneUrl: null } }),
-    ).toBe(true);
-    expect(
-      checksConfiguredForDispatch({ mode: "custom", checkCmds: [], repo: { cloneUrl: null } }),
-    ).toBe(true);
-  });
-
-  it("keeps the same semantics through the repo-row trigger predicate", () => {
-    expect(
-      checksConfiguredForRepo({
-        mode: "builder",
-        checkCmds: [],
-        repo: { owner: "acme", name: "app" },
-      }),
-    ).toBe(true);
-    expect(checksConfiguredForRepo({ mode: "builder", checkCmds: [], repo: null })).toBe(false);
-    expect(checksConfiguredForRepo({ mode: "architect", checkCmds: [], repo: null })).toBe(true);
+    expect(deliveryRepoConfigured({ mode: "architect", repo: { cloneUrl: null } })).toBe(true);
+    expect(deliveryRepoConfigured({ mode: "custom", repo: { cloneUrl: null } })).toBe(true);
   });
 });
 
-describe("resolveCheckCmds — acceptance-gate source of truth", () => {
+describe("resolveCheckCmds — runner acceptance command source of truth", () => {
   it("uses the project's configured checks when the sandbox profile has none", () => {
     expect(resolveCheckCmds({ setup: {} }, {}, { check_cmds: ["pnpm test", "pnpm lint"] })).toEqual(
       ["pnpm test", "pnpm lint"],

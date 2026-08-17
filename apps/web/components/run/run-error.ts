@@ -1,4 +1,5 @@
 export const CHECKS_NOT_CONFIGURED = "checks_not_configured";
+export const DELIVERY_REPO_NOT_CONFIGURED = "delivery_repo_not_configured";
 
 // Extract the machine code from a run's stored error: the runner posts JSON
 // fault payloads (possibly followed by stderr tail), and the platform marks
@@ -32,6 +33,14 @@ export function runErrorPresentation(
   projectId: string | null,
 ): RunErrorPresentation | null {
   const code = runErrorCode(error);
+  if (code === DELIVERY_REPO_NOT_CONFIGURED) {
+    return {
+      code,
+      message:
+        "This builder run has no repository configured, so it cannot create a branch or pull request. Connect a repository in Settings and retry.",
+      href: projectId ? `/projects/${projectId}/settings` : null,
+    };
+  }
   if (code !== CHECKS_NOT_CONFIGURED) return null;
   return {
     code,

@@ -3404,15 +3404,15 @@ describe("github platform lane", async () => {
     app.githubClientFactory = undefined;
   });
 
-  it("does not refuse a builder trigger without configured checks when the repo is GitHub-backed", async () => {
+  it("accepts and enqueues a no-checks GitHub builder because GitHub CI owns acceptance", async () => {
     const enqueued: { queue: string; data: Record<string, unknown> }[] = [];
     app.enqueue = async (queue, data) => {
       enqueued.push({ queue, data });
       return null;
     };
-    // No `.facility.json` checks and no project-level check commands: zero
-    // acceptance gates. The GitHub-CI-owns-acceptance exemption must keep this
-    // dispatch alive — refusing it would block deliveries that currently work.
+    // No `.facility.json` checks and no project-level check commands. A
+    // connected GitHub repo is still accepted and enqueued because GitHub CI
+    // owns acceptance; this is not the repo-less dispatch safety net.
     app.githubClientFactory = async () =>
       ({
         rest: {

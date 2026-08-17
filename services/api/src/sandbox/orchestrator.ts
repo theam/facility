@@ -63,9 +63,9 @@ import {
 } from "../previews.js";
 import type { AppConfig } from "../types.js";
 import { raisePlatformIssue, resolvePlatformIssue } from "../watchtower/issues.js";
-import { CHECKS_NOT_CONFIGURED, checksConfiguredForDispatch } from "./acceptance-gate.js";
 import { sandboxCachePartition, sandboxNamespace } from "./cache.js";
 import { nestedDockerEnabled, provisioningDepth } from "./capabilities.js";
+import { DELIVERY_REPO_NOT_CONFIGURED, deliveryRepoConfigured } from "./delivery-gate.js";
 import { DockerSandboxDriver } from "./docker.js";
 import type { LaunchSpec, SandboxDriver, SandboxDriverName } from "./driver.js";
 import { sandboxDriver } from "./driver.js";
@@ -105,18 +105,16 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
     if (run?.status !== "queued") return;
     const { bundle, profile, agentPermissions } = await buildRunBundle(db, run, config);
     // Refuse before any sandbox or spend-capable key exists: a delivery-mode
-    // agent without acceptance checks can never deliver, so letting it run
-    // only burns money and then fails at the runner's delivery gate. The
-    // GitHub-backed exemption mirrors the runner: those repos own acceptance
-    // through their own CI. failRun's atomic terminal transition also closes
-    // the race where a concurrent worker already claimed and launched.
-    if (!checksConfiguredForDispatch(bundle)) {
+    // agent without a repository cannot create a branch or pull request. The
+    // atomic failRun transition also closes the race where a concurrent worker
+    // already claimed and launched.
+    if (!deliveryRepoConfigured(bundle)) {
       await failRun(
         db,
         job.orgId,
         job.runId,
-        `{"code":"${CHECKS_NOT_CONFIGURED}"}`,
-        "checks_not_configured",
+        `{"code":"${DELIVERY_REPO_NOT_CONFIGURED}"}`,
+        DELIVERY_REPO_NOT_CONFIGURED,
       );
       return;
     }
@@ -2452,7 +2450,7 @@ function arrayField(value: unknown, key: string) {
     : [];
 }
 
-// Resolve the run's acceptance-gate commands: a sandbox profile's explicit
+// Resolve the run's acceptance commands: a sandbox profile's explicit
 // setup.check_cmds override wins; otherwise the project's own configured checks
 // (settings.check_cmds). Empty when neither is set.
 export function resolveCheckCmds(
@@ -2494,30 +2492,6 @@ async function agentSandboxProfile(
       )
       .limit(1)
   )[0];
-}
-
-// Acceptance checks an issue trigger would dispatch with, mirroring
-// buildRunBundle's precedence (profile override → repo render answers →
-// project settings). Trigger paths refuse up front instead of queuing a run
-// that dispatchRun would immediately fail.
-export async function resolveDispatchCheckCmds(
-  db: ReturnType<typeof createDb>["db"],
-  input: {
-    orgId: string;
-    projectId: string;
-    agent: { sandboxProfileId: string | null };
-    repo?: { renderAnswers?: unknown } | null;
-  },
-): Promise<string[]> {
-  const [profile, project] = await Promise.all([
-    agentSandboxProfile(db, input.orgId, input.agent),
-    db
-      .select({ settings: projects.settings })
-      .from(projects)
-      .where(and(eq(projects.orgId, input.orgId), eq(projects.id, input.projectId)))
-      .limit(1),
-  ]);
-  return resolveCheckCmds(profile ?? {}, input.repo?.renderAnswers, project[0]?.settings);
 }
 
 export function resolveRepoEngineConfig(

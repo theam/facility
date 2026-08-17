@@ -27,6 +27,15 @@ describe("runErrorCode", () => {
 });
 
 describe("runErrorPresentation", () => {
+  it("maps delivery_repo_not_configured to a human explanation with a settings link", () => {
+    expect(runErrorPresentation('{"code":"delivery_repo_not_configured"}', "project_1")).toEqual({
+      code: "delivery_repo_not_configured",
+      message:
+        "This builder run has no repository configured, so it cannot create a branch or pull request. Connect a repository in Settings and retry.",
+      href: "/projects/project_1/settings",
+    });
+  });
+
   it("maps checks_not_configured to a human explanation with a settings link", () => {
     expect(runErrorPresentation('{"code":"checks_not_configured"}', "project_1")).toEqual({
       code: "checks_not_configured",

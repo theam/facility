@@ -170,12 +170,7 @@ describe("sandbox api", async () => {
           orgId,
           name: "Sandbox Test Project",
           slug: `sandbox-${Date.now()}`,
-          // Builder dispatches here are platform-lane machinery tests (driver
-          // env, key policy, nested-Docker flags) that insert their own repos —
-          // not acceptance-gate tests. Project-level checks keep those
-          // dispatches through the new dispatch-time gate without interfering
-          // with repo selection.
-          settings: { check_cmds: ["true"] },
+          settings: {},
         })
         .returning()
     )[0];
@@ -282,6 +277,20 @@ describe("sandbox api", async () => {
         config: {},
       }),
     ]);
+    const permissionRepo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId,
+          owner: `sandbox-permissions-${suffix}`,
+          name: "repo",
+          defaultBranch: "main",
+        })
+        .returning()
+    )[0];
+    if (!permissionRepo) throw new Error("permission repository fixture missing");
     const driver: SandboxDriver = {
       name: "docker",
       launch: async (spec) => ({ ref: `fake-${spec.runId}` }),
@@ -362,9 +371,10 @@ describe("sandbox api", async () => {
       { virtual: null, platform: null },
       { virtual: null, platform: null },
     ]);
+    await db.delete(repos).where(eq(repos.id, permissionRepo.id));
   });
 
-  it("refuses a builder dispatch before provisioning when acceptance checks are missing and no repo backs the run", async () => {
+  it("fails a builder dispatch before provisioning when no delivery repository is configured", async () => {
     const suffix = Date.now();
     const gateProject = (
       await db
@@ -470,7 +480,7 @@ describe("sandbox api", async () => {
 
     const [failed] = await db.select().from(runs).where(eq(runs.id, run.id));
     expect(failed?.status).toBe("failed");
-    expect(failed?.error).toBe('{"code":"checks_not_configured"}');
+    expect(failed?.error).toBe('{"code":"delivery_repo_not_configured"}');
     expect(failed?.sandbox).toEqual({});
     await expect(
       db.select().from(virtualKeys).where(eq(virtualKeys.runId, run.id)),
