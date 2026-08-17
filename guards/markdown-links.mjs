@@ -138,9 +138,11 @@ export default {
   name: "markdown-links",
   description: "tracked Markdown files do not link to missing local targets",
   run() {
-    const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-    }).trim();
+    const root = resolve(
+      execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        encoding: "utf8",
+      }).trim(),
+    );
     const violations = [];
 
     for (const file of trackedMarkdownFiles(root)) {
