@@ -1,12 +1,12 @@
 "use client";
 
-import { Button, ButtonLink, StatusDot, toneFor } from "@facility/ui";
+import { Avatar, Button, ButtonLink, StatusDot, toneFor } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CiStatusLink } from "@/components/ci-status";
 import type { PipelineStory } from "@/lib/pipeline";
-import { storyHref } from "@/lib/pipeline";
+import { avatarInitial, avatarUrlFor, storyHref, storyOwner } from "@/lib/pipeline";
 
 function fmtAgo(iso: string | null) {
   if (!iso) return "—";
@@ -61,6 +61,7 @@ export function IssueRow({
   }
 
   const current = story.currentRun;
+  const owner = storyOwner(story.assignees);
   const openPull = story.prs.find((pull) => pull.state === "open") ?? null;
   const failedAgent = current?.mode.includes("architect")
     ? "architect"
@@ -194,6 +195,19 @@ export function IssueRow({
             {label}
           </span>
         ))}
+        {owner ? (
+          <span className="inline-flex items-center gap-1 font-mono text-[10.5px] text-(--dim)">
+            <Avatar
+              size={14}
+              src={avatarUrlFor(owner.login) ?? undefined}
+              initial={avatarInitial(owner.login)}
+            />
+            <span>
+              @{owner.login}
+              {owner.extra > 0 ? ` +${owner.extra}` : ""}
+            </span>
+          </span>
+        ) : null}
         <span className="font-mono text-[10.5px] text-(--dim)">{fmtAgo(story.ghUpdatedAt)}</span>
         {action()}
       </div>
