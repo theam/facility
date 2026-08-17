@@ -92,6 +92,19 @@ export function pipelineStageSummaries(stage: PipelineStage) {
     .filter((summary) => summary.count > 0);
 }
 
+export type StoryWsjf = {
+  value: number;
+  time: number;
+  risk: number;
+  effort: number;
+  score: number;
+};
+
+/** The provenance behind a story's position: the components that made the score. */
+export function wsjfBreakdown(wsjf: StoryWsjf) {
+  return `value ${wsjf.value} · time ${wsjf.time} · risk ${wsjf.risk} · effort ${wsjf.effort}`;
+}
+
 /** Stable story identity for projects that mirror more than one repository. */
 function storyQuery(story: Pick<PipelineStory, "repoId" | "storyType">) {
   return new URLSearchParams({ repoId: story.repoId, storyType: story.storyType }).toString();

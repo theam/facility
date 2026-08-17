@@ -202,6 +202,13 @@ const PipelinePullRequestSchema = z.object({
   mergedAt: DateValue.nullable(),
   closingIssues: z.array(z.number().int()),
 });
+const StoryWsjfSchema = z.object({
+  value: z.number(),
+  time: z.number(),
+  risk: z.number(),
+  effort: z.number(),
+  score: z.number(),
+});
 const PipelineStorySchema = z.object({
   key: z.string(),
   id: z.string(),
@@ -220,6 +227,7 @@ const PipelineStorySchema = z.object({
   ghCreatedAt: DateValue.nullable(),
   ghUpdatedAt: DateValue.nullable(),
   closedAt: DateValue.nullable(),
+  wsjf: StoryWsjfSchema.nullable(),
   stageState: PipelineStageStateSchema,
   runState: z.enum(["live", "failed"]).nullable(),
   currentRun: z
@@ -262,6 +270,7 @@ const StoryDetailSchema = z.object({
   ghCreatedAt: DateValue.nullable(),
   ghUpdatedAt: DateValue.nullable(),
   closedAt: DateValue.nullable(),
+  wsjf: StoryWsjfSchema.nullable(),
   prs: z.array(PipelinePullRequestSchema),
   ciState: z.enum(["pending", "success", "failure"]).nullable(),
   ciUrl: z.string().nullable(),
