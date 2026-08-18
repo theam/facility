@@ -180,6 +180,7 @@ describe("assistant ask endpoint", async () => {
 
     const keys = await db.select().from(virtualKeys).where(eq(virtualKeys.runId, ask.runId));
     expect(keys).toHaveLength(1);
+    expect(keys[0]?.expiresAt).toBeNull();
     expect(keys[0]?.revokedAt).not.toBeNull();
 
     const result = await app.inject({
@@ -189,6 +190,32 @@ describe("assistant ask endpoint", async () => {
     });
     expect(result.statusCode).toBe(200);
     expect((result.json() as { answer: string | null }).answer).toContain("on track");
+  });
+
+  it("continues beyond the former tool-iteration cap until the model finishes", async () => {
+    const project = await insertProject("Assistant Unbounded Loop");
+    await insertOwnerAgent(project.id);
+    let primaryCalls = 0;
+    setDriver(async ({ tools }) => {
+      if (tools.length === 0) return textTurn("Unbounded tool session");
+      primaryCalls += 1;
+      return primaryCalls <= 13
+        ? toolTurn("kb_space", {})
+        : textTurn("Finished after thirteen tool rounds.");
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.id}/ask`,
+      headers: { cookie },
+      payload: { body: "keep working until done" },
+    });
+    expect(response.statusCode).toBe(200);
+    const ask = response.json() as { conversationId: string; runId: string };
+    const run = await waitForTerminal(ask.runId);
+    expect(run.status).toBe("succeeded");
+    await waitForIdleThread(ask.conversationId);
+    expect(primaryCalls).toBe(14);
   });
 
   it("409s a second ask while a turn is in flight, and heals a stale lock", async () => {

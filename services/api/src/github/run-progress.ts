@@ -16,6 +16,7 @@ export type GithubRunProgressInput = {
   sender?: string | null;
   agentProgress?: string | null;
   finalText?: string | null;
+  error?: string | null;
   proposalId?: string | null;
   pullRequest?: { number: number; url: string } | null;
 };
@@ -67,7 +68,13 @@ export function renderGithubRunProgress(input: GithubRunProgressInput) {
 
   if (terminal) {
     lines.push("", "## Result", "");
-    if (input.finalText?.trim()) {
+    if (!succeeded && input.error?.trim()) {
+      lines.push(
+        `**Failure boundary:** \`${singleLine(input.error) ?? "run_failed"}\``,
+        "",
+        "The last assistant message may describe work completed before the interruption; it is not the failure reason. Resume this run from its latest Facility checkpoint after correcting any policy or provider issue.",
+      );
+    } else if (input.finalText?.trim()) {
       lines.push(truncate(input.finalText.trim(), RESULT_LIMIT));
     } else if (succeeded) {
       lines.push("_The run completed without a captured final message._");

@@ -34,7 +34,7 @@ describe("VercelSandboxDriver", () => {
       teamId: "team_test",
       projectId: "prj_test",
       image: "facility-runner:stable",
-      timeout: 45 * 60_000,
+      timeout: 300 * 60_000,
       resources: { vcpus: 4 },
       persistent: false,
       tags: { facility: "1", kind: "run" },
@@ -68,7 +68,7 @@ describe("VercelSandboxDriver", () => {
           FACILITY_SANDBOX_PROVIDER: "vercel",
         },
         detached: true,
-        timeoutMs: 45 * 60_000,
+        timeoutMs: 300 * 60_000,
       },
     ]);
     expect(client.sandbox.updates[0]?.tags).toMatchObject({ command: "cmd-1" });

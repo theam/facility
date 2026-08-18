@@ -37,7 +37,7 @@ describe("AwsSandboxDriver", () => {
       projectName: "facility-test-runner",
       idempotencyToken: "run_test",
       computeTypeOverride: "BUILD_GENERAL1_LARGE",
-      timeoutInMinutesOverride: 30,
+      timeoutInMinutesOverride: 2160,
       environmentVariablesOverride: [
         { name: "RUN_ID", value: "run_test", type: "PLAINTEXT" },
         { name: "RUNNER_TOKEN", value: "secret", type: "PLAINTEXT" },
@@ -188,7 +188,7 @@ describe("AwsSandboxDriver", () => {
     ).rejects.toThrow("CodeBuild StartBuild did not return a build id");
     expect(
       (codebuild.commands[0] as StartBuildCommand | undefined)?.input.timeoutInMinutesOverride,
-    ).toBe(5);
+    ).toBe(2160);
   });
 
   it("can inspect and stop existing builds when only launch cache config is missing", async () => {

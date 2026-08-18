@@ -28,7 +28,7 @@ overrides:
   "protobufjs@>=7.5.0 <7.6.5": 7.6.5
   "webpack-dev-server@<=5.2.5": 5.2.6
   "dompurify@<=3.4.12": 3.4.13
-  "nanoid@>=3.0.0 <3.3.17": 3.3.17
+  "nanoid@>=3.0.0 <3.3.18": 3.3.18
 
 # Postinstall build-script allowlist — nothing builds unless named here.
 allowBuilds:

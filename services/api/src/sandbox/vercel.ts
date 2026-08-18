@@ -113,7 +113,7 @@ export class VercelSandboxDriver implements SandboxDriver {
       name,
       image: vercelImage(spec.image),
       ...(spec.servicePort ? { ports: [spec.servicePort] } : {}),
-      timeout: timeoutMs(spec.timeoutMin),
+      timeout: providerLeaseTimeoutMs(spec),
       resources: { vcpus: vercelVcpus(spec.cpu, spec.memoryMb) },
       networkPolicy: vercelNetworkPolicy(spec.network, spec.env),
       tags,
@@ -152,7 +152,7 @@ export class VercelSandboxDriver implements SandboxDriver {
                 FACILITY_SANDBOX_PROVIDER: "vercel",
               },
         detached: true,
-        timeoutMs: timeoutMs(spec.timeoutMin),
+        timeoutMs: providerLeaseTimeoutMs(spec),
       });
       // Vercel currently keeps update() pending while a detached command is
       // alive. The command id is only recovery metadata: the opaque ref below
@@ -375,6 +375,10 @@ function runIdentity(runId: string) {
 
 function timeoutMs(timeoutMin: number) {
   return Math.min(300, Math.max(1, Math.ceil(timeoutMin))) * 60_000;
+}
+
+function providerLeaseTimeoutMs(spec: LaunchSpec) {
+  return spec.kind === "preview" ? timeoutMs(spec.timeoutMin) : timeoutMs(300);
 }
 
 function vercelVcpus(cpu: number, memoryMb: number) {

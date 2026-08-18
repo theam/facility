@@ -287,6 +287,7 @@ describe("sandbox api", async () => {
     };
 
     const permissionSets: string[][] = [];
+    const runKeyExpirations: Array<{ virtual: Date | null; platform: Date | null }> = [];
     for (const harnessEnabled of [false, true]) {
       const agent = (
         await db
@@ -337,9 +338,25 @@ describe("sandbox api", async () => {
           )[0]
         : undefined;
       permissionSets.push(role?.permissions ?? []);
+      const [virtualKey] = await db
+        .select({ expiresAt: virtualKeys.expiresAt })
+        .from(virtualKeys)
+        .where(eq(virtualKeys.runId, run.id));
+      const [platformKey] = await db
+        .select({ expiresAt: apiKeys.expiresAt })
+        .from(apiKeys)
+        .where(eq(apiKeys.runId, run.id));
+      runKeyExpirations.push({
+        virtual: virtualKey?.expiresAt ?? null,
+        platform: platformKey?.expiresAt ?? null,
+      });
     }
 
     expect(permissionSets).toEqual([[], ["kb:read", "kb:write", "tasks:read", "tasks:write"]]);
+    expect(runKeyExpirations).toEqual([
+      { virtual: null, platform: null },
+      { virtual: null, platform: null },
+    ]);
   });
 
   it("dispatch persists engine-specific model policy on each run key", async () => {
@@ -895,6 +912,32 @@ describe("sandbox api", async () => {
     await finishRun(db, run, { status: "succeeded", engineSessionId: "sess_finish_123" });
     const stored = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
     expect(stored?.engineSessionId).toBe("sess_finish_123");
+  });
+
+  it("persists the first engine session event before the runner reaches a result", async () => {
+    const token = "frt_early_session";
+    const run = await insertRunnerRun(token, "running");
+    const first = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/events`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: [{ type: "session", data: { engine_session_id: "sess_early_123" } }],
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/events`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: [{ type: "session", data: { engine_session_id: "sess_must_not_replace" } }],
+    });
+    expect(second.statusCode).toBe(200);
+
+    const [stored] = await db
+      .select({ engineSessionId: runs.engineSessionId, status: runs.status })
+      .from(runs)
+      .where(eq(runs.id, run.id));
+    expect(stored).toEqual({ engineSessionId: "sess_early_123", status: "running" });
   });
 
   it("finishRun synchronizes only trusted qualifying security findings", async () => {
@@ -1588,6 +1631,24 @@ describe("sandbox api", async () => {
     expect(vkey?.revokedAt).not.toBeNull();
     const [pkey] = await db.select().from(apiKeys).where(eq(apiKeys.id, platformKeyId));
     expect(pkey?.revokedAt).not.toBeNull();
+  });
+
+  it("does not turn a healthy inline session into a wall-clock timeout", async () => {
+    const runId = newId("run");
+    await insertRunnerRun("frt_unbounded_inline", "running", runId, { inline: true });
+    await db
+      .update(runs)
+      .set({ startedAt: new Date(Date.now() - 24 * 60 * 60_000) })
+      .where(eq(runs.id, runId));
+
+    await reconcileSandboxes(config);
+
+    const [stored] = await db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId));
+    expect(stored?.status).toBe("running");
+    await db
+      .update(runs)
+      .set({ status: "canceled", endedAt: new Date() })
+      .where(eq(runs.id, runId));
   });
 
   it("rejects an expired run-scoped platform key at authentication", async () => {

@@ -19,10 +19,7 @@ import { registerAssistantTurn, releaseAssistantTurn } from "./turn-registry.js"
 
 type Db = ReturnType<typeof createDb>["db"];
 
-const MAX_ITERATIONS = 12;
 const MAX_TOKENS = 4096;
-const WALL_CLOCK_MS = 240_000;
-const KEY_TTL_MS = 15 * 60_000;
 const HISTORY_LIMIT = 30;
 const TOOL_RESULT_CAP = 40_000;
 const DELTA_FLUSH_CHARS = 800;
@@ -127,13 +124,13 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<void>
   const abort = new AbortController();
   turns.set(runId, abort);
   const turnToken = registerAssistantTurn(runId);
-  const timer = setTimeout(() => abort.abort(), WALL_CLOCK_MS);
   const emit = (type: string, data: Record<string, unknown>) =>
     appendRunEvents(db, orgId, runId, [{ type, data }]);
   let virtualKeyId: string | undefined;
   try {
-    // Per-turn gateway key: run-bound (metering attributes spend to this run;
-    // the orphan-key sweep is the safety net), model-pinned, short-lived.
+    // Per-turn gateway key: run-bound (metering attributes spend to this run)
+    // and model-pinned. Its lifecycle is terminal revocation rather than a
+    // wall clock, so a healthy tool loop cannot lose access mid-session.
     const key = await generateApiKey("fvk");
     await db.insert(virtualKeys).values({
       id: key.id,
@@ -145,7 +142,6 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<void>
       last4: key.last4,
       hash: key.hash,
       allowedModels: [input.agentModel],
-      expiresAt: new Date(Date.now() + KEY_TTL_MS),
     });
     virtualKeyId = key.id;
     await db
@@ -245,7 +241,7 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<void>
     };
 
     let final: AssistantModelTurn = { content: [], stopReason: null };
-    for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
+    for (let iteration = 1; ; iteration++) {
       const current = await db
         .select({ status: runs.status })
         .from(runs)
@@ -352,7 +348,6 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<void>
     const message = error instanceof Error ? error.message : "assistant_turn_failed";
     await failRun(db, orgId, runId, message, "assistant_turn_failed").catch(() => undefined);
   } finally {
-    clearTimeout(timer);
     turns.delete(runId);
     releaseAssistantTurn(runId);
     if (virtualKeyId) await revokeRunKeys(db, { virtualKeyId }).catch(() => undefined);

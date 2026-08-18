@@ -27,6 +27,7 @@ import {
   deliverySystemPrompt,
   emitEngineEventsBestEffort,
   engineEnv,
+  engineResultError,
   exitCode,
   githubRequest,
   gitOutput,
@@ -1399,7 +1400,7 @@ describe("Claude resume controls", () => {
     );
   });
 
-  it("rejects a workspace checkpoint when the admitted base changed", async () => {
+  it("replays a workspace checkpoint when the admitted base changed", async () => {
     const root = await mkdtemp(join(tmpdir(), "facility-runner-resume-stale-"));
     const source = join(root, "source");
     const target = join(root, "target");
@@ -1423,18 +1424,59 @@ describe("Claude resume controls", () => {
     execFileSync("git", ["commit", "-m", "chore: advance admitted base"], { cwd: target });
     execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: target });
 
-    await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).rejects.toThrow(
-      "resume_workspace_base_mismatch",
-    );
+    await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).resolves.toBe(true);
+    await expect(readFile(join(target, "task.txt"), "utf8")).resolves.toBe("resumable work\n");
+    await expect(readFile(join(target, "new-base.txt"), "utf8")).resolves.toBe("new base\n");
+    expect(
+      execFileSync("git", ["branch", "--show-current"], { cwd: target, encoding: "utf8" }).trim(),
+    ).toBe("main");
+  });
+
+  it("preserves three-way conflicts for the resumed agent to reconcile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "facility-runner-resume-conflict-"));
+    const source = join(root, "source");
+    const target = join(root, "target");
+    const checkpoint = join(root, "checkpoint");
+    await mkdir(source);
+    execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: source });
+    execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: source });
+    await writeFile(join(source, "task.txt"), "shared baseline\n");
+    execFileSync("git", ["add", "task.txt"], { cwd: source });
+    execFileSync("git", ["commit", "-m", "chore: initialize conflict fixture"], { cwd: source });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source });
+    await writeFile(join(source, "task.txt"), "checkpoint version\n");
+    await createWorkspaceCheckpoint(source, checkpoint, "main");
+
+    execFileSync("git", ["clone", "--branch", "main", source, target]);
+    execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: target });
+    execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: target });
+    await writeFile(join(target, "task.txt"), "upstream version\n");
+    execFileSync("git", ["add", "task.txt"], { cwd: target });
+    execFileSync("git", ["commit", "-m", "chore: advance conflicting base"], { cwd: target });
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: target });
+
+    await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).resolves.toBe(true);
+    expect(
+      execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+        cwd: target,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("task.txt");
+    const conflicted = await readFile(join(target, "task.txt"), "utf8");
+    expect(conflicted).toContain("checkpoint version");
+    expect(conflicted).toContain("upstream version");
   });
 
   it("runs architects in native plan mode and keeps builders writable", () => {
     const architectArgs = buildClaudeCodeArgs(bundle({ mode: "architect" }), false);
     const builderArgs = buildClaudeCodeArgs(bundle({ mode: "builder" }), false);
 
-    expect(architectArgs.slice(architectArgs.indexOf("--permission-mode"), -2)).toContain("plan");
+    expect(architectArgs[architectArgs.indexOf("--permission-mode") + 1]).toBe("plan");
     expect(architectArgs).not.toContain("bypassPermissions");
     expect(builderArgs).toContain("bypassPermissions");
+    expect(architectArgs).not.toContain("--max-turns");
+    expect(builderArgs).not.toContain("--max-turns");
     expect(architectArgs).not.toContain("--append-system-prompt");
     expect(builderArgs).toContain("--append-system-prompt");
     expect(deliverySystemPrompt("builder")).toContain("facility-delivery write");
@@ -1443,6 +1485,16 @@ describe("Claude resume controls", () => {
       disableAllHooks: false,
       hooks: { Stop: [{ hooks: [{ command: "/usr/local/bin/facility-delivery" }] }] },
     });
+  });
+
+  it("reports the provider terminal boundary instead of the last assistant prose", () => {
+    expect(
+      engineResultError({
+        type: "engine_result",
+        data: { is_error: true, subtype: "error_max_turns", errors: [] },
+      }),
+    ).toBe("engine_error_max_turns");
+    expect(engineResultError({ type: "assistant", data: { text: "looks done" } })).toBeNull();
   });
 
   it("uses --resume only after session state has been restored", () => {

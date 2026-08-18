@@ -72,7 +72,11 @@ export class AwsSandboxDriver implements SandboxDriver {
         projectName: config.project,
         idempotencyToken: spec.runId,
         computeTypeOverride: codeBuildComputeType(spec.cpu, spec.memoryMb),
-        timeoutInMinutesOverride: clamp(Math.round(spec.timeoutMin), 5, 2160),
+        // CodeBuild requires a finite lease. Give agent runs the provider's
+        // maximum and rely on periodic Facility checkpoints for continuation
+        // across lease renewal; previews retain their explicit product TTL.
+        timeoutInMinutesOverride:
+          spec.kind === "preview" ? clamp(Math.round(spec.timeoutMin), 5, 2160) : 2160,
         environmentVariablesOverride: Object.entries(spec.env)
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([name, value]) => ({ name, value, type: "PLAINTEXT" })),

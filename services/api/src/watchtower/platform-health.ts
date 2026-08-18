@@ -27,7 +27,7 @@ async function detectStuckRuns(db: FacilityDb) {
         or(eq(sandboxProfiles.projectId, runs.projectId), isNull(sandboxProfiles.projectId)),
       ),
     )
-    .where(inArray(runs.status, ["queued", "provisioning", "running", "awaiting_human"]));
+    .where(inArray(runs.status, ["queued", "provisioning"]));
   const now = Date.now();
   for (const row of activeRuns) {
     const started = row.run.startedAt ?? row.run.queuedAt;
