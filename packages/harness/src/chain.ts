@@ -91,6 +91,14 @@ export const productChain: ArtifactChainConfig = {
         area: z.string().optional(),
       }).passthrough(),
     },
+    L: {
+      prefix: "L",
+      name: "Learning",
+      parentTypes: [],
+      schema: SharedFrontmatter.extend({
+        type: z.literal("L"),
+      }).passthrough(),
+    },
   },
 };
 

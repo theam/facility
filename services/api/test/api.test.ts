@@ -20,6 +20,7 @@ import {
   inboundEvents,
   insertAuditEvent,
   integrations,
+  kbEntries,
   kbSpaces,
   llmRequests,
   migrate,
@@ -3431,6 +3432,70 @@ describe("api", async () => {
     });
     const linkedAfter = hoodAfter.json().linked.map((neighbor: { id: string }) => neighbor.id);
     expect(linkedAfter).not.toContain(first.json().id);
+  });
+
+  it("edits existing product learning entries", async () => {
+    const learningProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: "Product Learning KB",
+          slug: `product-learning-kb-${Date.now()}`,
+          settings: {},
+        })
+        .returning()
+    )[0];
+    expect(learningProject).toBeTruthy();
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${learningProject?.id}/kb/space`,
+      headers: { cookie },
+      payload: { config: { chain: "product" } },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    const learningSpace = (
+      await db
+        .select()
+        .from(kbSpaces)
+        .where(and(eq(kbSpaces.orgId, orgId), eq(kbSpaces.projectId, learningProject?.id ?? "")))
+        .limit(1)
+    )[0];
+    expect(learningSpace).toBeTruthy();
+    const learning = (
+      await db
+        .insert(kbEntries)
+        .values({
+          id: newId("kb"),
+          orgId,
+          spaceId: learningSpace?.id ?? "",
+          type: "L",
+          number: 1,
+          slug: "agent-learning",
+          frontmatter: {
+            id: "L001",
+            aliases: ["L001"],
+            type: "L",
+            created: "2026-07-03",
+            tags: [],
+          },
+          bodyMd: "Agent-written learning.\n\n## Links\n\n- [[L001]]\n",
+        })
+        .returning()
+    )[0];
+    expect(learning).toBeTruthy();
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/v1/kb/entries/${learning?.id}`,
+      headers: { cookie },
+      payload: { bodyMd: "Human-edited learning." },
+    });
+
+    expect(patched.statusCode, patched.body).toBe(200);
+    expect(patched.json().error?.code).not.toBe("unknown_artifact_type");
+    expect(patched.json().bodyMd).toContain("Human-edited learning.");
   });
 
   it("returns null for a project whose KB space has not been created", async () => {
