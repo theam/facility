@@ -117,9 +117,15 @@ export type Octokit = {
       create: (
         args: Record<string, unknown>,
       ) => Promise<{ data: { number: number; html_url: string } }>;
-      update?: (
-        args: Record<string, unknown>,
-      ) => Promise<{ data: { number: number; html_url: string } }>;
+      update?: (args: Record<string, unknown>) => Promise<{
+        data: {
+          number: number;
+          html_url: string;
+          state?: string;
+          closed_at?: string | null;
+          updated_at?: string | null;
+        };
+      }>;
       createLabel?: (args: Record<string, unknown>) => Promise<{ data: unknown }>;
       createComment: (
         args: Record<string, unknown>,
@@ -133,6 +139,9 @@ export type Octokit = {
           title: string;
           body?: string | null;
           html_url: string;
+          state?: string;
+          closed_at?: string | null;
+          updated_at?: string | null;
           user?: { login?: string } | null;
           labels?: Array<string | { name?: string }>;
         };
@@ -278,6 +287,15 @@ export type GithubPullRequestSnapshot = {
   closedAt: string | null;
   mergedAt: string | null;
 };
+
+export type GithubIssueStateSnapshot = {
+  number: number;
+  state: "open" | "closed";
+  closedAt: Date | null;
+  updatedAt: Date | null;
+};
+
+export type GithubIssueCloseReason = "completed" | "not_planned";
 
 export type GithubCiDoctorEvidence = {
   pullRequest: CiDoctorPullRequest;
@@ -706,6 +724,50 @@ export class FacilityGithubClient {
       state: input.state,
     });
     return { number: response.data.number, url: response.data.html_url };
+  }
+
+  /**
+   * The lifecycle transitions, kept separate from `updateIssue` so closing a
+   * story can never rewrite the title and body a human wrote. `state_reason` is
+   * the part GitHub renders differently: `not_planned` is what "won't do" means.
+   */
+  async closeIssue(
+    number: number,
+    stateReason: GithubIssueCloseReason,
+  ): Promise<GithubIssueStateSnapshot> {
+    return this.setIssueState(number, "closed", stateReason);
+  }
+
+  async reopenIssue(number: number): Promise<GithubIssueStateSnapshot> {
+    return this.setIssueState(number, "open", "reopened");
+  }
+
+  async getIssueState(number: number): Promise<GithubIssueStateSnapshot> {
+    if (!this.octokit.rest.issues.get) throw new Error("GitHub issue retrieval is unavailable");
+    const response = await this.octokit.rest.issues.get({
+      owner: this.repo.owner,
+      repo: this.repo.repo,
+      issue_number: number,
+    });
+    return issueStateSnapshot(number, response.data);
+  }
+
+  private async setIssueState(
+    number: number,
+    state: "open" | "closed",
+    stateReason: GithubIssueCloseReason | "reopened",
+  ): Promise<GithubIssueStateSnapshot> {
+    if (!this.octokit.rest.issues.update) {
+      throw new Error("GitHub issue updates are unavailable");
+    }
+    const response = await this.octokit.rest.issues.update({
+      owner: this.repo.owner,
+      repo: this.repo.repo,
+      issue_number: number,
+      state,
+      state_reason: stateReason,
+    });
+    return issueStateSnapshot(number, response.data);
   }
 
   async ensureLabel(input: { name: string; color: string; description: string }): Promise<void> {
@@ -1295,6 +1357,18 @@ function pullRequestSnapshot(
     updatedAt: node.updatedAt ?? null,
     closedAt: node.closedAt ?? null,
     mergedAt: node.mergedAt ?? null,
+  };
+}
+
+function issueStateSnapshot(
+  number: number,
+  data: { state?: string; closed_at?: string | null; updated_at?: string | null },
+): GithubIssueStateSnapshot {
+  return {
+    number,
+    state: data.state === "closed" ? "closed" : "open",
+    closedAt: data.closed_at ? new Date(data.closed_at) : null,
+    updatedAt: data.updated_at ? new Date(data.updated_at) : null,
   };
 }
 

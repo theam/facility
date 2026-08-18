@@ -18,6 +18,7 @@ import { registerPullRequestLinkRoutes } from "./v1/pull-request-links.js";
 import { registerRegistryRoutes } from "./v1/registry.js";
 import { registerRunsRoutes } from "./v1/runs.js";
 import { assertProjectInOrg } from "./v1/shared.js";
+import { registerStoryCloseRoutes } from "./v1/story-close.js";
 
 export async function registerV1Routes(app: FastifyInstance, config: AppConfig) {
   const db = app.facilityDb;
@@ -37,6 +38,7 @@ export async function registerV1Routes(app: FastifyInstance, config: AppConfig) 
   await registerAssistantRoutes(app, context);
   await registerGithubV1Routes(app, context);
   await registerPullRequestLinkRoutes(app, context);
+  await registerStoryCloseRoutes(app, context);
   await registerProvidersBudgetsSpendRoutes(app, context);
   await registerPreviewRoutes(app, context);
   await registerAnalyticsRoutes(app, context);
