@@ -121,6 +121,8 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/projects/:projectId/pulls/:number/closing-issues",
   "POST /v1/projects/:projectId/repos",
   "POST /v1/projects/:projectId/runs",
+  "POST /v1/projects/:projectId/stories/:number/close",
+  "POST /v1/projects/:projectId/stories/:number/reopen",
   "POST /v1/projects/:projectId/tasks",
   "POST /v1/projects/:projectId/upgrade",
   "POST /v1/projects/:projectId/virtual-keys",

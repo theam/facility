@@ -1432,7 +1432,7 @@ function proposalKeysForAssembly(
   return keys;
 }
 
-async function loadIssue(
+export async function loadIssue(
   db: FastifyInstance["facilityDb"],
   orgId: string,
   projectId: string,

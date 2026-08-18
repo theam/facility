@@ -295,7 +295,7 @@ describe("api", async () => {
             : 0),
         0,
       ),
-    ).toBe(140);
+    ).toBe(142);
     expect(document.paths["/v1/projects"]?.get?.security).toEqual([
       { bearerAuth: [] },
       { sessionCookie: [] },
@@ -352,6 +352,16 @@ describe("api", async () => {
     expect(document.paths["/v1/projects/{projectId}/stories/{number}"]?.get).toMatchObject({
       summary: "Get story",
       tags: ["Projects"],
+    });
+    expect(document.paths["/v1/projects/{projectId}/stories/{number}/close"]?.post).toMatchObject({
+      summary: "Close story",
+      tags: ["Projects"],
+      "x-facility-permission": "repos:write",
+    });
+    expect(document.paths["/v1/projects/{projectId}/stories/{number}/reopen"]?.post).toMatchObject({
+      summary: "Reopen story",
+      tags: ["Projects"],
+      "x-facility-permission": "repos:write",
     });
     expect(document.paths["/v1/webhook-deliveries/{deliveryId}/retry"]?.post?.tags).toEqual([
       "Integrations",
