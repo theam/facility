@@ -8,9 +8,14 @@ import type { AppConfig } from "./types.js";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 loadDotenv({ path: join(repoRoot, ".env"), quiet: true });
 
-const OptionalUrl = z.preprocess(
-  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
-  z.string().url().optional(),
+const blankToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
+const OptionalUrl = z.preprocess(blankToUndefined, z.string().url().optional());
+
+const OptionalNonEmptyString = z.preprocess(
+  blankToUndefined,
+  z.string().trim().min(1).optional(),
 );
 
 const OptionalGithubOrganization = z.preprocess(
@@ -69,13 +74,13 @@ const EnvSchema = z
     S3_SECRET_KEY: z.string().optional(),
     S3_BUCKET: z.string().optional(),
     AWS_REGION: z.string().optional(),
-    FACILITY_AWS_CODEBUILD_PROJECT: z.string().trim().min(1).optional(),
-    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: z.string().trim().min(1).optional(),
-    VERCEL_TOKEN: z.string().trim().min(1).optional(),
-    VERCEL_OIDC_TOKEN: z.string().trim().min(1).optional(),
-    VERCEL_TEAM_ID: z.string().trim().min(1).optional(),
-    VERCEL_PROJECT_ID: z.string().trim().min(1).optional(),
-    PACKAGE_REGISTRY_TOKEN: z.string().trim().min(1).optional(),
+    FACILITY_AWS_CODEBUILD_PROJECT: OptionalNonEmptyString,
+    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: OptionalNonEmptyString,
+    VERCEL_TOKEN: OptionalNonEmptyString,
+    VERCEL_OIDC_TOKEN: OptionalNonEmptyString,
+    VERCEL_TEAM_ID: OptionalNonEmptyString,
+    VERCEL_PROJECT_ID: OptionalNonEmptyString,
+    PACKAGE_REGISTRY_TOKEN: OptionalNonEmptyString,
     GITHUB_APP_ID: z.string().optional(),
     GITHUB_APP_PRIVATE_KEY: z.string().optional(),
     GITHUB_APP_WEBHOOK_SECRET: z.string().optional(),
