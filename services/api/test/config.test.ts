@@ -155,6 +155,22 @@ describe("API configuration", () => {
     });
   });
 
+  it("treats blank Vercel credentials from a copied .env.example as unset", () => {
+    expect(
+      readConfig({
+        ...validEnv,
+        VERCEL_TOKEN: "",
+        VERCEL_OIDC_TOKEN: "",
+        VERCEL_TEAM_ID: "",
+        VERCEL_PROJECT_ID: "",
+      }),
+    ).toMatchObject({
+      vercelToken: undefined,
+      vercelTeamId: undefined,
+      vercelProjectId: undefined,
+    });
+  });
+
   it("accepts a Vercel sandbox project binding without exposing a token fallback", () => {
     expect(
       readConfig({
