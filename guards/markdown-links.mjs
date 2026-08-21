@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, extname, resolve, sep } from "node:path";
+import nodePath, { extname, resolve } from "node:path";
 
 import { readText } from "./_kit.mjs";
 
@@ -122,9 +122,28 @@ function localPath(target) {
   }
 }
 
+/**
+ * Resolve a link target against the repository, or null when it escapes the
+ * repository.
+ *
+ * `root` is normalised before the containment comparison because
+ * `git rev-parse --show-toplevel` reports POSIX separators on every platform:
+ * on Windows it answers `C:/repo` while `path.resolve` produces `C:\repo`, so
+ * comparing them directly rejects every in-repo target.
+ *
+ * `path` is injectable so the platform-specific behaviour can be tested from
+ * any host.
+ */
+export function resolveWithinRoot(root, source, target, path = nodePath) {
+  const base = path.resolve(root);
+  const exact = path.resolve(base, path.dirname(source), target);
+  if (exact !== base && !exact.startsWith(`${base}${path.sep}`)) return null;
+  return exact;
+}
+
 function targetExists(root, source, target) {
-  const exact = resolve(root, dirname(source), target);
-  if (exact !== root && !exact.startsWith(`${root}${sep}`)) return false;
+  const exact = resolveWithinRoot(root, source, target);
+  if (exact === null) return false;
 
   const withoutSlash = exact.replace(/[\\/]+$/, "");
   const candidates = [exact];
