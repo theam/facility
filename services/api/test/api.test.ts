@@ -3368,6 +3368,74 @@ describe("api", async () => {
     expect(child.statusCode).toBe(200);
   });
 
+  it("refuses a chain change that would strand stored entries", async () => {
+    // A space with an empty config resolves to the research chain, so an H
+    // written under it is legal. Rewriting the config to the product chain
+    // would leave that H undeclared — uneditable, and a permanent whole-space
+    // validation failure — so the PUT is refused, names the entry, and the
+    // stored config survives untouched.
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Chain change", slug: `chain-change-${Date.now()}` },
+    });
+    const chainProjectId = created.json().id as string;
+    expect(chainProjectId).toBeTruthy();
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { charterMd: "", activeMd: "" },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    expect(space.json().config).toEqual({});
+    const stored = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${chainProjectId}/kb/entries`,
+      headers: { cookie },
+      payload: { type: "H", slug: "written-under-research", bodyMd: "body", links: [] },
+    });
+    expect(stored.statusCode, stored.body).toBe(200);
+
+    const refused = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { config: { chain: "product" } },
+    });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json().error.code).toBe("chain_change_strands_entries");
+    expect(refused.json().error.details).toEqual({
+      chain: "product",
+      stranded: [{ entryId: stored.json().id, artifactId: "H001", type: "H" }],
+    });
+    const unchanged = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+    });
+    expect(unchanged.json().config).toEqual({});
+
+    // A doc-only save never touches the chain, and naming the chain the
+    // entries already belong to strands nothing — both still go through.
+    const charterOnly = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { charterMd: "## Blocked Stop Condition\nNone\n" },
+    });
+    expect(charterOnly.statusCode, charterOnly.body).toBe(200);
+    const explicit = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { config: { chain: "research" } },
+    });
+    expect(explicit.statusCode, explicit.body).toBe(200);
+    expect(explicit.json().config).toEqual({ chain: "research" });
+  });
+
   it("links cited artifacts on body edits and captures the prior version", async () => {
     // Partial PUT: only config — charter/active must survive untouched.
     const space = await app.inject({
