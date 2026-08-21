@@ -27,6 +27,11 @@ time, not discovered in review. The `ACTIVE` state note stays deliberately
 narrow (objective, next step, blocker, links) so sessions recover cleanly
 every time.
 
+The chain a space runs is part of that contract. Reconfiguring it is refused
+while an entry already stored would be left undeclared — the refusal names the
+entries and the stored config stays as it was — so a chain switch can never
+strand what was legitimately written under the previous one.
+
 ## Task flow
 
 The PO agent proposes tasks; humans accept them in the inbox; the platform

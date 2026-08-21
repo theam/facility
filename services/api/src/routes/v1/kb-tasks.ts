@@ -15,7 +15,12 @@ import {
   runEvents,
   runs,
 } from "@facility/db";
-import { artifactIdFor, validate } from "@facility/harness";
+import {
+  artifactIdFor,
+  chainFromConfig,
+  entriesStrandedByChain,
+  validate,
+} from "@facility/harness";
 import { and, asc, desc, eq, ilike, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -160,7 +165,31 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       }
       const row = await db.transaction(async (tx) => {
         const patch: Partial<typeof kbSpaces.$inferInsert> = { updatedAt: new Date() };
-        if (body.config !== undefined) patch.config = body.config;
+        if (body.config !== undefined) {
+          // Re-chaining is the one config change that can strand what is
+          // already stored: validation judges every entry by the chain
+          // configured now, so an entry the new chain does not declare fails
+          // every later validation — uneditable on PATCH, and a permanent
+          // failure of the whole-space check that run checkpoints gate on.
+          // Refuse and name the entries rather than store a config that
+          // re-litigates history.
+          const next = chainFromConfig(body.config);
+          const stored = await tx
+            .select()
+            .from(kbEntries)
+            .where(and(eq(kbEntries.orgId, p.orgId), eq(kbEntries.spaceId, current.id)));
+          const stranded = entriesStrandedByChain(stored.map(toHarnessEntry), next);
+          if (stranded.length > 0) {
+            const ids = stranded.map((item) => item.artifactId).join(", ");
+            throw new ApiError(
+              409,
+              "chain_change_strands_entries",
+              `Chain "${next.id}" does not declare ${stranded.length} stored ${stranded.length === 1 ? "entry" : "entries"} (${ids}); supersede or remove them first, or keep a chain that declares their types`,
+              { chain: next.id, stranded },
+            );
+          }
+          patch.config = body.config;
+        }
         const docs = [
           { doc: "charter" as const, next: body.charterMd, prior: current.charterMd },
           { doc: "active" as const, next: body.activeMd, prior: current.activeMd },
