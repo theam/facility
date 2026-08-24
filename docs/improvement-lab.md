@@ -24,8 +24,11 @@ The first vertical slice is intentionally narrow:
 - targets are published skill and agent-contract registry versions;
 - the assignment unit is one GitHub issue and its delivery chain;
 - one control and one variant run concurrently;
-- metrics come from Facility receipts, gateway usage, and GitHub-derived
-  outcomes;
+- exactly one primary outcome is declared: assessed acceptance rate;
+- one-shot delivery, review rounds, human fixup commits, lead time, and cost
+  remain secondary metrics or guardrails;
+- the complete analysis contract is immutable and digest-bound before the first
+  issue is assigned;
 - a deterministic evaluator decides evidence sufficiency and guardrail status;
 - separate human decisions start the experiment and adopt the candidate;
 - rollback restores the previous active registry reference.
@@ -107,6 +110,12 @@ surfaces into a controlled test.
    composition contract explicitly permits them.
 10. **Budgets remain authoritative.** Experiment allocation never overrides a
     hard organization, project, agent, or run budget.
+11. **The analysis is preregistered.** Primary outcome, cohort, assignment
+    algorithm, allocation, sample, duration, missing-evidence treatment, and
+    uncertainty rule cannot change after start.
+12. **Interim monitoring cannot select a winner.** Watchtower evaluates safety
+    guardrails while an experiment runs, but candidate selection occurs only at
+    the terminal analysis point declared in the analysis contract.
 
 ## Terminology
 
@@ -120,7 +129,7 @@ surfaces into a controlled test.
   starts.
 - **Assignment:** the persisted arm selection for one eligible unit.
 - **Exposure:** proof that a run actually used the assigned arm.
-- **Primary metric:** the outcome the hypothesis expects to improve.
+- **Primary outcome:** the single outcome the hypothesis expects to improve.
 - **Guardrail:** a metric whose regression pauses or invalidates the experiment.
 - **Candidate:** a variant with sufficient evidence for a human adoption
   decision. Candidate status does not publish anything.
@@ -144,16 +153,89 @@ a pull request for a shadow reviewer.
 For an eligible issue, the platform computes a bucket from stable identifiers:
 
 ```text
-bucket = uint64(sha256(experiment_id + ":" + repo_id + ":" + issue_number)) % 10_000
+encoded = length_prefix(experiment_id) || length_prefix(repo_id) || length_prefix(issue_number)
+bucket = uint64_be(sha256(encoded)[0:8]) % 10_000
 ```
 
 The configured allocation maps that bucket to control or variant. The result is
 inserted with a uniqueness constraint before the first affected run is queued.
 Retries return the existing assignment.
 
-The hash function, input encoding, and allocation boundaries become part of the
-experiment snapshot. Changing allocation affects only units that have not yet
-been assigned; it never rewrites existing assignments.
+The first slice names this algorithm
+`facility.issue-assignment.sha256.v1`. Its input is the UTF-8 encoding of the
+length-prefixed tuple `(experiment_id, repo_id, issue_number)`. Length prefixes
+avoid ambiguous concatenation; the algorithm name fixes tuple order and
+encoding. The first eight digest bytes are interpreted as an unsigned
+big-endian integer and reduced modulo 10,000.
+
+The first slice uses a fixed 5,000/5,000 control/variant boundary. Hash inputs,
+algorithm version, and allocation are part of the preregistered analysis
+contract and cannot change after start. A different allocation or hash version
+requires a new experiment rather than mutating an active cohort.
+
+## Preregistered analysis contract
+
+Before start approval, Facility canonicalizes and digest-binds one complete
+analysis contract. Start approval covers that exact digest. The first
+assignment stores the same digest, and every exposure receipt refers to it.
+
+Conceptually:
+
+```json
+{
+  "schema": "facility.experiment.analysis.v1",
+  "primaryOutcome": {
+    "name": "assessed_acceptance_rate",
+    "numerator": "outcomes where accepted = true",
+    "denominator": "terminal outcomes where accepted is not null",
+    "direction": "increase",
+    "minimumEffectBasisPoints": 500
+  },
+  "assignment": {
+    "algorithm": "facility.issue-assignment.sha256.v1",
+    "inputs": ["experiment_id", "repo_id", "issue_number"],
+    "controlBasisPoints": 5000,
+    "variantBasisPoints": 5000
+  },
+  "cohort": {
+    "snapshotDigest": "sha256:...",
+    "projectId": "proj_...",
+    "repoIds": ["repo_..."],
+    "targetAgentDefId": "agd_...",
+    "eligibleAfter": "2026-09-01T00:00:00Z",
+    "predicate": {},
+    "exclusions": ["synthetic_canary", "learning", "security_sweep"]
+  },
+  "enrollment": {
+    "minimumAssessedPerArm": 60,
+    "minimumDurationDays": 14,
+    "maximumDurationDays": 30,
+    "outcomeMaturationDays": 7
+  },
+  "missingEvidence": {
+    "unassessedTreatment": "exclude_from_primary_denominator",
+    "minimumAssessmentCoverage": 0.8,
+    "maximumCoverageDifference": 0.1
+  },
+  "uncertainty": {
+    "method": "newcombe_score_interval_for_risk_difference",
+    "confidenceLevel": 0.95,
+    "candidateRule": "lower_bound_above_zero_and_minimum_effect_met"
+  }
+}
+```
+
+The numeric sample and duration values above are illustrative defaults, not a
+universal claim that 60 outcomes can detect every useful effect. Creation must
+record the chosen values before start, and validation must show the baseline,
+minimum detectable effect, and power assumptions used to justify them. Once
+approved, none of these fields can be amended; a changed hypothesis or analysis
+plan is a new experiment.
+
+The cohort snapshot contains the exact normalized eligibility predicate and
+scope available at start, plus its digest. For future issues, Facility also
+records the issue metadata used to evaluate eligibility at assignment time.
+Later label or project changes do not rewrite eligibility or arm assignment.
 
 ## Exposure proof
 
@@ -166,6 +248,7 @@ At run start, Registry resolution produces an immutable exposure manifest:
 {
   "experimentId": "exp_...",
   "assignmentId": "exa_...",
+  "analysisContractDigest": "sha256:...",
   "arm": "variant",
   "unit": {
     "type": "github_issue",
@@ -207,21 +290,25 @@ draft
 
 ### Draft
 
-The creator specifies the hypothesis, target, arms, eligibility, assignment
-unit, allocation, metric contract, minimum evidence, guardrails, budget, and
-rollback reference. Validation resolves and snapshots all referenced versions.
+The creator specifies the hypothesis, target, arms, and complete analysis
+contract: one primary outcome, cohort snapshot, assignment algorithm and
+allocation, minimum sample and duration, maturation window, missing-evidence
+treatment, uncertainty rule, secondary metrics, guardrails, budget, and
+rollback reference. Validation resolves all referenced versions, canonicalizes
+the contract, and records its digest.
 
 ### Pending start approval
 
 Starting is a typed HITL action. The approver sees the exact version diff,
-eligible cohort, allocation, maximum spend, primary metric, guardrails, and
-rollback target. Four-eyes rules apply.
+eligible cohort, allocation, maximum spend, primary outcome, analysis contract
+digest, guardrails, and rollback target. Four-eyes rules apply.
 
 ### Running
 
 New eligible issues receive assignments. Existing delivery chains keep their
-previous assignment. Results are recomputed from verified exposures and
-independent outcomes.
+previous assignment. Safety and integrity indicators are recomputed from
+verified exposures and independent outcomes, but interim results cannot assign
+candidate status.
 
 ### Paused
 
@@ -253,13 +340,14 @@ only Registry activation state; it never edits repository code.
 
 ## Metric contract
 
-Each experiment declares one primary metric, optional secondary metrics, and
-mandatory guardrails. The first release uses metrics already grounded in
-Facility evidence.
+The first slice has exactly one primary outcome: **assessed acceptance rate**.
+Its numerator is terminal outcomes for which independent GitHub evidence
+establishes `accepted = true`; its denominator is terminal outcomes for which
+`accepted IS NOT NULL`. Neither the learning agent nor an experiment operator
+may substitute another primary outcome after start.
 
-### Primary and secondary outcome metrics
+### Secondary outcome metrics
 
-- assessed acceptance rate;
 - one-shot delivery rate;
 - review rounds per assessed pull request;
 - human fixup commits per assessed pull request;
@@ -283,11 +371,16 @@ expensive in practice.
 - no acceptance regression beyond the declared tolerance;
 - no cost-per-accepted-outcome increase beyond the declared tolerance;
 - no receipt-integrity regression;
-- no platform failure-rate regression beyond the declared tolerance.
+- no platform failure-rate regression beyond the declared tolerance;
+- assessment coverage in each arm meets the preregistered minimum;
+- the difference in assessment coverage between arms stays within the
+  preregistered maximum.
 
 Metric definitions include numerator, denominator, eligibility window, terminal
 window, missing-evidence behavior, and direction of improvement. Unassessed
-outcomes never enter the assessed denominator.
+outcomes never enter the assessed denominator. However, insufficient or
+materially different assessment coverage makes the result `inconclusive`
+rather than allowing selective missingness to favor an arm.
 
 ## Evidence sufficiency
 
@@ -300,12 +393,19 @@ hold:
 - complete terminal window for included assignments;
 - no active hard guardrail breach;
 - configured minimum effect;
-- configured confidence threshold where the metric supports inference.
+- the two-sided 95% Newcombe score interval for the variant-minus-control risk
+  difference has a lower bound above zero.
 
-The initial implementation should use transparent, well-tested statistical
-methods appropriate to each metric and publish the raw counts alongside any
-interval or test result. Facility must report the method and its limitations;
-it must not collapse a low-powered result into a binary loss.
+The primary estimate must also meet the preregistered minimum practical effect;
+statistical separation alone is insufficient. Facility publishes each arm's
+raw numerator, assessed denominator, eligible/exposed count, assessment
+coverage, point estimate, interval, and exclusions.
+
+Watchtower may inspect interim data to pause enrollment for a safety, integrity,
+budget, or missingness breach. The primary analysis runs once, after enrollment
+closes and the preregistered outcome-maturation window ends. It cannot select a
+winner through repeated peeking. A future sequential design would require a new
+versioned analysis schema with its own stopping and error-spending rules.
 
 ## Data model
 
@@ -316,9 +416,8 @@ Names are provisional; the contract matters more than prefixes.
 ```text
 id, org_id, project_id, name, hypothesis
 target_kind, target_item_id, unit_type
-status, allocation_basis_points
-eligibility, metric_contract, safety_contract
-minimum_samples, minimum_duration_days, maximum_duration_days
+status
+analysis_contract, analysis_contract_digest, safety_contract
 rollback_version_id
 created_by, start_approved_by, adoption_approved_by
 started_at, finished_at, created_at, updated_at
@@ -338,7 +437,8 @@ Exactly one `control` and one `variant` arm exist in the first release.
 
 ```text
 id, org_id, project_id, experiment_id, arm_id
-unit_type, unit_key, assignment_digest, assigned_at
+unit_type, unit_key, eligibility_input, assignment_digest
+analysis_contract_digest, assigned_at
 ```
 
 Required uniqueness:
@@ -441,8 +541,10 @@ permission to approve, start, adopt, or roll back. A valid proposal includes:
 - target and immutable control/variant versions;
 - eligible cohort;
 - expected effect;
-- primary metric;
-- minimum sample and duration;
+- assessed acceptance rate as the primary outcome;
+- assignment algorithm and allocation;
+- minimum sample, duration, and maturation window;
+- unassessed-outcome treatment and uncertainty rule;
 - cost and safety guardrails;
 - rollback target.
 
@@ -491,7 +593,7 @@ transitions.
 The experiment detail view must show the exact change and the evidence, not only
 a winner badge:
 
-- hypothesis and cohort;
+- hypothesis, frozen cohort, analysis schema, and contract digest;
 - control/variant Registry version diff;
 - allocation, assignments, valid exposures, and assessment coverage;
 - raw numerator and denominator for every rate;
@@ -514,6 +616,7 @@ repository's critical-change rules.
 
 - deterministic bucketing and stable encoding;
 - eligibility snapshots;
+- canonical analysis-contract encoding and digest stability;
 - metric numerator/denominator definitions;
 - evidence sufficiency and inconclusive results;
 - guardrail direction and thresholds;
@@ -529,6 +632,10 @@ repository's critical-change rules.
 - cross-project and cross-organization access is denied;
 - an assignment without a verified receipt is excluded from comparison;
 - unassessed outcomes do not lower acceptance;
+- insufficient or differential assessment coverage is inconclusive;
+- interim recomputation cannot select a candidate;
+- changing the primary outcome, cohort, allocation, sample, duration,
+  missing-evidence rule, or uncertainty rule after start is rejected;
 - hard budget exhaustion stops new assignment;
 - guardrail breach pauses and opens one deduplicated platform issue;
 - the proposing principal cannot approve start or adoption;
@@ -588,27 +695,27 @@ A disposable project proves this journey:
    receipts.
 5. GitHub outcomes and gateway cost produce arm-level results with explicit
    assessed denominators.
-6. Insufficient evidence remains inconclusive.
-7. A forced guardrail breach pauses allocation and opens one platform issue.
-8. A qualifying variant becomes a candidate but is not automatically active.
-9. A separate human approves adoption.
-10. Rollback restores the previous active version and leaves a complete audit
+6. The evaluator uses the immutable analysis contract approved before the first
+   assignment; interim results cannot select a candidate.
+7. Insufficient or materially asymmetric assessment remains inconclusive.
+8. A forced guardrail breach pauses allocation and opens one platform issue.
+9. A qualifying variant becomes a candidate but is not automatically active.
+10. A separate human approves adoption.
+11. Rollback restores the previous active version and leaves a complete audit
     trail.
-11. Cross-project credentials cannot read or operate the experiment.
+12. Cross-project credentials cannot read or operate the experiment.
 
 ## Open questions
 
 1. Should the first implementation support repository-lane exposure, or fail
    closed to platform-lane runs until exact registry-version provenance is
    available there?
-2. Which statistical methods and defaults are understandable enough to expose
-   without implying more certainty than the sample supports?
-3. Should changing allocation always require approval, or only increases in
-   variant exposure and spend?
-4. Does Registry need an explicit active-version history table, or can the
+2. Which baseline and minimum detectable effect assumptions should the first
+   project use to justify its preregistered sample requirement?
+3. Does Registry need an explicit active-version history table, or can the
    experiment ledger plus existing registry state provide a sufficient rollback
    proof?
-5. Which issue metadata is stable and general enough for first-release cohort
+4. Which issue metadata is stable and general enough for first-release cohort
    eligibility without embedding product-specific classification?
 
 These questions should be resolved on the tracking issue before runtime work
