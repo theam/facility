@@ -11,6 +11,7 @@ import {
   validate,
 } from "@facility/harness";
 import { and, eq } from "drizzle-orm";
+import { ApiError } from "./errors.js";
 
 type Db = ReturnType<typeof createDb>["db"];
 
@@ -127,6 +128,38 @@ export function toHarnessLink(link: typeof kbLinks.$inferSelect): HarnessKbLink 
 
 export function toHarnessSpace(space: typeof kbSpaces.$inferSelect): HarnessKbSpace {
   return { charterMd: space.charterMd, activeMd: space.activeMd, config: space.config };
+}
+
+/**
+ * Serialize KB entry writers against chain changes. A chain change takes the
+ * space row FOR UPDATE before deciding (the kb/space PUT); every entry writer
+ * calls this inside its write transaction to take the same row FOR SHARE and
+ * re-check that the chain still declares the type it validated outside the
+ * transaction. Writers do not block each other, but neither side can
+ * interleave with a chain change — so a stranded entry cannot slip in between
+ * the chain check and the config commit.
+ */
+export async function lockSpaceAgainstChainChange(
+  tx: Pick<Db, "select">,
+  orgId: string,
+  spaceId: string,
+  type: string,
+) {
+  const row = (
+    await tx
+      .select()
+      .from(kbSpaces)
+      .where(and(eq(kbSpaces.orgId, orgId), eq(kbSpaces.id, spaceId)))
+      .for("share")
+  )[0];
+  if (!row) throw new ApiError(404, "not_found", "KB space not found");
+  if (!chainFromConfig(row.config).types[type]) {
+    throw new ApiError(
+      409,
+      "space_chain_changed",
+      `The space's chain changed while this entry was being written; type ${type} is no longer declared — re-validate and retry`,
+    );
+  }
 }
 
 export function normalizeKbDraft(input: {

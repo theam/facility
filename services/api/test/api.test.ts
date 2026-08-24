@@ -3436,6 +3436,74 @@ describe("api", async () => {
     expect(explicit.json().config).toEqual({ chain: "research" });
   });
 
+  it("serializes entry writers against chain changes", async () => {
+    const wait = (ms: number) =>
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), ms));
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Chain race", slug: `chain-race-${Date.now()}` },
+    });
+    const raceProjectId = created.json().id as string;
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${raceProjectId}/kb/space`,
+      headers: { cookie },
+      payload: {
+        charterMd: "## Blocked Stop Condition\nNone\n",
+        activeMd: "## Objective\n\n## Next Step\n\n## Blocker\n\n## Links\n",
+      },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    const spaceId = space.json().id as string;
+    const raw = postgres(databaseUrl, { max: 1 });
+    try {
+      // The interleaving the lock exists for: a writer validates under the
+      // old chain, then a chain change lands before its insert. The chain
+      // change holds the space row FOR UPDATE, so the writer parks at its
+      // FOR SHARE and its in-transaction re-check turns it away.
+      await raw.unsafe("begin");
+      await raw.unsafe("select id from kb_spaces where id = $1 for update", [spaceId]);
+      const write = app.inject({
+        method: "POST",
+        url: `/v1/projects/${raceProjectId}/kb/entries`,
+        headers: { cookie },
+        payload: { type: "H", slug: "raced", bodyMd: "body", links: [] },
+      });
+      expect(await Promise.race([write.then(() => "resolved" as const), wait(300)])).toBe(
+        "waiting",
+      );
+      await raw.unsafe(`update kb_spaces set config = '{"chain":"product"}' where id = $1`, [
+        spaceId,
+      ]);
+      await raw.unsafe("commit");
+      const turnedAway = await write;
+      expect(turnedAway.statusCode, turnedAway.body).toBe(409);
+      expect(turnedAway.json().error.code).toBe("space_chain_changed");
+      expect((await validateProjectKb(db, orgId, raceProjectId)).ok).toBe(true);
+
+      // And the reverse: a writer holding its FOR SHARE parks the chain
+      // change until it commits.
+      await raw.unsafe("begin");
+      await raw.unsafe("select id from kb_spaces where id = $1 for share", [spaceId]);
+      const rechain = app.inject({
+        method: "PUT",
+        url: `/v1/projects/${raceProjectId}/kb/space`,
+        headers: { cookie },
+        payload: { config: { chain: "research" } },
+      });
+      expect(await Promise.race([rechain.then(() => "resolved" as const), wait(300)])).toBe(
+        "waiting",
+      );
+      await raw.unsafe("commit");
+      const rechained = await rechain;
+      expect(rechained.statusCode, rechained.body).toBe(200);
+    } finally {
+      await raw.end({ timeout: 1 });
+    }
+  });
+
   it("links cited artifacts on body edits and captures the prior version", async () => {
     // Partial PUT: only config — charter/active must survive untouched.
     const space = await app.inject({

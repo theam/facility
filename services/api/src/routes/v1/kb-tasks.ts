@@ -29,6 +29,7 @@ import {
   ensureActive,
   ensureLinks,
   loadKbGraph,
+  lockSpaceAgainstChainChange,
   normalizeKbDraft,
   toHarnessEntry,
   toHarnessSpace,
@@ -172,7 +173,15 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           // every later validation — uneditable on PATCH, and a permanent
           // failure of the whole-space check that run checkpoints gate on.
           // Refuse and name the entries rather than store a config that
-          // re-litigates history.
+          // re-litigates history. The space row is taken FOR UPDATE first;
+          // entry writers take it FOR SHARE and re-check the chain inside
+          // their own transaction (lockSpaceAgainstChainChange), so neither
+          // side can interleave with the other.
+          await tx
+            .select({ id: kbSpaces.id })
+            .from(kbSpaces)
+            .where(and(eq(kbSpaces.orgId, p.orgId), eq(kbSpaces.id, current.id)))
+            .for("update");
           const next = chainFromConfig(body.config);
           const stored = await tx
             .select()
@@ -184,7 +193,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
             throw new ApiError(
               409,
               "chain_change_strands_entries",
-              `Chain "${next.id}" does not declare ${stranded.length} stored ${stranded.length === 1 ? "entry" : "entries"} (${ids}); supersede or remove them first, or keep a chain that declares their types`,
+              `Chain "${next.id}" does not declare ${stranded.length} stored ${stranded.length === 1 ? "entry" : "entries"} (${ids}); the space keeps its current chain — it can change chains only once every stored entry's type is declared by the target chain`,
               { chain: next.id, stranded },
             );
           }
@@ -571,6 +580,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         throw new ApiError(400, "kb_validation_failed", "KB entry failed validation", report);
       }
       return db.transaction(async (tx) => {
+        await lockSpaceAgainstChainChange(tx, p.orgId, space.id, predecessor.type);
         const inserted = (
           await tx
             .insert(kbEntries)
@@ -706,6 +716,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         return { ok: true, entry: draft, report };
       }
       const entry = await db.transaction(async (tx) => {
+        await lockSpaceAgainstChainChange(tx, p.orgId, space.id, body.type);
         const inserted = (
           await tx
             .insert(kbEntries)
@@ -887,6 +898,9 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         throw new ApiError(400, "kb_validation_failed", "KB entry failed validation", report);
       }
       const row = await db.transaction(async (tx) => {
+        if (body.type !== undefined) {
+          await lockSpaceAgainstChainChange(tx, p.orgId, current.spaceId, body.type);
+        }
         const latest = (
           await tx
             .select()
@@ -1130,21 +1144,24 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       if (!report.ok) {
         throw new ApiError(400, "kb_validation_failed", "Intake entry failed validation", report);
       }
-      const entry = (
-        await db
-          .insert(kbEntries)
-          .values({
-            id: newId("kb"),
-            orgId: p.orgId,
-            spaceId: space.id,
-            type: "S",
-            number: max + 1,
-            slug,
-            frontmatter: normalized.frontmatter,
-            bodyMd: normalized.bodyMd,
-          })
-          .returning()
-      )[0];
+      const entry = await db.transaction(async (tx) => {
+        await lockSpaceAgainstChainChange(tx, p.orgId, space.id, "S");
+        return (
+          await tx
+            .insert(kbEntries)
+            .values({
+              id: newId("kb"),
+              orgId: p.orgId,
+              spaceId: space.id,
+              type: "S",
+              number: max + 1,
+              slug,
+              frontmatter: normalized.frontmatter,
+              bodyMd: normalized.bodyMd,
+            })
+            .returning()
+        )[0];
+      });
       if (!entry) throw new ApiError(500, "insert_failed", "Could not store intake entry");
       const artifactId = artifactIdFor(toHarnessEntry(entry));
       let runId: string | null = null;
