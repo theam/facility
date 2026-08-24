@@ -35,9 +35,9 @@ export default async function ProjectStoriesPage({
   searchParams,
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ stage?: string; status?: string }>;
+  searchParams: Promise<{ stage?: string; status?: string; mine?: string }>;
 }) {
-  const [{ projectId }, { stage, status }] = await Promise.all([params, searchParams]);
+  const [{ projectId }, { stage, status, mine }] = await Promise.all([params, searchParams]);
   const [pipelineResult, me] = await Promise.all([api.pipeline(projectId), api.me()]);
 
   if (!pipelineResult.ok && pipelineResult.offline) return <Offline />;
@@ -50,13 +50,20 @@ export default async function ProjectStoriesPage({
   const activeStage =
     stage && stageKeys.has(stage as PipelineStageKey) ? (stage as PipelineStageKey) : null;
   const items = pipelineResult.ok ? pipelineStories(pipelineResult.data) : [];
+  const githubLogin = me.ok ? me.data.principal.githubLogin : undefined;
+  const mineLogin = mine === "1" ? githubLogin : undefined;
   const stageStates = new Set(items.map((story) => story.stageState));
   const activeStatus =
     activeStage && status && stageStates.has(status as PipelineStageState)
       ? (status as PipelineStageState)
       : null;
-  const counts = [...stages].reverse();
-  const activeOpenStoryCount = items.filter((story) => story.state === "open").length;
+  const counts = [...stages].reverse().map((candidate) => {
+    if (mineLogin === undefined) return candidate;
+    const stories = candidate.stories.filter((story) => story.assignees.includes(mineLogin));
+    return { ...candidate, count: stories.length, stories };
+  });
+  const mineFilteredItems = counts.flatMap((candidate) => candidate.stories);
+  const activeOpenStoryCount = mineFilteredItems.filter((story) => story.state === "open").length;
 
   const stageFiltered = activeStage
     ? counts.filter((candidate) => candidate.key === activeStage)
@@ -142,6 +149,26 @@ export default async function ProjectStoriesPage({
               </Link>
             </span>
           </>
+        ) : null}
+        {githubLogin ? (
+          <div className="flex items-center gap-2">
+            <span className="h-4 w-px bg-(--line)" />
+            <Link
+              href={
+                mineLogin
+                  ? `/projects/${projectId}/stories${activeStage ? `?stage=${activeStage}` : ""}`
+                  : `/projects/${projectId}/stories?mine=1${activeStage ? `&stage=${activeStage}` : ""}`
+              }
+              className={cx(
+                "border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                mineLogin
+                  ? "border-(--line-strong) text-(--ink)"
+                  : "border-(--line) text-(--mut) hover:text-(--ink)",
+              )}
+            >
+              mine
+            </Link>
+          </div>
         ) : null}
       </div>
 

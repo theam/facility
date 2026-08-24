@@ -108,6 +108,20 @@ export function pipelineStories(pipeline: Pipeline): PipelineStory[] {
   return pipeline.stages.flatMap((stage) => stage.stories);
 }
 
+/** GitHub avatar for an assignee login; needs no sync column and no new table. */
+export function githubAvatarUrl(login: string) {
+  return `https://github.com/${login}.png?size=40`;
+}
+
+/** Initial-letter fallback for deployments where the browser cannot reach github.com. */
+export function assigneeInitial(login: string) {
+  return login.charAt(0).toUpperCase();
+}
+
+export function assigneeSummary(assignees: string[], maxShown = 1) {
+  return { shown: assignees.slice(0, maxShown), extra: Math.max(0, assignees.length - maxShown) };
+}
+
 /** Open, non-draft pull requests that are genuinely waiting on a human review. */
 export function reviewablePullRequests<Story extends Pick<PipelineStory, "repoId" | "prs">>(
   stories: Story[],
