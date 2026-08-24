@@ -3483,10 +3483,10 @@ describe("api", async () => {
       expect(turnedAway.json().error.code).toBe("space_chain_changed");
       expect((await validateProjectKb(db, orgId, raceProjectId)).ok).toBe(true);
 
-      // And the reverse: a writer holding its FOR SHARE parks the chain
-      // change until it commits.
+      // And the reverse: a writer holding its lock parks the chain change
+      // until it commits.
       await raw.unsafe("begin");
-      await raw.unsafe("select id from kb_spaces where id = $1 for share", [spaceId]);
+      await raw.unsafe("select id from kb_spaces where id = $1 for no key update", [spaceId]);
       const rechain = app.inject({
         method: "PUT",
         url: `/v1/projects/${raceProjectId}/kb/space`,

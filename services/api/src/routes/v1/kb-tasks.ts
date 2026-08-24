@@ -174,9 +174,9 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
           // failure of the whole-space check that run checkpoints gate on.
           // Refuse and name the entries rather than store a config that
           // re-litigates history. The space row is taken FOR UPDATE first;
-          // entry writers take it FOR SHARE and re-check the chain inside
-          // their own transaction (lockSpaceAgainstChainChange), so neither
-          // side can interleave with the other.
+          // entry writers take it at NO KEY UPDATE strength and re-check the
+          // chain inside their own transaction (lockSpaceAgainstChainChange),
+          // so neither side can interleave with the other.
           await tx
             .select({ id: kbSpaces.id })
             .from(kbSpaces)

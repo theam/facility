@@ -53,6 +53,7 @@ import {
   ensureActive,
   ensureLinks,
   loadKbGraph,
+  lockSpaceAgainstChainChange,
   normalizeKbDraft,
   toHarnessEntry,
   toHarnessSpace,
@@ -2242,6 +2243,7 @@ async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
   });
   if (!report.ok) throw new Error("kb_validation_failed");
   return db.transaction(async (tx) => {
+    await lockSpaceAgainstChainChange(tx, proposal.orgId, space.id, type);
     const inserted = (
       await tx
         .insert(kbEntries)

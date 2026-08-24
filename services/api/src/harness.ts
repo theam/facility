@@ -133,11 +133,17 @@ export function toHarnessSpace(space: typeof kbSpaces.$inferSelect): HarnessKbSp
 /**
  * Serialize KB entry writers against chain changes. A chain change takes the
  * space row FOR UPDATE before deciding (the kb/space PUT); every entry writer
- * calls this inside its write transaction to take the same row FOR SHARE and
- * re-check that the chain still declares the type it validated outside the
- * transaction. Writers do not block each other, but neither side can
- * interleave with a chain change — so a stranded entry cannot slip in between
- * the chain check and the config commit.
+ * calls this first inside its write transaction to take the same row at
+ * NO KEY UPDATE strength and re-check that the chain still declares the type
+ * it validated outside the transaction. Neither side can interleave with the
+ * other, so a stranded entry cannot slip in between the chain check and the
+ * config commit. The strength matters: several writers end their transaction
+ * by updating the space row (ACTIVE upkeep), so a shared lock here would
+ * deadlock two concurrent writers at that upgrade — NO KEY UPDATE serializes
+ * writers per space up front (they serialized at that tail update anyway,
+ * and this also removes the duplicate max+1 numbering race) while staying
+ * compatible with the KEY SHARE locks their entry inserts take through the
+ * space foreign key.
  */
 export async function lockSpaceAgainstChainChange(
   tx: Pick<Db, "select">,
@@ -150,7 +156,7 @@ export async function lockSpaceAgainstChainChange(
       .select()
       .from(kbSpaces)
       .where(and(eq(kbSpaces.orgId, orgId), eq(kbSpaces.id, spaceId)))
-      .for("share")
+      .for("no key update")
   )[0];
   if (!row) throw new ApiError(404, "not_found", "KB space not found");
   if (!chainFromConfig(row.config).types[type]) {
