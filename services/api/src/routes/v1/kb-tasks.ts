@@ -31,6 +31,7 @@ import {
   loadKbGraph,
   lockSpaceAgainstChainChange,
   normalizeKbDraft,
+  SpaceChainChangedError,
   toHarnessEntry,
   toHarnessSpace,
   validateProjectKb,
@@ -78,6 +79,30 @@ function coalescesWith(
   if (Date.now() - latest.createdAt.getTime() > VERSION_COALESCE_MS) return false;
   const by = latest.savedBy as { type?: string; id?: string } | null;
   return by?.type === p.type && by?.id === p.id;
+}
+
+/**
+ * Route-side face of the harness's host-agnostic writer re-check: here,
+ * losing the race against a chain change is an HTTP conflict.
+ */
+async function lockSpaceForEntryWrite(
+  tx: Parameters<typeof lockSpaceAgainstChainChange>[0],
+  orgId: string,
+  spaceId: string,
+  type: string,
+) {
+  try {
+    await lockSpaceAgainstChainChange(tx, orgId, spaceId, type);
+  } catch (error) {
+    if (error instanceof SpaceChainChangedError) {
+      throw new ApiError(
+        409,
+        error.code,
+        `The space's chain changed while this entry was being written; type ${type} is no longer declared — re-validate and retry`,
+      );
+    }
+    throw error;
+  }
 }
 
 /** Artifact ids a body cites — bare codes (they match inside [[wikilinks]] too). */
@@ -580,7 +605,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         throw new ApiError(400, "kb_validation_failed", "KB entry failed validation", report);
       }
       return db.transaction(async (tx) => {
-        await lockSpaceAgainstChainChange(tx, p.orgId, space.id, predecessor.type);
+        await lockSpaceForEntryWrite(tx, p.orgId, space.id, predecessor.type);
         const inserted = (
           await tx
             .insert(kbEntries)
@@ -716,7 +741,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         return { ok: true, entry: draft, report };
       }
       const entry = await db.transaction(async (tx) => {
-        await lockSpaceAgainstChainChange(tx, p.orgId, space.id, body.type);
+        await lockSpaceForEntryWrite(tx, p.orgId, space.id, body.type);
         const inserted = (
           await tx
             .insert(kbEntries)
@@ -899,7 +924,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
       }
       const row = await db.transaction(async (tx) => {
         if (body.type !== undefined) {
-          await lockSpaceAgainstChainChange(tx, p.orgId, current.spaceId, body.type);
+          await lockSpaceForEntryWrite(tx, p.orgId, current.spaceId, body.type);
         }
         const latest = (
           await tx
@@ -1145,7 +1170,7 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         throw new ApiError(400, "kb_validation_failed", "Intake entry failed validation", report);
       }
       const entry = await db.transaction(async (tx) => {
-        await lockSpaceAgainstChainChange(tx, p.orgId, space.id, "S");
+        await lockSpaceForEntryWrite(tx, p.orgId, space.id, "S");
         return (
           await tx
             .insert(kbEntries)

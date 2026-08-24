@@ -11,7 +11,6 @@ import {
   validate,
 } from "@facility/harness";
 import { and, eq } from "drizzle-orm";
-import { ApiError } from "./errors.js";
 
 type Db = ReturnType<typeof createDb>["db"];
 
@@ -144,6 +143,10 @@ export function toHarnessSpace(space: typeof kbSpaces.$inferSelect): HarnessKbSp
  * and this also removes the duplicate max+1 numbering race) while staying
  * compatible with the KEY SHARE locks their entry inserts take through the
  * space foreign key.
+ *
+ * Losing the race throws the host-agnostic SpaceChainChangedError below; each
+ * caller translates it into its own idiom (the routes answer 409, the
+ * proposal executor records the code like its other coded failures).
  */
 export async function lockSpaceAgainstChainChange(
   tx: Pick<Db, "select">,
@@ -158,13 +161,20 @@ export async function lockSpaceAgainstChainChange(
       .where(and(eq(kbSpaces.orgId, orgId), eq(kbSpaces.id, spaceId)))
       .for("no key update")
   )[0];
-  if (!row) throw new ApiError(404, "not_found", "KB space not found");
+  if (!row) throw new Error("kb_space_missing");
   if (!chainFromConfig(row.config).types[type]) {
-    throw new ApiError(
-      409,
-      "space_chain_changed",
-      `The space's chain changed while this entry was being written; type ${type} is no longer declared — re-validate and retry`,
-    );
+    throw new SpaceChainChangedError(type);
+  }
+}
+
+/**
+ * Domain failure for the writer-side chain re-check, free of transport
+ * semantics so the harness helper can serve any writer host.
+ */
+export class SpaceChainChangedError extends Error {
+  readonly code = "space_chain_changed";
+  constructor(readonly type: string) {
+    super(`space_chain_changed: the chain no longer declares type ${type}`);
   }
 }
 
