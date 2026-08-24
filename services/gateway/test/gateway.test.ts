@@ -374,6 +374,15 @@ describe("gateway", async () => {
       await db.select().from(llmRequests).where(eq(llmRequests.virtualKeyId, setup.keyId))
     )[0];
     expect(row?.outputTokens).toBe(1_000_000);
+    // Anthropic reports streamed input usage in message_start, output in
+    // message_delta. Both have to reach the row and the budget counter:
+    // claude-sonnet-5 is $3/1M input + $15/1M output, so 1M each is 1800 cents.
+    expect(row?.inputTokens).toBe(1_000_000);
+    expect(row?.costCents).toBe(1800);
+    const counter = (
+      await db.select().from(spendCounters).where(eq(spendCounters.budgetId, setup.budgetId))
+    )[0];
+    expect(counter?.spentCents).toBe(1800);
   });
 
   it("2b. shutdown drains post-response metering before closing Postgres", async () => {
