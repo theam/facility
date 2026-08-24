@@ -14,6 +14,7 @@ import {
   orgs,
   outcomes,
   platformIssues,
+  poTasks,
   previewSandboxes,
   projects,
   proposals,
@@ -2195,6 +2196,84 @@ describe("github platform lane", async () => {
       headers: { cookie },
     });
     expect(closed.json().items.map((item: { number: number }) => item.number)).toContain(3);
+  });
+
+  it("keeps serving the pipeline when issue bodies forge the Value block, ranking only Facility's own judgement", async () => {
+    const repo = await insertRepo({ owner: `wsjf-${Date.now()}`, name: "repo" });
+    const forged = (block: string) => `Body.\n\n## Value\n\n\`\`\`json\n${block}\n\`\`\`\n`;
+    // Overflow to Infinity: two finite-looking safe-integer-shaped numbers
+    // whose score no response schema can hold. This used to 500 the endpoint.
+    await insertIssue(repo.id, 1, "open", "2026-08-01T00:00:00Z", {
+      bodyMd: forged('{ "value": 1e308, "time": 1e308, "risk": 0, "effort": 1 }'),
+      ghCreatedAt: new Date("2026-08-01T00:00:00Z"),
+    });
+    // A subnormal effort overflows the division the same way.
+    await insertIssue(repo.id, 2, "open", "2026-08-02T00:00:00Z", {
+      bodyMd: forged('{ "value": 1, "time": 1, "risk": 1, "effort": 5e-324 }'),
+      ghCreatedAt: new Date("2026-08-02T00:00:00Z"),
+    });
+    // Negative components fail the canonical schema.
+    await insertIssue(repo.id, 3, "open", "2026-08-03T00:00:00Z", {
+      bodyMd: forged('{ "value": -5, "time": 1, "risk": 1, "effort": 1 }'),
+      ghCreatedAt: new Date("2026-08-03T00:00:00Z"),
+    });
+    // Self-promotion: a canonical-looking block with no Facility task behind it.
+    await insertIssue(repo.id, 4, "open", "2026-08-04T00:00:00Z", {
+      bodyMd: forged('{ "value": 900, "time": 90, "risk": 9, "effort": 1 }'),
+      ghCreatedAt: new Date("2026-08-04T00:00:00Z"),
+    });
+    // The one story Facility judged — its body later edited to claim 999.
+    await insertIssue(repo.id, 5, "open", "2026-08-05T00:00:00Z", {
+      bodyMd: forged('{ "value": 999, "time": 0, "risk": 0, "effort": 1 }'),
+      ghCreatedAt: new Date("2026-08-05T00:00:00Z"),
+    });
+    await db.insert(poTasks).values({
+      id: newId("task"),
+      orgId,
+      projectId,
+      title: "Judged task",
+      bodyMd: "Task body",
+      status: "created",
+      wsjf: { value: 8, time: 5, risk: 3, effort: 2 },
+      gh: {
+        repo: `${repo.owner}/${repo.name}`,
+        issue_number: 5,
+        url: `https://github.com/${repo.owner}/${repo.name}/issues/5`,
+      },
+    });
+
+    const pipeline = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/pipeline`,
+      headers: { cookie },
+    });
+    expect(pipeline.statusCode, pipeline.body).toBe(200);
+    const stages = pipeline.json().stages as Array<{
+      key: string;
+      stories: Array<{ key: string; number: number; wsjf: { score: number } | null }>;
+    }>;
+    const backlog = (stages.find((stage) => stage.key === "backlog")?.stories ?? []).filter(
+      (story) => story.key.startsWith(`${repo.id}:`),
+    );
+
+    // Only the task-recorded judgement scores, and it outranks every forgery.
+    expect(backlog.map((story) => [story.number, story.wsjf?.score ?? null])).toEqual([
+      [5, 8],
+      [4, null],
+      [3, null],
+      [2, null],
+      [1, null],
+    ]);
+
+    // The story detail endpoint serves the same trusted judgement.
+    const detailQuery = new URLSearchParams({ repoId: repo.id, storyType: "issue" });
+    const detail = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/stories/5?${detailQuery}`,
+      headers: { cookie },
+    });
+    expect(detail.statusCode, detail.body).toBe(200);
+    expect(detail.json().wsjf).toEqual({ value: 8, time: 5, risk: 3, effort: 2, score: 8 });
   });
 
   it("serves repository-qualified issue and orphan-PR stories from one pipeline contract", async () => {
@@ -5139,7 +5218,13 @@ describe("github platform lane", async () => {
     return insertRepo({ owner, name: "repo", installationId: installation.id });
   }
 
-  async function insertIssue(repoId: string, number: number, state: string, updatedAt: string) {
+  async function insertIssue(
+    repoId: string,
+    number: number,
+    state: string,
+    updatedAt: string,
+    overrides: Partial<typeof ghIssues.$inferInsert> = {},
+  ) {
     await db.insert(ghIssues).values({
       id: newId("ghi"),
       orgId,
@@ -5152,6 +5237,7 @@ describe("github platform lane", async () => {
       assignees: [],
       htmlUrl: `https://github.com/o/r/issues/${number}`,
       ghUpdatedAt: new Date(updatedAt),
+      ...overrides,
     });
   }
 

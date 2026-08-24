@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WsjfSchema } from "./wsjf.js";
 
 export type ChainTypeConfig = {
   prefix: string;
@@ -24,13 +25,6 @@ const SharedFrontmatter = z
     tags: z.array(z.string()).default([]),
   })
   .passthrough();
-
-const WsjfSchema = z.object({
-  value: z.number().int().min(0),
-  time: z.number().int().min(0),
-  risk: z.number().int().min(0),
-  effort: z.number().positive(),
-});
 
 export const productChain: ArtifactChainConfig = {
   id: "product",

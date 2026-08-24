@@ -6,13 +6,14 @@ import {
   ghPullRequests,
   githubInstallations,
   insertAuditEvent,
+  poTasks,
   proposals,
   repos,
   runEvents,
   runs,
   users,
 } from "@facility/db";
-import { and, desc, eq, gte, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
@@ -1062,7 +1063,7 @@ async function assembleProjectStories(
   projectId: string,
 ) {
   const shippedSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [issueRows, repoRows] = await Promise.all([
+  const [issueRows, repoRows, taskRows] = await Promise.all([
     db
       .select()
       .from(ghIssues)
@@ -1077,6 +1078,7 @@ async function assembleProjectStories(
       .select({ id: repos.id, owner: repos.owner, name: repos.name })
       .from(repos)
       .where(and(eq(repos.orgId, orgId), eq(repos.projectId, projectId))),
+    tasksForAssembly(db, orgId, projectId),
   ]);
   const linkedPullConditions: SQL[] = [];
   for (const repo of repoRows) {
@@ -1122,6 +1124,7 @@ async function assembleProjectStories(
     pullRequests: pullRows,
     repos: repoRows,
     runs: runRows,
+    tasks: taskRows,
   });
 }
 
@@ -1329,7 +1332,21 @@ async function assembleSelectedStories(
     pullRequests: pullRows,
     repos: repoRows,
     runs: runRows,
+    tasks: await tasksForAssembly(db, orgId, projectId),
   });
+}
+
+/**
+ * The trusted provenance behind story ranks: PO tasks Facility has mirrored to
+ * GitHub, newest first so the latest judgement for an issue wins. The issue
+ * body's `## Value` block is world-writable and never consulted for ordering.
+ */
+function tasksForAssembly(db: FastifyInstance["facilityDb"], orgId: string, projectId: string) {
+  return db
+    .select({ wsjf: poTasks.wsjf, gh: poTasks.gh })
+    .from(poTasks)
+    .where(and(eq(poTasks.orgId, orgId), eq(poTasks.projectId, projectId), isNotNull(poTasks.gh)))
+    .orderBy(desc(poTasks.updatedAt));
 }
 
 async function runsForAssembly(

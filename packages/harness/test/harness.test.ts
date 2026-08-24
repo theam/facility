@@ -2,7 +2,13 @@ import { expect, it } from "vitest";
 import { productChain, researchChain } from "../src/chain.js";
 import { buildHarnessBundle } from "../src/session.js";
 import { validate } from "../src/validate.js";
-import { parseWsjfValueSection, rankByWsjf, wsjfScore, wsjfValueSection } from "../src/wsjf.js";
+import {
+  parseWsjfValueSection,
+  rankByWsjf,
+  validateWsjf,
+  wsjfScore,
+  wsjfValueSection,
+} from "../src/wsjf.js";
 
 const created = "2026-07-03";
 
@@ -120,6 +126,50 @@ it("treats missing or malformed Value sections as unscored, never as errors", ()
       '## Value\n\nprose only\n\n## KB trace\n\n```json\n{ "value": 1, "time": 1, "risk": 1, "effort": 1 }\n```',
     ),
   ).toBeNull();
+});
+
+it("rejects Value blocks the canonical WSJF schema rejects", () => {
+  const body = (wsjf: unknown) => `## Value\n\n\`\`\`json\n${JSON.stringify(wsjf)}\n\`\`\``;
+  // Negative and fractional components are not canonical judgements.
+  expect(parseWsjfValueSection(body({ value: -8, time: 5, risk: 3, effort: 2 }))).toBeNull();
+  expect(parseWsjfValueSection(body({ value: 8, time: 5, risk: 3, effort: -2 }))).toBeNull();
+  expect(parseWsjfValueSection(body({ value: 8.5, time: 5, risk: 3, effort: 2 }))).toBeNull();
+  // Strings that JSON.parse happily carries are not numbers.
+  expect(parseWsjfValueSection(body({ value: "8", time: 5, risk: 3, effort: 2 }))).toBeNull();
+  expect(parseWsjfValueSection(body([8, 5, 3, 2]))).toBeNull();
+});
+
+it("never yields a non-finite score, whatever the block claims", () => {
+  const body = (wsjf: unknown) => `## Value\n\n\`\`\`json\n${JSON.stringify(wsjf)}\n\`\`\``;
+  // The canonical schema bounds components to safe integers, so a 1e308
+  // numerator never reaches the division.
+  expect(parseWsjfValueSection(body({ value: 1e308, time: 1e308, risk: 0, effort: 1 }))).toBeNull();
+  // Effort is any positive number: a subnormal divides an honest numerator to
+  // Infinity, so the score itself must also be checked.
+  expect(parseWsjfValueSection(body({ value: 1, time: 1, risk: 1, effort: 5e-324 }))).toBeNull();
+  // JSON has no Infinity literal, but the validator must not depend on that.
+  expect(validateWsjf({ value: Number.POSITIVE_INFINITY, time: 0, risk: 0, effort: 1 })).toBeNull();
+  expect(() => wsjfScore({ value: 1e308, time: 1e308, risk: 0, effort: 1 })).toThrow(
+    "wsjf_score_must_be_finite",
+  );
+  // A large but finite score survives.
+  expect(validateWsjf({ value: 1_000_000, time: 0, risk: 0, effort: 0.001 })).toMatchObject({
+    score: 1_000_000_000,
+  });
+});
+
+it("validates untrusted judgements with the same schema task frontmatter uses", () => {
+  expect(validateWsjf({ value: 8, time: 5, risk: 2, effort: 4 })).toEqual({
+    value: 8,
+    time: 5,
+    risk: 2,
+    effort: 4,
+    score: 3.75,
+  });
+  expect(validateWsjf(null)).toBeNull();
+  expect(validateWsjf("wsjf")).toBeNull();
+  expect(validateWsjf({})).toBeNull();
+  expect(validateWsjf({ value: 8, time: 5, risk: 2, effort: 0 })).toBeNull();
 });
 
 it("builds session recovery bundle text", () => {

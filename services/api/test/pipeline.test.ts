@@ -6,6 +6,7 @@ import {
   type PipelineIssueRecord,
   type PipelinePullRequestRecord,
   type PipelineRunRecord,
+  type PipelineTaskRecord,
 } from "../src/pipeline.js";
 
 const NOW = new Date("2026-08-05T12:00:00Z");
@@ -248,14 +249,14 @@ describe("server-owned story pipeline", () => {
     ]);
   });
 
-  it("orders active stages by the mirrored WSJF judgement, immune to activity bumps", () => {
+  it("orders active stages by the task-recorded WSJF judgement, immune to activity bumps", () => {
     const hour = 60 * 60 * 1000;
     const scoredHigh = issue("repo_a", 1, {
-      bodyMd: valueBody({ value: 8, time: 5, risk: 3, effort: 2 }), // score 8
+      bodyMd: valueBody({ value: 8, time: 5, risk: 3, effort: 2 }),
       ghUpdatedAt: new Date(NOW.getTime() - 72 * hour), // stale activity must not demote it
     });
     const scoredLow = issue("repo_a", 2, {
-      bodyMd: valueBody({ value: 2, time: 1, risk: 1, effort: 2 }), // score 2
+      bodyMd: valueBody({ value: 2, time: 1, risk: 1, effort: 2 }),
       ghUpdatedAt: NOW, // touched just now — a comment must not promote it
     });
     const unscoredNew = issue("repo_a", 3, {
@@ -277,12 +278,92 @@ describe("server-owned story pipeline", () => {
       pullRequests: [],
       repos: [{ id: "repo_a", owner: "alice", name: "alpha" }],
       runs: [],
+      tasks: [
+        task("alice/alpha", 1, { value: 8, time: 5, risk: 3, effort: 2 }), // score 8
+        task("alice/alpha", 2, { value: 2, time: 1, risk: 1, effort: 2 }), // score 2
+      ],
     });
     const backlog = classifyPipeline(assembly.stories, new Set(), NOW.getTime()).get("backlog");
 
     expect(backlog?.map((story) => story.number)).toEqual([1, 2, 3, 4, 5]);
     expect(backlog?.[0]?.wsjf).toEqual({ value: 8, time: 5, risk: 3, effort: 2, score: 8 });
     expect(backlog?.slice(2).every((story) => story.wsjf === null)).toBe(true);
+  });
+
+  it("never ranks a story from its issue body: only Facility's task record scores", () => {
+    // The `## Value` block is world-writable. An issue author claiming a
+    // gigantic score must stay unscored, and an edited block on a mirrored
+    // issue must lose to the judgement Facility recorded.
+    const selfPromoted = issue("repo_a", 1, {
+      bodyMd: valueBody({ value: 9007199254740991, time: 0, risk: 0, effort: 1 }),
+    });
+    const edited = issue("repo_a", 2, {
+      bodyMd: valueBody({ value: 900, time: 90, risk: 9, effort: 1 }), // forged edit
+    });
+    const honest = issue("repo_a", 3, {
+      bodyMd: valueBody({ value: 8, time: 5, risk: 3, effort: 2 }),
+    });
+
+    const assembly = assemblePipelineStories({
+      issues: [selfPromoted, edited, honest],
+      pullRequests: [],
+      repos: [{ id: "repo_a", owner: "alice", name: "alpha" }],
+      runs: [],
+      tasks: [
+        task("alice/alpha", 2, { value: 2, time: 1, risk: 1, effort: 2 }), // score 2
+        task("alice/alpha", 3, { value: 8, time: 5, risk: 3, effort: 2 }), // score 8
+      ],
+    });
+    const backlog = classifyPipeline(assembly.stories, new Set(), NOW.getTime()).get("backlog");
+
+    expect(backlog?.map((story) => [story.number, story.wsjf?.score ?? null])).toEqual([
+      [3, 8],
+      [2, 2],
+      [1, null],
+    ]);
+  });
+
+  it("treats task records that fail the canonical schema or overflow as unscored", () => {
+    const issues = [1, 2, 3, 4, 5].map((number) => issue("repo_a", number));
+    const assembly = assemblePipelineStories({
+      issues,
+      pullRequests: [],
+      repos: [{ id: "repo_a", owner: "alice", name: "alpha" }],
+      runs: [],
+      tasks: [
+        task("alice/alpha", 1, { value: -8, time: 5, risk: 3, effort: 2 }), // negative
+        task("alice/alpha", 2, { value: 1e308, time: 1e308, risk: 0, effort: 1 }), // unsafe ints
+        task("alice/alpha", 3, { value: 1, time: 1, risk: 1, effort: 5e-324 }), // score → Infinity
+        { wsjf: "not an object", gh: { repo: "alice/alpha", issue_number: 4 } }, // junk column
+        { wsjf: { value: 1, time: 1, risk: 1, effort: 1 }, gh: null }, // no provenance
+      ],
+    });
+
+    // Nothing throws, nothing scores, and the endpoint's response schema
+    // never meets an Infinity.
+    expect(assembly.stories.every((story) => story.wsjf === null)).toBe(true);
+  });
+
+  it("binds a task's judgement through its gh provenance, latest record first", () => {
+    const assembly = assemblePipelineStories({
+      issues: [issue("repo_a", 7), issue("repo_b", 7)],
+      pullRequests: [],
+      repos: [
+        { id: "repo_a", owner: "alice", name: "alpha" },
+        { id: "repo_b", owner: "alice", name: "beta" },
+      ],
+      runs: [],
+      tasks: [
+        task("Alice/Alpha", 7, { value: 6, time: 2, risk: 1, effort: 3 }), // score 3, case-insensitive
+        task("alice/alpha", 7, { value: 9, time: 9, risk: 9, effort: 1 }), // superseded — newest first
+        task("alice/other", 7, { value: 9, time: 9, risk: 9, effort: 1 }), // repo outside the project
+      ],
+    });
+
+    const a7 = assembly.stories.find((story) => story.key === "repo_a:issue:7");
+    const b7 = assembly.stories.find((story) => story.key === "repo_b:issue:7");
+    expect(a7?.wsjf).toEqual({ value: 6, time: 2, risk: 1, effort: 3, score: 3 });
+    expect(b7?.wsjf).toBeNull();
   });
 
   it("ships recent closed issues and merged orphan PRs, but not abandoned PRs", () => {
@@ -344,6 +425,18 @@ function issue(
     ghUpdatedAt: NOW,
     closedAt: null,
     ...overrides,
+  };
+}
+
+/** A PO task row as Facility records it when it mirrors an issue to GitHub. */
+function task(repo: string, issueNumber: number, wsjf: unknown): PipelineTaskRecord {
+  return {
+    wsjf,
+    gh: {
+      repo,
+      issue_number: issueNumber,
+      url: `https://github.test/${repo}/issues/${issueNumber}`,
+    },
   };
 }
 
