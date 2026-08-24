@@ -3404,6 +3404,57 @@ describe("github platform lane", async () => {
     app.githubClientFactory = undefined;
   });
 
+  it("accepts and enqueues a no-checks GitHub builder because GitHub CI owns acceptance", async () => {
+    const enqueued: { queue: string; data: Record<string, unknown> }[] = [];
+    app.enqueue = async (queue, data) => {
+      enqueued.push({ queue, data });
+      return null;
+    };
+    // No `.facility.json` checks and no project-level check commands. A
+    // connected GitHub repo is still accepted and enqueued because GitHub CI
+    // owns acceptance; this is not the repo-less dispatch safety net.
+    app.githubClientFactory = async () =>
+      ({
+        rest: {
+          issues: {
+            get: async (input: { issue_number: number }) => ({
+              data: {
+                number: input.issue_number,
+                title: `Issue ${input.issue_number}`,
+                body: "Body",
+                user: { login: "author" },
+                labels: [],
+                html_url: `https://github.test/issues/${input.issue_number}`,
+              },
+            }),
+            listComments: async () => ({ data: [] }),
+            createComment: async () => ({ data: { id: 1, html_url: "https://example.test/c" } }),
+            addAssignees: async () => ({ data: { assignees: [] } }),
+          },
+          repos: repositoryApiWithoutFacilityManifest(),
+          git: {},
+          pulls: {},
+        },
+      }) as never;
+    const repo = await insertRepoWithInstallation(`nochecks-${Date.now()}`);
+    await insertIssue(repo.id, 51, "open", "2026-03-01T00:00:06Z");
+    await insertAgent("builder");
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/issues/51/trigger`,
+      headers: { cookie },
+      payload: { agent: "builder" },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().gh.issueNumber).toBe(51);
+    expect(enqueued).toContainEqual({
+      queue: "runs.dispatch",
+      data: { runId: response.json().id, orgId },
+    });
+    app.githubClientFactory = undefined;
+  });
+
   it("pins project-scoped keys to their project across the issue mirror (404 elsewhere)", async () => {
     // A key pinned to ANOTHER project — with full engineer permissions — must
     // not read this project's issues nor trigger runs in it.

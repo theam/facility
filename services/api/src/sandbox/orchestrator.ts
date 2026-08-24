@@ -65,6 +65,7 @@ import type { AppConfig } from "../types.js";
 import { raisePlatformIssue, resolvePlatformIssue } from "../watchtower/issues.js";
 import { sandboxCachePartition, sandboxNamespace } from "./cache.js";
 import { nestedDockerEnabled, provisioningDepth } from "./capabilities.js";
+import { DELIVERY_REPO_NOT_CONFIGURED, deliveryRepoConfigured } from "./delivery-gate.js";
 import { DockerSandboxDriver } from "./docker.js";
 import type { LaunchSpec, SandboxDriver, SandboxDriverName } from "./driver.js";
 import { sandboxDriver } from "./driver.js";
@@ -102,6 +103,21 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
   try {
     const run = await loadRun(db, job.orgId, job.runId);
     if (run?.status !== "queued") return;
+    const { bundle, profile, agentPermissions } = await buildRunBundle(db, run, config);
+    // Refuse before any sandbox or spend-capable key exists: a delivery-mode
+    // agent without a repository cannot create a branch or pull request. The
+    // atomic failRun transition also closes the race where a concurrent worker
+    // already claimed and launched.
+    if (!deliveryRepoConfigured(bundle)) {
+      await failRun(
+        db,
+        job.orgId,
+        job.runId,
+        `{"code":"${DELIVERY_REPO_NOT_CONFIGURED}"}`,
+        DELIVERY_REPO_NOT_CONFIGURED,
+      );
+      return;
+    }
     // Claim the run atomically. If a duplicate queue delivery raced us and
     // another worker already moved it out of "queued", the update touches no
     // rows and we must NOT launch a second sandbox for the same run.
@@ -113,7 +129,6 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
     if (claimed.length === 0) return;
     await appendRunEvents(db, run.orgId, run.id, [{ type: "provisioning", data: {} }]);
 
-    const { bundle, profile, agentPermissions } = await buildRunBundle(db, run, config);
     const virtualKey = await generateApiKey("fvk");
     await db.insert(virtualKeys).values({
       id: virtualKey.id,
@@ -1659,27 +1674,7 @@ async function buildRunBundle(
   if (agent.orgId !== run.orgId || agent.projectId !== run.projectId) {
     throw new Error("agent_not_in_project");
   }
-  const profile = (
-    await db
-      .select()
-      .from(sandboxProfiles)
-      .where(
-        and(
-          eq(sandboxProfiles.orgId, run.orgId),
-          agent.sandboxProfileId
-            ? eq(sandboxProfiles.id, agent.sandboxProfileId)
-            : or(eq(sandboxProfiles.id, "sbx_dev_default"), isNull(sandboxProfiles.projectId)),
-        ),
-      )
-      // Deterministic fallback when an org has several global profiles: the
-      // canonical seeded default wins, otherwise the oldest global profile — never
-      // an arbitrary row (limit(1) with no order returned a nondeterministic pick).
-      .orderBy(
-        sql`case when ${sandboxProfiles.id} = 'sbx_dev_default' then 0 else 1 end`,
-        sandboxProfiles.createdAt,
-      )
-      .limit(1)
-  )[0];
+  const profile = await agentSandboxProfile(db, run.orgId, agent);
   if (!profile) throw new Error("run_missing_sandbox_profile");
   // Clone the repo the run is ACTUALLY about: an issue/resume trigger records it
   // in run.gh (owner/repo). Only fall back to the project's oldest repo when the
@@ -2455,11 +2450,11 @@ function arrayField(value: unknown, key: string) {
     : [];
 }
 
-// Resolve the run's acceptance-gate commands: a sandbox profile's explicit
+// Resolve the run's acceptance commands: a sandbox profile's explicit
 // setup.check_cmds override wins; otherwise the project's own configured checks
 // (settings.check_cmds). Empty when neither is set.
 export function resolveCheckCmds(
-  profile: { setup: unknown },
+  profile: { setup?: unknown },
   renderAnswers: unknown,
   projectSettings: unknown,
 ): string[] {
@@ -2469,6 +2464,34 @@ export function resolveCheckCmds(
   if (Object.hasOwn(answers, "checkCmds")) return arrayField(answers, "checkCmds");
   if (Object.hasOwn(answers, "check_cmds")) return arrayField(answers, "check_cmds");
   return arrayField(projectSettings, "check_cmds");
+}
+
+// The sandbox profile a run would use: the agent's explicit pick, else a
+// deterministic global fallback (the canonical seeded default, then the oldest
+// global profile — never an arbitrary row).
+async function agentSandboxProfile(
+  db: ReturnType<typeof createDb>["db"],
+  orgId: string,
+  agent: { sandboxProfileId: string | null },
+) {
+  return (
+    await db
+      .select()
+      .from(sandboxProfiles)
+      .where(
+        and(
+          eq(sandboxProfiles.orgId, orgId),
+          agent.sandboxProfileId
+            ? eq(sandboxProfiles.id, agent.sandboxProfileId)
+            : or(eq(sandboxProfiles.id, "sbx_dev_default"), isNull(sandboxProfiles.projectId)),
+        ),
+      )
+      .orderBy(
+        sql`case when ${sandboxProfiles.id} = 'sbx_dev_default' then 0 else 1 end`,
+        sandboxProfiles.createdAt,
+      )
+      .limit(1)
+  )[0];
 }
 
 export function resolveRepoEngineConfig(
