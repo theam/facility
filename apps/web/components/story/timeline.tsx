@@ -99,7 +99,20 @@ function TimelineItem({
         />
       );
     case "issue_closed":
-      return <MilestoneLine ts={item.ts} text="issue closed" tone="ok" />;
+      return (
+        <div className="flex flex-col gap-1.5">
+          <MilestoneLine
+            ts={item.ts}
+            text={`issue closed${item.actor ? ` by ${item.actor}` : ""}`}
+            tone={item.reason ? "human" : "ok"}
+          />
+          {item.reason ? (
+            <p className="border-l border-(--line) pl-3 text-[12.5px] text-(--dim)">
+              {item.reason}
+            </p>
+          ) : null}
+        </div>
+      );
     case "stage":
       return (
         <div className="flex items-center gap-2.5">

@@ -72,6 +72,11 @@ export type PipelineStoryInput = {
   number: number;
   title: string;
   state: "open" | "closed" | "merged";
+  /**
+   * GitHub's reason for a closed issue; `not_planned` is abandoned, not
+   * delivered. Absent on pull-request stories, which have no issue state.
+   */
+  stateReason?: string | null;
   labels: string[];
   assignees: string[];
   author: string | null;
@@ -100,6 +105,7 @@ export type PipelineIssueRecord = {
   number: number;
   title: string;
   state: string;
+  stateReason: string | null;
   labels: unknown;
   assignees: unknown;
   author: string | null;
@@ -191,6 +197,7 @@ export function assemblePipelineStories(input: {
       number: issue.number,
       title: issue.title,
       state: issue.state === "closed" ? "closed" : "open",
+      stateReason: issue.stateReason,
       labels: stringArray(issue.labels),
       assignees: stringArray(issue.assignees),
       author: issue.author,
@@ -325,8 +332,12 @@ export function classifyPipeline(
       stages.get(stage)?.push(placed);
       continue;
     }
+    // A story abandoned as `not_planned` was decided against, not delivered.
+    // It leaves the board rather than joining the work that shipped.
     const shipped =
-      story.storyType === "issue" ? story.state === "closed" : story.state === "merged";
+      story.storyType === "issue"
+        ? story.state === "closed" && story.stateReason !== "not_planned"
+        : story.state === "merged";
     const closedStamp = story.closedAt ?? story.ghUpdatedAt;
     if (shipped && closedStamp && now - closedStamp.getTime() < WEEK_MS) {
       stages.get("shipped")?.push(placeBase(story, "shipped_recently"));

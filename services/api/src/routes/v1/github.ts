@@ -1,6 +1,7 @@
 import { newId } from "@facility/core";
 import {
   actionTypes,
+  auditEvents,
   ghCiEvents,
   ghIssues,
   ghPullRequests,
@@ -262,6 +263,10 @@ const StoryDetailSchema = z.object({
   ghCreatedAt: DateValue.nullable(),
   ghUpdatedAt: DateValue.nullable(),
   closedAt: DateValue.nullable(),
+  stateReason: z.string().nullable(),
+  /** The human who closed this story from Facility, and why, from the audit log. */
+  closedBy: z.string().nullable(),
+  closeReason: z.string().nullable(),
   prs: z.array(PipelinePullRequestSchema),
   ciState: z.enum(["pending", "success", "failure"]).nullable(),
   ciUrl: z.string().nullable(),
@@ -655,8 +660,12 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
         ? (staged.get(stageDefinition.key) ?? []).find((story) => story.key === selected.key)
         : null;
       const { linkedRuns: _linkedRuns, ...story } = selected;
+      const closeDecision = await latestStoryClose(db, p.orgId, projectId, selected);
       return {
         ...story,
+        stateReason: story.stateReason ?? null,
+        closedBy: closeDecision.closedBy,
+        closeReason: closeDecision.reason,
         bodyMd: bodyRow?.bodyMd ?? null,
         ciState: placedStory?.ciState ?? null,
         ciUrl: placedStory?.ciUrl ?? null,
@@ -1430,6 +1439,43 @@ function proposalKeysForAssembly(
     if (match) keys.add(match.key);
   }
   return keys;
+}
+
+export /**
+ * Who closed this story from Facility and why. The audit log is the only place
+ * that record exists — GitHub has no field for a closing rationale — so the
+ * timeline reads the decision back from the event the close verb wrote.
+ */
+async function latestStoryClose(
+  db: FastifyInstance["facilityDb"],
+  orgId: string,
+  projectId: string,
+  story: { storyType: string; state: string; repoId: string; number: number },
+): Promise<{ closedBy: string | null; reason: string | null }> {
+  if (story.storyType !== "issue" || story.state !== "closed") {
+    return { closedBy: null, reason: null };
+  }
+  const event = (
+    await db
+      .select({ payload: auditEvents.payload })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.orgId, orgId),
+          eq(auditEvents.projectId, projectId),
+          eq(auditEvents.action, "story.closed"),
+          sql`${auditEvents.payload}->>'repoId' = ${story.repoId}`,
+          sql`${auditEvents.payload}->>'number' = ${String(story.number)}`,
+        ),
+      )
+      .orderBy(desc(auditEvents.seq))
+      .limit(1)
+  )[0];
+  const payload = objectOrEmpty(event?.payload);
+  return {
+    closedBy: typeof payload.actor === "string" ? payload.actor : null,
+    reason: typeof payload.reason === "string" ? payload.reason : null,
+  };
 }
 
 export async function loadIssue(

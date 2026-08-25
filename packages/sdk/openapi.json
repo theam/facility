@@ -12439,6 +12439,18 @@
                       "type": "string",
                       "format": "date-time"
                     },
+                    "stateReason": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "closedBy": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "closeReason": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "prs": {
                       "type": "array",
                       "items": {
@@ -12674,6 +12686,9 @@
                     "ghCreatedAt",
                     "ghUpdatedAt",
                     "closedAt",
+                    "stateReason",
+                    "closedBy",
+                    "closeReason",
                     "prs",
                     "ciState",
                     "ciUrl",

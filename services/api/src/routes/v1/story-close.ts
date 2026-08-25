@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { githubInstallations, repos } from "@facility/db";
 import { and, eq } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
 import {
@@ -71,6 +72,8 @@ export async function registerStoryCloseRoutes(app: FastifyInstance, context: V1
         reason,
         stateReason,
         actor: actorLabel(p),
+        attemptId: attemptId(request),
+        appSlug: context.config.githubAppSlug,
       });
       await request.audit(
         "story.closed",
@@ -80,6 +83,9 @@ export async function registerStoryCloseRoutes(app: FastifyInstance, context: V1
           number,
           stateReason,
           reason,
+          // The display label the timeline reads back; the actor field on the
+          // event itself stays the authoritative principal id.
+          actor: actorLabel(p),
           commentId: result.commentId,
           changed: result.changed,
         },
@@ -133,6 +139,17 @@ function mutationResponse(repoId: string, number: number, result: StoryStateMuta
     closedAt: result.closedAt,
     changed: result.changed,
   };
+}
+
+/**
+ * Names this close attempt for its own retries. The idempotency key already
+ * identifies a retried request, and hashing keeps the caller's key off GitHub.
+ * Without one there is nothing to recover against, so no comment is reused.
+ */
+function attemptId(request: FastifyRequest) {
+  const raw = request.headers["idempotency-key"];
+  const key = Array.isArray(raw) ? raw[0] : raw;
+  return key ? createHash("sha256").update(key).digest("hex").slice(0, 16) : null;
 }
 
 /** GitHub identity is never taken from the request body — only from the principal. */

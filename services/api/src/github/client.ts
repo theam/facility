@@ -122,6 +122,7 @@ export type Octokit = {
           number: number;
           html_url: string;
           state?: string;
+          state_reason?: string | null;
           closed_at?: string | null;
           updated_at?: string | null;
         };
@@ -140,6 +141,7 @@ export type Octokit = {
           body?: string | null;
           html_url: string;
           state?: string;
+          state_reason?: string | null;
           closed_at?: string | null;
           updated_at?: string | null;
           user?: { login?: string } | null;
@@ -291,6 +293,8 @@ export type GithubPullRequestSnapshot = {
 export type GithubIssueStateSnapshot = {
   number: number;
   state: "open" | "closed";
+  /** GitHub's own reason for that state, mirrored verbatim when it sends one. */
+  stateReason: string | null;
   closedAt: Date | null;
   updatedAt: Date | null;
 };
@@ -1362,11 +1366,17 @@ function pullRequestSnapshot(
 
 function issueStateSnapshot(
   number: number,
-  data: { state?: string; closed_at?: string | null; updated_at?: string | null },
+  data: {
+    state?: string;
+    state_reason?: string | null;
+    closed_at?: string | null;
+    updated_at?: string | null;
+  },
 ): GithubIssueStateSnapshot {
   return {
     number,
     state: data.state === "closed" ? "closed" : "open",
+    stateReason: data.state_reason ?? null,
     closedAt: data.closed_at ? new Date(data.closed_at) : null,
     updatedAt: data.updated_at ? new Date(data.updated_at) : null,
   };

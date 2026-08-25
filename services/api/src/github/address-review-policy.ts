@@ -163,7 +163,8 @@ export function decideAddressReviewAdmission(input: {
   return { admitted: true };
 }
 
-function facilityBotLogins(slug?: string): Set<string> {
+/** The logins GitHub can present for this Facility App installation. */
+export function facilityBotLogins(slug?: string): Set<string> {
   const normalized = normalizeLogin(slug);
   return normalized ? new Set([normalized, `${normalized}[bot]`]) : new Set();
 }

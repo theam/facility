@@ -284,6 +284,30 @@ describe("server-owned story pipeline", () => {
     ]);
     expect(shipped?.every((story) => story.stageState === "shipped_recently")).toBe(true);
   });
+
+  it("keeps a story abandoned as not planned off the board instead of shipping it", () => {
+    const recent = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+    const delivered = {
+      ...storyWith({}),
+      state: "closed" as const,
+      stateReason: "completed",
+      closedAt: recent,
+      prs: [],
+    };
+    const abandoned = {
+      ...delivered,
+      key: "repo_a:issue:41",
+      number: 41,
+      stateReason: "not_planned",
+    };
+
+    const stages = classifyPipeline([delivered, abandoned], new Set(), NOW.getTime());
+    expect(stages.get("shipped")?.map((story) => story.key)).toEqual(["repo_a:issue:1"]);
+    // Abandoned work is decided, not delivered: it appears in no stage at all.
+    expect([...stages.values()].flat().some((story) => story.key === "repo_a:issue:41")).toBe(
+      false,
+    );
+  });
 });
 
 function issue(repoId: string, number: number): PipelineIssueRecord {
@@ -293,6 +317,7 @@ function issue(repoId: string, number: number): PipelineIssueRecord {
     number,
     title: `Issue ${number}`,
     state: "open",
+    stateReason: null,
     labels: [],
     assignees: [],
     author: "octocat",

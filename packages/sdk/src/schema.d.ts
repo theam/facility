@@ -9273,6 +9273,9 @@ export interface operations {
                         ghUpdatedAt: string | null;
                         /** Format: date-time */
                         closedAt: string | null;
+                        stateReason: string | null;
+                        closedBy: string | null;
+                        closeReason: string | null;
                         prs: {
                             number: number;
                             title: string;

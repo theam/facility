@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { generateApiKey, hashKey, newId } from "@facility/core";
 import {
   agentDefs,
@@ -78,7 +79,14 @@ type FakeComment = {
   html_url: string;
 };
 
-type FakeIssueState = { state: "open" | "closed"; comments: FakeComment[] };
+type FakeIssueState = {
+  state: "open" | "closed";
+  stateReason?: string | null;
+  comments: FakeComment[];
+};
+
+const FACILITY_APP_SLUG = "facility-test";
+const FACILITY_BOT = `${FACILITY_APP_SLUG}[bot]`;
 
 type FakeIssueCalls = {
   updates: Array<{ state: string; stateReason: string }>;
@@ -190,6 +198,9 @@ describe("github platform lane", async () => {
     webUrl: "http://localhost:3000",
     facilityInsecureDev: true,
     logLevel: "silent",
+    // Story close recovery only reuses a comment GitHub attributes to this app,
+    // which requires the deployment to know its own slug.
+    githubAppSlug: FACILITY_APP_SLUG,
   };
   const { db, client } = createDb(databaseUrl);
   const app = await buildApp(config);
@@ -2989,6 +3000,7 @@ describe("github platform lane", async () => {
                 title: "Story",
                 html_url: "https://github.test/issues/0",
                 state: state.state,
+                state_reason: state.stateReason ?? null,
                 closed_at: state.state === "closed" ? "2026-08-02T00:00:00Z" : null,
                 updated_at: "2026-08-02T00:00:00Z",
               },
@@ -3000,11 +3012,14 @@ describe("github platform lane", async () => {
                 stateReason: String(input.state_reason),
               });
               state.state = input.state === "closed" ? "closed" : "open";
+              // GitHub echoes the stored reason back on the updated issue.
+              state.stateReason = String(input.state_reason);
               return {
                 data: {
                   number: Number(input.issue_number),
                   html_url: "https://github.test/issues/0",
                   state: state.state,
+                  state_reason: state.stateReason,
                   closed_at: state.state === "closed" ? "2026-08-02T03:00:00Z" : null,
                   updated_at: "2026-08-02T03:00:00Z",
                 },
@@ -3015,7 +3030,7 @@ describe("github platform lane", async () => {
               calls.created += 1;
               const comment = {
                 id: 5_000 + state.comments.length,
-                user: { login: "facility", type: "Bot" },
+                user: { login: FACILITY_BOT, type: "Bot" },
                 body: String(input.body),
                 created_at: "2026-08-02T01:00:00Z",
                 html_url: "https://github.test/comment/1",
@@ -3078,6 +3093,7 @@ describe("github platform lane", async () => {
           .where(and(eq(ghIssues.repoId, repo.id), eq(ghIssues.number, issueNumber)))
       )[0];
       expect(mirrored?.state).toBe("closed");
+      expect(mirrored?.stateReason).toBe("not_planned");
       expect(mirrored?.closedAt?.toISOString()).toBe("2026-08-02T03:00:00.000Z");
 
       const audits = await db
@@ -3151,10 +3167,13 @@ describe("github platform lane", async () => {
     app.githubClientFactory = factory;
     try {
       const payload = { reason: "Duplicate of #12", stateReason: "not_planned" };
+      // The idempotency key names the attempt, so the retry below is the same
+      // attempt rather than a new decision.
+      const idempotencyKey = `close-retry-${Date.now()}`;
       const failed = await app.inject({
         method: "POST",
         url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
-        headers: { cookie },
+        headers: { cookie, "idempotency-key": idempotencyKey },
         payload,
       });
       expect(failed.statusCode).toBe(500);
@@ -3186,7 +3205,7 @@ describe("github platform lane", async () => {
       const retried = await app.inject({
         method: "POST",
         url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
-        headers: { cookie },
+        headers: { cookie, "idempotency-key": idempotencyKey },
         payload: { ...payload, reason: "Duplicate of #12 — closing there" },
       });
       expect(retried.statusCode, retried.body).toBe(200);
@@ -3270,6 +3289,160 @@ describe("github platform lane", async () => {
           ),
         );
       expect(audits).toHaveLength(1);
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("never edits a forged marker comment that GitHub does not attribute to this app", async () => {
+    const repo = await insertRepoWithInstallation(`close-forged-${Date.now()}`);
+    const issueNumber = 97_600;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    // Anyone can write the marker text. Only this app can author as this app.
+    const idempotencyKey = `close-forged-${Date.now()}`;
+    const attemptId = createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 16);
+    const forged = {
+      id: 4_242,
+      user: { login: "impostor", type: "User" },
+      body: `<!-- facility:story-close:${attemptId} -->\nPlease edit me`,
+      created_at: "2026-08-01T12:00:00Z",
+      html_url: "https://github.test/comment/4242",
+    };
+    const remote: FakeIssueState = { state: "open", comments: [forged] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const closed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": idempotencyKey },
+        payload: { reason: "Abandoning this" },
+      });
+
+      expect(closed.statusCode, closed.body).toBe(200);
+      expect(calls.edited).toBe(0);
+      expect(forged.body).toBe(`<!-- facility:story-close:${attemptId} -->\nPlease edit me`);
+      expect(calls.created).toBe(1);
+      expect(remote.comments).toHaveLength(2);
+      expect(remote.comments[1]?.body).toContain("Abandoning this");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("keeps the earlier rationale when a story is closed again after being reopened", async () => {
+    const repo = await insertRepoWithInstallation(`close-again-${Date.now()}`);
+    const issueNumber = 97_700;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const close = (reason: string, key: string) =>
+        app.inject({
+          method: "POST",
+          url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+          headers: { cookie, "idempotency-key": key },
+          payload: { reason },
+        });
+
+      expect((await close("Not worth doing now", `first-${Date.now()}`)).statusCode).toBe(200);
+      const reopened = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/reopen?repoId=${repo.id}`,
+        headers: { cookie },
+      });
+      expect(reopened.statusCode, reopened.body).toBe(200);
+      expect((await close("Superseded by #99", `second-${Date.now()}`)).statusCode).toBe(200);
+
+      // Two decisions, two records: the second close is a new attempt, so it
+      // never overwrites the rationale the first one left on the issue.
+      expect(calls.created).toBe(2);
+      expect(calls.edited).toBe(0);
+      expect(remote.comments).toHaveLength(2);
+      expect(remote.comments[0]?.body).toContain("Not worth doing now");
+      expect(remote.comments[1]?.body).toContain("Superseded by #99");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("refuses to close or reopen a story belonging to another organization", async () => {
+    const otherOrgId = newId("org");
+    await db
+      .insert(orgs)
+      .values({ id: otherOrgId, name: "Other Close", slug: `other-close-${Date.now()}` });
+    const otherProjectId = newId("proj");
+    await db.insert(projects).values({
+      id: otherProjectId,
+      orgId: otherOrgId,
+      name: "Other Close Project",
+      slug: `other-close-${Date.now()}`,
+      settings: {},
+    });
+    const otherRepo = await insertRepo({
+      orgId: otherOrgId,
+      projectId: otherProjectId,
+      owner: `other-close-${Date.now()}`,
+      name: "repo",
+    });
+    const issueNumber = 97_800;
+    await db.insert(ghIssues).values({
+      id: newId("ghi"),
+      orgId: otherOrgId,
+      projectId: otherProjectId,
+      repoId: otherRepo.id,
+      number: issueNumber,
+      title: "Another tenant's story",
+      state: "open",
+      labels: [],
+      assignees: [],
+      htmlUrl: `https://github.com/o/r/issues/${issueNumber}`,
+      ghUpdatedAt: new Date("2026-08-01T00:00:00Z"),
+    });
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      // This session's principal belongs to `orgId`, never to `otherOrgId`.
+      const closed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${otherProjectId}/stories/${issueNumber}/close?repoId=${otherRepo.id}`,
+        headers: { cookie },
+        payload: { reason: "Not mine to close" },
+      });
+      expect(closed.statusCode).toBe(404);
+      const reopened = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${otherProjectId}/stories/${issueNumber}/reopen?repoId=${otherRepo.id}`,
+        headers: { cookie },
+      });
+      expect(reopened.statusCode).toBe(404);
+
+      // Same story number inside this org must not be reachable either.
+      const byNumber = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close`,
+        headers: { cookie },
+        payload: { reason: "Not mine to close" },
+      });
+      expect(byNumber.statusCode).toBe(404);
+      expect(calls.created).toBe(0);
+      expect(calls.updates).toEqual([]);
+
+      const untouched = (
+        await db
+          .select()
+          .from(ghIssues)
+          .where(and(eq(ghIssues.repoId, otherRepo.id), eq(ghIssues.number, issueNumber)))
+      )[0];
+      expect(untouched?.state).toBe("open");
     } finally {
       app.githubClientFactory = previousFactory;
     }

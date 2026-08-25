@@ -30,6 +30,7 @@ type GithubIssue = {
   number?: number;
   title?: string;
   state?: string;
+  state_reason?: string | null;
   user?: { login?: string };
   labels?: Array<string | { name?: string | null }>;
   assignees?: Array<{ login?: string | null }>;
@@ -276,6 +277,7 @@ async function upsertIssue(db: FacilityDb, repo: typeof repos.$inferSelect, issu
     number: issue.number,
     title: issue.title,
     state: issue.state === "closed" ? "closed" : "open",
+    stateReason: issueStateReason(issue.state_reason),
     author: issue.user?.login ?? null,
     labels: issueLabels(issue),
     assignees: issueAssignees(issue),
@@ -296,6 +298,7 @@ async function upsertIssue(db: FacilityDb, repo: typeof repos.$inferSelect, issu
       set: {
         title: values.title,
         state: values.state,
+        stateReason: values.stateReason,
         author: values.author,
         labels: values.labels,
         assignees: values.assignees,
@@ -311,6 +314,16 @@ async function upsertIssue(db: FacilityDb, repo: typeof repos.$inferSelect, issu
     })
     .returning();
   return row ?? null;
+}
+
+/** Only GitHub's documented reasons reach the mirror; the column is checked. */
+function issueStateReason(value: string | null | undefined) {
+  return value === "completed" ||
+    value === "not_planned" ||
+    value === "duplicate" ||
+    value === "reopened"
+    ? value
+    : null;
 }
 
 function issueLabels(issue: GithubIssue): string[] {

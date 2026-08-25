@@ -31,7 +31,7 @@ export type StoryItem =
   | { kind: "pr_opened"; ts: string; outcome: Outcome | null; pr: StoryPr }
   | { kind: "pr_closed"; ts: string; outcome: Outcome | null; pr: StoryPr }
   | { kind: "ci"; ts: string; event: StoryCiEvent; pr: StoryPr }
-  | { kind: "issue_closed"; ts: string }
+  | { kind: "issue_closed"; ts: string; actor: string | null; reason: string | null }
   | { kind: "stage"; ts: string; stage: PipelineStageKey; label: string };
 
 function stamp(value: unknown): string | null {
@@ -190,7 +190,12 @@ export function deriveStoryTimeline(input: {
 
   const closed = stamp(detail.closedAt);
   if (detail.storyType === "issue" && detail.state === "closed" && closed) {
-    items.push({ kind: "issue_closed", ts: closed });
+    items.push({
+      kind: "issue_closed",
+      ts: closed,
+      actor: detail.closedBy,
+      reason: detail.closeReason,
+    });
   }
 
   items.sort((a, b) => {

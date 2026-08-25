@@ -287,6 +287,52 @@ describe("story presentation contract", () => {
 
     expect(reviewablePullRequests([story]).map(({ pull }) => pull.number)).toEqual([22]);
   });
+
+  it("carries the closing actor and reason onto the issue_closed milestone", () => {
+    const detail = storyDetail();
+    detail.state = "closed";
+    detail.closedAt = "2026-08-03T00:00:00Z";
+    detail.closedBy = "@octocat";
+    detail.closeReason = "Superseded by the new pipeline";
+
+    expect(
+      deriveStoryTimeline({
+        detail,
+        proposals: [],
+        outcomes: [],
+        allowLegacyProposalNumber: true,
+        stageLabels: new Map(),
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "issue_closed",
+          actor: "@octocat",
+          reason: "Superseded by the new pipeline",
+        }),
+      ]),
+    );
+  });
+
+  it("leaves the closing actor and reason unset when the audit log has neither", () => {
+    const detail = storyDetail();
+    detail.state = "closed";
+    detail.closedAt = "2026-08-03T00:00:00Z";
+
+    expect(
+      deriveStoryTimeline({
+        detail,
+        proposals: [],
+        outcomes: [],
+        allowLegacyProposalNumber: true,
+        stageLabels: new Map(),
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "issue_closed", actor: null, reason: null }),
+      ]),
+    );
+  });
 });
 
 function pipelinePull(
@@ -322,6 +368,9 @@ function storyDetail(): StoryDetail {
     number: 17,
     title: "Story",
     state: "open",
+    stateReason: null,
+    closedBy: null,
+    closeReason: null,
     labels: [],
     assignees: [],
     author: "grace",
