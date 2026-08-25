@@ -111,9 +111,16 @@ export class UsageTee extends Transform {
     try {
       const parsed = JSON.parse(text);
       if (this.provider === "anthropic") {
-        const direct = usageFromJson("anthropic", parsed);
-        const delta = usageFromJson("anthropic", { usage: parsed.delta?.usage });
-        mergeUsage(this.usage, { ...direct, ...delta });
+        // Anthropic splits streamed usage across frames: `message_start` carries
+        // input and cache tokens under `message.usage`, `message_delta` carries
+        // output tokens under `delta.usage`, and a non-streamed body reports
+        // everything under a top-level `usage`. Merge each source separately
+        // rather than spreading them into one object: a spread copies absent
+        // keys as `undefined` and would drop an earlier frame's input tokens
+        // when the later frame reports only output.
+        for (const source of [parsed, parsed?.message, parsed?.delta]) {
+          mergeUsage(this.usage, usageFromJson("anthropic", source));
+        }
       } else {
         mergeUsage(this.usage, usageFromJson("openai", parsed));
       }
