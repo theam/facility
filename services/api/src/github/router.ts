@@ -45,18 +45,30 @@ export type GithubIssueCommentContext = {
 export const ISSUE_CONTEXT_MAX_CHARS = 512 * 1024;
 
 const COMMAND_RE =
-  /(?:^|\n)\s*\/(builder|architect|codex-builder|codex-architect)(?=$|[\s,.:;!?)])/g;
+  /(?:^|\n)\s*\/(?:(?<prefix>[a-z0-9][a-z0-9_-]*)\s+)?(?<agent>builder|architect|codex-builder|codex-architect)(?=$|[\s,.:;!?)])/g;
 
 export function resolveSlashCommand(body: string): {
   command?: string;
   agentCommand?: string;
+  prefix?: string;
   ambiguous: boolean;
 } {
-  const commands = [...body.matchAll(COMMAND_RE)].map((match) => match[1]).filter(Boolean);
-  const unique = [...new Set(commands)];
+  const matches = [...body.matchAll(COMMAND_RE)].map((match) => ({
+    agent: match.groups?.agent,
+    prefix: match.groups?.prefix,
+  }));
+  const unique = [
+    ...new Map(matches.map((match) => [`${match.prefix ?? ""}:${match.agent}`, match])).values(),
+  ];
   if (unique.length !== 1) return { ambiguous: unique.length > 1 };
-  const raw = unique[0] ?? "";
-  return { command: raw.replace(/^codex-/, ""), agentCommand: raw, ambiguous: false };
+  const selected = unique[0];
+  const raw = selected?.agent ?? "";
+  return {
+    command: raw.replace(/^codex-/, ""),
+    agentCommand: raw,
+    ...(selected?.prefix ? { prefix: selected.prefix } : {}),
+    ambiguous: false,
+  };
 }
 
 export function githubTriggerRequiresClient(payload: TriggerPayload) {
@@ -125,6 +137,9 @@ export async function routeTrigger(
   // workflow has already yielded to Facility but the database still has the
   // previous lane configuration.
   const renderAnswers = await syncRepoFacilityConfig({ db, client, repo });
+  if (resolved.prefix !== commandPrefixFor({ ...repo, renderAnswers })) {
+    return { routed: false, reason: "command_prefix_mismatch" };
+  }
   const lane = laneFor({ ...repo, renderAnswers }, resolved.agentCommand ?? command);
   if (lane !== "platform") return { routed: false, reason: "repo_lane" };
   const agent = await findAgentDef(
@@ -293,7 +308,7 @@ export async function routeTrigger(
       renderGithubRunProgress({
         runId: run.id,
         mode: command,
-        command: `/${resolved.agentCommand ?? command}`,
+        command: `/${resolved.prefix ? `${resolved.prefix} ` : ""}${resolved.agentCommand ?? command}`,
         phase: "queued",
         issueNumber,
         issueTitle: payload.issue?.title,
@@ -308,7 +323,7 @@ export async function routeTrigger(
           progressComment: {
             id: progress.id,
             url: progress.url ?? null,
-            command: `/${resolved.agentCommand ?? command}`,
+            command: `/${resolved.prefix ? `${resolved.prefix} ` : ""}${resolved.agentCommand ?? command}`,
             sender,
             issueTitle: payload.issue?.title ?? null,
           },
@@ -488,9 +503,22 @@ function objectOrEmpty(value: unknown): Record<string, unknown> {
 }
 
 export function laneFor(repo: typeof repos.$inferSelect, command: string): "repo" | "platform" {
-  const answers = repo.renderAnswers as { execution_lane?: Record<string, string> } | null;
-  const lane = answers?.execution_lane?.[command] ?? answers?.execution_lane?.[`/${command}`];
+  const answers = repo.renderAnswers as {
+    execution_lane?: Record<string, string>;
+    execution_lane_override?: Record<string, string>;
+  } | null;
+  const override =
+    answers?.execution_lane_override?.[command] ??
+    answers?.execution_lane_override?.[`/${command}`];
+  const lane =
+    override ?? answers?.execution_lane?.[command] ?? answers?.execution_lane?.[`/${command}`];
   return lane === "platform" ? "platform" : "repo";
+}
+
+export function commandPrefixFor(repo: typeof repos.$inferSelect): string | undefined {
+  const answers = repo.renderAnswers as { command_prefix?: unknown } | null;
+  const value = answers?.command_prefix;
+  return typeof value === "string" && value ? value : undefined;
 }
 
 export async function findAgentDef(

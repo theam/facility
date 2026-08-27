@@ -61,6 +61,7 @@ import {
   createPreviewRecord,
   previewAccessUrl,
 } from "../previews.js";
+import { githubFeedbackModeForRun } from "../project-policy.js";
 import type { AppConfig } from "../types.js";
 import { raisePlatformIssue, resolvePlatformIssue } from "../watchtower/issues.js";
 import { sandboxCachePartition, sandboxNamespace } from "./cache.js";
@@ -751,6 +752,18 @@ async function openArchitectPlanAcceptance(
       data: { source: "architect_run" },
     });
   }
+  const feedback = githubFeedbackModeForRun(run.trigger);
+  if (feedback === "silent") {
+    await insertAuditEvent(db, {
+      orgId: run.orgId,
+      projectId: run.projectId,
+      actor: { type: "agent", id: run.id },
+      action: "hitl.proposed",
+      target: { type: "proposal", id: proposal.id },
+      payload: { action_type: "plan_acceptance", issue: issueNumber, github_feedback: feedback },
+    });
+    return;
+  }
   if (!repo?.installationId) throw new Error("run_repo_missing_installation");
   const installation = (
     await db
@@ -782,7 +795,7 @@ async function openArchitectPlanAcceptance(
     proposalId: proposal.id,
   });
   const commentId = progressCommentId(run.gh);
-  if (commentId) {
+  if (feedback === "live" && commentId) {
     await client.updateIssueComment(commentId, body);
   } else {
     await client.createIssueComment(issueNumber, body);
@@ -793,7 +806,7 @@ async function openArchitectPlanAcceptance(
     actor: { type: "agent", id: run.id },
     action: "hitl.proposed",
     target: { type: "proposal", id: proposal.id },
-    payload: { action_type: "plan_acceptance", issue: issueNumber },
+    payload: { action_type: "plan_acceptance", issue: issueNumber, github_feedback: feedback },
   });
 }
 
@@ -1225,7 +1238,7 @@ export async function publishRunDelivery(
   if (delivery.issueNumber) {
     // New platform-lane runs have a live progress comment that is updated at
     // the terminal transition. Keep a short fallback for older/manual runs.
-    if (!progressCommentId(run.gh)) {
+    if (githubFeedbackModeForRun(run.trigger) === "live" && !progressCommentId(run.gh)) {
       await client
         .createIssueComment(delivery.issueNumber, `Facility opened PR #${pr.number}: ${pr.url}`)
         .catch(() => undefined);

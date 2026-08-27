@@ -40,6 +40,29 @@ webhook inactive until the API has a public HTTPS URL.
 
 ## 2. Grant permissions
 
+### Observe-only permission profile
+
+An organization evaluating Facility without repository writes can begin with
+an App limited to **Metadata, Contents, Issues, Pull requests, Actions, Checks,
+Deployments, and the enabled security-alert surfaces: Read-only**. Keep the
+organization Members and account Email addresses permissions below when this
+same App provides sign-in.
+
+That profile supports repository discovery, issue and pull-request mirrors,
+and manual observe-first analysis. It deliberately cannot kickstart a
+repository, publish comments, create branches or pull requests, project
+findings as issues, or deliver builder output. Those actions fail closed until
+the installation owner approves the corresponding write permissions. Move to
+the lifecycle profile below only when the project is switched from observation
+to active delivery.
+
+GitHub App permissions apply to the whole installation, not to an individual
+Facility project. For a mixed deployment, install a separate read-scoped App
+on observation repositories or limit each App installation to repositories
+with the same autonomy boundary.
+
+### Active lifecycle permission profile
+
 For an existing-repository lifecycle, set these **Repository permissions**:
 
 | permission | access | why |

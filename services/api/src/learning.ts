@@ -7,6 +7,7 @@ import {
   githubInstallations,
   outcomes,
   platformIssues,
+  projects,
   proposalEvents,
   proposals,
   repos,
@@ -21,6 +22,7 @@ import {
   type GithubClientFactory,
 } from "./github/client.js";
 import { ensureProjectKbSpace } from "./harness.js";
+import { scheduledAutonomyAllowed } from "./project-policy.js";
 import type { AppConfig } from "./types.js";
 
 type Db = ReturnType<typeof createDb>["db"];
@@ -461,10 +463,12 @@ export async function runLearningNightly(
   }
   try {
     const agents = await db
-      .select()
+      .select({ agent: agentDefs, project: projects })
       .from(agentDefs)
+      .innerJoin(projects, eq(projects.id, agentDefs.projectId))
       .where(and(eq(agentDefs.name, "learning"), eq(agentDefs.enabled, true)));
-    for (const agent of agents) {
+    for (const { agent, project } of agents) {
+      if (!scheduledAutonomyAllowed(project.settings)) continue;
       if (agent.harnessItemId) {
         await ensureProjectKbSpace(db, agent.orgId, agent.projectId);
       }

@@ -2,6 +2,7 @@ import { Divider, Eyebrow, PillTag, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { GatesEditor } from "@/components/project/gates-editor";
+import { ObserveFirstEditor } from "@/components/project/observe-first-editor";
 import { api } from "@/lib/api";
 
 export const metadata = { title: "project settings" };
@@ -85,6 +86,13 @@ export default async function ProjectSettingsPage({
             ))}
           </div>
         )}
+      </section>
+
+      <Divider />
+
+      <section className="flex flex-col gap-4">
+        <Eyebrow>autonomy</Eyebrow>
+        <ObserveFirstEditor projectId={projectId} settings={settings} repos={repoList} />
       </section>
 
       <Divider />

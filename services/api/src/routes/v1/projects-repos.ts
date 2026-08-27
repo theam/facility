@@ -1,4 +1,4 @@
-import { newId } from "@facility/core";
+import { can, newId } from "@facility/core";
 import {
   agentDefs,
   analysisSandboxProfileId,
@@ -85,6 +85,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         description?: string;
         settings?: Record<string, unknown>;
       };
+      validateProjectPolicy(body.settings);
       const project = (
         await db
           .insert(projects)
@@ -160,21 +161,49 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       const p = principal(request);
       const { projectId } = request.params as { projectId: string };
       assertProjectScope(p, projectId);
-      return (
-        await db
-          .update(projects)
-          .set(
-            definedFields({
-              name: (request.body as { name?: string }).name,
-              description: (request.body as { description?: string }).description,
-              status: (request.body as { status?: string }).status,
-              settings: (request.body as { settings?: Record<string, unknown> }).settings,
-              updatedAt: new Date(),
-            }),
-          )
-          .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
-          .returning()
-      )[0];
+      const settings = (request.body as { settings?: Record<string, unknown> }).settings;
+      validateProjectPolicy(settings);
+      const governance = settings ? repoGovernanceFromProjectSettings(settings) : null;
+      if (governance && !can(p.permissions, "repos:write")) {
+        throw new ApiError(403, "forbidden", "Repository write permission is required");
+      }
+      return db.transaction(async (tx) => {
+        const project = (
+          await tx
+            .update(projects)
+            .set(
+              definedFields({
+                name: (request.body as { name?: string }).name,
+                description: (request.body as { description?: string }).description,
+                status: (request.body as { status?: string }).status,
+                settings,
+                updatedAt: new Date(),
+              }),
+            )
+            .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
+            .returning()
+        )[0];
+        if (!project) throw notFound("Project not found");
+        if (governance) {
+          const projectRepos = await tx
+            .select()
+            .from(repos)
+            .where(and(eq(repos.orgId, p.orgId), eq(repos.projectId, projectId)));
+          for (const repo of projectRepos) {
+            const current =
+              repo.renderAnswers &&
+              typeof repo.renderAnswers === "object" &&
+              !Array.isArray(repo.renderAnswers)
+                ? (repo.renderAnswers as Record<string, unknown>)
+                : {};
+            await tx
+              .update(repos)
+              .set({ renderAnswers: { ...current, ...governance }, updatedAt: new Date() })
+              .where(and(eq(repos.orgId, p.orgId), eq(repos.id, repo.id)));
+          }
+        }
+        return project;
+      });
     },
   );
 
@@ -252,6 +281,11 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         autoInit: boolean;
       };
       const creation = body.create === true || body.mode === "create";
+      const project = await withOrg(db, p.orgId).projects.byId(projectId);
+      if (!project) throw notFound("Project not found");
+      const governance = repoGovernanceFromProjectSettings(
+        project.settings as Record<string, unknown>,
+      );
       const installation = await loadGithubInstallation(p.orgId, body.owner);
       const githubRepo = creation
         ? await createGithubRepository({
@@ -278,6 +312,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
             owner: githubRepo.owner,
             name: githubRepo.name,
             defaultBranch: githubRepo.defaultBranch ?? body.defaultBranch,
+            ...(governance ? { renderAnswers: governance } : {}),
           })
           .returning()
       )[0];
@@ -590,5 +625,66 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         enabled: true,
       });
     }
+  }
+}
+
+function repoGovernanceFromProjectSettings(settings: Record<string, unknown>) {
+  const rawLane = settings.execution_lane_override;
+  const rawPrefix = settings.command_prefix;
+  if (rawLane === undefined && rawPrefix === undefined) return null;
+  if (
+    rawLane !== undefined &&
+    (!rawLane || typeof rawLane !== "object" || Array.isArray(rawLane))
+  ) {
+    throw new ApiError(400, "invalid_project_governance", "execution_lane_override must be an object");
+  }
+  const lane = (rawLane ?? {}) as Record<string, unknown>;
+  if (Object.values(lane).some((value) => value !== "repo" && value !== "platform")) {
+    throw new ApiError(
+      400,
+      "invalid_project_governance",
+      "execution_lane_override values must be repo or platform",
+    );
+  }
+  if (
+    rawPrefix !== undefined &&
+    rawPrefix !== null &&
+    (typeof rawPrefix !== "string" ||
+      !/^[a-z0-9][a-z0-9_-]*$/.test(rawPrefix) ||
+      rawPrefix.length > 32)
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_project_governance",
+      "command_prefix must be null or 1-32 lowercase letters, numbers, hyphens, or underscores",
+    );
+  }
+  return {
+    ...(rawLane !== undefined ? { execution_lane_override: lane } : {}),
+    ...(rawPrefix !== undefined
+      ? { command_prefix: typeof rawPrefix === "string" ? rawPrefix : null }
+      : {}),
+  };
+}
+
+function validateProjectPolicy(settings: Record<string, unknown> | undefined) {
+  if (!settings) return;
+  if (
+    settings.autonomy_mode !== undefined &&
+    settings.autonomy_mode !== "observe" &&
+    settings.autonomy_mode !== "active"
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_project_governance",
+      "autonomy_mode must be observe or active",
+    );
+  }
+  if (settings.observe_summary !== undefined && typeof settings.observe_summary !== "boolean") {
+    throw new ApiError(
+      400,
+      "invalid_project_governance",
+      "observe_summary must be a boolean",
+    );
   }
 }
