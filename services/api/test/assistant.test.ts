@@ -136,6 +136,33 @@ describe("assistant ask endpoint", async () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it("denies an inline project-owner that also exposes /builder before creating a run", async () => {
+    const project = await insertProject("Assistant Builder Alias Guard");
+    await db
+      .update(projects)
+      .set({ builderPlanPolicy: "required" })
+      .where(eq(projects.id, project.id));
+    await insertOwnerAgent(project.id, [{ type: "command", handle: "/builder" }]);
+    const before = await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.projectId, project.id));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.id}/ask`,
+      headers: { cookie },
+      payload: { body: "attempt the inline bypass" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect((response.json() as { error: { code: string } }).error.code).toBe(
+      "builder_plan_required",
+    );
+    const after = await db.select({ id: runs.id }).from(runs).where(eq(runs.projectId, project.id));
+    expect(after).toHaveLength(before.length);
+  });
+
   it("runs a stubbed turn end to end: tool call, reply, revoked key, idle thread", async () => {
     const project = await insertProject("Assistant Happy Path");
     await insertOwnerAgent(project.id);
@@ -345,7 +372,7 @@ describe("assistant ask endpoint", async () => {
     return project;
   }
 
-  async function insertOwnerAgent(projectId: string) {
+  async function insertOwnerAgent(projectId: string, triggers: unknown[] = []) {
     const contract = (
       await db
         .insert(registryItems)
@@ -371,7 +398,7 @@ describe("assistant ask endpoint", async () => {
           engine: "claude_code",
           model: { model: "claude-sonnet-5" },
           contractItemId: contract.id,
-          triggers: [],
+          triggers,
           permissions: ["kb:read", "kb:write", "tasks:read", "tasks:write", "runs:read"],
           enabled: true,
         })

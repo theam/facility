@@ -503,6 +503,69 @@ describe("watchtower", async () => {
     expect(repoIssue?.state).toBe("open");
   });
 
+  it("preserves optional canary agent selection and gates a required dual-role fallback", async () => {
+    const configuredProject = await insertProject({
+      watchtower: { canary: { enabled: true, lane: "platform" } },
+    });
+    const configuredAgent = await insertAgent(configuredProject.id, "Configured Probe");
+    await db
+      .update(projects)
+      .set({
+        settings: {
+          watchtower: {
+            canary: { enabled: true, lane: "platform", agentDefId: configuredAgent.id },
+          },
+        },
+      })
+      .where(eq(projects.id, configuredProject.id));
+    await collectCanaries(db, new FakeGitHub(), async () => undefined);
+    expect(
+      (await db.select().from(runs).where(eq(runs.projectId, configuredProject.id)).limit(1))[0],
+    ).toMatchObject({ agentDefId: configuredAgent.id, mode: "architect", status: "queued" });
+
+    const fallbackProject = await insertProject({
+      watchtower: { canary: { enabled: true, lane: "platform" } },
+    });
+    const fallbackAgent = await insertAgent(fallbackProject.id, "Legacy Probe");
+    await collectCanaries(db, new FakeGitHub(), async () => undefined);
+    expect(
+      (await db.select().from(runs).where(eq(runs.projectId, fallbackProject.id)).limit(1))[0],
+    ).toMatchObject({ agentDefId: fallbackAgent.id, mode: "architect", status: "queued" });
+
+    const requiredProject = await insertProject({
+      watchtower: { canary: { enabled: true, lane: "platform" } },
+    });
+    const dualRoleAgent = await insertAgent(requiredProject.id, "Legacy Dual Role Probe");
+    await db
+      .update(agentDefs)
+      .set({ triggers: [{ type: "command", handle: "/builder" }] })
+      .where(eq(agentDefs.id, dualRoleAgent.id));
+    await db
+      .update(projects)
+      .set({ builderPlanPolicy: "required" })
+      .where(eq(projects.id, requiredProject.id));
+    const dispatched: Record<string, unknown>[] = [];
+    await collectCanaries(db, new FakeGitHub(), async (queue, data) => {
+      dispatched.push({ queue, ...data });
+    });
+    expect(await db.select().from(runs).where(eq(runs.projectId, requiredProject.id))).toEqual([]);
+    expect(dispatched).toEqual([]);
+    expect(
+      (
+        await db
+          .select()
+          .from(platformIssues)
+          .where(
+            and(
+              eq(platformIssues.projectId, requiredProject.id),
+              eq(platformIssues.kind, "canary_failure"),
+            ),
+          )
+          .limit(1)
+      )[0],
+    ).toMatchObject({ state: "open", title: "Canary agent blocked by Builder plan policy" });
+  });
+
   it("rolls up analytics idempotently and serves rollup-backed endpoints", async () => {
     const project = await insertProject();
     const agent = await insertAgent(project.id, "Builder");

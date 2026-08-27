@@ -18,10 +18,17 @@ import {
   runs,
 } from "@facility/db";
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import {
+  builderPlanDenialCode,
+  isBuilderPlanDenialError,
+  lockBuilderPlanPolicy,
+  withBuilderPlanPreflight,
+} from "../builder-plan-policy.js";
 import { applyFacilitySignal } from "../integrations/signals.js";
 import type { AppConfig } from "../types.js";
 import { resolvePlatformIssue } from "../watchtower/issues.js";
 import { decideAddressReviewAdmission, isTrustedReviewBot } from "./address-review-policy.js";
+import { laneFor } from "./agent-routing.js";
 import { type CiDoctorDecision, decideCiDoctorAction } from "./ci-doctor-policy.js";
 import {
   createGithubClientFactory,
@@ -44,13 +51,8 @@ import {
   syncRepoPullRequests,
   upsertGhPullRequestFromWebhook,
 } from "./pull-requests-sync.js";
-import {
-  githubTriggerRequiresClient,
-  laneFor,
-  routeTrigger,
-  type TriggerPayload,
-} from "./router.js";
-import { renderGithubRunProgress } from "./run-progress.js";
+import { githubTriggerRequiresClient, routeTrigger, type TriggerPayload } from "./router.js";
+import { renderBuilderPlanDenial, renderGithubRunProgress } from "./run-progress.js";
 
 type WebhookPayload = TriggerPayload & {
   action?: string;
@@ -610,10 +612,30 @@ async function processInstallation(
   )[0];
   if (!row) return;
   if (payload.action === "deleted" || payload.action === "suspend") {
-    await db
-      .update(repos)
-      .set({ fingerprintStatus: "orphaned", updatedAt: new Date() })
+    const affected = await db
+      .select({ orgId: repos.orgId, projectId: repos.projectId })
+      .from(repos)
       .where(eq(repos.installationId, row.id));
+    for (const project of uniqueProjects(affected)) {
+      await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as FacilityDb;
+        await lockBuilderPlanPolicy(tx, project.orgId, project.projectId);
+        await tx
+          .update(repos)
+          .set({
+            fingerprintStatus: "orphaned",
+            fingerprintVerifiedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(repos.orgId, project.orgId),
+              eq(repos.projectId, project.projectId),
+              eq(repos.installationId, row.id),
+            ),
+          );
+      });
+    }
     return;
   }
   const installationRepos =
@@ -624,17 +646,32 @@ async function processInstallation(
     })) ?? [];
   for (const item of installationRepos) {
     if (!item.owner || !item.name) continue;
-    const updated = await db
-      .update(repos)
-      .set({
-        installationId: row.id,
-        defaultBranch: item.defaultBranch ?? sql`${repos.defaultBranch}`,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(repos.orgId, orgId), eq(repos.owner, item.owner), eq(repos.name, item.name)))
-      .returning();
+    const targets = await db
+      .select({ id: repos.id, orgId: repos.orgId, projectId: repos.projectId })
+      .from(repos)
+      .where(and(eq(repos.orgId, orgId), eq(repos.owner, item.owner), eq(repos.name, item.name)));
+    const updated = [];
+    for (const target of targets) {
+      const rows = await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as FacilityDb;
+        await lockBuilderPlanPolicy(tx, target.orgId, target.projectId);
+        return tx
+          .update(repos)
+          .set({
+            installationId: row.id,
+            defaultBranch: item.defaultBranch ?? sql`${repos.defaultBranch}`,
+            fingerprintStatus: "pending",
+            fingerprintVerifiedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(repos.orgId, target.orgId), eq(repos.id, target.id)))
+          .returning();
+      });
+      updated.push(...rows);
+    }
     for (const repo of updated) {
       await enqueue?.("github.issues-sync", { repoId: repo.id, orgId: repo.orgId });
+      await enqueue?.("fingerprints.verify", { repoId: repo.id });
     }
   }
 }
@@ -684,8 +721,25 @@ async function processPush(
     });
   }
   if ([...changed].some((path) => managed.has(path))) {
+    // Close the asynchronous verification window immediately. Approval and
+    // dispatch refuse a non-ok fingerprint, so a managed default-branch push
+    // cannot keep using the previous verified state while the worker is still
+    // queued. syncRepoFacilityConfig above marks malformed/unsafe required
+    // manifests drifted before it throws.
+    await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      await lockBuilderPlanPolicy(tx, repo.orgId, repo.projectId);
+      await tx
+        .update(repos)
+        .set({ fingerprintStatus: "pending", fingerprintVerifiedAt: null, updatedAt: new Date() })
+        .where(and(eq(repos.orgId, repo.orgId), eq(repos.id, repo.id)));
+    });
     await enqueue?.("fingerprints.verify", { repoId: repo.id });
   }
+}
+
+function uniqueProjects(rows: Array<{ orgId: string; projectId: string }>) {
+  return [...new Map(rows.map((row) => [`${row.orgId}:${row.projectId}`, row])).values()];
 }
 
 async function processTrigger(
@@ -720,6 +774,21 @@ async function processTrigger(
       issueNumber: payload.issue?.number,
       runId: result.runId,
     });
+  } else {
+    const denialCode = builderPlanDenialCode(result.reason);
+    const issueNumber = payload.issue?.number;
+    if (denialCode && issueNumber) {
+      try {
+        await client.createIssueComment(issueNumber, renderBuilderPlanDenial(denialCode));
+      } catch (error) {
+        await auditGithub(db, repo.orgId, "github.comment.failed", repo, {
+          issueNumber,
+          kind: "builder_plan_denial",
+          code: denialCode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 }
 
@@ -1193,7 +1262,34 @@ async function processGithubAgentEvent(
       id: payload.sender?.login ?? `${eventType}-webhook`,
     },
   };
-  const inserted = await db.insert(runs).values(values).onConflictDoNothing().returning();
+  let inserted: (typeof runs.$inferSelect)[];
+  try {
+    inserted = await withBuilderPlanPreflight(
+      db,
+      {
+        orgId,
+        projectId: repo.projectId,
+        mode: values.mode,
+        agentDefId: agent.id,
+        trigger: values.trigger,
+        gh: values.gh,
+        actor: { type: "user", id: `github:${payload.sender?.login ?? `${eventType}-webhook`}` },
+        source: `github_event:${eventType}`,
+      },
+      (tx, admission) =>
+        tx
+          // builder-plan-preflight: github_event
+          .insert(runs)
+          .values({ ...values, mode: admission.mode })
+          .onConflictDoNothing()
+          .returning(),
+    );
+  } catch (error) {
+    if (isBuilderPlanDenialError(error)) {
+      return;
+    }
+    throw error;
+  }
   const run = inserted[0];
   if (!run) return;
   await db.insert(runEvents).values({

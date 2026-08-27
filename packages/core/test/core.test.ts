@@ -404,13 +404,14 @@ describe("receipts", () => {
       result: "succeeded",
       usage: { input_tokens: 100, output_tokens: 50, cost_usd: 1.235, cost_source: "provider" },
       activity: { turns: 2, shell_commands: 1, file_changes: 3, mcp_tool_calls: 0, errors: 0 },
-      github: { owner: "example", repo: "product", actor: "octo" },
+      github: { owner: "example", repo: "product", base_sha: "b".repeat(40), actor: "octo" },
       timing: { started_at: "2026-01-01T00:00:00Z", duration_ms: 1000 },
       checks: [{ name: "pnpm test", status: "passed", source: "platform", exit_code: 0 }],
     });
     expect(receipt.schema).toBe("facility.run.v1");
     expect(receipt.usage.cost_cents).toBe(124);
     expect(receipt.github?.actor_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(receipt.github?.base_sha).toBe("b".repeat(40));
     expect(receipt.checks).toEqual([
       { name: "pnpm test", status: "passed", source: "platform", exit_code: 0 },
     ]);
@@ -441,6 +442,29 @@ describe("receipts", () => {
       verifyFacilityReceipt({
         ...sealed,
         integrity: { ...sealed.integrity, previous_sha256: null } as never,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the optional base commit inside receipt integrity", () => {
+    const baseSha = "c".repeat(40);
+    const receipt = parseLegacyAgentReceipt({
+      schema: "example.agent_sdlc.run.v1",
+      provider: "codex_cli",
+      mode: "builder",
+      result: "succeeded",
+      usage: { input_tokens: 1, output_tokens: 1, cost_source: "provider" },
+      activity: {},
+      github: { base_sha: baseSha },
+      timing: { started_at: "2026-08-16T00:00:00.000Z" },
+    });
+    const sealed = sealFacilityReceipt(receipt, null);
+
+    expect(verifyFacilityReceipt(sealed)).toBe(true);
+    expect(
+      verifyFacilityReceipt({
+        ...sealed,
+        github: { ...sealed.github, base_sha: "d".repeat(40) },
       }),
     ).toBe(false);
   });

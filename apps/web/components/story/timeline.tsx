@@ -303,7 +303,11 @@ function humanizeAction(actionType: string | undefined): string {
 
 function decisionOf(proposal: Proposal): string {
   if (proposal.state === "rejected") return "rejected";
-  if (proposal.state === "execution_failed") return "approved · execution failed";
+  if (proposal.state === "execution_failed") {
+    return proposal.executionError
+      ? `approved · blocked (${proposal.executionError})`
+      : "approved · execution failed";
+  }
   return proposal.state === "approved" ? "approved" : proposal.state;
 }
 

@@ -22,9 +22,10 @@ type ApiProxyOptions = {
   apiUrl?: string;
   nodeEnv?: string;
   fetchImpl?: typeof fetch;
+  publicPathPrefix?: "/api" | "/oauth" | "/.well-known";
 };
 
-export function apiTargetUrl(requestUrl: string, apiUrl: string) {
+export function apiTargetUrl(requestUrl: string, apiUrl: string, publicPathPrefix = "/api") {
   let request: URL;
   let base: URL;
   try {
@@ -43,12 +44,18 @@ export function apiTargetUrl(requestUrl: string, apiUrl: string) {
   ) {
     throw new Error("facility_api_proxy_url_invalid");
   }
-  if (request.pathname !== "/api" && !request.pathname.startsWith("/api/")) {
+  if (
+    request.pathname !== publicPathPrefix &&
+    !request.pathname.startsWith(`${publicPathPrefix}/`)
+  ) {
     throw new Error("facility_api_proxy_path_invalid");
   }
 
   const target = new URL(base);
-  target.pathname = request.pathname.slice("/api".length) || "/";
+  target.pathname =
+    publicPathPrefix === "/api"
+      ? request.pathname.slice(publicPathPrefix.length) || "/"
+      : request.pathname;
   target.search = request.search;
   return target;
 }
@@ -81,7 +88,7 @@ export async function proxyApiRequest(request: Request, options: ApiProxyOptions
 
   let target: URL;
   try {
-    target = apiTargetUrl(request.url, apiUrl);
+    target = apiTargetUrl(request.url, apiUrl, options.publicPathPrefix);
   } catch {
     return proxyError(503, "api_proxy_not_configured");
   }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { progressCommentId, renderGithubRunProgress } from "../src/github/run-progress.js";
+import {
+  progressCommentId,
+  renderBuilderPlanDenial,
+  renderGithubRunProgress,
+} from "../src/github/run-progress.js";
 
 describe("GitHub run progress", () => {
   it("renders an in-place queued checklist with user context", () => {
@@ -64,5 +68,13 @@ describe("GitHub run progress", () => {
     expect(progressCommentId({ progressComment: { id: 123 } })).toBe(123);
     expect(progressCommentId({ progressComment: { id: "123" } })).toBeNull();
     expect(progressCommentId(null)).toBeNull();
+  });
+
+  it("renders a stable, digest-excludable Builder gate denial", () => {
+    const body = renderBuilderPlanDenial("builder_plan_freshness_unavailable");
+    expect(body).toContain("<!-- facility-run-progress gate=builder-plan -->");
+    expect(body).toContain("No Builder run was created");
+    expect(body).toContain("approved base and live issue revision");
+    expect(body).toContain("`builder_plan_freshness_unavailable`");
   });
 });

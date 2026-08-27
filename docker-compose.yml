@@ -104,7 +104,7 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       FACILITY_INSTANCE_ID: ${FACILITY_INSTANCE_ID:-}
-      FACILITY_OAUTH_ISSUER: ${FACILITY_OAUTH_ISSUER:-http://localhost:4400}
+      FACILITY_OAUTH_ISSUER: ${FACILITY_OAUTH_ISSUER:-http://localhost:3400}
       FACILITY_OAUTH_JWKS: ${FACILITY_OAUTH_JWKS:-}
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4420}
       # GitHub App (repo automation): webhooks 401 and clone-token minting fail
@@ -221,7 +221,7 @@ services:
       FACILITY_API_URL: http://api:4400
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4420}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,mcp}
-      MCP_AUTHORIZATION_SERVER: ${MCP_AUTHORIZATION_SERVER:-http://localhost:4400}
+      MCP_AUTHORIZATION_SERVER: ${MCP_AUTHORIZATION_SERVER:-http://localhost:3400}
       MCP_TRUST_PROXY_HOPS: ${MCP_TRUST_PROXY_HOPS:-0}
     command:
       [

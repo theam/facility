@@ -110,6 +110,35 @@ export function renderGithubRunProgress(input: GithubRunProgressInput) {
   return truncate(lines.join("\n"), COMMENT_LIMIT);
 }
 
+export function renderBuilderPlanDenial(code: string) {
+  const guidance: Record<string, string> = {
+    builder_plan_required:
+      "Run `/architect` first, review the published plan, then approve it with `/builder`.",
+    builder_plan_context_invalid:
+      "The linked Architect approval is not canonical. Run `/architect` again to create a new governed plan.",
+    builder_plan_expired:
+      "The Architect approval expired. Run `/architect` again to create a fresh plan.",
+    builder_plan_rejected:
+      "The Architect plan was rejected. Run `/architect` again after updating the request.",
+    builder_plan_already_consumed:
+      "That Architect approval has already been consumed. Inspect its Builder run or create a new plan with `/architect`.",
+    builder_plan_stale:
+      "The repository base or issue scope changed after planning. Run `/architect` again against the current state.",
+    builder_plan_freshness_unavailable:
+      "Facility could not verify the approved base and live issue revision. No Builder run was started; run `/architect` again after provenance support is available.",
+  };
+  return [
+    "<!-- facility-run-progress gate=builder-plan -->",
+    "### 🛑 Facility `/builder` blocked",
+    "",
+    "No Builder run was created because Human Gate 1 did not have valid plan evidence.",
+    "",
+    guidance[code] ?? guidance.builder_plan_context_invalid,
+    "",
+    `**Policy reason:** \`${code}\``,
+  ].join("\n");
+}
+
 export function progressCommentId(gh: unknown) {
   const root = objectOrEmpty(gh);
   const progress = objectOrEmpty(root.progressComment);

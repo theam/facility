@@ -10,6 +10,7 @@ import {
   runs,
 } from "@facility/db";
 import { and, eq } from "drizzle-orm";
+import { isBuilderPlanDenialError, withBuilderPlanPreflight } from "../builder-plan-policy.js";
 import type { AppConfig } from "../types.js";
 import { createGitHubClient, type GitHubClient } from "./github.js";
 import { raisePlatformIssue, resolvePlatformIssue } from "./issues.js";
@@ -107,25 +108,56 @@ async function verifyPlatformCanary(
       });
       return;
     }
-    const run = (
-      await db
-        .insert(runs)
-        .values({
-          id: newId("run"),
-          orgId,
-          projectId,
-          agentDefId: agent.id,
-          mode: "architect",
-          engine: agent.engine,
-          trigger: {
-            kind: "watchtower.canary",
-            message: CANARY_MESSAGE,
-            messageHash: CANARY_MESSAGE_HASH,
+    const trigger = {
+      kind: "watchtower.canary",
+      message: CANARY_MESSAGE,
+      messageHash: CANARY_MESSAGE_HASH,
+    };
+    let run: typeof runs.$inferSelect | undefined;
+    try {
+      run = (
+        await withBuilderPlanPreflight(
+          db,
+          {
+            orgId,
+            projectId,
+            mode: "architect",
+            agentDefId: agent.id,
+            trigger,
+            actor: { type: "system", id: "watchtower" },
+            source: "watchtower_canary",
           },
-          createdBy: { type: "system", id: "watchtower" },
-        })
-        .returning()
-    )[0];
+          (tx, admission) =>
+            tx
+              // builder-plan-preflight: watchtower_canary
+              .insert(runs)
+              .values({
+                id: newId("run"),
+                orgId,
+                projectId,
+                agentDefId: agent.id,
+                mode: admission.mode,
+                engine: agent.engine,
+                trigger,
+                createdBy: { type: "system", id: "watchtower" },
+              })
+              .returning(),
+        )
+      )[0];
+    } catch (error) {
+      if (!isBuilderPlanDenialError(error)) throw error;
+      await raisePlatformIssue(db, {
+        orgId,
+        projectId,
+        kind: "canary_failure",
+        severity: "error",
+        fingerprint,
+        title: "Canary agent blocked by Builder plan policy",
+        bodyMd:
+          "The configured canary agent also resolves as Builder and cannot run without canonical plan acceptance.",
+      });
+      return;
+    }
     if (run) {
       await db.insert(runEvents).values({
         orgId,

@@ -4,17 +4,21 @@ import {
   analysisSandboxProfileId,
   builderSandboxProfileId,
   defaultSandboxProfileId,
+  type FacilityDb,
   githubInstallations,
   projects,
   registryItems,
   repos,
+  runs,
   sandboxProfiles,
   withOrg,
 } from "@facility/db";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, notInArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { lockBuilderPlanPolicy } from "../../builder-plan-policy.js";
 import { ApiError, notFound } from "../../errors.js";
+import { laneFor } from "../../github/agent-routing.js";
 import { createGithubClientFactory } from "../../github/client.js";
 import { ensureProjectKbSpace } from "../../harness.js";
 import { projectHealth } from "../../watchtower/health.js";
@@ -72,6 +76,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
           name: z.string(),
           slug: z.string(),
           description: z.string().optional(),
+          builderPlanPolicy: z.enum(["optional", "required"]).optional(),
           settings: AnyObject.optional(),
         }),
         response: { 200: ProjectSchema },
@@ -83,6 +88,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         name: string;
         slug: string;
         description?: string;
+        builderPlanPolicy?: "optional" | "required";
         settings?: Record<string, unknown>;
       };
       const project = (
@@ -94,6 +100,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
             name: body.name,
             slug: body.slug,
             description: body.description,
+            builderPlanPolicy: body.builderPlanPolicy ?? "optional",
             settings: body.settings ?? { default_branch: "main", check_cmds: [] },
           })
           .returning()
@@ -151,6 +158,7 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
           name: z.string().optional(),
           description: z.string().optional(),
           status: z.string().optional(),
+          builderPlanPolicy: z.enum(["optional", "required"]).optional(),
           settings: AnyObject.optional(),
         }),
         response: { 200: ProjectSchema },
@@ -160,21 +168,41 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
       const p = principal(request);
       const { projectId } = request.params as { projectId: string };
       assertProjectScope(p, projectId);
-      return (
-        await db
-          .update(projects)
-          .set(
-            definedFields({
-              name: (request.body as { name?: string }).name,
-              description: (request.body as { description?: string }).description,
-              status: (request.body as { status?: string }).status,
-              settings: (request.body as { settings?: Record<string, unknown> }).settings,
-              updatedAt: new Date(),
-            }),
-          )
-          .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
-          .returning()
-      )[0];
+      const requestedPolicy = (request.body as { builderPlanPolicy?: "optional" | "required" })
+        .builderPlanPolicy;
+      return db.transaction(async (transaction) => {
+        const tx = transaction as unknown as FacilityDb;
+        await lockBuilderPlanPolicy(tx, p.orgId, projectId);
+        const currentProject = (
+          await tx
+            .select({ policy: projects.builderPlanPolicy })
+            .from(projects)
+            .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
+            .limit(1)
+        )[0];
+        if (!currentProject) throw notFound("Project not found");
+        if (requestedPolicy === "required" && currentProject.policy !== "required") {
+          await assertPlatformBuilderLanes(tx, p.orgId, projectId);
+          await assertNoActiveRuns(tx, p.orgId, projectId);
+        }
+        return (
+          await tx
+            .update(projects)
+            .set(
+              definedFields({
+                name: (request.body as { name?: string }).name,
+                description: (request.body as { description?: string }).description,
+                status: (request.body as { status?: string }).status,
+                builderPlanPolicy: (request.body as { builderPlanPolicy?: "optional" | "required" })
+                  .builderPlanPolicy,
+                settings: (request.body as { settings?: Record<string, unknown> }).settings,
+                updatedAt: new Date(),
+              }),
+            )
+            .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
+            .returning()
+        )[0];
+      });
     },
   );
 
@@ -251,42 +279,137 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
         description?: string;
         autoInit: boolean;
       };
+      const project = (
+        await db
+          .select({ policy: projects.builderPlanPolicy })
+          .from(projects)
+          .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
+          .limit(1)
+      )[0];
+      if (!project) throw notFound("Project not found");
+      if (project.policy === "required") {
+        throw new ApiError(
+          409,
+          "builder_plan_platform_lane_required",
+          "Set Builder plan policy to optional before connecting a repository; configure its Builder lane as platform, then re-enable required",
+        );
+      }
       const creation = body.create === true || body.mode === "create";
       const installation = await loadGithubInstallation(p.orgId, body.owner);
-      const githubRepo = creation
-        ? await createGithubRepository({
-            installationId: installation.installationId,
-            owner: body.owner,
-            name: body.name,
-            description: body.description,
-            private: body.private,
-            autoInit: body.autoInit,
-          })
-        : await loadGithubRepository({
-            installationId: installation.installationId,
-            owner: body.owner,
-            name: body.name,
-          });
-      const row = (
-        await db
-          .insert(repos)
-          .values({
-            id: newId("repo"),
-            orgId: p.orgId,
-            projectId,
-            installationId: installation.id,
-            owner: githubRepo.owner,
-            name: githubRepo.name,
-            defaultBranch: githubRepo.defaultBranch ?? body.defaultBranch,
-          })
-          .returning()
-      )[0];
+      const row = await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as FacilityDb;
+        await lockBuilderPlanPolicy(tx, p.orgId, projectId);
+        const currentProject = (
+          await tx
+            .select({ policy: projects.builderPlanPolicy })
+            .from(projects)
+            .where(and(eq(projects.orgId, p.orgId), eq(projects.id, projectId)))
+            .limit(1)
+        )[0];
+        if (!currentProject) throw notFound("Project not found");
+        if (currentProject.policy === "required") {
+          throw new ApiError(
+            409,
+            "builder_plan_platform_lane_required",
+            "Set Builder plan policy to optional before connecting a repository; configure its Builder lane as platform, then re-enable required",
+          );
+        }
+        // Keep the project lock through the remote create/load and local insert.
+        // Activation cannot slip between the final policy read and the new,
+        // initially-unverified repository row becoming visible.
+        const githubRepo = creation
+          ? await createGithubRepository({
+              installationId: installation.installationId,
+              owner: body.owner,
+              name: body.name,
+              description: body.description,
+              private: body.private,
+              autoInit: body.autoInit,
+            })
+          : await loadGithubRepository({
+              installationId: installation.installationId,
+              owner: body.owner,
+              name: body.name,
+            });
+        return (
+          await tx
+            .insert(repos)
+            .values({
+              id: newId("repo"),
+              orgId: p.orgId,
+              projectId,
+              installationId: installation.id,
+              owner: githubRepo.owner,
+              name: githubRepo.name,
+              defaultBranch: githubRepo.defaultBranch ?? body.defaultBranch,
+            })
+            .returning()
+        )[0];
+      });
       if (row) {
         await app.enqueue("github.issues-sync", { repoId: row.id, orgId: p.orgId });
       }
       return row;
     },
   );
+
+  async function assertPlatformBuilderLanes(
+    database: FacilityDb,
+    orgId: string,
+    projectId: string,
+  ) {
+    const projectRepos = await database
+      .select()
+      .from(repos)
+      .where(and(eq(repos.orgId, orgId), eq(repos.projectId, projectId)));
+    const now = Date.now();
+    const incompatible = projectRepos.filter(
+      (repo) =>
+        laneFor(repo, "builder") !== "platform" ||
+        laneFor(repo, "codex-builder") !== "platform" ||
+        !repo.fingerprint ||
+        repo.fingerprintStatus !== "ok" ||
+        !repo.fingerprintVerifiedAt ||
+        now - repo.fingerprintVerifiedAt.getTime() > 5 * 60_000,
+    );
+    if (incompatible.length > 0) {
+      throw new ApiError(
+        409,
+        "builder_plan_platform_lane_required",
+        "Builder plan policy required needs a recent verified default-branch Facility fingerprint and platform lanes for /builder and /codex-builder in every connected repository",
+        {
+          repos: incompatible.map((repo) => ({
+            repo: `${repo.owner}/${repo.name}`,
+            fingerprintStatus: repo.fingerprintStatus,
+            fingerprintVerifiedAt: repo.fingerprintVerifiedAt?.toISOString() ?? null,
+          })),
+        },
+      );
+    }
+  }
+
+  async function assertNoActiveRuns(database: FacilityDb, orgId: string, projectId: string) {
+    const active = await database
+      .select({
+        id: runs.id,
+      })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, orgId),
+          eq(runs.projectId, projectId),
+          notInArray(runs.status, ["succeeded", "failed", "canceled"]),
+        ),
+      );
+    if (active.length > 0) {
+      throw new ApiError(
+        409,
+        "builder_plan_active_runs_present",
+        "Wait for every existing run to finish before enabling the required plan policy",
+        { runIds: active.map((run) => run.id) },
+      );
+    }
+  }
 
   async function loadGithubInstallation(orgId: string, owner: string) {
     const installation = await findGithubInstallation(orgId, owner);
@@ -393,9 +516,15 @@ export async function registerProjectsReposRoutes(app: FastifyInstance, context:
     async (request) => {
       const p = principal(request);
       const { projectId, repoId } = request.params as { projectId: string; repoId: string };
-      await db
-        .delete(repos)
-        .where(and(eq(repos.orgId, p.orgId), eq(repos.projectId, projectId), eq(repos.id, repoId)));
+      await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as FacilityDb;
+        await lockBuilderPlanPolicy(tx, p.orgId, projectId);
+        await tx
+          .delete(repos)
+          .where(
+            and(eq(repos.orgId, p.orgId), eq(repos.projectId, projectId), eq(repos.id, repoId)),
+          );
+      });
       return { ok: true };
     },
   );

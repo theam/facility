@@ -137,10 +137,24 @@ identity broker. See [Authentication modes](authentication) for the broker claim
 ### Remote MCP OAuth 2.1 (interactive clients)
 
 Each Facility instance is the authorization server for its MCP resource. Set
-`FACILITY_OAUTH_ISSUER`, a private ES256 `FACILITY_OAUTH_JWKS`, and
-`MCP_PUBLIC_URL`; point `MCP_AUTHORIZATION_SERVER` at the issuer. Interactive
+`FACILITY_OAUTH_ISSUER` to the exact `WEB_URL` origin, configure a private ES256
+`FACILITY_OAUTH_JWKS`, and set `MCP_PUBLIC_URL` to the MCP origin or its canonical
+`/mcp` endpoint; point `MCP_AUTHORIZATION_SERVER` at the issuer. The web runtime
+proxies the authorization endpoints to the API, keeping every browser cookie
+host-only and same-origin. Interactive
 clients use Authorization Code + PKCE and receive 15-minute, audience-bound JWTs
-plus rotating refresh tokens. `fak_` keys remain available for services.
+plus rotating refresh tokens. All four browser/resource URLs must use HTTPS in production; an
+all-loopback HTTP configuration is retained only for local development. `fak_` keys remain
+available for services.
+
+> **Breaking upgrade:** update configuration or Terraform before deploying the new API, web, and
+> MCP images. The issuer changes from the API origin to `WEB_URL`, and the token audience changes
+> from the MCP origin to the canonical `/mcp` resource. Deploy those three services together, then
+> reconnect interactive MCP clients and start new browser sessions; existing access/refresh flows
+> must not be reused. For old `pnpm dev` `.env` files, replace the legacy
+> `FACILITY_OAUTH_ISSUER=http://localhost:4400` and
+> `MCP_AUTHORIZATION_SERVER=http://localhost:4400` values with `http://localhost:3400`. See the
+> [MCP upgrade guide](../reference/mcp#breaking-upgrade-same-origin-path-aware-oauth).
 
 ## GitHub App
 
