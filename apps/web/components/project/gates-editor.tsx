@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Field, TextInput } from "@facility/ui";
+import { Button, Field, Select, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -14,11 +14,20 @@ type Settings = Record<string, unknown> & {
  * The project's acceptance gates — what the control-plane lane runs after the agent
  * finishes and what kickstart detected. One command per line.
  */
-export function GatesEditor({ projectId, settings }: { projectId: string; settings: Settings }) {
+export function GatesEditor({
+  projectId,
+  settings,
+  builderPlanPolicy,
+}: {
+  projectId: string;
+  settings: Settings;
+  builderPlanPolicy: "optional" | "required";
+}) {
   const router = useRouter();
   const [branch, setBranch] = useState(settings.default_branch ?? "main");
   const [provision, setProvision] = useState(settings.provision_cmd ?? "");
   const [checks, setChecks] = useState((settings.check_cmds ?? []).join("\n"));
+  const [planPolicy, setPlanPolicy] = useState(builderPlanPolicy);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -39,9 +48,17 @@ export function GatesEditor({ projectId, settings }: { projectId: string; settin
       const res = await fetch(`/api/v1/projects/${projectId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ settings: nextSettings }),
+        body: JSON.stringify({ settings: nextSettings, builderPlanPolicy: planPolicy }),
       });
-      if (!res.ok) throw new Error(`save failed (${res.status})`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: { code?: string; message?: string };
+        } | null;
+        throw new Error(
+          [body?.error?.code, body?.error?.message].filter(Boolean).join(": ") ||
+            `save failed (${res.status})`,
+        );
+      }
       setNote("saved");
       router.refresh();
     } catch (err) {
@@ -74,6 +91,18 @@ export function GatesEditor({ projectId, settings }: { projectId: string; settin
           className="w-full border border-(--line) bg-transparent px-3 py-2 font-mono text-[12.5px] text-(--ink) outline-none placeholder:text-(--dim) focus:border-(--line-strong)"
           placeholder={"pnpm lint\npnpm test"}
         />
+      </Field>
+      <Field
+        label="Builder plan gate"
+        hint="Required enforces a freshly approved Architect plan, live base and issue freshness, recent default-branch fingerprints, and platform Builder lanes. Plans created before this deployment must be regenerated."
+      >
+        <Select
+          value={planPolicy}
+          onChange={(event) => setPlanPolicy(event.target.value as "optional" | "required")}
+        >
+          <option value="optional">optional</option>
+          <option value="required">required</option>
+        </Select>
       </Field>
       <div className="flex items-center gap-3">
         <Button type="submit" variant="primary" size="sm" disabled={busy}>

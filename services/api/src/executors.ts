@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { can, newId } from "@facility/core";
-import type { createDb } from "@facility/db";
+import type { createDb, FacilityDb } from "@facility/db";
 import {
   actionTypes,
   agentDefs,
@@ -36,6 +36,20 @@ import { artifactIdFor, validate } from "@facility/harness";
 import { and, desc, eq, gt, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "./budget-scope.js";
 import {
+  type BuilderPlanFreshnessOptions,
+  resolveBuilderPlanFreshnessForProposal,
+} from "./builder-plan-freshness.js";
+import {
+  architectRunIdentityValid,
+  builderPlanDenialCode,
+  builderPlanRequired,
+  lockBuilderPlanPolicy,
+  recordBuilderPlanDenial,
+  withBuilderPlanPreflight,
+} from "./builder-plan-policy.js";
+import { ApiError } from "./errors.js";
+import { findAgentDef, laneFor } from "./github/agent-routing.js";
+import {
   createGithubClientFactory,
   FacilityGithubClient,
   type GithubClientFactory,
@@ -46,7 +60,6 @@ import {
   kickstartRepo,
   upgradeRepo,
 } from "./github/kickstart.js";
-import { findAgentDef, laneFor } from "./github/router.js";
 import { renderGithubRunProgress } from "./github/run-progress.js";
 import { ensureTrackedIssue } from "./github/tracked-issues.js";
 import {
@@ -86,6 +99,7 @@ type ExecuteApprovedProposalOptions = {
   config?: AppConfig;
   github?: GitHubIssueClient;
   githubFactory?: GithubClientFactory;
+  githubClient?: BuilderPlanFreshnessOptions["githubClient"];
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<string | null>;
 };
 
@@ -96,30 +110,57 @@ export async function executeApprovedProposal(
   options: ExecuteApprovedProposalOptions | GitHubIssueClient = {},
 ) {
   const executionOptions = isGitHubIssueClient(options) ? { github: options } : options;
-  if (candidate.state !== "approved" && candidate.state !== "execution_failed") return false;
+  if (
+    candidate.state !== "approved" &&
+    candidate.state !== "execution_failed" &&
+    candidate.state !== "executing"
+  ) {
+    return false;
+  }
   const actionType = (
     await db.select().from(actionTypes).where(eq(actionTypes.id, candidate.actionTypeId)).limit(1)
   )[0];
   if (!actionType) return false;
+  // Plan acceptance is the only executor whose side effects are deliberately
+  // idempotent at the database boundary: its Builder row is protected by the
+  // proposal and Architect-run unique indexes. Allow a later request to finish
+  // an `executing` proposal after a process dies between the claim and insert.
+  // Other action types retain the original single-owner behavior.
+  if (candidate.state === "executing" && actionType.name !== "plan_acceptance") return false;
   // `executor.type = none` is a deliberate externally-consumed approval gate.
   // Approval is terminal for Facility itself, so leave the proposal approved.
   if (objectOrEmpty(actionType.executor).type === "none") return true;
   // Claim before performing any database or external side effect. The compare-and-set
   // makes concurrent /execute calls single-writer even when both loaded the same
   // approved proposal. Failed executions remain explicitly retryable.
-  const proposal = (
-    await db
-      .update(proposals)
-      .set({ state: "executing", updatedAt: new Date() })
-      .where(
-        and(
-          eq(proposals.orgId, candidate.orgId),
-          eq(proposals.id, candidate.id),
-          inArray(proposals.state, ["approved", "execution_failed"]),
-        ),
-      )
-      .returning()
-  )[0];
+  const proposal =
+    candidate.state === "executing"
+      ? (
+          await db
+            .select()
+            .from(proposals)
+            .where(
+              and(
+                eq(proposals.orgId, candidate.orgId),
+                eq(proposals.id, candidate.id),
+                eq(proposals.state, "executing"),
+              ),
+            )
+            .limit(1)
+        )[0]
+      : (
+          await db
+            .update(proposals)
+            .set({ state: "executing", updatedAt: new Date() })
+            .where(
+              and(
+                eq(proposals.orgId, candidate.orgId),
+                eq(proposals.id, candidate.id),
+                inArray(proposals.state, ["approved", "execution_failed"]),
+              ),
+            )
+            .returning()
+        )[0];
   if (!proposal) return false;
   let actionTypeName = "unknown";
   try {
@@ -154,23 +195,56 @@ export async function executeApprovedProposal(
     } else {
       throw new Error(`unsupported_action_type:${actionType.name}`);
     }
-    await db
-      .update(proposals)
-      .set({ state: "executed", updatedAt: new Date() })
-      .where(and(eq(proposals.orgId, proposal.orgId), eq(proposals.id, proposal.id)));
-    await appendProposalEvent(db, proposal, "executed", actor, {
-      actionType: actionType.name,
-      ...(recurrence ? { recurrence } : {}),
+    await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as Db;
+      const completed = (
+        await tx
+          .update(proposals)
+          .set({ state: "executed", updatedAt: new Date() })
+          .where(
+            and(
+              eq(proposals.orgId, proposal.orgId),
+              eq(proposals.id, proposal.id),
+              inArray(proposals.state, ["executing", "execution_failed"]),
+            ),
+          )
+          .returning()
+      )[0];
+      if (completed) {
+        await appendProposalEvent(tx, completed, "executed", actor, {
+          actionType: actionType.name,
+          ...(recurrence ? { recurrence } : {}),
+        });
+      }
     });
     return true;
   } catch (error) {
-    await db
-      .update(proposals)
-      .set({ state: "execution_failed", updatedAt: new Date() })
-      .where(and(eq(proposals.orgId, proposal.orgId), eq(proposals.id, proposal.id)));
-    await appendProposalEvent(db, proposal, "execution_failed", actor, {
-      actionType: actionTypeName,
-      error: error instanceof Error ? error.message : String(error),
+    await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as Db;
+      const failed = (
+        await tx
+          .update(proposals)
+          .set({ state: "execution_failed", updatedAt: new Date() })
+          .where(
+            and(
+              eq(proposals.orgId, proposal.orgId),
+              eq(proposals.id, proposal.id),
+              eq(proposals.state, "executing"),
+            ),
+          )
+          .returning()
+      )[0];
+      if (failed) {
+        await appendProposalEvent(tx, failed, "execution_failed", actor, {
+          actionType: actionTypeName,
+          error:
+            error instanceof ApiError
+              ? error.code
+              : error instanceof Error
+                ? error.message
+                : String(error),
+        });
+      }
     });
     return true;
   }
@@ -184,6 +258,7 @@ async function executePlanAcceptance(
 ) {
   if (!proposal.projectId) throw new Error("plan_acceptance_missing_project");
   if (!proposal.runId) throw new Error("plan_acceptance_missing_architect_run");
+  const proposalProjectId = proposal.projectId;
 
   const architectRun = (
     await db
@@ -199,20 +274,120 @@ async function executePlanAcceptance(
       .limit(1)
   )[0];
   if (!architectRun) throw new Error("plan_acceptance_architect_run_not_found");
-  if (!["architect", "codex-architect"].includes(architectRun.mode)) {
+  if (!(await architectRunIdentityValid(db, architectRun))) {
     throw new Error("plan_acceptance_source_not_architect");
   }
   if (!["succeeded", "awaiting_human"].includes(architectRun.status)) {
     throw new Error("plan_acceptance_architect_run_not_ready");
   }
 
-  await assertPlatformBuilderLane(db, proposal, architectRun);
+  const builderCommand = architectRun.engine === "codex" ? "codex-builder" : "builder";
+  await assertPlatformBuilderLane(db, proposal, architectRun, builderCommand);
+  const requiredPlan = await builderPlanRequired(db, proposal.orgId, proposal.projectId);
+  let freshnessEvidence:
+    | Awaited<ReturnType<typeof resolveBuilderPlanFreshnessForProposal>>
+    | undefined;
+  if (requiredPlan) {
+    try {
+      freshnessEvidence = await resolveBuilderPlanFreshnessForProposal(db, proposal, options);
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : null;
+      const code = apiError ? builderPlanDenialCode(apiError.code) : null;
+      if (code) {
+        const payload = objectOrEmpty(proposal.payload);
+        await recordBuilderPlanDenial(
+          db,
+          {
+            orgId: proposal.orgId,
+            projectId: proposal.projectId,
+            mode: builderCommand,
+            agentName: builderCommand,
+            trigger: {
+              source: "plan_acceptance",
+              proposalId: proposal.id,
+              architectRunId: architectRun.id,
+              planProvenance: {
+                workspaceBaseSha: payload.workspaceBaseSha,
+                issueRevisionSha256: payload.issueRevisionSha256,
+              },
+            },
+            gh: architectRun.gh,
+            actor: { type: auditActorType(actor.type), id: actor.id },
+            source: "plan_acceptance_freshness",
+          },
+          code,
+          stringField(objectOrEmpty(apiError?.details).reason) ?? "freshness_resolution_failed",
+        );
+      }
+      throw error;
+    }
+  }
 
+  const builderGh = { ...objectOrEmpty(architectRun.gh) };
+  delete builderGh.progressComment;
+  const planSha256 = createHash("sha256").update(proposal.contextMd).digest("hex");
+  const approval = {
+    principal: proposal.decidedBy,
+    at: proposal.decidedAt?.toISOString(),
+  };
+  const approvalEvent = (
+    await db
+      .select({ actor: proposalEvents.actor })
+      .from(proposalEvents)
+      .where(
+        and(
+          eq(proposalEvents.orgId, proposal.orgId),
+          eq(proposalEvents.proposalId, proposal.id),
+          eq(proposalEvents.type, "approved"),
+        ),
+      )
+      .orderBy(desc(proposalEvents.seq))
+      .limit(1)
+  )[0];
+  const approvalActor = objectOrEmpty(approvalEvent?.actor);
+  const approvalCreator = {
+    type: stringField(approvalActor.type) ?? actor.type,
+    id: proposal.decidedBy ?? actor.id,
+    proposalId: proposal.id,
+  };
   // The proposal link, not the currently configured builder definition, is
   // the durable dispatch identity. Reuse the original run even if an admin
   // replaces or disables the builder before an execution retry.
   const existingRun = await loadPlanBuilderRun(db, proposal);
   if (existingRun) {
+    await withBuilderPlanPreflight(
+      db,
+      {
+        orgId: existingRun.orgId,
+        projectId: existingRun.projectId,
+        mode: existingRun.mode,
+        agentDefId: existingRun.agentDefId,
+        trigger: existingRun.trigger,
+        gh: existingRun.gh,
+        runId: existingRun.id,
+        actor: { type: auditActorType(actor.type), id: actor.id },
+        source: "plan_acceptance_retry",
+        freshnessEvidence,
+      },
+      async (tx) => {
+        await assertPlatformBuilderLane(tx, proposal, architectRun, builderCommand);
+        await tx
+          .insert(runEvents)
+          .values({
+            orgId: existingRun.orgId,
+            runId: existingRun.id,
+            seq: 1,
+            type: "queued",
+            data: {
+              queue: "runs.dispatch",
+              source: "plan_acceptance",
+              proposalId: proposal.id,
+              architectRunId: architectRun.id,
+            },
+          })
+          .onConflictDoNothing();
+      },
+    );
     await options.enqueue?.("runs.dispatch", {
       runId: existingRun.id,
       orgId: proposal.orgId,
@@ -220,59 +395,122 @@ async function executePlanAcceptance(
     return;
   }
 
-  const builderCommand = architectRun.engine === "codex" ? "codex-builder" : "builder";
   const builder = await findAgentDef(db, proposal.orgId, proposal.projectId, builderCommand);
   if (!builder) throw new Error("plan_acceptance_builder_not_configured");
-  const builderGh = { ...objectOrEmpty(architectRun.gh) };
-  delete builderGh.progressComment;
+
   const architectTrigger = objectOrEmpty(architectRun.trigger);
+  const proposalPayload = objectOrEmpty(proposal.payload);
   const architectCreator = objectOrEmpty(architectRun.createdBy);
   const githubLogin =
     stringField(architectTrigger.githubLogin) ??
     (architectCreator.type === "github"
       ? (stringField(architectCreator.id) ?? stringField(architectCreator.login))
       : null);
+  const builderTrigger = {
+    source: "plan_acceptance",
+    ...(githubLogin ? { githubLogin } : {}),
+    proposalId: proposal.id,
+    architectRunId: architectRun.id,
+    architectTrigger: architectRun.trigger,
+    approvedPlan: proposal.contextMd,
+    planSha256,
+    approval,
+    planProvenance: {
+      workspaceBaseSha: proposalPayload.workspaceBaseSha,
+      issueRevisionSha256: proposalPayload.issueRevisionSha256,
+    },
+    ...(freshnessEvidence ? { admissionFreshness: freshnessEvidence } : {}),
+  };
+  const builderPolicyInput = {
+    orgId: proposal.orgId,
+    projectId: proposal.projectId,
+    mode: "builder",
+    agentDefId: builder.id,
+    trigger: builderTrigger,
+    gh: builderGh,
+    actor: { type: auditActorType(actor.type), id: actor.id } as const,
+    source: "plan_acceptance_executor",
+    freshnessEvidence,
+  };
 
-  const createdRun = (
-    await db
-      .insert(runs)
-      .values({
-        id: newId("run"),
-        orgId: proposal.orgId,
-        projectId: proposal.projectId,
-        agentDefId: builder.id,
-        mode: "builder",
-        engine: builder.engine,
-        trigger: {
-          source: "plan_acceptance",
-          ...(githubLogin ? { githubLogin } : {}),
-          proposalId: proposal.id,
-          architectRunId: architectRun.id,
-          architectTrigger: architectRun.trigger,
-          approvedPlan: proposal.contextMd,
+  const createdRun = await withBuilderPlanPreflight(
+    db,
+    builderPolicyInput,
+    async (tx, admission) => {
+      await assertPlatformBuilderLane(tx, proposal, architectRun, builderCommand);
+      const run = (
+        await tx
+          // builder-plan-preflight: plan_acceptance_executor
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId: proposal.orgId,
+            projectId: proposalProjectId,
+            agentDefId: builder.id,
+            mode: admission.mode,
+            engine: builder.engine,
+            trigger: builderTrigger,
+            gh: builderGh,
+            // Attribute the durable Builder row to the principal that approved the
+            // proposal, never to a later crash-recovery caller that happened to win
+            // the unique insert race.
+            createdBy: approvalCreator,
+          })
+          .onConflictDoNothing()
+          .returning()
+      )[0];
+      if (run) {
+        await tx.insert(runEvents).values({
+          orgId: proposal.orgId,
+          runId: run.id,
+          seq: 1,
+          type: "queued",
+          data: {
+            queue: "runs.dispatch",
+            source: "plan_acceptance",
+            proposalId: proposal.id,
+            architectRunId: architectRun.id,
+          },
+        });
+      }
+      return run;
+    },
+  );
+  let run = createdRun ?? (await loadPlanBuilderRun(db, proposal));
+  if (!run) {
+    const architectLinkedRun = await loadArchitectBuilderRun(db, proposal);
+    if (architectLinkedRun && (await builderPlanRequired(db, proposal.orgId, proposal.projectId))) {
+      await recordBuilderPlanDenial(
+        db,
+        {
+          orgId: proposal.orgId,
+          projectId: proposal.projectId,
+          mode: builderCommand,
+          agentDefId: builder.id,
+          trigger: {
+            source: "plan_acceptance",
+            proposalId: proposal.id,
+            architectRunId: architectRun.id,
+          },
+          gh: builderGh,
+          actor: { type: auditActorType(actor.type), id: actor.id },
+          source: "plan_acceptance_unique_conflict",
         },
-        gh: builderGh,
-        createdBy: { type: actor.type, id: actor.id, proposalId: proposal.id },
-      })
-      .onConflictDoNothing()
-      .returning()
-  )[0];
-  const run = createdRun ?? (await loadPlanBuilderRun(db, proposal));
+        "builder_plan_already_consumed",
+        "architect_plan_linked_to_another_run",
+      );
+      throw new ApiError(
+        409,
+        "builder_plan_already_consumed",
+        "This Architect plan is already linked to another Builder run",
+      );
+    }
+    // Preserve legacy Architect-level de-duplication for optional projects.
+    run = architectLinkedRun;
+  }
   if (!run) throw new Error("plan_acceptance_builder_run_not_created");
 
   if (createdRun) {
-    await db.insert(runEvents).values({
-      orgId: proposal.orgId,
-      runId: run.id,
-      seq: 1,
-      type: "queued",
-      data: {
-        queue: "runs.dispatch",
-        source: "plan_acceptance",
-        proposalId: proposal.id,
-        architectRunId: architectRun.id,
-      },
-    });
     await createBuilderProgressComment(db, createdRun, architectRun, builderCommand, options);
   }
   await options.enqueue?.("runs.dispatch", { runId: run.id, orgId: proposal.orgId });
@@ -376,7 +614,7 @@ async function createBuilderProgressComment(
   }
 }
 
-async function loadPlanBuilderRun(db: Db, proposal: typeof proposals.$inferSelect) {
+export async function loadPlanBuilderRun(db: Db, proposal: typeof proposals.$inferSelect) {
   return (
     await db
       .select()
@@ -385,7 +623,28 @@ async function loadPlanBuilderRun(db: Db, proposal: typeof proposals.$inferSelec
         and(
           eq(runs.orgId, proposal.orgId),
           eq(runs.projectId, proposal.projectId ?? ""),
-          eq(runs.mode, "builder"),
+          inArray(runs.mode, ["builder", "codex-builder"]),
+          sql`${runs.trigger} @> ${JSON.stringify({
+            source: "plan_acceptance",
+            proposalId: proposal.id,
+            architectRunId: proposal.runId,
+          })}::jsonb`,
+        ),
+      )
+      .limit(1)
+  )[0];
+}
+
+async function loadArchitectBuilderRun(db: Db, proposal: typeof proposals.$inferSelect) {
+  return (
+    await db
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.orgId, proposal.orgId),
+          eq(runs.projectId, proposal.projectId ?? ""),
+          inArray(runs.mode, ["builder", "codex-builder"]),
           sql`${runs.trigger} @> ${JSON.stringify({
             source: "plan_acceptance",
             architectRunId: proposal.runId,
@@ -400,6 +659,7 @@ async function assertPlatformBuilderLane(
   db: Db,
   proposal: typeof proposals.$inferSelect,
   architectRun: typeof runs.$inferSelect,
+  builderCommand: string,
 ) {
   const projectRepos = await db
     .select()
@@ -419,8 +679,22 @@ async function assertPlatformBuilderLane(
   const repo =
     matchedRepo ?? (!hasRepoIdentity && projectRepos.length === 1 ? projectRepos[0] : undefined);
   if (!repo) throw new Error("plan_acceptance_repo_context_ambiguous");
-  if (laneFor(repo, "builder") !== "platform") {
+  if (laneFor(repo, builderCommand) !== "platform") {
     throw new Error("plan_acceptance_builder_uses_repo_lane");
+  }
+  if (
+    (await builderPlanRequired(db, proposal.orgId, proposal.projectId ?? "")) &&
+    (!repo.fingerprint ||
+      repo.fingerprintStatus !== "ok" ||
+      !repo.fingerprintVerifiedAt ||
+      Date.now() - repo.fingerprintVerifiedAt.getTime() > 5 * 60_000)
+  ) {
+    throw new ApiError(
+      409,
+      "builder_plan_context_invalid",
+      "The required Builder plan repository no longer has a verified Facility fingerprint",
+      { reason: "repository_fingerprint_unverified", repo: `${repo.owner}/${repo.name}` },
+    );
   }
 }
 
@@ -585,20 +859,35 @@ async function executeKnownMcpTool(
     const projectId = requiredString(args.projectId, "projectId");
     const agentName = requiredString(args.agentName, "agentName");
     const agent = await resolveAgentForMcpRun(db, orgId, projectId, agentName);
+    const trigger = { source: "mcp", agentName, input: args.input };
     const run = (
-      await db
-        .insert(runs)
-        .values({
-          id: newId("run"),
+      await withBuilderPlanPreflight(
+        db,
+        {
           orgId,
           projectId,
-          agentDefId: agent.id,
           mode: agent.name,
-          engine: agent.engine,
-          trigger: { source: "mcp", agentName, input: args.input },
-          createdBy: actor,
-        })
-        .returning()
+          agentDefId: agent.id,
+          trigger,
+          actor: { type: auditActorType(actor.type), id: actor.id },
+          source: "mcp_trigger_run",
+        },
+        (tx, admission) =>
+          tx
+            // builder-plan-preflight: mcp_trigger_run
+            .insert(runs)
+            .values({
+              id: newId("run"),
+              orgId,
+              projectId,
+              agentDefId: agent.id,
+              mode: admission.mode,
+              engine: agent.engine,
+              trigger,
+              createdBy: actor,
+            })
+            .returning(),
+      )
     )[0];
     if (run) {
       await db.insert(runEvents).values({
@@ -732,25 +1021,42 @@ async function executeKnownMcpTool(
       throw new Error("run_not_resumable");
     }
     const message = optionalString(args.message);
+    const trigger = {
+      type: "resume",
+      resumeOf: parent.id,
+      ...(message ? { message } : {}),
+    };
+    const gh = resumableGithubContext(parent.gh);
     const resumed = (
-      await db
-        .insert(runs)
-        .values({
-          id: newId("run"),
+      await withBuilderPlanPreflight(
+        db,
+        {
           orgId,
           projectId: parent.projectId,
-          agentDefId: parent.agentDefId,
           mode: parent.mode,
-          engine: parent.engine,
-          trigger: {
-            type: "resume",
-            resumeOf: parent.id,
-            ...(message ? { message } : {}),
-          },
-          gh: resumableGithubContext(parent.gh),
-          createdBy: actor,
-        })
-        .returning({ id: runs.id })
+          agentDefId: parent.agentDefId,
+          trigger,
+          gh,
+          actor: { type: auditActorType(actor.type), id: actor.id },
+          source: "mcp_resume_run",
+        },
+        (tx, admission) =>
+          tx
+            // builder-plan-preflight: mcp_resume_run
+            .insert(runs)
+            .values({
+              id: newId("run"),
+              orgId,
+              projectId: parent.projectId,
+              agentDefId: parent.agentDefId,
+              mode: admission.mode,
+              engine: parent.engine,
+              trigger,
+              gh,
+              createdBy: actor,
+            })
+            .returning({ id: runs.id }),
+      )
     )[0];
     if (!resumed) throw new Error("run_resume_failed");
     await db.insert(runEvents).values({
@@ -803,75 +1109,110 @@ async function executeKnownMcpTool(
   if (toolName === "facility_send_conversation_message") {
     const conversationId = requiredString(args.conversationId, "conversationId");
     const body = requiredString(args.body, "body");
-    const result = await db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
-      const conversation = (
+    const conversationForPolicy = (
+      await db
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)))
+        .limit(1)
+    )[0];
+    if (!conversationForPolicy) throw new Error("conversation_not_found");
+    const agentForPolicy = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(
+          and(
+            eq(agentDefs.orgId, orgId),
+            eq(agentDefs.projectId, conversationForPolicy.projectId),
+            eq(agentDefs.id, conversationForPolicy.agentDefId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!agentForPolicy) throw new Error("conversation_agent_not_found");
+    const result = await withBuilderPlanPreflight(
+      db,
+      {
+        orgId,
+        projectId: conversationForPolicy.projectId,
+        mode: "conversation",
+        agentDefId: agentForPolicy.id,
+        trigger: { type: "conversation", conversationId, message: body },
+        actor: { type: auditActorType(actor.type), id: actor.id },
+        source: "mcp_conversation_message",
+      },
+      async (tx, admission) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+        const conversation = (
+          await tx
+            .update(conversations)
+            .set({ status: "running", updatedAt: new Date() })
+            .where(
+              and(
+                eq(conversations.orgId, orgId),
+                eq(conversations.id, conversationId),
+                eq(conversations.status, "idle"),
+              ),
+            )
+            .returning()
+        )[0];
+        if (!conversation) throw new Error("conversation_turn_in_flight");
+        const rows = await tx
+          .select({ max: sql<number>`coalesce(max(${conversationMessages.seq}), 0)` })
+          .from(conversationMessages)
+          .where(eq(conversationMessages.conversationId, conversationId));
+        const message = (
+          await tx
+            .insert(conversationMessages)
+            .values({
+              id: newId("evt"),
+              orgId,
+              conversationId,
+              seq: Number(rows[0]?.max ?? 0) + 1,
+              role: "user",
+              body,
+            })
+            .returning({ id: conversationMessages.id })
+        )[0];
+        const run = (
+          await tx
+            // builder-plan-preflight: mcp_conversation_message
+            .insert(runs)
+            .values({
+              id: newId("run"),
+              orgId,
+              projectId: conversation.projectId,
+              agentDefId: conversation.agentDefId,
+              mode: admission.mode,
+              engine: "claude_code",
+              trigger: {
+                type: "conversation",
+                conversationId,
+                message: body,
+                ...(conversation.engineSessionId && conversation.lastRunId
+                  ? { resumeOf: conversation.lastRunId }
+                  : {}),
+              },
+              createdBy: actor,
+            })
+            .returning({ id: runs.id })
+        )[0];
+        if (!message || !run) throw new Error("conversation_turn_create_failed");
         await tx
           .update(conversations)
-          .set({ status: "running", updatedAt: new Date() })
-          .where(
-            and(
-              eq(conversations.orgId, orgId),
-              eq(conversations.id, conversationId),
-              eq(conversations.status, "idle"),
-            ),
-          )
-          .returning()
-      )[0];
-      if (!conversation) throw new Error("conversation_turn_in_flight");
-      const rows = await tx
-        .select({ max: sql<number>`coalesce(max(${conversationMessages.seq}), 0)` })
-        .from(conversationMessages)
-        .where(eq(conversationMessages.conversationId, conversationId));
-      const message = (
-        await tx
-          .insert(conversationMessages)
-          .values({
-            id: newId("evt"),
-            orgId,
-            conversationId,
-            seq: Number(rows[0]?.max ?? 0) + 1,
-            role: "user",
-            body,
-          })
-          .returning({ id: conversationMessages.id })
-      )[0];
-      const run = (
-        await tx
-          .insert(runs)
-          .values({
-            id: newId("run"),
-            orgId,
-            projectId: conversation.projectId,
-            agentDefId: conversation.agentDefId,
-            mode: "conversation",
-            engine: "claude_code",
-            trigger: {
-              type: "conversation",
-              conversationId,
-              message: body,
-              ...(conversation.engineSessionId && conversation.lastRunId
-                ? { resumeOf: conversation.lastRunId }
-                : {}),
-            },
-            createdBy: actor,
-          })
-          .returning({ id: runs.id })
-      )[0];
-      if (!message || !run) throw new Error("conversation_turn_create_failed");
-      await tx
-        .update(conversations)
-        .set({ lastRunId: run.id, updatedAt: new Date() })
-        .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)));
-      await tx.insert(runEvents).values({
-        orgId,
-        runId: run.id,
-        seq: 1,
-        type: "queued",
-        data: { queue: "runs.dispatch" },
-      });
-      return { messageId: message.id, runId: run.id };
-    });
+          .set({ lastRunId: run.id, updatedAt: new Date() })
+          .where(and(eq(conversations.orgId, orgId), eq(conversations.id, conversationId)));
+        await tx.insert(runEvents).values({
+          orgId,
+          runId: run.id,
+          seq: 1,
+          type: "queued",
+          data: { queue: "runs.dispatch" },
+        });
+        return { messageId: message.id, runId: run.id };
+      },
+    );
     await options.enqueue?.("runs.dispatch", { runId: result.runId, orgId });
     return { conversationId, ...result };
   }
@@ -919,25 +1260,42 @@ async function executeKnownMcpTool(
     )[0];
     if (!repo) throw new Error("repo_not_found");
     const agent = await resolveAgentForMcpRun(db, orgId, projectId, agentName);
+    const trigger = {
+      type: "mcp_issue",
+      repo: { id: repo.id, owner: repo.owner, name: repo.name },
+      issue: { number },
+    };
+    const gh = { owner: repo.owner, repo: repo.name, issueNumber: number };
     const run = (
-      await db
-        .insert(runs)
-        .values({
-          id: newId("run"),
+      await withBuilderPlanPreflight(
+        db,
+        {
           orgId,
           projectId,
+          mode: agent.name,
           agentDefId: agent.id,
-          mode: agentName,
-          engine: agent.engine,
-          trigger: {
-            type: "mcp_issue",
-            repo: { id: repo.id, owner: repo.owner, name: repo.name },
-            issue: { number },
-          },
-          gh: { owner: repo.owner, repo: repo.name, issueNumber: number },
-          createdBy: actor,
-        })
-        .returning({ id: runs.id })
+          trigger,
+          gh,
+          actor: { type: auditActorType(actor.type), id: actor.id },
+          source: "mcp_trigger_github_issue",
+        },
+        (tx, admission) =>
+          tx
+            // builder-plan-preflight: mcp_trigger_github_issue
+            .insert(runs)
+            .values({
+              id: newId("run"),
+              orgId,
+              projectId,
+              agentDefId: agent.id,
+              mode: admission.mode,
+              engine: agent.engine,
+              trigger,
+              gh,
+              createdBy: actor,
+            })
+            .returning({ id: runs.id }),
+      )
     )[0];
     if (!run) throw new Error("run_create_failed");
     await db.insert(runEvents).values({
@@ -1041,24 +1399,28 @@ async function executeKnownMcpTool(
     const contractItemId = await resolveMcpAgentContract(db, orgId, projectId, args, actor.id);
     await assertMcpRegistryReference(db, orgId, projectId, optionalString(args.harnessItemId));
     await assertMcpSandboxReference(db, orgId, projectId, optionalString(args.sandboxProfileId));
-    const agent = (
-      await db
-        .insert(agentDefs)
-        .values({
-          id: newId("agent"),
-          orgId,
-          projectId,
-          name: requiredString(args.name, "name"),
-          engine: requiredString(args.engine, "engine"),
-          model: args.model ?? {},
-          contractItemId,
-          harnessItemId: optionalString(args.harnessItemId),
-          triggers: Array.isArray(args.triggers) ? args.triggers : [],
-          sandboxProfileId: optionalString(args.sandboxProfileId),
-          enabled: true,
-        })
-        .returning()
-    )[0];
+    const agent = await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      await lockBuilderPlanPolicy(tx, orgId, projectId);
+      return (
+        await tx
+          .insert(agentDefs)
+          .values({
+            id: newId("agent"),
+            orgId,
+            projectId,
+            name: requiredString(args.name, "name"),
+            engine: requiredString(args.engine, "engine"),
+            model: args.model ?? {},
+            contractItemId,
+            harnessItemId: optionalString(args.harnessItemId),
+            triggers: Array.isArray(args.triggers) ? args.triggers : [],
+            sandboxProfileId: optionalString(args.sandboxProfileId),
+            enabled: true,
+          })
+          .returning()
+      )[0];
+    });
     return { agentId: agent?.id, contractItemId };
   }
 
@@ -1101,19 +1463,23 @@ async function executeKnownMcpTool(
       updatedAt: new Date(),
     };
     if (Object.keys(values).length === 1) throw new Error("mcp_tool_no_changes");
-    const updated = (
-      await db
-        .update(agentDefs)
-        .set(values)
-        .where(
-          and(
-            eq(agentDefs.orgId, orgId),
-            eq(agentDefs.projectId, projectId),
-            eq(agentDefs.id, agentId),
-          ),
-        )
-        .returning({ id: agentDefs.id })
-    )[0];
+    const updated = await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      await lockBuilderPlanPolicy(tx, orgId, projectId);
+      return (
+        await tx
+          .update(agentDefs)
+          .set(values)
+          .where(
+            and(
+              eq(agentDefs.orgId, orgId),
+              eq(agentDefs.projectId, projectId),
+              eq(agentDefs.id, agentId),
+            ),
+          )
+          .returning({ id: agentDefs.id })
+      )[0];
+    });
     if (!updated) throw new Error("agent_not_found");
     return { agentId: updated.id };
   }
@@ -1121,18 +1487,22 @@ async function executeKnownMcpTool(
   if (toolName === "facility_retire_agent") {
     const projectId = requiredString(args.projectId, "projectId");
     const agentId = requiredString(args.agentId, "agentId");
-    const retired = (
-      await db
-        .delete(agentDefs)
-        .where(
-          and(
-            eq(agentDefs.orgId, orgId),
-            eq(agentDefs.projectId, projectId),
-            eq(agentDefs.id, agentId),
-          ),
-        )
-        .returning({ id: agentDefs.id })
-    )[0];
+    const retired = await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      await lockBuilderPlanPolicy(tx, orgId, projectId);
+      return (
+        await tx
+          .delete(agentDefs)
+          .where(
+            and(
+              eq(agentDefs.orgId, orgId),
+              eq(agentDefs.projectId, projectId),
+              eq(agentDefs.id, agentId),
+            ),
+          )
+          .returning({ id: agentDefs.id })
+      )[0];
+    });
     if (!retired) throw new Error("agent_not_found");
     return { agentId: retired.id, retired: true };
   }
@@ -1450,6 +1820,7 @@ function resumableGithubContext(value: unknown) {
     ...(typeof source.owner === "string" ? { owner: source.owner } : {}),
     ...(typeof source.repo === "string" ? { repo: source.repo } : {}),
     ...(typeof source.branch === "string" ? { branch: source.branch } : {}),
+    ...(typeof source.issueNumber === "number" ? { issueNumber: source.issueNumber } : {}),
   };
 }
 
@@ -1779,53 +2150,73 @@ async function connectMcpRepo(
 ) {
   const owner = requiredString(args.owner, "owner");
   const name = requiredString(args.name, "name");
-  const installation = (
-    await db
-      .select()
-      .from(githubInstallations)
-      .where(
-        and(
-          eq(githubInstallations.orgId, orgId),
-          eq(githubInstallations.accountLogin, owner),
-          isNull(githubInstallations.suspendedAt),
-        ),
-      )
-      .limit(1)
-  )[0];
-  if (!installation) throw new Error("github_installation_required");
-  const factory = options.githubFactory ?? createGithubClientFactory(requireConfig(options));
-  const octokit = await factory(installation.installationId);
   const shouldCreate = args.create === true || args.mode === "create";
-  const createRepository = octokit.rest.repos.createInOrg;
-  const getRepository = octokit.rest.repos.get;
-  if (shouldCreate && !createRepository) throw new Error("github_create_unavailable");
-  if (!shouldCreate && !getRepository) throw new Error("github_lookup_unavailable");
-  const response = shouldCreate
-    ? await createRepository?.({
-        org: owner,
-        name,
-        private: args.private !== false,
-        description: optionalString(args.description),
-        auto_init: args.autoInit !== false,
-      })
-    : await getRepository?.({ owner, repo: name });
-  if (!response) throw new Error("github_repo_unavailable");
-  const repo = (
-    await db
-      .insert(repos)
-      .values({
-        id: newId("repo"),
-        orgId,
-        projectId,
-        installationId: installation.id,
-        owner: response.data.owner?.login ?? owner,
-        name: response.data.name,
-        defaultBranch: response.data.default_branch ?? optionalString(args.defaultBranch) ?? "main",
-      })
-      .returning()
-  )[0];
-  if (!repo) throw new Error("repo_connect_failed");
-  return { repoId: repo.id };
+  return db.transaction(async (transaction) => {
+    const tx = transaction as unknown as FacilityDb;
+    await lockBuilderPlanPolicy(tx, orgId, projectId);
+    const project = (
+      await tx
+        .select({ policy: projects.builderPlanPolicy })
+        .from(projects)
+        .where(and(eq(projects.orgId, orgId), eq(projects.id, projectId)))
+        .limit(1)
+    )[0];
+    if (!project) throw new Error("project_not_found");
+    if (project.policy === "required") {
+      throw new ApiError(
+        409,
+        "builder_plan_platform_lane_required",
+        "Set Builder plan policy to optional before connecting a repository; configure its Builder lane as platform, then re-enable required",
+      );
+    }
+    const installation = (
+      await tx
+        .select()
+        .from(githubInstallations)
+        .where(
+          and(
+            eq(githubInstallations.orgId, orgId),
+            eq(githubInstallations.accountLogin, owner),
+            isNull(githubInstallations.suspendedAt),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!installation) throw new Error("github_installation_required");
+    const factory = options.githubFactory ?? createGithubClientFactory(requireConfig(options));
+    const octokit = await factory(installation.installationId);
+    const createRepository = octokit.rest.repos.createInOrg;
+    const getRepository = octokit.rest.repos.get;
+    if (shouldCreate && !createRepository) throw new Error("github_create_unavailable");
+    if (!shouldCreate && !getRepository) throw new Error("github_lookup_unavailable");
+    const response = shouldCreate
+      ? await createRepository?.({
+          org: owner,
+          name,
+          private: args.private !== false,
+          description: optionalString(args.description),
+          auto_init: args.autoInit !== false,
+        })
+      : await getRepository?.({ owner, repo: name });
+    if (!response) throw new Error("github_repo_unavailable");
+    const repo = (
+      await tx
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId,
+          installationId: installation.id,
+          owner: response.data.owner?.login ?? owner,
+          name: response.data.name,
+          defaultBranch:
+            response.data.default_branch ?? optionalString(args.defaultBranch) ?? "main",
+        })
+        .returning()
+    )[0];
+    if (!repo) throw new Error("repo_connect_failed");
+    return { repoId: repo.id };
+  });
 }
 
 async function executeTaskCreation(

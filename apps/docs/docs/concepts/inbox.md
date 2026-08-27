@@ -27,8 +27,11 @@ Facility implements a typed, auditable HITL model:
   cancelled / expired, then executed or execution-failed. Who decided, when,
   and why is never reconstructable-only — it's recorded.
 - **Plan acceptance** is executable: approving a platform-lane plan creates
-  and queues the builder run linked to the architect run. In the repo lane,
-  the human invokes `/builder` in GitHub, which is the recorded Gate 1 action.
+  and queues the builder run linked to the architect run. The current repo-lane
+  workflow executes outside this control-plane boundary and is therefore not
+  compatible with `builderPlanPolicy=required`; required projects must route
+  both Builder commands to the platform lane. A later signed repo-lane handshake
+  can extend the same invariant without treating a slash command as a proposal.
 
 ## Design intent
 

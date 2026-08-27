@@ -42,13 +42,14 @@ export default async function StoryPage({
     ...(storyType ? { storyType } : {}),
   };
 
-  const [detail, inbox, outcomes, activity, pipeline, me] = await Promise.all([
+  const [detail, inbox, outcomes, activity, pipeline, me, project] = await Promise.all([
     api.story(projectId, number, query),
     api.inboxAll(),
     api.outcomes(`?state=all&projectId=${projectId}&limit=200`),
     api.storyGithubActivity(projectId, number, query),
     api.pipeline(projectId),
     api.me(),
+    api.project(projectId),
   ]);
 
   if (!detail.ok) {
@@ -139,6 +140,7 @@ export default async function StoryPage({
               projectId={projectId}
               issueNumber={story.number}
               repoId={story.repoId}
+              builderPlanRequired={!project.ok || project.data.builderPlanPolicy === "required"}
             />
           ) : null}
         </div>

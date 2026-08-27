@@ -1,6 +1,22 @@
 /** @param {string} mode */
 export function isBuilderMode(mode) {
-  return mode === "builder" || mode.endsWith("-builder");
+  const canonical = mode.replaceAll("_", "-");
+  return canonical === "builder" || canonical.endsWith("-builder");
+}
+
+/** @param {unknown} value */
+export function agentDefTriggersBuilder(value) {
+  if (!Array.isArray(value)) return false;
+  return value.some((trigger) => {
+    const entry = objectValue(trigger);
+    const command = stringValue(entry.command) ?? stringValue(entry.handle);
+    return command ? isBuilderMode(command.replace(/^\//, "")) : false;
+  });
+}
+
+/** @param {string} name @param {unknown} triggers */
+export function isBuilderAgent(name, triggers) {
+  return isBuilderMode(name) || agentDefTriggersBuilder(triggers);
 }
 
 /**
@@ -35,4 +51,9 @@ export function runObjectiveText(value) {
  */
 function objectValue(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+/** @param {unknown} value @returns {string | null} */
+function stringValue(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }

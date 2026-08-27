@@ -137,6 +137,7 @@ async function main() {
       await prepareRunnerRuntime();
     });
     restoredSessionState = await restoreSessionState(activeBundle);
+    await recordWorkspaceProvenance(activeBundle);
     steerStop = startSteeringPoll();
     const packageInstallCmd = activeBundle.packageInstallCmd;
     if (packageInstallCmd) {
@@ -543,6 +544,22 @@ export async function prepareWorkspace(
   for (const secret of [virtualKey, platform.platformKey, platform.repoToken]) {
     if (secret) secretsToRedact.add(secret);
   }
+}
+
+export async function preparedWorkspaceBaseSha(bundle: RunBundle, root = workRoot) {
+  if (!bundle.repo.cloneUrl) return null;
+  const baseSha = (await gitOutput(cwdFor(bundle, root), ["rev-parse", "HEAD"])).trim();
+  if (!/^[0-9a-f]{40}$/i.test(baseSha)) throw new Error("workspace_base_sha_invalid");
+  return baseSha.toLowerCase();
+}
+
+export async function recordWorkspaceProvenance(bundle: RunBundle, root = workRoot) {
+  const baseSha = await preparedWorkspaceBaseSha(bundle, root);
+  if (!baseSha) return null;
+  return api<{ baseSha: string }>(`/internal/runs/${currentRunId()}/workspace`, {
+    method: "POST",
+    body: JSON.stringify({ baseSha }),
+  });
 }
 
 async function pathExists(path: string) {
@@ -1922,6 +1939,7 @@ export async function shipGitChanges(
     return {
       branch: published.branch,
       headSha: published.headSha,
+      baseSha,
       changed: true,
       ...(pullRequest
         ? {

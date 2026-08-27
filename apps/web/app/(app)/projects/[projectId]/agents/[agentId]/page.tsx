@@ -11,12 +11,13 @@ export default async function AgentDetailPage({
   params: Promise<{ projectId: string; agentId: string }>;
 }) {
   const { projectId, agentId } = await params;
-  const [agents, status, catalog, me, profiles] = await Promise.all([
+  const [agents, status, catalog, me, profiles, project] = await Promise.all([
     api.projectAgents(projectId),
     api.agentsStatus(projectId),
     api.catalog(),
     api.me(),
     api.sandboxProfiles(),
+    api.project(projectId),
   ]);
 
   if (!agents.ok) return agents.offline ? <Offline /> : <ErrorNotice message={agents.message} />;
@@ -42,6 +43,7 @@ export default async function AgentDetailPage({
         myPermissions={me.ok ? me.data.permissions : []}
         sandboxProfiles={profiles.ok ? profiles.data.map((p) => ({ id: p.id, name: p.name })) : []}
         recentRuns={runs.ok ? runs.data : []}
+        builderPlanPolicy={project.ok ? project.data.builderPlanPolicy : "required"}
       />
     </>
   );

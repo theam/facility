@@ -13,7 +13,11 @@ import { deliverPendingWebhooks } from "./integrations/outbound.js";
 import { runLearningNightly } from "./learning.js";
 import { destroyPreviewById, provisionPreview, reconcilePreviews } from "./previews.js";
 import { deliverPendingRunDeliveries } from "./sandbox/delivery.js";
-import { dispatchRun, reconcileSandboxes } from "./sandbox/orchestrator.js";
+import {
+  dispatchRun,
+  reconcileArchitectPlanPublications,
+  reconcileSandboxes,
+} from "./sandbox/orchestrator.js";
 import { runAgentSchedules } from "./schedules.js";
 import { runAnalyticsRollup } from "./watchtower/analytics.js";
 import { runWatchtowerCanary } from "./watchtower/canary.js";
@@ -35,6 +39,7 @@ export async function startWorker() {
   const queues = [
     "runs.dispatch",
     "deliveries.deliver",
+    "architect-plans.publish",
     "watchtower.outcomes",
     "watchtower.health",
     "watchtower.canary",
@@ -105,6 +110,22 @@ export async function startWorker() {
           pending: deliveries.filter((delivery) => delivery.status === "pending").length,
           blocked: deliveries.filter((delivery) => delivery.status === "blocked").length,
         };
+      } else if (queue === "architect-plans.publish") {
+        const publications = await reconcileArchitectPlanPublications(
+          db,
+          config,
+          data as { proposalId?: string; orgId?: string },
+          githubFactory,
+        );
+        result = {
+          selected: publications.length,
+          published: publications.filter((publication) => publication.status === "published")
+            .length,
+          closed: publications.filter((publication) => publication.status === "closed").length,
+          suppressed: publications.filter((publication) => publication.status === "suppressed")
+            .length,
+          pending: publications.filter((publication) => publication.status === "pending").length,
+        };
       } else if (queue === "sandbox.reconcile") {
         await reconcileSandboxes(config, (name, payload) => boss.send(name, payload));
       } else if (queue === "agent.schedules") {
@@ -155,6 +176,7 @@ export async function startWorker() {
   }
   await boss.schedule("sandbox.reconcile", "*/2 * * * *", {});
   await boss.schedule("deliveries.deliver", "* * * * *", {});
+  await boss.schedule("architect-plans.publish", "* * * * *", {});
   await boss.schedule("agent.schedules", "* * * * *", {});
   await boss.schedule("webhooks.deliver", "* * * * *", {});
   await boss.schedule("idempotency.expire", "15 2 * * *", {});

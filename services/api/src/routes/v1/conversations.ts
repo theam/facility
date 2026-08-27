@@ -10,6 +10,7 @@ import {
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { withBuilderPlanPreflight } from "../../builder-plan-policy.js";
 import { ApiError, notFound } from "../../errors.js";
 import {
   assertBareRowProjectScope,
@@ -191,79 +192,94 @@ export async function registerConversationsRoutes(app: FastifyInstance, context:
       if (conversation.status === "running") {
         throw new ApiError(409, "turn_in_flight", "Conversation already has a turn in flight");
       }
-      const result = await db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
-        const claimed = (
+      const agent = await loadAgent(p.orgId, conversation.projectId, conversation.agentDefId);
+      if (!agent) throw new ApiError(409, "conversation_agent_not_found", "Agent not found");
+      const result = await withBuilderPlanPreflight(
+        db,
+        {
+          orgId: p.orgId,
+          projectId: conversation.projectId,
+          mode: "conversation",
+          agentDefId: agent.id,
+          trigger: { type: "conversation", conversationId, message: body.body },
+          actor: { type: p.type, id: p.id },
+          source: "rest_conversation_message",
+        },
+        async (tx, admission) => {
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+          const claimed = (
+            await tx
+              .update(conversations)
+              .set({ status: "running", updatedAt: new Date() })
+              .where(
+                and(
+                  eq(conversations.orgId, p.orgId),
+                  eq(conversations.id, conversationId),
+                  eq(conversations.status, "idle"),
+                ),
+              )
+              .returning()
+          )[0];
+          if (!claimed) return null;
+          const rows = await tx
+            .select({ max: sql<number>`coalesce(max(seq), 0)` })
+            .from(conversationMessages)
+            .where(eq(conversationMessages.conversationId, conversationId));
+          const seq = Number(rows[0]?.max ?? 0) + 1;
+          const message = (
+            await tx
+              .insert(conversationMessages)
+              .values({
+                id: newId("evt"),
+                orgId: p.orgId,
+                conversationId,
+                seq,
+                role: "user",
+                body: body.body,
+              })
+              .returning()
+          )[0];
+          const trigger: Record<string, unknown> = {
+            type: "conversation",
+            conversationId,
+            message: body.body,
+          };
+          if (claimed.engineSessionId && claimed.lastRunId) trigger.resumeOf = claimed.lastRunId;
+          const run = (
+            await tx
+              // builder-plan-preflight: rest_conversation_message
+              .insert(runs)
+              .values({
+                id: newId("run"),
+                orgId: p.orgId,
+                projectId: claimed.projectId,
+                agentDefId: claimed.agentDefId,
+                mode: admission.mode,
+                engine: "claude_code",
+                trigger,
+                createdBy: { type: p.type, id: p.id },
+              })
+              .returning()
+          )[0];
+          if (!message || !run) throw new Error("conversation_turn_create_failed");
+          // Pin the run that OWNS this running turn. Both finalize paths
+          // (finishConversationTurn / releaseConversationOnFailure) require the
+          // finishing run to be this one — so a forged run carrying another
+          // conversation's id can't release or append to a thread it doesn't own.
           await tx
             .update(conversations)
-            .set({ status: "running", updatedAt: new Date() })
-            .where(
-              and(
-                eq(conversations.orgId, p.orgId),
-                eq(conversations.id, conversationId),
-                eq(conversations.status, "idle"),
-              ),
-            )
-            .returning()
-        )[0];
-        if (!claimed) return null;
-        const rows = await tx
-          .select({ max: sql<number>`coalesce(max(seq), 0)` })
-          .from(conversationMessages)
-          .where(eq(conversationMessages.conversationId, conversationId));
-        const seq = Number(rows[0]?.max ?? 0) + 1;
-        const message = (
-          await tx
-            .insert(conversationMessages)
-            .values({
-              id: newId("evt"),
-              orgId: p.orgId,
-              conversationId,
-              seq,
-              role: "user",
-              body: body.body,
-            })
-            .returning()
-        )[0];
-        const trigger: Record<string, unknown> = {
-          type: "conversation",
-          conversationId,
-          message: body.body,
-        };
-        if (claimed.engineSessionId && claimed.lastRunId) trigger.resumeOf = claimed.lastRunId;
-        const run = (
-          await tx
-            .insert(runs)
-            .values({
-              id: newId("run"),
-              orgId: p.orgId,
-              projectId: claimed.projectId,
-              agentDefId: claimed.agentDefId,
-              mode: "conversation",
-              engine: "claude_code",
-              trigger,
-              createdBy: { type: p.type, id: p.id },
-            })
-            .returning()
-        )[0];
-        if (!message || !run) throw new Error("conversation_turn_create_failed");
-        // Pin the run that OWNS this running turn. Both finalize paths
-        // (finishConversationTurn / releaseConversationOnFailure) require the
-        // finishing run to be this one — so a forged run carrying another
-        // conversation's id can't release or append to a thread it doesn't own.
-        await tx
-          .update(conversations)
-          .set({ lastRunId: run.id, updatedAt: new Date() })
-          .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
-        await tx.insert(runEvents).values({
-          orgId: p.orgId,
-          runId: run.id,
-          seq: 1,
-          type: "queued",
-          data: { queue: "runs.dispatch" },
-        });
-        return { message, run };
-      });
+            .set({ lastRunId: run.id, updatedAt: new Date() })
+            .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
+          await tx.insert(runEvents).values({
+            orgId: p.orgId,
+            runId: run.id,
+            seq: 1,
+            type: "queued",
+            data: { queue: "runs.dispatch" },
+          });
+          return { message, run };
+        },
+      );
       if (!result) {
         throw new ApiError(409, "turn_in_flight", "Conversation already has a turn in flight");
       }

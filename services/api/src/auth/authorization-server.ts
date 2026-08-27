@@ -11,6 +11,7 @@ import { oauthAdapterFactory } from "./oauth-adapter.js";
 
 export async function registerAuthorizationServer(app: FastifyInstance, config: AppConfig) {
   if (!config.oauthIssuer || !config.oauthJwks || !config.mcpPublicUrl) return;
+  const browserOrigin = oauthBrowserOrigin(config);
   const Adapter = oauthAdapterFactory(app.facilityDb, config.secretMasterKey);
   const provider = new Provider(config.oauthIssuer, {
     adapter: Adapter,
@@ -72,7 +73,7 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       client.grantTypeAllowed("refresh_token"),
     interactions: {
       url: (_ctx: unknown, interaction: { uid: string }) =>
-        `${config.publicUrl}/oauth/interaction/${interaction.uid}`,
+        `${browserOrigin}/oauth/interaction/${interaction.uid}`,
     },
     findAccount: async (_ctx: unknown, accountId: string) => {
       const account = await activeAccount(app, accountId);
@@ -143,8 +144,9 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
     { config: { public: true }, schema: { params: z.object({ uid: z.string() }) } },
     async (request, reply) => {
       if (!request.principal?.userId) {
+        const returnTo = `/oauth/interaction/${(request.params as { uid: string }).uid}`;
         return reply.redirect(
-          `/auth/login?returnTo=${encodeURIComponent(`/oauth/interaction/${(request.params as { uid: string }).uid}`)}`,
+          `${browserOrigin}/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
         );
       }
       const details = await provider.interactionDetails(request.raw, reply.raw);
@@ -221,4 +223,50 @@ function escapeHtml(value: string) {
     "'": "&#39;",
   };
   return value.replace(/[&<>"']/g, (character) => entities[character] ?? character);
+}
+
+export function oauthBrowserOrigin(config: AppConfig) {
+  let issuer: URL;
+  let web: URL;
+  let callback: URL;
+  try {
+    issuer = new URL(config.oauthIssuer ?? "");
+    web = new URL(config.webUrl ?? config.publicUrl);
+    callback = new URL(config.authCallbackUrl ?? `${web.origin}/api/auth/callback`);
+  } catch {
+    throw new Error(
+      "Facility OAuth WEB_URL, issuer, and authentication callback must be valid HTTP(S) URLs",
+    );
+  }
+  if (!isOriginUrl(web) || !isOriginUrl(issuer) || issuer.origin !== web.origin) {
+    throw new Error("Facility OAuth WEB_URL and issuer must be the same canonical HTTP(S) origin");
+  }
+  if (!isExactAuthCallbackUrl(callback, web.origin)) {
+    throw new Error(
+      "Facility OAuth authentication callback must be exactly WEB_URL /api/auth/callback",
+    );
+  }
+  return web.origin;
+}
+
+function isOriginUrl(url: URL) {
+  return (
+    ["http:", "https:"].includes(url.protocol) &&
+    !url.username &&
+    !url.password &&
+    url.pathname === "/" &&
+    !url.search &&
+    !url.hash
+  );
+}
+
+function isExactAuthCallbackUrl(url: URL, webOrigin: string) {
+  return (
+    ["http:", "https:"].includes(url.protocol) &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    url.toString() === `${webOrigin}/api/auth/callback`
+  );
 }

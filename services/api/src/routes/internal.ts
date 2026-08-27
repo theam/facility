@@ -24,6 +24,7 @@ import {
 import type { AppConfig } from "../types.js";
 
 const Params = z.object({ runId: z.string() });
+const GitCommitSha = z.string().regex(/^[0-9a-f]{40}$/i);
 const TRANSCRIPT_MAX_BYTES = 50 * 1024 * 1024;
 const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
 const EventBatch = z.array(
@@ -165,6 +166,45 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       const bundle = readSandbox(run.sandbox).bundle;
       if (!bundle) throw notFound("Bundle not found");
       return bundle as unknown as Record<string, unknown>;
+    },
+  );
+
+  app.post(
+    "/internal/runs/:runId/workspace",
+    {
+      config: { public: true },
+      preHandler: authenticate,
+      schema: {
+        params: Params,
+        body: z.object({ baseSha: GitCommitSha }),
+        response: { 200: z.object({ baseSha: GitCommitSha }) },
+      },
+    },
+    async (request) => {
+      const run = (request as RunnerRequest).runnerRun;
+      if (!run) throw notFound("Run not found");
+      const baseSha = (request.body as { baseSha: string }).baseSha.toLowerCase();
+      const [recorded] = await db
+        .update(runs)
+        .set({ workspaceBaseSha: baseSha, updatedAt: new Date() })
+        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id), isNull(runs.workspaceBaseSha)))
+        .returning({ baseSha: runs.workspaceBaseSha });
+      if (recorded?.baseSha) return { baseSha: recorded.baseSha };
+
+      // Runner lifecycle requests may be replayed after a lost response. The
+      // checkpoint is immutable: an exact replay succeeds, while a different
+      // SHA cannot rewrite the provenance already bound to this run.
+      const [current] = await db
+        .select({ baseSha: runs.workspaceBaseSha })
+        .from(runs)
+        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id)))
+        .limit(1);
+      if (current?.baseSha === baseSha) return { baseSha };
+      throw new ApiError(
+        409,
+        "workspace_base_mismatch",
+        "Run workspace base commit was already recorded",
+      );
     },
   );
 
@@ -426,6 +466,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
             .object({
               branch: z.string().optional(),
               headSha: z.string().optional(),
+              baseSha: GitCommitSha.optional(),
               changed: z.boolean(),
               pushError: z.string().optional(),
               pullRequestTitle: z.string().optional(),
@@ -448,6 +489,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         git?: {
           branch?: string;
           headSha?: string;
+          baseSha?: string;
           changed: boolean;
           pushError?: string;
           pullRequestTitle?: string;

@@ -6,6 +6,26 @@ const validEnv = {
   SECRET_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
 };
 
+const validOauthJwks = JSON.stringify({
+  keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "oauth-key" }],
+});
+
+const enabledOauthEnv = {
+  FACILITY_OAUTH_JWKS: validOauthJwks,
+  MCP_PUBLIC_URL: "https://mcp.example.org/mcp",
+};
+
+const validProductionOauthEnv = {
+  ...validEnv,
+  NODE_ENV: "production",
+  PUBLIC_URL: "https://api.example.com",
+  WEB_URL: "https://app.example.com",
+  FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
+  AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
+  FACILITY_OAUTH_ISSUER: "https://app.example.com",
+  ...enabledOauthEnv,
+};
+
 describe("API configuration", () => {
   it("accepts a master key that decodes to exactly 32 bytes", () => {
     expect(readConfig(validEnv).secretMasterKey).toBe(validEnv.SECRET_MASTER_KEY);
@@ -206,14 +226,173 @@ describe("API configuration", () => {
     expect(
       readConfig({
         ...validEnv,
-        FACILITY_OAUTH_ISSUER: "https://api.example.com/",
+        PUBLIC_URL: "https://api.example.com/",
+        WEB_URL: "https://app.example.com/",
+        AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
+        FACILITY_OAUTH_ISSUER: "https://app.example.com/",
         MCP_PUBLIC_URL: "https://mcp.example.com/",
         FACILITY_OAUTH_JWKS: JSON.stringify({ keys: [privateKey] }),
       }),
     ).toMatchObject({
-      oauthIssuer: "https://api.example.com",
-      mcpPublicUrl: "https://mcp.example.com",
+      oauthIssuer: "https://app.example.com",
+      mcpPublicUrl: "https://mcp.example.com/mcp",
       oauthJwks: { keys: [privateKey] },
     });
+  });
+
+  it("canonicalizes the MCP resource and rejects an unrelated path", () => {
+    expect(readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com" })).toMatchObject({
+      mcpPublicUrl: "https://mcp.example.com/mcp",
+    });
+    expect(
+      readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com/mcp/" }),
+    ).toMatchObject({ mcpPublicUrl: "https://mcp.example.com/mcp" });
+    expect(() =>
+      readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com/other" }),
+    ).toThrow("MCP_PUBLIC_URL path must be /mcp");
+    expect(() => readConfig({ ...validEnv, MCP_PUBLIC_URL: "http://mcp.facility.test" })).toThrow(
+      "MCP_PUBLIC_URL must use HTTPS unless it is a loopback URL",
+    );
+  });
+
+  it("preserves an exact same-origin HTTP OAuth flow outside production", () => {
+    expect(
+      readConfig({
+        ...validEnv,
+        PUBLIC_URL: "http://localhost:4400",
+        WEB_URL: "http://localhost:3400",
+        FACILITY_OAUTH_ISSUER: "http://localhost:3400",
+        AUTH_CALLBACK_URL: "http://localhost:3400/api/auth/callback",
+        MCP_PUBLIC_URL: "http://localhost:4420",
+        FACILITY_OAUTH_JWKS: validOauthJwks,
+      }),
+    ).toMatchObject({
+      webUrl: "http://localhost:3400",
+      oauthIssuer: "http://localhost:3400",
+      authCallbackUrl: "http://localhost:3400/api/auth/callback",
+      mcpPublicUrl: "http://localhost:4420/mcp",
+    });
+  });
+
+  it("allows all-loopback HTTP OAuth URLs when the Compose image sets production", () => {
+    expect(
+      readConfig({
+        ...validEnv,
+        NODE_ENV: "production",
+        PUBLIC_URL: "http://localhost:4400",
+        WEB_URL: "http://localhost:3400",
+        FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
+        FACILITY_OAUTH_ISSUER: "http://localhost:3400",
+        AUTH_CALLBACK_URL: "http://localhost:3400/api/auth/callback",
+        MCP_PUBLIC_URL: "http://127.0.0.1:4420",
+        FACILITY_OAUTH_JWKS: validOauthJwks,
+      }),
+    ).toMatchObject({
+      oauthIssuer: "http://localhost:3400",
+      mcpPublicUrl: "http://127.0.0.1:4420/mcp",
+    });
+  });
+
+  it("does not apply Facility OAuth transport policy to an incomplete configuration", () => {
+    expect(
+      readConfig({
+        ...validEnv,
+        NODE_ENV: "production",
+        PUBLIC_URL: "http://api.example.com",
+        WEB_URL: "http://app.example.com",
+        FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
+        FACILITY_OAUTH_ISSUER: "http://app.example.com",
+        AUTH_CALLBACK_URL: "http://app.example.com/api/auth/callback",
+        MCP_PUBLIC_URL: "https://mcp.example.org",
+        FACILITY_OAUTH_JWKS: "",
+      }),
+    ).toMatchObject({ oauthJwks: undefined, mcpPublicUrl: "https://mcp.example.org/mcp" });
+  });
+
+  it.each([
+    [
+      "WEB_URL",
+      {
+        WEB_URL: "http://app.example.com",
+        FACILITY_OAUTH_ISSUER: "http://app.example.com",
+        AUTH_CALLBACK_URL: "http://app.example.com/api/auth/callback",
+      },
+    ],
+    ["AUTH_CALLBACK_URL", { AUTH_CALLBACK_URL: "http://app.example.com/api/auth/callback" }],
+    ["FACILITY_OAUTH_ISSUER", { FACILITY_OAUTH_ISSUER: "http://app.example.com" }],
+  ])("requires HTTPS for %s in production", (name, overrides) => {
+    expect(() => readConfig({ ...validProductionOauthEnv, ...overrides })).toThrow(
+      `${name} must use HTTPS in production`,
+    );
+  });
+
+  it.each([
+    "https://user:secret@app.example.com",
+    "https://app.example.com/oauth",
+    "https://app.example.com?tenant=one",
+    "https://app.example.com#fragment",
+  ])("requires the OAuth WEB_URL to be a canonical origin: %s", (webUrl) => {
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        ...enabledOauthEnv,
+        PUBLIC_URL: "https://api.example.com",
+        WEB_URL: webUrl,
+        FACILITY_OAUTH_ISSUER: "https://app.example.com",
+      }),
+    ).toThrow(
+      "WEB_URL must be an HTTP(S) origin without credentials, path, query, or fragment when Facility OAuth is enabled",
+    );
+  });
+
+  it("requires the MCP authorization server issuer to be the canonical web origin", () => {
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        ...enabledOauthEnv,
+        PUBLIC_URL: "https://api.example.com",
+        WEB_URL: "https://app.example.com",
+        FACILITY_OAUTH_ISSUER: "https://api.example.com",
+      }),
+    ).toThrow(
+      "FACILITY_OAUTH_ISSUER must be the WEB_URL origin so OAuth browser cookies remain host-only and same-origin",
+    );
+    for (const oauthIssuer of [
+      "https://user:secret@app.example.com",
+      "https://app.example.com/oauth",
+      "https://app.example.com?tenant=one",
+      "https://app.example.com#fragment",
+    ]) {
+      expect(() =>
+        readConfig({
+          ...validEnv,
+          ...enabledOauthEnv,
+          WEB_URL: "https://app.example.com",
+          FACILITY_OAUTH_ISSUER: oauthIssuer,
+        }),
+      ).toThrow(
+        "FACILITY_OAUTH_ISSUER must be the WEB_URL origin so OAuth browser cookies remain host-only and same-origin",
+      );
+    }
+  });
+
+  it.each([
+    "https://user:secret@app.example.com/api/auth/callback",
+    "https://app.example.com/auth/callback",
+    "https://app.example.com/api/auth/callback/",
+    "https://app.example.com/api/auth/callback?tenant=one",
+    "https://app.example.com/api/auth/callback#fragment",
+    "https://other.example.com/api/auth/callback",
+  ])("requires the exact host-only OAuth callback URL: %s", (callbackUrl) => {
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        ...enabledOauthEnv,
+        PUBLIC_URL: "https://api.example.com",
+        WEB_URL: "https://app.example.com",
+        FACILITY_OAUTH_ISSUER: "https://app.example.com",
+        AUTH_CALLBACK_URL: callbackUrl,
+      }),
+    ).toThrow("AUTH_CALLBACK_URL must be exactly the WEB_URL /api/auth/callback URL");
   });
 });
