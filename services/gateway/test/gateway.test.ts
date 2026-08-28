@@ -1310,7 +1310,7 @@ async function buildStub(state: StubState) {
       });
       reply.raw.writeHead(200, { "content-type": "text/event-stream" });
       reply.raw.write(
-        'event: message_delta\ndata: {"type":"message_delta","delta":{"usage":{"output_tokens":333}}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":333}}\n\n',
       );
       await new Promise((resolve) => setTimeout(resolve, 10_000));
       return reply;
@@ -1375,8 +1375,11 @@ async function buildStub(state: StubState) {
 
 function anthropicSseBody() {
   return [
-    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1000000}}}\n\n',
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_stub","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"usage":{"input_tokens":1000000,"output_tokens":1}}}\n\n',
     'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"ok"}}\n\n',
-    'event: message_delta\ndata: {"type":"message_delta","delta":{"usage":{"output_tokens":1000000}}}\n\n',
+    // `usage` is a sibling of `delta`, and `delta` carries only the stop fields —
+    // see RawMessageDeltaEvent in @anthropic-ai/sdk. The null cache counters are
+    // what the API sends for an uncached request.
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":null,"cache_creation_input_tokens":null,"cache_read_input_tokens":null,"output_tokens":1000000}}\n\n',
   ].join("");
 }
