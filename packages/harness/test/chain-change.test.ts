@@ -22,14 +22,13 @@ describe("entriesStrandedByChain", () => {
   it("reproduces the orphan: the research default, then a switch to product", () => {
     // A space stored with an empty config runs the research chain, so agents
     // legitimately write H/E/F/L under it. Resolving {"chain":"product"} for
-    // the same space declares none of them.
+    // the same space retains the shared L type, but leaves H/E/F undeclared.
     const written = [stored("H"), stored("E"), stored("L")];
     expect(chainFromConfig({}).id).toBe("research");
     expect(entriesStrandedByChain(written, chainFromConfig({}))).toEqual([]);
     expect(entriesStrandedByChain(written, chainFromConfig({ chain: "product" }))).toEqual([
       { entryId: "row-H001", artifactId: "H001", type: "H" },
       { entryId: "row-E001", artifactId: "E001", type: "E" },
-      { entryId: "row-L001", artifactId: "L001", type: "L" },
     ]);
   });
 
