@@ -10,7 +10,7 @@ import {
   type HarnessKbSpace,
   validate,
 } from "@facility/harness";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 type Db = ReturnType<typeof createDb>["db"];
 
@@ -176,6 +176,52 @@ export class SpaceChainChangedError extends Error {
   constructor(readonly type: string) {
     super(`space_chain_changed: the chain no longer declares type ${type}`);
   }
+}
+
+/**
+ * Allocate the next entry number for a type and derive the draft that carries
+ * it. Both halves must run inside the caller's write transaction, after the
+ * space lock: the number is only unique while that lock is held, and
+ * `normalizeKbDraft` bakes it into the artifact id, the aliases and the body
+ * links — so allocating without re-deriving them would store a row whose id
+ * contradicts its number, which `validate` rejects as `id_number_mismatch`.
+ */
+export async function allocateNormalizedKbEntry(
+  tx: Pick<Db, "select">,
+  input: {
+    orgId: string;
+    spaceId: string;
+    type: string;
+    slug: string;
+    frontmatter: Record<string, unknown>;
+    bodyMd: string;
+    parentEntries: HarnessKbEntry[];
+  },
+) {
+  const number =
+    ((
+      await tx
+        .select({ number: kbEntries.number })
+        .from(kbEntries)
+        .where(
+          and(
+            eq(kbEntries.orgId, input.orgId),
+            eq(kbEntries.spaceId, input.spaceId),
+            eq(kbEntries.type, input.type),
+          ),
+        )
+        .orderBy(desc(kbEntries.number))
+        .limit(1)
+    )[0]?.number ?? 0) + 1;
+  const normalized = normalizeKbDraft({
+    type: input.type,
+    number,
+    slug: input.slug,
+    frontmatter: input.frontmatter,
+    bodyMd: input.bodyMd,
+    parentEntries: input.parentEntries,
+  });
+  return { number, frontmatter: normalized.frontmatter, bodyMd: normalized.bodyMd };
 }
 
 export function normalizeKbDraft(input: {

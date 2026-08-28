@@ -63,6 +63,7 @@ import {
 import { renderGithubRunProgress } from "./github/run-progress.js";
 import { ensureTrackedIssue } from "./github/tracked-issues.js";
 import {
+  allocateNormalizedKbEntry,
   ensureActive,
   ensureLinks,
   loadKbGraph,
@@ -2568,8 +2569,10 @@ async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
   if (!space) throw new Error("kb_space_missing");
   const graph = await loadKbGraph(db, proposal.orgId, proposal.projectId);
   if (!graph) throw new Error("kb_space_missing");
-  const max =
-    (
+  // Preview number only: it dates the draft that validation inspects. The
+  // stored number is allocated under the space lock below — never this one.
+  const previewNumber =
+    ((
       await db
         .select()
         .from(kbEntries)
@@ -2582,7 +2585,7 @@ async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
         )
         .orderBy(desc(kbEntries.number))
         .limit(1)
-    )[0]?.number ?? 0;
+    )[0]?.number ?? 0) + 1;
   const links = arrayOfStrings(payload.links);
   const parentEntries = graph.entries.filter((entry) => links.includes(entry.id));
   if (parentEntries.length !== links.length) throw new Error("kb_amendment_link_target_missing");
@@ -2599,20 +2602,21 @@ async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
   }
   const status =
     stringField(payload.status) ?? (supersedesId && type === "D" ? "decided" : "draft");
+  const amendmentFrontmatter = supersedesId
+    ? { ...objectOrEmpty(payload.frontmatter), supersedes: supersedesId }
+    : objectOrEmpty(payload.frontmatter);
   const normalized = normalizeKbDraft({
     type,
-    number: max + 1,
+    number: previewNumber,
     slug,
-    frontmatter: supersedesId
-      ? { ...objectOrEmpty(payload.frontmatter), supersedes: supersedesId }
-      : objectOrEmpty(payload.frontmatter),
+    frontmatter: amendmentFrontmatter,
     bodyMd,
     parentEntries,
   });
   const draft = {
     id: "__draft__",
     type,
-    number: max + 1,
+    number: previewNumber,
     slug,
     frontmatter: normalized.frontmatter,
     bodyMd: normalized.bodyMd,
@@ -2635,6 +2639,15 @@ async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
   if (!report.ok) throw new Error("kb_validation_failed");
   return db.transaction(async (tx) => {
     await lockSpaceAgainstChainChange(tx, proposal.orgId, space.id, type);
+    const allocated = await allocateNormalizedKbEntry(tx, {
+      orgId: proposal.orgId,
+      spaceId: space.id,
+      type,
+      slug,
+      frontmatter: amendmentFrontmatter,
+      bodyMd,
+      parentEntries,
+    });
     const inserted = (
       await tx
         .insert(kbEntries)
@@ -2643,10 +2656,10 @@ async function executeKbAmendment(db: Db, proposal: ProposalExecutionContext) {
           orgId: proposal.orgId,
           spaceId: space.id,
           type,
-          number: max + 1,
+          number: allocated.number,
           slug,
-          frontmatter: normalized.frontmatter,
-          bodyMd: normalized.bodyMd,
+          frontmatter: allocated.frontmatter,
+          bodyMd: allocated.bodyMd,
           status,
           supersedes: supersedesId ?? null,
         })

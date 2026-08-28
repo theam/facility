@@ -4063,6 +4063,76 @@ describe("api", async () => {
     }
   });
 
+  it("allocates distinct numbers to concurrent same-type writers", async () => {
+    const wait = (ms: number) =>
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), ms));
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Number race", slug: `number-race-${Date.now()}` },
+    });
+    const raceProjectId = created.json().id as string;
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${raceProjectId}/kb/space`,
+      headers: { cookie },
+      payload: {
+        charterMd: "## Blocked Stop Condition\nNone\n",
+        activeMd: "## Objective\n\n## Next Step\n\n## Blocker\n\n## Links\n",
+      },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    const spaceId = space.json().id as string;
+    const raw = postgres(databaseUrl, { max: 1 });
+    try {
+      // Two H creates queued behind one space lock. Allocating the number
+      // before the lock handed both writers the same one, and the loser died
+      // on the unique constraint; allocating after it has to hand them
+      // consecutive numbers instead.
+      await raw.unsafe("begin");
+      await raw.unsafe("select id from kb_spaces where id = $1 for no key update", [spaceId]);
+      const first = app.inject({
+        method: "POST",
+        url: `/v1/projects/${raceProjectId}/kb/entries`,
+        headers: { cookie },
+        payload: { type: "H", slug: "raced-one", bodyMd: "first", links: [] },
+      });
+      const second = app.inject({
+        method: "POST",
+        url: `/v1/projects/${raceProjectId}/kb/entries`,
+        headers: { cookie },
+        payload: { type: "H", slug: "raced-two", bodyMd: "second", links: [] },
+      });
+      expect(
+        await Promise.race([
+          Promise.all([first, second]).then(() => "resolved" as const),
+          wait(300),
+        ]),
+      ).toBe("waiting");
+      await raw.unsafe("commit");
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.statusCode, one.body).toBe(200);
+      expect(two.statusCode, two.body).toBe(200);
+      const numbers = [one.json().number as number, two.json().number as number].sort(
+        (a, b) => a - b,
+      );
+      expect(numbers).toEqual([1, 2]);
+      // Each row's artifact id has to come from the number it was finally
+      // given, not the one it previewed before the lock — so normalization
+      // has to run under the lock too, not just the allocation.
+      for (const response of [one, two]) {
+        const entry = response.json();
+        const expected = `H${String(entry.number).padStart(3, "0")}`;
+        expect(entry.frontmatter.id).toBe(expected);
+        expect(entry.bodyMd).toContain(`[[${expected}]]`);
+      }
+      expect((await validateProjectKb(db, orgId, raceProjectId)).ok).toBe(true);
+    } finally {
+      await raw.end({ timeout: 1 });
+    }
+  });
+
   it("links cited artifacts on body edits and captures the prior version", async () => {
     // Partial PUT: only config — charter/active must survive untouched.
     const space = await app.inject({
