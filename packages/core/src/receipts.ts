@@ -8,6 +8,15 @@ const ReceiptCheckSchema = z.object({
   exit_code: z.number().int().optional(),
 });
 
+// Non-gating evidence: named artifacts a run was expected to preserve. Distinct
+// from `checks`, which the run's outcome is gated on. Optional so receipts
+// sealed before this field existed still parse and digest unchanged.
+const ReceiptEvidenceSchema = z.object({
+  name: z.string(),
+  status: z.enum(["passed", "failed", "skipped", "unknown"]),
+  reason: z.string().optional(),
+});
+
 export const FacilityReceiptSchema = z.object({
   schema: z.literal("facility.run.v1"),
   run_id: z.string().optional(),
@@ -71,6 +80,8 @@ export const FacilityReceiptSchema = z.object({
     .optional(),
   checks: z.array(ReceiptCheckSchema).optional(),
   checks_truncated: z.boolean().optional(),
+  evidence: z.array(ReceiptEvidenceSchema).optional(),
+  evidence_truncated: z.boolean().optional(),
   integrity: z
     .object({
       algorithm: z.literal("sha256"),

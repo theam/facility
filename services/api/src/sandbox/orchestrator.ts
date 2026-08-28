@@ -3039,6 +3039,7 @@ async function gatewayAggregate(db: ReturnType<typeof createDb>["db"], runId: st
     select
       count(*)::int as event_count,
       count(*) filter (where type = 'check')::int as check_count,
+      count(*) filter (where type = 'evidence')::int as evidence_count,
       count(*) filter (where type = 'assistant')::int as turns,
       count(*) filter (where type = 'tool')::int as tool_calls,
       count(*) filter (
@@ -3063,10 +3064,20 @@ async function gatewayAggregate(db: ReturnType<typeof createDb>["db"], runId: st
     .where(and(eq(runEvents.runId, runId), eq(runEvents.type, "check")))
     .orderBy(runEvents.seq)
     .limit(200);
+  // Non-gating evidence is deliberately not a check, so the query above cannot
+  // see it. Collected separately, the receipt names what a run failed to
+  // preserve instead of folding it into the anonymous `activity.errors` count.
+  const evidenceEvents = await db
+    .select({ data: runEvents.data })
+    .from(runEvents)
+    .where(and(eq(runEvents.runId, runId), eq(runEvents.type, "evidence")))
+    .orderBy(runEvents.seq)
+    .limit(200);
   const eventRow = (
     events as unknown as Array<{
       event_count: number;
       check_count: number;
+      evidence_count: number;
       turns: number;
       tool_calls: number;
       shell_commands: number;
@@ -3083,6 +3094,7 @@ async function gatewayAggregate(db: ReturnType<typeof createDb>["db"], runId: st
     costCents: Number(usage?.costCents ?? 0),
     eventCount: Number(eventRow?.event_count ?? 0),
     checkCount: Number(eventRow?.check_count ?? 0),
+    evidenceCount: Number(eventRow?.evidence_count ?? 0),
     activity: {
       turns: Number(eventRow?.turns ?? 0),
       shell_commands: Number(eventRow?.shell_commands ?? 0),
@@ -3092,6 +3104,7 @@ async function gatewayAggregate(db: ReturnType<typeof createDb>["db"], runId: st
       errors: Number(eventRow?.errors ?? 0),
     },
     checks: checkEvents.map(({ data }) => receiptCheck(data)),
+    evidence: evidenceEvents.map(({ data }) => receiptEvidence(data)),
   };
 }
 
@@ -3165,6 +3178,10 @@ async function canonicalRunReceipt(
     events: { count: aggregate.eventCount, checks: aggregate.checkCount },
     checks: aggregate.checks,
     checks_truncated: aggregate.checkCount > aggregate.checks.length,
+    ...(aggregate.evidence.length > 0 ? { evidence: aggregate.evidence } : {}),
+    // Only when true: a receipt that carries no evidence must digest exactly as
+    // it did before the field existed.
+    ...(aggregate.evidenceCount > aggregate.evidence.length ? { evidence_truncated: true } : {}),
   });
   return sealFacilityReceipt(receipt, await previousReceiptDigest(db, run));
 }
@@ -3330,6 +3347,17 @@ function receiptCheck(value: unknown) {
     ...(typeof data.exit_code === "number" && Number.isInteger(data.exit_code)
       ? { exit_code: data.exit_code }
       : {}),
+  };
+}
+
+function receiptEvidence(value: unknown) {
+  const data = objectOrEmpty(value);
+  const rawStatus = typeof data.status === "string" ? data.status.trim().toLowerCase() : "unknown";
+  const status = ["passed", "failed", "skipped"].includes(rawStatus) ? rawStatus : "unknown";
+  return {
+    name: typeof data.name === "string" && data.name.trim() ? data.name : "unnamed evidence",
+    status,
+    ...(typeof data.reason === "string" && data.reason.trim() ? { reason: data.reason } : {}),
   };
 }
 

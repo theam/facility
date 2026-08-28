@@ -1609,6 +1609,128 @@ describe("sandbox api", async () => {
     await expect(verifyStoredReceipts(db, orgId, [run.id])).resolves.toMatchObject({ ok: true });
   });
 
+  it("stores normalised non-gating evidence in the run receipt", async () => {
+    const token = "frt_receipt_evidence";
+    const run = await insertRunnerRun(token, "running");
+    await appendRunEvents(db, orgId, run.id, [
+      {
+        type: "evidence",
+        data: { name: "transcript", status: "failed", reason: "transcript_upload_failed" },
+      },
+      // Malformed: no name, a status needing trim and case folding, and a blank
+      // reason that must not reach the receipt as an empty string.
+      { type: "evidence", data: { status: " SKIPPED ", reason: "   " } },
+      // An unrecognised status must clamp rather than pass through.
+      { type: "evidence", data: { name: "session state", status: "exploded" } },
+      {
+        type: "check",
+        data: { command: "pnpm test", status: "passed", exit_code: 0, self_reported: false },
+      },
+      { type: "artifact_error", data: { kind: "transcript_upload_failed" } },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/result`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: "succeeded" },
+    });
+    expect(response.statusCode).toBe(200);
+    const finished = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    const receipt = finished?.receipt as {
+      evidence?: unknown[];
+      evidence_truncated?: boolean;
+      checks?: unknown[];
+      checks_truncated?: boolean;
+      activity?: { errors?: number };
+      result?: string;
+    };
+
+    expect(receipt.evidence).toEqual([
+      { name: "transcript", status: "failed", reason: "transcript_upload_failed" },
+      { name: "unnamed evidence", status: "skipped" },
+      { name: "session state", status: "unknown" },
+    ]);
+    // Evidence is collected separately from checks and must not leak into the
+    // gated list the run's outcome is read from.
+    expect(receipt.checks).toEqual([
+      { name: "pnpm test", status: "passed", source: "platform", exit_code: 0 },
+    ]);
+    expect(receipt.checks_truncated).toBe(false);
+    expect(receipt).not.toHaveProperty("evidence_truncated");
+
+    // The tally is unmoved by the three evidence events. It has exactly two
+    // contributions: the one artifact_error the aggregate counted, plus one for
+    // the run resolving to failed. It resolves to failed because
+    // insertRunnerRun creates a builder run and finishing one with no git
+    // changes is delivery_no_changes — asserted here so the count reads as
+    // deliberate rather than as an evidence event that leaked into it.
+    expect(receipt.result).toBe("failed");
+    expect(finished?.error).toBe("delivery_no_changes");
+    expect(receipt.activity?.errors).toBe(2);
+    expect(verifyFacilityReceipt(receipt as never)).toBe(true);
+    await expect(verifyStoredReceipts(db, orgId, [run.id])).resolves.toMatchObject({ ok: true });
+  });
+
+  it("omits the evidence field entirely from a run that recorded none", async () => {
+    const token = "frt_receipt_no_evidence";
+    const run = await insertRunnerRun(token, "running");
+    await appendRunEvents(db, orgId, run.id, [
+      {
+        type: "check",
+        data: { command: "pnpm test", status: "passed", exit_code: 0, self_reported: false },
+      },
+    ]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/result`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: "succeeded" },
+    });
+    expect(response.statusCode).toBe(200);
+    const finished = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    const receipt = finished?.receipt as Record<string, unknown>;
+
+    // Absent, not an empty array: such a receipt has to digest exactly as it
+    // did before the field existed.
+    expect(receipt).not.toHaveProperty("evidence");
+    expect(receipt).not.toHaveProperty("evidence_truncated");
+    expect(verifyFacilityReceipt(receipt as never)).toBe(true);
+  });
+
+  it("discloses when a run receipt truncates its evidence list", async () => {
+    const token = "frt_receipt_evidence_truncated";
+    const run = await insertRunnerRun(token, "running");
+    await appendRunEvents(
+      db,
+      orgId,
+      run.id,
+      Array.from({ length: 201 }, (_, index) => ({
+        type: "evidence",
+        data: { name: `artifact ${index + 1}`, status: "failed" },
+      })),
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/result`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { status: "succeeded" },
+    });
+    expect(response.statusCode).toBe(200);
+    const finished = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    const receipt = finished?.receipt as {
+      evidence?: unknown[];
+      evidence_truncated?: boolean;
+    };
+
+    expect(receipt.evidence).toHaveLength(200);
+    expect(receipt.evidence_truncated).toBe(true);
+    expect(verifyFacilityReceipt(receipt as never)).toBe(true);
+    await expect(verifyStoredReceipts(db, orgId, [run.id])).resolves.toMatchObject({ ok: true });
+  });
+
   it("delivers run events over the NOTIFY-backed SSE path without safety polling", async () => {
     const token = "frt_stream";
     const run = await insertRunnerRun(token, "running");
