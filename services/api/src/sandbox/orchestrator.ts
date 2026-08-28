@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   allowedModelsForEngine,
   type FacilityReceipt,
@@ -23,6 +24,7 @@ import {
   kbSpaces,
   llmRequests,
   outcomes,
+  platformIssues,
   projects,
   proposalEvents,
   proposals,
@@ -37,13 +39,36 @@ import {
   sandboxProfiles,
   virtualKeys,
 } from "@facility/db";
-import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { isBuilderMode } from "@facility/run-objective";
+import { and, asc, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import {
+  type BuilderPlanFreshnessOptions,
+  resolveBuilderPlanFreshnessForRun,
+} from "../builder-plan-freshness.js";
+import {
+  assertBuilderPlanDispatch,
+  builderPlanDenialCode,
+  builderPlanRequired,
+  recordBuilderPlanDenial,
+  withBuilderPlanPreflight,
+} from "../builder-plan-policy.js";
+import { ApiError } from "../errors.js";
+import {
+  architectPlanPublicationKey,
+  architectPlanPublicationMarker,
+  effectiveArchitectPlanProposalState,
+  findArchitectPlanPublicationComment,
+  isGithubNotFound,
+  renderClosedArchitectPlanPublication,
+  rotateArchitectPlanPublicationOrgIds,
+} from "../github/architect-plan-publication.js";
 import {
   createGithubClientFactory,
   FacilityGithubClient,
   type GithubClientFactory,
 } from "../github/client.js";
 import { pullRequestBodyForIssue } from "../github/closing-issues.js";
+import { githubIssueRevisionSha256 } from "../github/issue-revision.js";
 import {
   type GithubRunProgressPhase,
   progressCommentId,
@@ -84,12 +109,61 @@ type FinishRunDeps = {
   config?: AppConfig;
   githubClientFactory?: GithubClientFactory;
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>;
+  /** Test seam for proving terminal run + proposal commit atomicity. */
+  afterArchitectPlanOutboxWrite?: () => Promise<void> | void;
 };
 type DispatchRunDeps = {
   sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
+  githubFactory?: GithubClientFactory;
+  githubClient?: BuilderPlanFreshnessOptions["githubClient"];
+};
+
+type ArchitectPlanPublicationJob = {
+  proposalId?: string;
+  orgId?: string;
 };
 
 const RESUME_FALLBACK_SCOPE_MAX_BYTES = 32 * 1024;
+const ARCHITECT_PLAN_PUBLICATION_LIMIT = 25;
+const ARCHITECT_PLAN_PUBLICATION_TIMEOUT_MS = 20_000;
+
+function architectPlanPublicationBaseEligibility(now: Date) {
+  return and(
+    eq(actionTypes.name, "plan_acceptance"),
+    eq(runs.status, "succeeded"),
+    sql`(${runs.mode} = 'architect' or ${runs.mode} like '%-architect')`,
+    sql`(
+      ${platformIssues.id} is null
+      or ${platformIssues.state} = 'resolved'
+      or ${platformIssues.lastSeen} <= ${now.toISOString()}::timestamptz
+        - (interval '1 minute' * (1 << least(greatest(${platformIssues.count} - 1, 0), 6)))
+    )`,
+  );
+}
+
+function globalArchitectPlanPublicationEligibility(now: Date) {
+  return and(
+    architectPlanPublicationBaseEligibility(now),
+    sql`not exists (
+        select 1
+        from proposal_events publication
+        where publication.org_id = ${proposals.orgId}
+          and publication.proposal_id = ${proposals.id}
+          and publication.type in ('publication_suppressed', 'publication_closed')
+      )
+      and (
+        not exists (
+          select 1
+          from proposal_events publication
+          where publication.org_id = ${proposals.orgId}
+            and publication.proposal_id = ${proposals.id}
+            and publication.type = 'published'
+        )
+        or ${proposals.state} <> 'open'
+        or ${proposals.expiresAt} <= ${now.toISOString()}::timestamptz
+      )`,
+  );
+}
 
 export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: DispatchRunDeps = {}) {
   if (!job.runId || !job.orgId) throw new Error("runs.dispatch requires runId and orgId");
@@ -99,9 +173,36 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
   // (failRun revokes by persisted sandbox, which wouldn't yet carry these ids).
   const createdKeys: RunSandboxState = {};
   let launchedSandbox: { driver: SandboxDriver; ref: string } | undefined;
+  let run: RunRow | undefined;
+  let freshnessFailureSource: "worker_initial_freshness" | "worker_claimed_freshness" | null = null;
   try {
-    const run = await loadRun(db, job.orgId, job.runId);
+    run = await loadRun(db, job.orgId, job.runId);
     if (run?.status !== "queued") return;
+    const requiredBuilderPlan =
+      isBuilderMode(run.mode) && (await builderPlanRequired(db, run.orgId, run.projectId));
+    const requiredPlanFreshness =
+      requiredBuilderPlan && objectOrEmpty(run.trigger).source === "plan_acceptance";
+    freshnessFailureSource = requiredPlanFreshness ? "worker_initial_freshness" : null;
+    const initialFreshness = requiredPlanFreshness
+      ? await resolveBuilderPlanFreshnessForRun(db, run, {
+          config,
+          githubFactory: deps.githubFactory,
+          githubClient: deps.githubClient,
+        })
+      : undefined;
+    freshnessFailureSource = null;
+    await assertBuilderPlanDispatch(db, {
+      orgId: run.orgId,
+      projectId: run.projectId,
+      mode: run.mode,
+      agentDefId: run.agentDefId,
+      trigger: run.trigger,
+      gh: run.gh,
+      runId: run.id,
+      actor: { type: "system", id: "runs.dispatch" },
+      source: "worker_dispatch",
+      freshnessEvidence: initialFreshness,
+    });
     // Claim the run atomically. If a duplicate queue delivery raced us and
     // another worker already moved it out of "queued", the update touches no
     // rows and we must NOT launch a second sandbox for the same run.
@@ -111,9 +212,72 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
       .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id), eq(runs.status, "queued")))
       .returning({ id: runs.id });
     if (claimed.length === 0) return;
+    // Re-evaluate after the atomic claim. The project policy or mutable agent
+    // definition may change between the producer preflight and queue delivery;
+    // claiming first prevents another worker racing ahead while this final
+    // check fails. The outer failure boundary marks the row failed before any
+    // credential or sandbox side effect is created.
+    freshnessFailureSource = requiredPlanFreshness ? "worker_claimed_freshness" : null;
+    const claimedFreshness = requiredPlanFreshness
+      ? await resolveBuilderPlanFreshnessForRun(db, run, {
+          config,
+          githubFactory: deps.githubFactory,
+          githubClient: deps.githubClient,
+        })
+      : undefined;
+    freshnessFailureSource = null;
+    const claimedRunScope = { orgId: run.orgId, runId: run.id };
+    const dispatchSnapshot = await withBuilderPlanPreflight(
+      db,
+      {
+        orgId: run.orgId,
+        projectId: run.projectId,
+        mode: run.mode,
+        agentDefId: run.agentDefId,
+        trigger: run.trigger,
+        gh: run.gh,
+        runId: run.id,
+        actor: { type: "system", id: "runs.dispatch" },
+        source: "worker_claimed_dispatch",
+        freshnessEvidence: claimedFreshness,
+      },
+      async (tx, admission) => {
+        let claimedRun = await loadRun(tx, claimedRunScope.orgId, claimedRunScope.runId);
+        if (claimedRun?.status !== "provisioning") return null;
+        if (claimedRun.mode !== admission.mode) {
+          const sealed = (
+            await tx
+              .update(runs)
+              .set({ mode: admission.mode, updatedAt: new Date() })
+              .where(and(eq(runs.orgId, claimedRun.orgId), eq(runs.id, claimedRun.id)))
+              .returning()
+          )[0];
+          if (!sealed) return null;
+          claimedRun = sealed;
+        }
+        // Agent definitions are mutable. Build the complete execution snapshot
+        // while holding the same lock used by name/trigger/contract mutations so
+        // the identity that passed Gate 1 is exactly the identity launched.
+        return buildRunBundle(tx, claimedRun, config);
+      },
+    );
+    if (!dispatchSnapshot) return;
+    if (claimedFreshness) {
+      await appendRunEvents(db, run.orgId, run.id, [
+        {
+          type: "builder_plan_admitted",
+          data: {
+            proposalId: stringValue(objectOrEmpty(run.trigger).proposalId),
+            baseSha: claimedFreshness.baseSha,
+            issueRevisionSha256: claimedFreshness.issueRevisionSha256,
+            checkedAt: claimedFreshness.checkedAt,
+          },
+        },
+      ]);
+    }
     await appendRunEvents(db, run.orgId, run.id, [{ type: "provisioning", data: {} }]);
 
-    const { bundle, profile, agentPermissions } = await buildRunBundle(db, run, config);
+    const { bundle, profile, agentPermissions } = dispatchSnapshot;
     const virtualKey = await generateApiKey("fvk");
     await db.insert(virtualKeys).values({
       id: virtualKey.id,
@@ -261,9 +425,33 @@ export async function dispatchRun(config: AppConfig, job: DispatchJob, deps: Dis
     ]);
     await updateGithubRunProgress(db, run.id, "provisioning", { config }).catch(() => undefined);
   } catch (error) {
-    await failRun(db, job.orgId, job.runId, errorMessage(error), "provision_failed").catch(
-      () => undefined,
-    );
+    const builderPlanCode = error instanceof ApiError ? builderPlanDenialCode(error.code) : null;
+    if (builderPlanCode && freshnessFailureSource && run) {
+      await recordBuilderPlanDenial(
+        db,
+        {
+          orgId: run.orgId,
+          projectId: run.projectId,
+          mode: run.mode,
+          agentDefId: run.agentDefId,
+          trigger: run.trigger,
+          gh: run.gh,
+          runId: run.id,
+          actor: { type: "system", id: "runs.dispatch" },
+          source: freshnessFailureSource,
+        },
+        builderPlanCode,
+        stringValue(objectOrEmpty(error instanceof ApiError ? error.details : null).reason) ??
+          "freshness_resolution_failed",
+      ).catch(() => undefined);
+    }
+    await failRun(
+      db,
+      job.orgId,
+      job.runId,
+      builderPlanCode ?? errorMessage(error),
+      builderPlanCode ? "builder_plan_denied" : "provision_failed",
+    ).catch(() => undefined);
     await updateGithubRunProgress(db, job.runId, "failed", { config }).catch(() => undefined);
     // failRun revokes by the persisted sandbox, which on a pre-persist failure
     // wouldn't carry these — so revoke every key we minted, and destroy the
@@ -288,6 +476,7 @@ export async function finishRun(
     git?: {
       branch?: string;
       headSha?: string;
+      baseSha?: string;
       changed: boolean;
       pushError?: string;
       pullRequestTitle?: string;
@@ -298,7 +487,18 @@ export async function finishRun(
   },
   deps?: FinishRunDeps,
 ) {
-  if (terminalStatus(run.status)) return run;
+  if (terminalStatus(run.status)) {
+    // Current writes commit Architect success and its Gate 1 proposal together.
+    // Keep this repair path for legacy/incomplete rows and missing canonical
+    // origin events; network delivery remains the cron reconciler's job.
+    if (run.status === "succeeded" && isArchitectMode(run.mode)) {
+      const receipt = FacilityReceiptSchema.safeParse(run.receipt);
+      if (receipt.success && verifyFacilityReceipt(receipt.data)) {
+        await openArchitectPlanAcceptance(db, run, receipt.data);
+      }
+    }
+    return run;
+  }
   // A harness run that succeeds must leave the KB valid. If the checkpoint
   // fails, the run is a FAILURE — but resources must still be reclaimed, so we
   // downgrade status here and fall through to cleanup rather than throwing and
@@ -347,8 +547,19 @@ export async function finishRun(
   }
   const sandbox = readSandbox(run.sandbox);
   const aggregate = await gatewayAggregate(db, run.id);
-  let receipt = await canonicalRunReceipt(db, run, input.receipt, aggregate, status);
-  const claimed = await db.transaction(async (tx) => {
+  // A delivery receipt names the published range. Runs without a delivery
+  // still expose the prepared workspace base they actually inspected.
+  const receiptBaseSha = input.git?.baseSha ?? run.workspaceBaseSha;
+  let receipt = await canonicalRunReceipt(
+    db,
+    run,
+    input.receipt,
+    aggregate,
+    status,
+    receiptBaseSha,
+  );
+  const claim = await db.transaction(async (transaction) => {
+    const tx = transaction as unknown as ReturnType<typeof createDb>["db"];
     const terminal = (
       await tx
         .update(runs)
@@ -362,9 +573,10 @@ export async function finishRun(
           sandbox: { ...sandbox, finishedAt: new Date().toISOString() },
           updatedAt: new Date(),
         })
-        // The terminal status and durable delivery intent are one commit. A
-        // process crash can therefore never strand a successfully pushed
-        // branch without the metadata needed to publish its pull request.
+        // Terminal status, durable PR delivery intent, and the Architect Gate
+        // 1 proposal/open event commit together. A process crash can therefore
+        // strand neither a pushed branch nor a succeeded GitHub Architect run
+        // without the durable metadata its delivery reconciler needs.
         .where(and(eq(runs.id, run.id), notInArray(runs.status, [...TERMINAL_RUN_STATUSES])))
         .returning()
     )[0];
@@ -372,9 +584,15 @@ export async function finishRun(
     if (status === "succeeded" && deliveryPlan) {
       await tx.insert(runDeliveries).values(deliveryPlan);
     }
-    return terminal;
+    const architectProposal =
+      status === "succeeded" && isArchitectMode(terminal.mode)
+        ? await ensureArchitectPlanAcceptance(tx, terminal, receipt)
+        : undefined;
+    if (architectProposal) await deps?.afterArchitectPlanOutboxWrite?.();
+    return { run: terminal, architectProposalId: architectProposal?.id };
   });
-  if (!claimed) return run;
+  if (!claim) return run;
+  const claimed = claim.run;
   if (sandbox.driver && sandbox.ref) {
     const driver = await sandboxDriver(sandbox.driver);
     const destroyed = await driver
@@ -411,29 +629,20 @@ export async function finishRun(
   ) {
     await recordRunPullRequestUpdate(db, claimed, input.git.branch, input.git.headSha);
   }
-  if (status === "succeeded" && isArchitectMode(run.mode)) {
+  if (status === "succeeded" && claim.architectProposalId) {
     try {
-      await openArchitectPlanAcceptance(db, claimed, receipt, deps);
+      await publishArchitectPlanAcceptance(db, run.orgId, claim.architectProposalId, deps);
     } catch (planError) {
-      const message = errorMessage(planError);
-      status = "failed";
-      error = `plan_publication_failed:${message}`;
-      receipt = await canonicalRunReceipt(db, run, input.receipt, aggregate, status);
-      await db
-        .update(runs)
-        .set({ status, receipt, error, updatedAt: new Date() })
-        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id)));
-      await appendRunEvents(db, run.orgId, run.id, [
-        { type: "artifact_error", data: { kind: "plan_publication_failed", error: message } },
-      ]);
-      await raisePlatformIssue(db, {
+      // The sealed Architect work and canonical proposal are already durable.
+      // A transient GitHub publication failure is an artifact-delivery error,
+      // not a reason to rewrite a succeeded receipt as failed. The scheduled
+      // reconciler and terminal finish retry re-enter the idempotent publisher.
+      await recordArchitectPlanPublicationFailure(db, {
         orgId: run.orgId,
         projectId: run.projectId,
-        kind: "plan_publication_failed",
-        severity: "error",
-        fingerprint: `plan_publication_failed:${run.id}`,
-        title: "Failed to publish architect plan",
-        bodyMd: `Architect run ${run.id} completed, but Facility could not publish its plan and human approval gate.\n\n${message}`,
+        runId: run.id,
+        proposalId: claim.architectProposalId,
+        error: planError,
       });
     }
   }
@@ -459,7 +668,14 @@ export async function finishRun(
       const message = errorMessage(syncError);
       status = "failed";
       error = `security_issue_sync_failed:${message}`;
-      receipt = await canonicalRunReceipt(db, run, input.receipt, aggregate, status);
+      receipt = await canonicalRunReceipt(
+        db,
+        run,
+        input.receipt,
+        aggregate,
+        status,
+        receiptBaseSha,
+      );
       await db
         .update(runs)
         .set({ status, receipt, error, updatedAt: new Date() })
@@ -479,7 +695,12 @@ export async function finishRun(
     }
   }
   await appendRunEvents(db, run.orgId, run.id, [{ type: "result", data: { status, error } }]);
-  await updateGithubRunProgress(db, run.id, status, deps).catch(() => undefined);
+  // Architect Gate 1 publication owns the succeeded progress comment. A
+  // second generic update could race a publication_closed reconciliation and
+  // resurrect an approval CTA after the proposal became terminal.
+  if (!(status === "succeeded" && claim.architectProposalId)) {
+    await updateGithubRunProgress(db, run.id, status, deps).catch(() => undefined);
+  }
   await insertAuditEvent(db, {
     orgId: run.orgId,
     projectId: run.projectId,
@@ -636,15 +857,17 @@ export async function updateGithubRunProgress(
   const agentProgress = await lastAgentProgress(db, run);
   const commentId = progressCommentId(run.gh);
   if (!commentId) return false;
-  await client.updateIssueComment(
-    commentId,
-    renderProgressForRun(run, phase, {
-      finalText,
-      agentProgress,
-      proposalId: proposal?.id,
-      error: phase === "failed" ? run.error : null,
-    }),
-  );
+  const rendered = renderProgressForRun(run, phase, {
+    finalText,
+    agentProgress,
+    proposalId: proposal?.id,
+    error: phase === "failed" ? run.error : null,
+  });
+  const body =
+    phase === "succeeded" && proposal
+      ? `${rendered}\n\n${architectPlanPublicationMarker(run.id, proposal.id)}`
+      : rendered;
+  await client.updateIssueComment(commentId, body);
   return true;
 }
 
@@ -687,7 +910,23 @@ async function openArchitectPlanAcceptance(
   db: ReturnType<typeof createDb>["db"],
   run: RunRow,
   receipt: FacilityReceipt,
-  deps?: FinishRunDeps,
+) {
+  await db.transaction(async (transaction) =>
+    ensureArchitectPlanAcceptance(
+      transaction as unknown as ReturnType<typeof createDb>["db"],
+      run,
+      receipt,
+    ),
+  );
+  // Terminal retries repair only the durable DB outbox. Network publication is
+  // left to the scheduled reconciler so an ambiguous prior response observes
+  // durable backoff instead of immediately creating a second comment.
+}
+
+async function ensureArchitectPlanAcceptance(
+  db: ReturnType<typeof createDb>["db"],
+  run: RunRow,
+  receipt: FacilityReceipt,
 ) {
   const gh = objectOrEmpty(run.gh);
   const issueNumber = numberOrUndefined(gh.issueNumber);
@@ -704,96 +943,741 @@ async function openArchitectPlanAcceptance(
       .limit(1)
   )[0];
   if (!actionType) throw new Error("plan_acceptance_action_missing");
-  const existing = (
-    await db
-      .select()
-      .from(proposals)
-      .where(
-        and(
-          eq(proposals.orgId, run.orgId),
-          eq(proposals.projectId, run.projectId),
-          eq(proposals.runId, run.id),
-          eq(proposals.actionTypeId, actionType.id),
-        ),
-      )
-      .limit(1)
-  )[0];
-  const proposal =
-    existing ??
-    (
+  const runTrigger = objectOrEmpty(run.trigger);
+  const workspaceBaseSha = gitCommitSha(run.workspaceBaseSha);
+  const issueRevisionSha256 = githubIssueRevisionSha256(runTrigger.request);
+  const canonicalPayload = {
+    architectRunId: run.id,
+    issueNumber,
+    repoId: repo.id,
+    receiptSha256: receipt.integrity?.payload_sha256,
+    planSha256: createHash("sha256").update(plan).digest("hex"),
+    ...(workspaceBaseSha ? { workspaceBaseSha } : {}),
+    ...(issueRevisionSha256 ? { issueRevisionSha256 } : {}),
+  };
+  await db.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`architect-plan:${run.id}`}, 0))`,
+  );
+  const candidates = await db
+    .select()
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.orgId, run.orgId),
+        eq(proposals.projectId, run.projectId),
+        eq(proposals.runId, run.id),
+        eq(proposals.actionTypeId, actionType.id),
+      ),
+    );
+  for (const existing of candidates) {
+    const payload = objectOrEmpty(existing.payload);
+    if (
+      existing.contextMd !== plan ||
+      payload.architectRunId !== canonicalPayload.architectRunId ||
+      payload.issueNumber !== canonicalPayload.issueNumber ||
+      payload.repoId !== canonicalPayload.repoId ||
+      payload.receiptSha256 !== canonicalPayload.receiptSha256 ||
+      payload.planSha256 !== canonicalPayload.planSha256 ||
+      (gitCommitSha(payload.workspaceBaseSha) ?? null) !== (workspaceBaseSha ?? null) ||
+      (sha256Digest(payload.issueRevisionSha256) ?? null) !== (issueRevisionSha256 ?? null)
+    ) {
+      continue;
+    }
+    const origin = (
       await db
-        .insert(proposals)
-        .values({
-          id: newId("prop"),
-          orgId: run.orgId,
-          projectId: run.projectId,
-          runId: run.id,
-          actionTypeId: actionType.id,
-          payload: {
-            architectRunId: run.id,
-            issueNumber,
-            repoId: repo.id,
-            receiptSha256: receipt.integrity?.payload_sha256,
-          },
-          contextMd: plan,
-          expiresAt: new Date(Date.now() + actionType.defaultTtlHours * 3_600_000),
+        .select({
+          seq: proposalEvents.seq,
+          type: proposalEvents.type,
+          actor: proposalEvents.actor,
+          data: proposalEvents.data,
         })
-        .returning()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.orgId, run.orgId),
+            eq(proposalEvents.proposalId, existing.id),
+            eq(proposalEvents.seq, 1),
+          ),
+        )
+        .limit(1)
     )[0];
-  if (!proposal) throw new Error("plan_acceptance_create_failed");
-  if (!existing) {
-    await db.insert(proposalEvents).values({
-      orgId: run.orgId,
-      proposalId: proposal.id,
-      seq: 1,
-      type: "open",
-      actor: { type: "agent", id: run.id },
-      data: { source: "architect_run" },
-    });
+    const originActor = objectOrEmpty(origin?.actor);
+    const originData = objectOrEmpty(origin?.data);
+    if (
+      origin &&
+      (origin.type !== "open" ||
+        originActor.type !== "agent" ||
+        originActor.id !== run.id ||
+        originData.source !== "architect_run")
+    ) {
+      continue;
+    }
+    if (!origin) {
+      await db
+        .insert(proposalEvents)
+        .values({
+          orgId: run.orgId,
+          proposalId: existing.id,
+          seq: 1,
+          type: "open",
+          actor: { type: "agent", id: run.id },
+          data: { source: "architect_run" },
+        })
+        .onConflictDoNothing();
+    }
+    return existing;
   }
-  if (!repo?.installationId) throw new Error("run_repo_missing_installation");
-  const installation = (
+  const created = (
     await db
-      .select()
-      .from(githubInstallations)
-      .where(
+      .insert(proposals)
+      .values({
+        id: newId("prop"),
+        orgId: run.orgId,
+        projectId: run.projectId,
+        runId: run.id,
+        actionTypeId: actionType.id,
+        payload: canonicalPayload,
+        contextMd: plan,
+        expiresAt: new Date(Date.now() + actionType.defaultTtlHours * 3_600_000),
+      })
+      .returning()
+  )[0];
+  if (!created) throw new Error("plan_acceptance_create_failed");
+  await db.insert(proposalEvents).values({
+    orgId: run.orgId,
+    proposalId: created.id,
+    seq: 1,
+    type: "open",
+    actor: { type: "agent", id: run.id },
+    data: { source: "architect_run" },
+  });
+  return created;
+}
+
+export async function reconcileArchitectPlanPublications(
+  db: ReturnType<typeof createDb>["db"],
+  config: AppConfig,
+  job: ArchitectPlanPublicationJob = {},
+  githubClientFactory?: GithubClientFactory,
+  now = new Date(),
+) {
+  if ((job.proposalId && !job.orgId) || (!job.proposalId && job.orgId)) {
+    throw new Error("architect-plans.publish requires proposalId and orgId together");
+  }
+  const globalEligibility = globalArchitectPlanPublicationEligibility(now);
+  let selectedOrgIds: string[] | undefined;
+  if (!job.proposalId) {
+    const eligibleOrgs = await db
+      .selectDistinct({ orgId: proposals.orgId })
+      .from(proposals)
+      .innerJoin(
+        actionTypes,
+        and(eq(actionTypes.id, proposals.actionTypeId), eq(actionTypes.orgId, proposals.orgId)),
+      )
+      .innerJoin(
+        runs,
         and(
-          eq(githubInstallations.orgId, run.orgId),
-          eq(githubInstallations.id, repo.installationId),
+          eq(runs.id, proposals.runId),
+          eq(runs.orgId, proposals.orgId),
+          eq(runs.projectId, proposals.projectId),
         ),
       )
-      .limit(1)
-  )[0];
-  if (!installation || installation.suspendedAt) throw new Error("run_installation_unavailable");
-  const factory =
-    deps?.githubClientFactory ??
-    (deps?.config?.githubAppId && deps.config.githubAppPrivateKey
-      ? createGithubClientFactory(deps.config)
-      : null);
-  if (!factory) throw new Error("github_app_unconfigured");
-  const client = new FacilityGithubClient(await factory(installation.installationId), {
-    owner: repo.owner,
-    repo: repo.name,
-    defaultBranch: repo.defaultBranch,
-  });
-  const body = renderProgressForRun(run, "succeeded", {
-    finalText: plan,
-    agentProgress: await lastAgentProgress(db, run),
-    proposalId: proposal.id,
-  });
-  const commentId = progressCommentId(run.gh);
-  if (commentId) {
-    await client.updateIssueComment(commentId, body);
-  } else {
-    await client.createIssueComment(issueNumber, body);
+      .leftJoin(
+        platformIssues,
+        and(
+          eq(platformIssues.orgId, proposals.orgId),
+          eq(platformIssues.kind, "plan_publication_failed"),
+          sql`${platformIssues.fingerprint} = 'plan_publication_failed:' || ${runs.id}`,
+        ),
+      )
+      .where(globalEligibility)
+      .orderBy(asc(proposals.orgId));
+    selectedOrgIds = rotateArchitectPlanPublicationOrgIds(
+      eligibleOrgs.map((row) => row.orgId),
+      now,
+      ARCHITECT_PLAN_PUBLICATION_LIMIT,
+    );
+    if (selectedOrgIds.length === 0) return [];
   }
-  await insertAuditEvent(db, {
-    orgId: run.orgId,
-    projectId: run.projectId,
-    actor: { type: "agent", id: run.id },
-    action: "hitl.proposed",
-    target: { type: "proposal", id: proposal.id },
-    payload: { action_type: "plan_acceptance", issue: issueNumber },
+  const pending = await db
+    .select({
+      proposalId: proposals.id,
+      orgId: proposals.orgId,
+      projectId: proposals.projectId,
+      runId: proposals.runId,
+    })
+    .from(proposals)
+    .innerJoin(
+      actionTypes,
+      and(eq(actionTypes.id, proposals.actionTypeId), eq(actionTypes.orgId, proposals.orgId)),
+    )
+    .innerJoin(
+      runs,
+      and(
+        eq(runs.id, proposals.runId),
+        eq(runs.orgId, proposals.orgId),
+        eq(runs.projectId, proposals.projectId),
+      ),
+    )
+    .leftJoin(
+      platformIssues,
+      and(
+        eq(platformIssues.orgId, proposals.orgId),
+        eq(platformIssues.kind, "plan_publication_failed"),
+        sql`${platformIssues.fingerprint} = 'plan_publication_failed:' || ${runs.id}`,
+      ),
+    )
+    .where(
+      and(
+        job.proposalId ? architectPlanPublicationBaseEligibility(now) : globalEligibility,
+        job.proposalId ? eq(proposals.id, job.proposalId) : undefined,
+        job.orgId ? eq(proposals.orgId, job.orgId) : undefined,
+        selectedOrgIds ? inArray(proposals.orgId, selectedOrgIds) : undefined,
+      ),
+    )
+    .orderBy(
+      job.proposalId
+        ? asc(proposals.createdAt)
+        : sql`row_number() over (
+            partition by ${proposals.orgId}
+            order by
+              case when ${platformIssues.id} is null then 0 else 1 end,
+              ${platformIssues.lastSeen} asc nulls first,
+              ${proposals.createdAt},
+              ${proposals.id}
+          )`,
+      sql`case when ${platformIssues.id} is null then 0 else 1 end`,
+      asc(platformIssues.lastSeen),
+      asc(proposals.createdAt),
+      asc(proposals.id),
+    )
+    .limit(job.proposalId ? 1 : ARCHITECT_PLAN_PUBLICATION_LIMIT);
+
+  const results: Array<{
+    proposalId: string;
+    status: "published" | "closed" | "suppressed" | "pending";
+  }> = [];
+  for (const candidate of pending) {
+    if (!candidate.projectId || !candidate.runId) continue;
+    try {
+      const status = await publishArchitectPlanAcceptance(
+        db,
+        candidate.orgId,
+        candidate.proposalId,
+        { config, githubClientFactory },
+      );
+      results.push({ proposalId: candidate.proposalId, status });
+    } catch (error) {
+      await recordArchitectPlanPublicationFailure(db, {
+        orgId: candidate.orgId,
+        projectId: candidate.projectId,
+        runId: candidate.runId,
+        proposalId: candidate.proposalId,
+        error,
+      });
+      results.push({ proposalId: candidate.proposalId, status: "pending" });
+    }
+  }
+  return results;
+}
+
+async function publishArchitectPlanAcceptance(
+  db: ReturnType<typeof createDb>["db"],
+  orgId: string,
+  proposalId: string,
+  deps?: Pick<FinishRunDeps, "config" | "githubClientFactory">,
+) {
+  return db.transaction(async (transaction) => {
+    const tx = transaction as unknown as ReturnType<typeof createDb>["db"];
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`architect-plan-publication:${proposalId}`}, 0))`,
+    );
+    const context = (
+      await tx
+        .select({ proposal: proposals, run: runs, actionTypeName: actionTypes.name })
+        .from(proposals)
+        .innerJoin(
+          actionTypes,
+          and(eq(actionTypes.id, proposals.actionTypeId), eq(actionTypes.orgId, proposals.orgId)),
+        )
+        .innerJoin(
+          runs,
+          and(
+            eq(runs.id, proposals.runId),
+            eq(runs.orgId, proposals.orgId),
+            eq(runs.projectId, proposals.projectId),
+          ),
+        )
+        .where(and(eq(proposals.orgId, orgId), eq(proposals.id, proposalId)))
+        .for("update", { of: proposals })
+        .limit(1)
+    )[0];
+    if (context?.actionTypeName !== "plan_acceptance") {
+      throw new Error("architect_plan_publication_missing");
+    }
+    const { proposal, run } = context;
+    if (!proposal.projectId || run.status !== "succeeded" || !isArchitectMode(run.mode)) {
+      throw new Error("architect_plan_publication_invalid_run");
+    }
+    const origin = (
+      await tx
+        .select({
+          type: proposalEvents.type,
+          actor: proposalEvents.actor,
+          data: proposalEvents.data,
+        })
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.orgId, orgId),
+            eq(proposalEvents.proposalId, proposal.id),
+            eq(proposalEvents.seq, 1),
+          ),
+        )
+        .limit(1)
+    )[0];
+    const originActor = objectOrEmpty(origin?.actor);
+    const originData = objectOrEmpty(origin?.data);
+    if (
+      origin?.type !== "open" ||
+      originActor.type !== "agent" ||
+      originActor.id !== run.id ||
+      originData.source !== "architect_run"
+    ) {
+      throw new Error("architect_plan_publication_invalid_origin");
+    }
+    const payload = objectOrEmpty(proposal.payload);
+    const issueNumber = numberOrUndefined(payload.issueNumber);
+    const repoId = stringValue(payload.repoId);
+    const receipt = FacilityReceiptSchema.safeParse(run.receipt);
+    const ghIssueNumber = numberOrUndefined(objectOrEmpty(run.gh).issueNumber);
+    if (
+      !issueNumber ||
+      issueNumber !== ghIssueNumber ||
+      !repoId ||
+      payload.architectRunId !== run.id ||
+      payload.planSha256 !== createHash("sha256").update(proposal.contextMd).digest("hex") ||
+      (gitCommitSha(payload.workspaceBaseSha) ?? null) !==
+        (gitCommitSha(run.workspaceBaseSha) ?? null) ||
+      (sha256Digest(payload.issueRevisionSha256) ?? null) !==
+        (githubIssueRevisionSha256(objectOrEmpty(run.trigger).request) ?? null) ||
+      !receipt.success ||
+      !verifyFacilityReceipt(receipt.data) ||
+      payload.receiptSha256 !== receipt.data.integrity?.payload_sha256
+    ) {
+      throw new Error("architect_plan_publication_invalid_context");
+    }
+    const repo = await repoForGithubRun(tx, run);
+    if (!repo || repo.id !== repoId || repo.projectId !== proposal.projectId) {
+      throw new Error("architect_plan_publication_repo_mismatch");
+    }
+    const publicationEvents = await tx
+      .select({ type: proposalEvents.type, data: proposalEvents.data })
+      .from(proposalEvents)
+      .where(
+        and(
+          eq(proposalEvents.orgId, orgId),
+          eq(proposalEvents.proposalId, proposal.id),
+          inArray(proposalEvents.type, [
+            "published",
+            "publication_suppressed",
+            "publication_closed",
+          ]),
+        ),
+      )
+      .orderBy(desc(proposalEvents.seq));
+    const published = publicationEvents.find((event) => event.type === "published");
+    const suppressed = publicationEvents.find((event) => event.type === "publication_suppressed");
+    const closed = publicationEvents.find((event) => event.type === "publication_closed");
+    const publicationFingerprint = `plan_publication_failed:${run.id}`;
+    if (closed) {
+      await resolvePlatformIssue(
+        tx,
+        orgId,
+        publicationFingerprint,
+        "Architect plan publication closed",
+        { projectId: run.projectId },
+      );
+      return "closed" as const;
+    }
+    if (suppressed) {
+      await resolvePlatformIssue(
+        tx,
+        orgId,
+        publicationFingerprint,
+        "Architect plan publication suppressed",
+        { projectId: run.projectId },
+      );
+      return "suppressed" as const;
+    }
+    // Expiry is evaluated after taking the proposal row lock, not from the
+    // sweep's selection timestamp. A long batch can therefore never publish a
+    // CTA that expired while earlier candidates were using GitHub.
+    const effective = effectiveArchitectPlanProposalState(
+      proposal.state,
+      proposal.expiresAt,
+      new Date(),
+    );
+    const effectiveOpen = effective.open;
+    const effectiveState = effective.state;
+    if (published && effectiveOpen) {
+      await resolvePlatformIssue(
+        tx,
+        orgId,
+        publicationFingerprint,
+        "Architect plan publication recovered",
+        { projectId: run.projectId },
+      );
+      return "published" as const;
+    }
+    if (!repo.installationId) throw new Error("run_repo_missing_installation");
+    const installation = (
+      await tx
+        .select()
+        .from(githubInstallations)
+        .where(
+          and(
+            eq(githubInstallations.orgId, orgId),
+            eq(githubInstallations.id, repo.installationId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!installation || installation.suspendedAt) throw new Error("run_installation_unavailable");
+    const factory =
+      deps?.githubClientFactory ??
+      (deps?.config?.githubAppId && deps.config.githubAppPrivateKey
+        ? createGithubClientFactory(deps.config)
+        : null);
+    if (!factory) throw new Error("github_app_unconfigured");
+    const networkDeadline = Date.now() + ARCHITECT_PLAN_PUBLICATION_TIMEOUT_MS;
+    const remote = <T>(operation: () => Promise<T>) =>
+      withArchitectPlanPublicationTimeout(operation, Math.max(1, networkDeadline - Date.now()));
+    const client = new FacilityGithubClient(
+      await remote(() => factory(installation.installationId)),
+      {
+        owner: repo.owner,
+        repo: repo.name,
+        defaultBranch: repo.defaultBranch,
+      },
+    );
+    const publicationKey = architectPlanPublicationKey(run.id, proposal.id);
+    const publicationMarker = architectPlanPublicationMarker(run.id, proposal.id);
+    const publishedData = objectOrEmpty(published?.data);
+    const publishedCommentId = numberOrUndefined(publishedData.commentId);
+    let listedComments: Awaited<ReturnType<typeof client.listIssueComments>> | undefined;
+    const recoverComment = async (allowLegacy: boolean) => {
+      listedComments ??= await remote(() => client.listIssueComments(issueNumber));
+      return findArchitectPlanPublicationComment(listedComments, {
+        runId: run.id,
+        publicationMarker,
+        allowLegacy,
+      });
+    };
+    const closedBody = renderClosedArchitectPlanPublication({
+      runId: run.id,
+      plan: proposal.contextMd,
+      proposalState: effectiveState,
+      publicationMarker,
+    });
+    const closePublished = async (
+      remoteComment: { id: number; url?: string } | undefined,
+      reason?: "deleted_comment" | "legacy_comment_untracked",
+    ) => {
+      const latest = (
+        await tx
+          .select({ seq: proposalEvents.seq })
+          .from(proposalEvents)
+          .where(and(eq(proposalEvents.orgId, orgId), eq(proposalEvents.proposalId, proposal.id)))
+          .orderBy(desc(proposalEvents.seq))
+          .limit(1)
+      )[0];
+      await tx.insert(proposalEvents).values({
+        orgId,
+        proposalId: proposal.id,
+        seq: (latest?.seq ?? 0) + 1,
+        type: "publication_closed",
+        actor: { type: "agent", id: run.id },
+        data: {
+          source: "architect_run",
+          issue: issueNumber,
+          publicationKey,
+          proposalState: effectiveState,
+          commentId: remoteComment?.id ?? null,
+          commentUrl: remoteComment?.url ?? stringValue(publishedData.commentUrl) ?? null,
+          ...(reason ? { reason } : {}),
+        },
+      });
+      await resolvePlatformIssue(
+        tx,
+        orgId,
+        publicationFingerprint,
+        `Architect plan publication closed because proposal is ${effectiveState}`,
+        { projectId: run.projectId },
+      );
+      return "closed" as const;
+    };
+    if (!effectiveOpen && published) {
+      const knownCommentId = publishedCommentId ?? progressCommentId(run.gh);
+      if (knownCommentId) {
+        try {
+          await remote(() => client.updateIssueComment(knownCommentId, closedBody));
+          return closePublished({ id: knownCommentId });
+        } catch (error) {
+          if (!isGithubNotFound(error)) throw error;
+        }
+      }
+      const recovered = await recoverComment(true);
+      if (!recovered) {
+        return closePublished(
+          undefined,
+          knownCommentId ? "deleted_comment" : "legacy_comment_untracked",
+        );
+      }
+      await remote(() => client.updateIssueComment(recovered.id, closedBody));
+      return closePublished({ id: recovered.id, url: recovered.url });
+    }
+    const recovered = !effectiveOpen ? await recoverComment(false) : undefined;
+    if (!effectiveOpen && !recovered) {
+      const latest = (
+        await tx
+          .select({ seq: proposalEvents.seq })
+          .from(proposalEvents)
+          .where(and(eq(proposalEvents.orgId, orgId), eq(proposalEvents.proposalId, proposal.id)))
+          .orderBy(desc(proposalEvents.seq))
+          .limit(1)
+      )[0];
+      await tx.insert(proposalEvents).values({
+        orgId,
+        proposalId: proposal.id,
+        seq: (latest?.seq ?? 0) + 1,
+        type: "publication_suppressed",
+        actor: { type: "agent", id: run.id },
+        data: {
+          source: "architect_run",
+          issue: issueNumber,
+          publicationKey,
+          proposalState: effectiveState,
+          reason: "proposal_not_open",
+        },
+      });
+      await resolvePlatformIssue(
+        tx,
+        orgId,
+        publicationFingerprint,
+        `Architect plan publication suppressed because proposal is ${effectiveState}`,
+        { projectId: run.projectId },
+      );
+      return "suppressed" as const;
+    }
+
+    let remoteComment: { id: number; url?: string };
+    if (!effectiveOpen && recovered) {
+      // GitHub already accepted the stable marker before the proposal changed
+      // state. Replace the old CTA with a terminal snapshot, then close the
+      // ledger; never create a fresh approval surface after close/expiry.
+      await remote(() => client.updateIssueComment(recovered.id, closedBody));
+      remoteComment = { id: recovered.id, url: recovered.url };
+    } else {
+      const body = `${renderProgressForRun(run, "succeeded", {
+        finalText: proposal.contextMd,
+        agentProgress: await lastAgentProgress(tx, run),
+        proposalId: proposal.id,
+      })}\n\n${publicationMarker}`;
+      const progressId = progressCommentId(run.gh);
+      if (progressId) {
+        try {
+          await remote(() => client.updateIssueComment(progressId, body));
+          remoteComment = { id: progressId };
+        } catch (error) {
+          if (!isGithubNotFound(error)) throw error;
+          const fallback = await recoverComment(true);
+          if (fallback) {
+            await remote(() => client.updateIssueComment(fallback.id, body));
+            remoteComment = { id: fallback.id, url: fallback.url };
+          } else {
+            remoteComment = await remote(() => client.createIssueComment(issueNumber, body));
+          }
+        }
+      } else {
+        const fallback = await recoverComment(false);
+        if (fallback) {
+          await remote(() => client.updateIssueComment(fallback.id, body));
+          remoteComment = { id: fallback.id, url: fallback.url };
+        } else {
+          remoteComment = await remote(() => client.createIssueComment(issueNumber, body));
+        }
+      }
+    }
+    const latest = (
+      await tx
+        .select({ seq: proposalEvents.seq })
+        .from(proposalEvents)
+        .where(and(eq(proposalEvents.orgId, run.orgId), eq(proposalEvents.proposalId, proposal.id)))
+        .orderBy(desc(proposalEvents.seq))
+        .limit(1)
+    )[0];
+    await tx.insert(proposalEvents).values({
+      orgId,
+      proposalId: proposal.id,
+      seq: (latest?.seq ?? 0) + 1,
+      type: "published",
+      actor: { type: "agent", id: run.id },
+      data: {
+        source: "architect_run",
+        issue: issueNumber,
+        publicationKey,
+        commentId: remoteComment.id,
+        commentUrl: remoteComment.url ?? null,
+      },
+    });
+    if (!effectiveOpen) {
+      await tx.insert(proposalEvents).values({
+        orgId,
+        proposalId: proposal.id,
+        seq: (latest?.seq ?? 0) + 2,
+        type: "publication_closed",
+        actor: { type: "agent", id: run.id },
+        data: {
+          source: "architect_run",
+          issue: issueNumber,
+          publicationKey,
+          proposalState: effectiveState,
+          commentId: remoteComment.id,
+          commentUrl: remoteComment.url ?? null,
+        },
+      });
+    }
+    await insertAuditEvent(tx, {
+      orgId,
+      projectId: run.projectId,
+      actor: { type: "agent", id: run.id },
+      action: "hitl.proposed",
+      target: { type: "proposal", id: proposal.id },
+      payload: {
+        action_type: "plan_acceptance",
+        issue: issueNumber,
+        publication_key: publicationKey,
+        comment_id: remoteComment.id,
+      },
+    });
+    await resolvePlatformIssue(
+      tx,
+      orgId,
+      publicationFingerprint,
+      "Architect plan publication recovered",
+      { projectId: run.projectId },
+    );
+    return effectiveOpen ? ("published" as const) : ("closed" as const);
+  });
+}
+
+async function withArchitectPlanPublicationTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("architect_plan_publication_timeout")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function recordArchitectPlanPublicationFailure(
+  db: ReturnType<typeof createDb>["db"],
+  input: {
+    orgId: string;
+    projectId: string;
+    runId: string;
+    proposalId: string;
+    error: unknown;
+  },
+) {
+  const message = errorMessage(input.error);
+  await db.transaction(async (transaction) => {
+    const tx = transaction as unknown as ReturnType<typeof createDb>["db"];
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`architect-plan-publication:${input.proposalId}`}, 0))`,
+    );
+    const proposal = (
+      await tx
+        .select({ state: proposals.state, expiresAt: proposals.expiresAt })
+        .from(proposals)
+        .where(and(eq(proposals.orgId, input.orgId), eq(proposals.id, input.proposalId)))
+        .for("update")
+        .limit(1)
+    )[0];
+    const outcomes = await tx
+      .select({ type: proposalEvents.type })
+      .from(proposalEvents)
+      .where(
+        and(
+          eq(proposalEvents.orgId, input.orgId),
+          eq(proposalEvents.proposalId, input.proposalId),
+          inArray(proposalEvents.type, [
+            "published",
+            "publication_suppressed",
+            "publication_closed",
+          ]),
+        ),
+      );
+    const effectiveOpen = proposal?.state === "open" && proposal.expiresAt.getTime() > Date.now();
+    const completedOutcome =
+      outcomes.find((outcome) =>
+        ["publication_suppressed", "publication_closed"].includes(outcome.type),
+      ) ?? (effectiveOpen ? outcomes.find((outcome) => outcome.type === "published") : undefined);
+    const fingerprint = `plan_publication_failed:${input.runId}`;
+    if (completedOutcome) {
+      await resolvePlatformIssue(
+        tx,
+        input.orgId,
+        fingerprint,
+        `Architect plan publication reached terminal outcome ${completedOutcome.type}`,
+        { projectId: input.projectId },
+      );
+      return;
+    }
+    const priorFailure = (
+      await tx
+        .select({ seq: runEvents.seq })
+        .from(runEvents)
+        .where(
+          and(
+            eq(runEvents.orgId, input.orgId),
+            eq(runEvents.runId, input.runId),
+            eq(runEvents.type, "artifact_error"),
+            sql`${runEvents.data}->>'kind' = 'plan_publication_failed'`,
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!priorFailure) {
+      await appendRunEvents(tx, input.orgId, input.runId, [
+        { type: "artifact_error", data: { kind: "plan_publication_failed", error: message } },
+      ]);
+    }
+    await raisePlatformIssue(
+      tx,
+      {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        kind: "plan_publication_failed",
+        severity: "error",
+        fingerprint,
+        title: "Failed to publish architect plan",
+        bodyMd: `Architect run ${input.runId} completed, but Facility could not publish its plan and human approval gate. The durable publication reconciler will retry.\n\n${message}`,
+      },
+      { projectId: input.projectId },
+    );
   });
 }
 
@@ -890,6 +1774,7 @@ async function prepareRunDelivery(
   git: {
     branch?: string;
     headSha?: string;
+    baseSha?: string;
     changed: boolean;
     pushError?: string;
     pullRequestTitle?: string;
@@ -967,6 +1852,7 @@ async function prepareRunDelivery(
     repoName: repo.name,
     headBranch: git.branch,
     expectedHeadSha: git.headSha,
+    baseSha: git.baseSha,
     baseBranch: repo.defaultBranch,
     title: git.pullRequestTitle,
     body: pullRequestBody,
@@ -1731,7 +2617,11 @@ async function buildRunBundle(
   const contract = renderRunContract(rawContract, provisionSummary, checkCmds);
   const githubBranch = typeof runGh.branch === "string" ? runGh.branch : null;
   const checkoutBranch = githubPullRequestMode(run.mode) && githubBranch ? githubBranch : null;
-  const expectedHeadSha = repairExpectedHeadSha(run.mode, run.trigger);
+  const planProvenance = objectOrEmpty(objectOrEmpty(run.trigger).planProvenance);
+  const acceptedPlanBaseSha = isBuilderMode(run.mode)
+    ? gitCommitSha(planProvenance.workspaceBaseSha)
+    : undefined;
+  const expectedHeadSha = repairExpectedHeadSha(run.mode, run.trigger) ?? acceptedPlanBaseSha;
   if (run.mode.replace(/^codex-/, "").replace(/-/g, "_") === "ci_doctor" && !expectedHeadSha) {
     throw new Error("ci_doctor_admitted_head_missing");
   }
@@ -1767,7 +2657,7 @@ async function buildRunBundle(
       ? {
           cloneUrl: `https://github.com/${repo.owner}/${repo.name}.git`,
           branch: checkoutBranch ?? repo.defaultBranch,
-          expectedHeadSha,
+          expectedHeadSha: expectedHeadSha ?? null,
           installationTokenRef: repo.installationId,
         }
       : { cloneUrl: null, branch: null, expectedHeadSha: null, installationTokenRef: null },
@@ -2211,6 +3101,7 @@ async function canonicalRunReceipt(
   runnerReceipt: Record<string, unknown> | undefined,
   aggregate: Awaited<ReturnType<typeof gatewayAggregate>>,
   status: "succeeded" | "failed" | "canceled",
+  baseSha: string | null | undefined,
 ): Promise<FacilityReceipt> {
   const runner = objectOrEmpty(runnerReceipt);
   const runnerTiming = objectOrEmpty(runner.timing);
@@ -2264,6 +3155,7 @@ async function canonicalRunReceipt(
       repo: stringValue(gh.repo),
       issue: integerValue(gh.issueNumber),
       pr: integerValue(objectOrEmpty(gh.pr).number),
+      base_sha: stringValue(baseSha),
     },
     timing: {
       started_at: stringValue(runnerTiming.started_at) ?? startedAt.toISOString(),
@@ -2335,10 +3227,6 @@ export function platformDeliveryFailure(
   return null;
 }
 
-function isBuilderMode(mode: string) {
-  return mode === "builder" || mode.endsWith("-builder");
-}
-
 function isArchitectMode(mode: string) {
   return mode === "architect" || mode.endsWith("-architect");
 }
@@ -2408,6 +3296,18 @@ function receiptMode(mode: string): FacilityReceipt["mode"] {
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value ? value : undefined;
+}
+
+function gitCommitSha(value: unknown) {
+  return typeof value === "string" && /^[a-f0-9]{40}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
+function sha256Digest(value: unknown) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
 }
 
 function integerValue(value: unknown) {

@@ -15,6 +15,7 @@ import {
 import { and, desc, eq, gte, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { assertBuilderPlanDispatch, withBuilderPlanPreflight } from "../../builder-plan-policy.js";
 import { ApiError, notFound } from "../../errors.js";
 import { createGithubClientFactory, type GithubClientFactory } from "../../github/client.js";
 import { createGithubClientForRepo, syncRepoFacilityConfig } from "../../github/kickstart.js";
@@ -938,6 +939,15 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
       // context that cannot be dispatched.
       const agent = await findAgentDef(db, p.orgId, projectId, body.agent);
       if (!agent) throw new ApiError(400, "agent_not_found", "Agent definition not found");
+      await assertBuilderPlanDispatch(db, {
+        orgId: p.orgId,
+        projectId,
+        mode: agent.name,
+        agentDefId: agent.id,
+        trigger: { type: "web_issue" },
+        actor: { type: p.type, id: p.id },
+        source: "web_issue_preflight",
+      });
       const githubFactory =
         app.githubClientFactory ??
         (config.githubAppId && config.githubAppPrivateKey
@@ -966,6 +976,7 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
             number: githubIssue.number,
             title: githubIssue.title,
             body: githubIssue.body,
+            state: githubIssue.state,
             user: { login: githubIssue.user?.login },
             labels: githubIssue.labels ?? [],
             html_url: githubIssue.html_url,
@@ -974,30 +985,47 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
         issueComments,
       );
       assertGithubRequestContextSize(issueRequest);
+      const trigger = {
+        type: "web_issue",
+        ...(p.githubLogin ? { githubLogin: p.githubLogin } : {}),
+        repo: { id: repo.id, owner: repo.owner, name: repo.name },
+        issue: { number },
+        request: issueRequest,
+      };
+      const gh = { owner: repo.owner, repo: repo.name, issueNumber: number };
       // No GitHub userCanWrite check: platform RBAC `runs:trigger` is the authority
       // for control-plane-originated dispatch.
       // No execution_lane gate: an explicit control-plane trigger is platform-lane intent.
       const run = (
-        await db
-          .insert(runs)
-          .values({
-            id: newId("run"),
+        await withBuilderPlanPreflight(
+          db,
+          {
             orgId: p.orgId,
             projectId,
-            agentDefId: agent.id,
             mode: body.agent,
-            engine: agent.engine,
-            trigger: {
-              type: "web_issue",
-              ...(p.githubLogin ? { githubLogin: p.githubLogin } : {}),
-              repo: { id: repo.id, owner: repo.owner, name: repo.name },
-              issue: { number },
-              request: issueRequest,
-            },
-            gh: { owner: repo.owner, repo: repo.name, issueNumber: number },
-            createdBy: { type: p.type, id: p.id },
-          })
-          .returning()
+            agentDefId: agent.id,
+            trigger,
+            gh,
+            actor: { type: p.type, id: p.id },
+            source: "web_issue",
+          },
+          (tx, admission) =>
+            tx
+              // builder-plan-preflight: rest_github_issue
+              .insert(runs)
+              .values({
+                id: newId("run"),
+                orgId: p.orgId,
+                projectId,
+                agentDefId: agent.id,
+                mode: admission.mode,
+                engine: agent.engine,
+                trigger,
+                gh,
+                createdBy: { type: p.type, id: p.id },
+              })
+              .returning(),
+        )
       )[0];
       if (!run) throw new ApiError(500, "insert_failed", "Could not create run");
       await db.insert(runEvents).values({

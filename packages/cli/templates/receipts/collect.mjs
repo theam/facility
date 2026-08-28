@@ -28,7 +28,8 @@ export function collectReceipt(env = process.env, now = new Date()) {
   const engine = parseEngineEvidence(env.FACILITY_RECEIPT_ENGINE_JSONL);
   const checkEvidence = parseChecks(env.FACILITY_RECEIPT_CHECKS_FILE);
   const target = githubTarget(env.GITHUB_EVENT_PATH);
-  const git = gitActivity(env.FACILITY_RECEIPT_BASE_SHA, env.GITHUB_WORKSPACE);
+  const baseSha = gitCommitSha(env.FACILITY_RECEIPT_BASE_SHA);
+  const git = gitActivity(baseSha, env.GITHUB_WORKSPACE);
   const actor = env.GITHUB_ACTOR;
   const receipt = {
     schema: "facility.run.v1",
@@ -59,6 +60,7 @@ export function collectReceipt(env = process.env, now = new Date()) {
       repo: env.GITHUB_REPOSITORY?.split("/")[1],
       issue: target.issue,
       pr: target.pr,
+      ...(baseSha ? { base_sha: baseSha } : {}),
       ...(actor ? { actor_sha256: sha256(actor) } : {}),
     },
     timing: {
@@ -248,6 +250,12 @@ function normalizeResult(value) {
   if (value === "cancelled" || value === "canceled") return "canceled";
   if (value === "skipped") return "skipped";
   return "failed";
+}
+
+function gitCommitSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
 }
 
 function requiredChoice(value, choices, name) {

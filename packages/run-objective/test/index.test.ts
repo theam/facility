@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isBuilderMode, runObjectiveText } from "../src/index.js";
+import {
+  agentDefTriggersBuilder,
+  isBuilderAgent,
+  isBuilderMode,
+  runObjectiveText,
+} from "../src/index.js";
 
 describe("run objective policy", () => {
   it("recognizes every governed builder objective source", () => {
@@ -34,6 +39,14 @@ describe("run objective policy", () => {
   it("recognizes canonical and prefixed builder modes", () => {
     expect(isBuilderMode("builder")).toBe(true);
     expect(isBuilderMode("codex-builder")).toBe(true);
+    expect(isBuilderMode("codex_builder")).toBe(true);
     expect(isBuilderMode("architect")).toBe(false);
+  });
+
+  it("recognizes renamed Builder definitions from command triggers", () => {
+    expect(agentDefTriggersBuilder([{ type: "command", command: "builder" }])).toBe(true);
+    expect(agentDefTriggersBuilder([{ type: "command", handle: "/codex_builder" }])).toBe(true);
+    expect(isBuilderAgent("implementation-agent", [{ handle: "/codex-builder" }])).toBe(true);
+    expect(isBuilderAgent("architect", [{ handle: "/architect" }])).toBe(false);
   });
 });

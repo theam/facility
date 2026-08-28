@@ -12,33 +12,54 @@ export async function runHitlExpire(config: AppConfig) {
 }
 
 export async function expireHitlProposals(db: FacilityDb) {
+  const now = new Date();
   const overdue = await db
     .select()
     .from(proposals)
-    .where(and(eq(proposals.state, "open"), lt(proposals.expiresAt, new Date())));
+    .where(and(eq(proposals.state, "open"), lt(proposals.expiresAt, now)));
+  let expired = 0;
   for (const proposal of overdue) {
-    await db
-      .update(proposals)
-      .set({ state: "expired", updatedAt: new Date() })
-      .where(and(eq(proposals.orgId, proposal.orgId), eq(proposals.id, proposal.id)));
-    const last = (
-      await db
-        .select()
-        .from(proposalEvents)
-        .where(
-          and(eq(proposalEvents.orgId, proposal.orgId), eq(proposalEvents.proposalId, proposal.id)),
-        )
-        .orderBy(desc(proposalEvents.seq))
-        .limit(1)
-    )[0];
-    await db.insert(proposalEvents).values({
-      orgId: proposal.orgId,
-      proposalId: proposal.id,
-      seq: (last?.seq ?? 0) + 1,
-      type: "expired",
-      actor: { type: "system", name: "hitl.expire" },
-      data: {},
+    const claimed = await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      const updated = (
+        await tx
+          .update(proposals)
+          .set({ state: "expired", updatedAt: now })
+          .where(
+            and(
+              eq(proposals.orgId, proposal.orgId),
+              eq(proposals.id, proposal.id),
+              eq(proposals.state, "open"),
+              lt(proposals.expiresAt, now),
+            ),
+          )
+          .returning()
+      )[0];
+      if (!updated) return false;
+      const last = (
+        await tx
+          .select()
+          .from(proposalEvents)
+          .where(
+            and(
+              eq(proposalEvents.orgId, proposal.orgId),
+              eq(proposalEvents.proposalId, proposal.id),
+            ),
+          )
+          .orderBy(desc(proposalEvents.seq))
+          .limit(1)
+      )[0];
+      await tx.insert(proposalEvents).values({
+        orgId: proposal.orgId,
+        proposalId: proposal.id,
+        seq: (last?.seq ?? 0) + 1,
+        type: "expired",
+        actor: { type: "system", name: "hitl.expire" },
+        data: {},
+      });
+      return true;
     });
+    if (claimed) expired += 1;
   }
-  return overdue.length;
+  return expired;
 }

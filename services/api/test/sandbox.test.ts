@@ -28,7 +28,7 @@ import {
   seed,
   virtualKeys,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -205,6 +205,226 @@ describe("sandbox api", async () => {
   afterAll(async () => {
     await app.close();
     await client.end();
+  });
+
+  it("fails a queued required-plan Builder before any sandbox or credential is created", async () => {
+    const suffix = crypto.randomUUID().replaceAll("-", "");
+    const guardedProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: "Required Builder Gate",
+          slug: `required-builder-${suffix}`,
+          builderPlanPolicy: "required",
+          settings: {},
+        })
+        .returning()
+    )[0];
+    if (!guardedProject) throw new Error("guarded project fixture missing");
+    const contract = (
+      await db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          projectId: guardedProject.id,
+          scope: "project",
+          kind: "agent_contract",
+          name: `required-builder-contract-${suffix}`,
+        })
+        .returning()
+    )[0];
+    if (!contract) throw new Error("guarded contract fixture missing");
+    const agent = (
+      await db
+        .insert(agentDefs)
+        .values({
+          id: newId("agent"),
+          orgId,
+          projectId: guardedProject.id,
+          name: "codex_builder",
+          engine: "codex",
+          model: { primary: "gpt-5" },
+          contractItemId: contract.id,
+        })
+        .returning()
+    )[0];
+    if (!agent) throw new Error("guarded Builder fixture missing");
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: guardedProject.id,
+          agentDefId: agent.id,
+          mode: "builder",
+          engine: agent.engine,
+          trigger: { type: "conversation", message: "bypass attempt" },
+          createdBy: { type: "system", id: "worker-policy-test" },
+        })
+        .returning()
+    )[0];
+    if (!run) throw new Error("guarded run fixture missing");
+    let launches = 0;
+    const driver: SandboxDriver = {
+      name: "docker",
+      launch: async () => {
+        launches += 1;
+        return { ref: "must-not-launch" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+
+    await expect(
+      dispatchRun(config, { runId: run.id, orgId }, { sandboxDriver: async () => driver }),
+    ).rejects.toMatchObject({ code: "builder_plan_required" });
+    expect(launches).toBe(0);
+    await expect(
+      db.select({ id: virtualKeys.id }).from(virtualKeys).where(eq(virtualKeys.runId, run.id)),
+    ).resolves.toHaveLength(0);
+    await expect(
+      db.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.runId, run.id)),
+    ).resolves.toHaveLength(0);
+    const failed = (
+      await db
+        .select({ status: runs.status, error: runs.error })
+        .from(runs)
+        .where(eq(runs.id, run.id))
+        .limit(1)
+    )[0];
+    expect(failed).toEqual({ status: "failed", error: "builder_plan_required" });
+    const result = (
+      await db
+        .select({ data: runEvents.data })
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, run.id), eq(runEvents.type, "result")))
+        .limit(1)
+    )[0];
+    expect(result?.data).toMatchObject({
+      status: "failed",
+      kind: "builder_plan_denied",
+      error: "builder_plan_required",
+    });
+  });
+
+  it("denies after a concurrent agent mutation wins before the claimed worker guard", async () => {
+    const suffix = crypto.randomUUID().replaceAll("-", "");
+    const guardedProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: "Worker Agent Snapshot Gate",
+          slug: `worker-agent-snapshot-${suffix}`,
+          builderPlanPolicy: "required",
+          settings: {},
+        })
+        .returning()
+    )[0];
+    if (!guardedProject) throw new Error("worker snapshot project fixture missing");
+    const contract = (
+      await db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          projectId: guardedProject.id,
+          scope: "project",
+          kind: "agent_contract",
+          name: `worker-agent-snapshot-${suffix}`,
+        })
+        .returning()
+    )[0];
+    if (!contract) throw new Error("worker snapshot contract fixture missing");
+    const agent = (
+      await db
+        .insert(agentDefs)
+        .values({
+          id: newId("agent"),
+          orgId,
+          projectId: guardedProject.id,
+          name: "worker-canary-specialist",
+          engine: "codex",
+          model: { primary: "gpt-5" },
+          contractItemId: contract.id,
+          triggers: [{ type: "manual" }],
+        })
+        .returning()
+    )[0];
+    if (!agent) throw new Error("worker snapshot agent fixture missing");
+    const run = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: guardedProject.id,
+          agentDefId: agent.id,
+          mode: "conversation",
+          engine: agent.engine,
+          trigger: { type: "conversation", message: "snapshot race" },
+          createdBy: { type: "system", id: "worker-snapshot-test" },
+        })
+        .returning()
+    )[0];
+    if (!run) throw new Error("worker snapshot run fixture missing");
+    let launches = 0;
+    const driver: SandboxDriver = {
+      name: "docker",
+      launch: async () => {
+        launches += 1;
+        return { ref: "must-not-launch-after-agent-race" };
+      },
+      status: async () => "running",
+      async *logs() {},
+      stop: async () => undefined,
+      destroy: async () => undefined,
+    };
+    let dispatch: Promise<void> | undefined;
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`builder-plan:${orgId}:${guardedProject.id}`}, 0))`,
+      );
+      await tx
+        .update(agentDefs)
+        .set({ triggers: [{ type: "command", handle: "/builder" }] })
+        .where(eq(agentDefs.id, agent.id));
+      dispatch = dispatchRun(
+        config,
+        { runId: run.id, orgId },
+        { sandboxDriver: async () => driver },
+      );
+      let provisioning = false;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const current = (
+          await db.select({ status: runs.status }).from(runs).where(eq(runs.id, run.id)).limit(1)
+        )[0];
+        if (current?.status === "provisioning") {
+          provisioning = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(provisioning).toBe(true);
+    });
+    if (!dispatch) throw new Error("worker snapshot dispatch did not start");
+    await expect(dispatch).rejects.toMatchObject({ code: "builder_plan_required" });
+    expect(launches).toBe(0);
+    expect(
+      (
+        await db
+          .select({ status: runs.status, error: runs.error })
+          .from(runs)
+          .where(eq(runs.id, run.id))
+      )[0],
+    ).toEqual({ status: "failed", error: "builder_plan_required" });
   });
 
   it("imageExists reports daemon image presence without pulling", async () => {
@@ -965,6 +1185,62 @@ describe("sandbox api", async () => {
     expect(stored).toEqual({ engineSessionId: "sess_early_123", status: "running" });
   });
 
+  it("records an authenticated runner workspace base once and accepts exact replays", async () => {
+    const token = "frt_workspace_base";
+    const run = await insertRunnerRun(token, "running");
+    const otherToken = "frt_workspace_other_run";
+    await insertRunnerRun(otherToken, "running");
+    const baseSha = "A".repeat(40);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha: "not-a-commit" },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const crossRun = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: { baseSha },
+    });
+    expect(crossRun.statusCode).toBe(401);
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha },
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toEqual({ baseSha: "a".repeat(40) });
+
+    const replay = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha: "a".repeat(40) },
+    });
+    expect(replay.statusCode, replay.body).toBe(200);
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url: `/internal/runs/${run.id}/workspace`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { baseSha: "b".repeat(40) },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toMatchObject({ error: { code: "workspace_base_mismatch" } });
+
+    const [stored] = await db
+      .select({ workspaceBaseSha: runs.workspaceBaseSha })
+      .from(runs)
+      .where(eq(runs.id, run.id));
+    expect(stored?.workspaceBaseSha).toBe("a".repeat(40));
+  });
+
   it("finishRun synchronizes only trusted qualifying security findings", async () => {
     const suffix = Date.now();
     const installation = (
@@ -1263,6 +1539,8 @@ describe("sandbox api", async () => {
   it("stores actual check outcomes and provenance in the run receipt", async () => {
     const token = "frt_receipt_checks";
     const run = await insertRunnerRun(token, "running");
+    const workspaceBaseSha = "c".repeat(40);
+    await db.update(runs).set({ workspaceBaseSha }).where(eq(runs.id, run.id));
     await appendRunEvents(db, orgId, run.id, [
       {
         type: "check",
@@ -1291,6 +1569,9 @@ describe("sandbox api", async () => {
       { name: "pnpm test", status: "passed", source: "platform", exit_code: 0 },
       { name: "agent smoke", status: "skipped", source: "agent" },
     ]);
+    expect((finished?.receipt as { github?: { base_sha?: string } })?.github?.base_sha).toBe(
+      workspaceBaseSha,
+    );
     expect((finished?.receipt as { checks_truncated?: boolean })?.checks_truncated).toBe(false);
   });
 

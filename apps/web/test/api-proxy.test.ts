@@ -33,6 +33,26 @@ describe("runtime API proxy policy", () => {
     }
   });
 
+  it("keeps OAuth and authorization metadata on the browser's web origin", () => {
+    expect(
+      apiTargetUrl(
+        "https://app.example/oauth/authorize?client_id=codex",
+        "https://api.example",
+        "/oauth",
+      ).toString(),
+    ).toBe("https://api.example/oauth/authorize?client_id=codex");
+    expect(
+      apiTargetUrl(
+        "https://app.example/.well-known/oauth-authorization-server",
+        "https://api.example",
+        "/.well-known",
+      ).toString(),
+    ).toBe("https://api.example/.well-known/oauth-authorization-server");
+    expect(() =>
+      apiTargetUrl("https://app.example/v1/me", "https://api.example", "/oauth"),
+    ).toThrow("facility_api_proxy_path_invalid");
+  });
+
   it("preserves application headers but strips hop-by-hop and spoofed forwarding headers", () => {
     const headers = apiProxyRequestHeaders(
       new Headers({
@@ -142,6 +162,59 @@ describe("runtime API proxy integration", () => {
     expect(result.status).toBe(302);
     expect(result.headers.get("location")).toBe("/should-not-be-followed");
     expect(requests).toBe(1);
+  });
+
+  it("preserves a host-only interaction cookie across two web-origin OAuth proxy hops", async () => {
+    let hop = 0;
+    const { origin } = await listen((request, response) => {
+      hop += 1;
+      if (hop === 1) {
+        expect(request.url).toBe("/oauth/authorize?client_id=codex");
+        expect(request.headers.cookie).toBeUndefined();
+        response.writeHead(303, {
+          location: "https://app.example/oauth/interaction/interaction_1",
+          "set-cookie":
+            "_interaction=sealed; Path=/oauth/interaction/interaction_1; HttpOnly; Secure",
+        });
+        response.end();
+        return;
+      }
+      expect(request.url).toBe("/oauth/interaction/interaction_1");
+      expect(request.headers.cookie).toBe("_interaction=sealed");
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("interaction resumed");
+    });
+    const authorization = await proxyApiRequest(
+      new Request("https://app.example/oauth/authorize?client_id=codex"),
+      {
+        apiUrl: origin,
+        nodeEnv: "production",
+        publicPathPrefix: "/oauth",
+      },
+    );
+    expect(authorization.status).toBe(303);
+    expect(authorization.headers.get("location")).toBe(
+      "https://app.example/oauth/interaction/interaction_1",
+    );
+    expect(authorization.headers.getSetCookie()).toEqual([
+      "_interaction=sealed; Path=/oauth/interaction/interaction_1; HttpOnly; Secure",
+    ]);
+    const cookie = authorization.headers.getSetCookie()[0]?.split(";", 1)[0];
+    if (!cookie) throw new Error("OAuth proxy response omitted its interaction cookie");
+
+    const interaction = await proxyApiRequest(
+      new Request("https://app.example/oauth/interaction/interaction_1", {
+        headers: { cookie },
+      }),
+      {
+        apiUrl: origin,
+        nodeEnv: "production",
+        publicPathPrefix: "/oauth",
+      },
+    );
+    expect(interaction.status).toBe(200);
+    await expect(interaction.text()).resolves.toBe("interaction resumed");
+    expect(hop).toBe(2);
   });
 
   it("delivers an event-stream chunk before the upstream response completes", async () => {

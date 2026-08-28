@@ -21,10 +21,12 @@ export function IssueRow({
   projectId,
   story,
   canTrigger,
+  builderPlanRequired,
 }: {
   projectId: string;
   story: PipelineStory;
   canTrigger: boolean;
+  builderPlanRequired: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -90,6 +92,13 @@ export function IssueRow({
       );
     }
     if (story.stageState === "ready_to_build" && canTrigger && story.storyType === "issue") {
+      if (builderPlanRequired) {
+        return (
+          <ButtonLink size="sm" href={storyHref(projectId, story)}>
+            Review Gate 1
+          </ButtonLink>
+        );
+      }
       return (
         <Button
           size="sm"
@@ -103,6 +112,13 @@ export function IssueRow({
       );
     }
     if (story.stageState === "failed" && failedAgent && canTrigger) {
+      if (failedAgent === "builder" && builderPlanRequired) {
+        return (
+          <ButtonLink size="sm" variant="danger" href={storyHref(projectId, story)}>
+            Review Gate 1
+          </ButtonLink>
+        );
+      }
       return (
         <Button
           size="sm"

@@ -60,6 +60,11 @@ Edit `playground.tfvars`:
   In certificate-less validation stacks the preview viewer edge remains HTTPS,
   but CloudFront reaches the ALB over plaintext HTTP. Configure the certificate
   for production transport confidentiality.
+  Certificate-less stacks intentionally omit Facility's interactive MCP OAuth issuer, signing-key
+  injection, public resource URL, and authorization-server advertisement. The MCP listener remains
+  available for validation with `fak_` API keys, but this plaintext mode must not carry real
+  credentials or workloads. Configure ACM before enabling interactive MCP clients or using MCP
+  operationally.
 - Set `route53_zone_id` if Terraform should create alias records.
 - Set `enable_cloudfront_api_endpoint = true` to get an AWS-managed HTTPS API
   and webhook URL without a public DNS zone. This is intended for validation;
@@ -67,7 +72,7 @@ Edit `playground.tfvars`:
   certificate for production; Terraform rejects enabling both modes.
 - Use the module-owned ECR release path below.
 - Select direct `github` authentication for self-hosting or `oidc` for a SaaS
-  broker. MCP OAuth is always issued by the dedicated Facility instance.
+  broker. With ACM configured, MCP OAuth is issued by the dedicated Facility instance.
 - Set a stable `facility_instance_id` so API and worker retain one sandbox
   ownership namespace across PostgreSQL endpoint moves. For commercial OIDC it
   must match the instance id registered with the identity broker.
