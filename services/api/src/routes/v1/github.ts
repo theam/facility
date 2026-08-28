@@ -600,6 +600,15 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           409,
           "ambiguous_story_number",
           "Story number exists in more than one project repository; provide repoId and storyType",
+          {
+            matches: matches.map((match) => ({
+              repoId: match.repoId,
+              repoOwner: match.repoOwner,
+              repoName: match.repoName,
+              storyType: match.storyType,
+              number: match.number,
+            })),
+          },
         );
       }
       const selected = matches[0] as (typeof matches)[number];
@@ -708,6 +717,15 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
           409,
           "ambiguous_story_number",
           "Story number exists in more than one project repository; provide repoId and storyType",
+          {
+            matches: matches.map((match) => ({
+              repoId: match.repoId,
+              repoOwner: match.repoOwner,
+              repoName: match.repoName,
+              storyType: match.storyType,
+              number: match.number,
+            })),
+          },
         );
       }
       const story = matches[0] as (typeof matches)[number];

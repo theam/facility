@@ -2503,7 +2503,14 @@ describe("github platform lane", async () => {
     });
     expect(ambiguousStory.statusCode).toBe(409);
     expect(ambiguousStory.json().error.code).toBe("ambiguous_story_number");
-
+    const ambiguousStoryMatches = ambiguousStory.json().error.details.matches;
+    expect(ambiguousStoryMatches).toHaveLength(2);
+    expect(ambiguousStoryMatches.map((match: { repoId: string }) => match.repoId).sort()).toEqual(
+      [repoA.id, repoB.id].sort(),
+    );
+    expect(
+      ambiguousStoryMatches.every((match: { number: number }) => match.number === number),
+    ).toBe(true);
     const ambiguousActivity = await app.inject({
       method: "GET",
       url: `/v1/projects/${projectId}/stories/${number}/github-activity`,
