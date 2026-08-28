@@ -6,7 +6,7 @@ const MESSAGE_START =
 const CONTENT_DELTA =
   'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"ok"}}\n\n';
 const MESSAGE_DELTA =
-  'event: message_delta\ndata: {"type":"message_delta","delta":{"usage":{"output_tokens":700}}}\n\n';
+  'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":700}}\n\n';
 
 describe("UsageTee anthropic streaming usage", () => {
   it("meters input and cache tokens reported by message_start", async () => {

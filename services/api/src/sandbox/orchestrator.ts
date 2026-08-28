@@ -3255,8 +3255,15 @@ function readOnlyRepositoryMode(mode: string) {
   );
 }
 
-function githubPullRequestMode(mode: string) {
-  return ["review", "address_review", "ci_doctor"].includes(mode.replace(/-/g, "_"));
+// Codex agents carry a `codex-` prefix by convention (see the seeded
+// `codex-architect`/`codex-builder`), and `runs.mode` is the agent's name. Strip
+// it here exactly as the sibling role predicates do, so a Codex-engine reviewer
+// or repair agent resolves to the same governed role as its Claude counterpart
+// and still receives the pull request's branch.
+export function githubPullRequestMode(mode: string) {
+  return ["review", "address_review", "ci_doctor"].includes(
+    mode.replace(/^codex-/, "").replace(/-/g, "_"),
+  );
 }
 
 function receiptProvider(engine: string): FacilityReceipt["provider"] {

@@ -11791,6 +11791,35 @@
                                   "type": "string",
                                   "format": "date-time"
                                 },
+                                "wsjf": {
+                                  "nullable": true,
+                                  "type": "object",
+                                  "properties": {
+                                    "value": {
+                                      "type": "number"
+                                    },
+                                    "time": {
+                                      "type": "number"
+                                    },
+                                    "risk": {
+                                      "type": "number"
+                                    },
+                                    "effort": {
+                                      "type": "number"
+                                    },
+                                    "score": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "value",
+                                    "time",
+                                    "risk",
+                                    "effort",
+                                    "score"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "stageState": {
                                   "type": "string",
                                   "enum": [
@@ -11975,6 +12004,7 @@
                                 "ghCreatedAt",
                                 "ghUpdatedAt",
                                 "closedAt",
+                                "wsjf",
                                 "stageState",
                                 "runState",
                                 "currentRun",
@@ -12520,6 +12550,35 @@
                       "type": "string",
                       "format": "date-time"
                     },
+                    "wsjf": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number"
+                        },
+                        "time": {
+                          "type": "number"
+                        },
+                        "risk": {
+                          "type": "number"
+                        },
+                        "effort": {
+                          "type": "number"
+                        },
+                        "score": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "time",
+                        "risk",
+                        "effort",
+                        "score"
+                      ],
+                      "additionalProperties": false
+                    },
                     "prs": {
                       "type": "array",
                       "items": {
@@ -12755,6 +12814,7 @@
                     "ghCreatedAt",
                     "ghUpdatedAt",
                     "closedAt",
+                    "wsjf",
                     "prs",
                     "ciState",
                     "ciUrl",

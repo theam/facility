@@ -1,5 +1,9 @@
 /** Server-owned story assembly and pipeline classification. */
 
+import { validateWsjf, type WsjfInput } from "@facility/harness";
+
+export type StoryWsjf = WsjfInput & { score: number };
+
 export type PipelineStage =
   | "backlog"
   | "planning"
@@ -80,6 +84,7 @@ export type PipelineStoryInput = {
   ghCreatedAt: Date | null;
   ghUpdatedAt: Date | null;
   closedAt: Date | null;
+  wsjf: StoryWsjf | null;
   linkedRuns: PipelineRun[];
   prs: PipelinePullRequest[];
 };
@@ -104,6 +109,7 @@ export type PipelineIssueRecord = {
   assignees: unknown;
   author: string | null;
   htmlUrl: string;
+  bodyMd: string | null;
   commentsCount: number;
   ghCreatedAt: Date | null;
   ghUpdatedAt: Date | null;
@@ -132,6 +138,13 @@ export type PipelinePullRequestRecord = {
 
 export type PipelineRepoRecord = { id: string; owner: string; name: string };
 
+/**
+ * A PO task as Facility recorded it: `wsjf` is the accepted judgement and `gh`
+ * is the provenance Facility wrote when it created the mirrored issue. This —
+ * not the world-writable issue body — is what a story's rank binds to.
+ */
+export type PipelineTaskRecord = { wsjf: unknown; gh: unknown };
+
 export type PipelineRunRecord = PipelineRun & { gh: unknown };
 
 export type PipelineAssembly = {
@@ -147,11 +160,31 @@ export function assemblePipelineStories(input: {
   pullRequests: PipelinePullRequestRecord[];
   repos: PipelineRepoRecord[];
   runs: PipelineRunRecord[];
+  tasks?: PipelineTaskRecord[];
 }): PipelineAssembly {
   const reposById = new Map(input.repos.map((repo) => [repo.id, repo]));
   const repoIdByName = new Map(
     input.repos.map((repo) => [`${repo.owner}/${repo.name}`.toLowerCase(), repo.id]),
   );
+
+  // Scores bind to the judgement Facility itself recorded on the PO task,
+  // located through the `gh` provenance written when the issue was created.
+  // The `## Value` block mirrored into the issue body is world-writable —
+  // any issue author can edit it — so it never ranks a story. Records that
+  // fail the canonical schema, or whose score is not finite, stay unscored.
+  // Callers pass tasks newest-first; the first canonical record per issue wins.
+  const wsjfByIssue = new Map<string, StoryWsjf>();
+  for (const task of input.tasks ?? []) {
+    const gh = objectValue(task.gh);
+    const fullName = stringValue(gh.repo);
+    const issueNumber = numberValue(gh.issue_number);
+    const repoId = fullName ? repoIdByName.get(fullName.toLowerCase()) : null;
+    if (!repoId || !issueNumber) continue;
+    const scored = validateWsjf(task.wsjf);
+    if (!scored) continue;
+    const key = repoNumberKey(repoId, issueNumber);
+    if (!wsjfByIssue.has(key)) wsjfByIssue.set(key, scored);
+  }
   const stories = new Map<string, PipelineStoryInput>();
   const issueKeyByRepoNumber = new Map<string, string>();
   const storyKeysByPull = new Map<string, Set<string>>();
@@ -199,6 +232,7 @@ export function assemblePipelineStories(input: {
       ghCreatedAt: issue.ghCreatedAt,
       ghUpdatedAt: issue.ghUpdatedAt,
       closedAt: issue.closedAt,
+      wsjf: wsjfByIssue.get(repoNumberKey(issue.repoId, issue.number)) ?? null,
       linkedRuns: [],
       prs: [],
     });
@@ -242,6 +276,7 @@ export function assemblePipelineStories(input: {
         ghCreatedAt: pull.ghCreatedAt,
         ghUpdatedAt: pull.ghUpdatedAt,
         closedAt: pull.mergedAt ?? pull.closedAt,
+        wsjf: null,
         linkedRuns: [],
         prs: [pullRequestOf(pull)],
       });
@@ -332,15 +367,39 @@ export function classifyPipeline(
       stages.get("shipped")?.push(placeBase(story, "shipped_recently"));
     }
   }
-  for (const placed of stages.values()) {
-    placed.sort(
-      (left, right) =>
-        (right.ghUpdatedAt?.getTime() ?? 0) - (left.ghUpdatedAt?.getTime() ?? 0) ||
-        right.number - left.number ||
-        right.repoId.localeCompare(left.repoId),
-    );
+  for (const [stage, placed] of stages) {
+    placed.sort(stage === "shipped" ? byRecency : byPriority);
   }
   return stages;
+}
+
+/** Shipped is a log, not a queue: most recently touched on top. */
+function byRecency(left: PlacedPipelineStory, right: PlacedPipelineStory) {
+  return (
+    (right.ghUpdatedAt?.getTime() ?? 0) - (left.ghUpdatedAt?.getTime() ?? 0) ||
+    right.number - left.number ||
+    right.repoId.localeCompare(left.repoId)
+  );
+}
+
+/**
+ * Active stages order by the WSJF judgement Facility recorded on the PO task,
+ * not by last activity — a comment, a label, or Facility's own acknowledgement
+ * must not reorder a stage, and neither can an edited issue body. Unscored
+ * stories sit below scored ones and keep GitHub's own newest-created-first
+ * grammar.
+ */
+function byPriority(left: PlacedPipelineStory, right: PlacedPipelineStory) {
+  if (left.wsjf || right.wsjf) {
+    if (!right.wsjf) return -1;
+    if (!left.wsjf) return 1;
+    if (right.wsjf.score !== left.wsjf.score) return right.wsjf.score - left.wsjf.score;
+  }
+  return (
+    (right.ghCreatedAt?.getTime() ?? 0) - (left.ghCreatedAt?.getTime() ?? 0) ||
+    right.number - left.number ||
+    right.repoId.localeCompare(left.repoId)
+  );
 }
 
 function placeOpen(

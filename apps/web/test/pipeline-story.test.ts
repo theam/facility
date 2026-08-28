@@ -331,6 +331,7 @@ function storyDetail(): StoryDetail {
     ghCreatedAt: "2026-08-01T00:00:00Z",
     ghUpdatedAt: "2026-08-01T00:00:00Z",
     closedAt: null,
+    wsjf: null,
     prs: [],
     ciState: null,
     ciUrl: null,

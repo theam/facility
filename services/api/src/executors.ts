@@ -32,7 +32,7 @@ import {
   users,
   webhookDeliveries,
 } from "@facility/db";
-import { artifactIdFor, validate } from "@facility/harness";
+import { artifactIdFor, validate, wsjfValueSection } from "@facility/harness";
 import { and, desc, eq, gt, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { assertBudgetAgentInProject, resolveBudgetScope } from "./budget-scope.js";
 import {
@@ -2256,11 +2256,7 @@ async function executeTaskCreation(
   const github = options.github ?? (await githubIssueClientForRepo(db, repo, options));
   const issueBody = `${task.bodyMd.trimEnd()}
 
-## Value
-
-\`\`\`json
-${JSON.stringify(task.wsjf, null, 2)}
-\`\`\`
+${wsjfValueSection(task.wsjf)}
 
 ## KB trace
 
