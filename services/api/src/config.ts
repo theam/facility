@@ -176,6 +176,70 @@ const EnvSchema = z
         message: "GitHub organization restriction is only supported in github mode",
       });
     }
+    if (env.MCP_PUBLIC_URL) {
+      try {
+        canonicalMcpResourceUrl(env.MCP_PUBLIC_URL);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["MCP_PUBLIC_URL"],
+          message: error instanceof Error ? error.message : "MCP_PUBLIC_URL is invalid",
+        });
+      }
+    }
+    const interactiveOauthEnabled = Boolean(
+      env.FACILITY_OAUTH_ISSUER && env.FACILITY_OAUTH_JWKS?.trim() && env.MCP_PUBLIC_URL,
+    );
+    if (interactiveOauthEnabled) {
+      const webUrl = env.WEB_URL ?? env.PUBLIC_URL;
+      const callbackUrl =
+        env.AUTH_CALLBACK_URL ?? `${webUrl.replace(/\/+$/, "")}/api/auth/callback`;
+      const oauthUrls: Array<[string, URL]> = [
+        ["WEB_URL", new URL(webUrl)],
+        ["AUTH_CALLBACK_URL", new URL(callbackUrl)],
+        ["FACILITY_OAUTH_ISSUER", new URL(env.FACILITY_OAUTH_ISSUER ?? "")],
+        ["MCP_PUBLIC_URL", new URL(env.MCP_PUBLIC_URL ?? "")],
+      ];
+      const allLoopbackHttp = oauthUrls.every(
+        ([, url]) => url.protocol === "http:" && isLoopbackHostname(url.hostname),
+      );
+      if (env.NODE_ENV === "production" && !allLoopbackHttp) {
+        for (const [name, url] of oauthUrls) {
+          if (url.protocol === "https:") continue;
+          ctx.addIssue({
+            code: "custom",
+            path: [name],
+            message: `${name} must use HTTPS in production`,
+          });
+        }
+      }
+      const web = new URL(webUrl);
+      const issuer = new URL(env.FACILITY_OAUTH_ISSUER ?? "");
+      if (!isOriginUrl(web)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["WEB_URL"],
+          message:
+            "WEB_URL must be an HTTP(S) origin without credentials, path, query, or fragment when Facility OAuth is enabled",
+        });
+      }
+      if (!isOriginUrl(issuer) || issuer.origin !== web.origin) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["FACILITY_OAUTH_ISSUER"],
+          message:
+            "FACILITY_OAUTH_ISSUER must be the WEB_URL origin so OAuth browser cookies remain host-only and same-origin",
+        });
+      }
+      const callback = new URL(callbackUrl);
+      if (!isExactAuthCallbackUrl(callback, web.origin)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["AUTH_CALLBACK_URL"],
+          message: "AUTH_CALLBACK_URL must be exactly the WEB_URL /api/auth/callback URL",
+        });
+      }
+    }
   });
 
 function isExactBase64Key(value: string) {
@@ -213,7 +277,9 @@ export function readConfig(env = process.env): AppConfig {
     facilityInstanceId: parsed.FACILITY_INSTANCE_ID,
     oauthIssuer: parsed.FACILITY_OAUTH_ISSUER?.replace(/\/$/, ""),
     oauthJwks: parseJwks(parsed.FACILITY_OAUTH_JWKS),
-    mcpPublicUrl: parsed.MCP_PUBLIC_URL?.replace(/\/$/, ""),
+    mcpPublicUrl: parsed.MCP_PUBLIC_URL
+      ? canonicalMcpResourceUrl(parsed.MCP_PUBLIC_URL)
+      : undefined,
     facilityInsecureDev: parsed.FACILITY_INSECURE_DEV === "1",
     s3Endpoint: parsed.S3_ENDPOINT,
     s3AccessKey: parsed.S3_ACCESS_KEY,
@@ -263,4 +329,53 @@ function parseJwks(value: string | undefined): { keys: Record<string, unknown>[]
     throw new Error("FACILITY_OAUTH_JWKS key ids must be unique");
   }
   return { keys: keys as Record<string, unknown>[] };
+}
+
+function canonicalMcpResourceUrl(value: string) {
+  const resource = new URL(value);
+  if (
+    !["http:", "https:"].includes(resource.protocol) ||
+    resource.username ||
+    resource.password ||
+    resource.search ||
+    resource.hash
+  ) {
+    throw new Error(
+      "MCP_PUBLIC_URL must be an HTTP(S) URL without credentials, query, or fragment",
+    );
+  }
+  if (resource.protocol !== "https:" && !isLoopbackHostname(resource.hostname)) {
+    throw new Error("MCP_PUBLIC_URL must use HTTPS unless it is a loopback URL");
+  }
+  const path = resource.pathname.replace(/\/+$/, "");
+  if (path && path !== "/mcp") throw new Error("MCP_PUBLIC_URL path must be /mcp");
+  resource.pathname = "/mcp";
+  return resource.toString();
+}
+
+function isOriginUrl(url: URL) {
+  return (
+    ["http:", "https:"].includes(url.protocol) &&
+    !url.username &&
+    !url.password &&
+    url.pathname === "/" &&
+    !url.search &&
+    !url.hash
+  );
+}
+
+function isExactAuthCallbackUrl(url: URL, webOrigin: string) {
+  return (
+    ["http:", "https:"].includes(url.protocol) &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    url.toString() === `${webOrigin}/api/auth/callback`
+  );
+}
+
+function isLoopbackHostname(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  return ["localhost", "127.0.0.1", "[::1]"].includes(normalized);
 }

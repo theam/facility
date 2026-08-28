@@ -1,9 +1,21 @@
 import { newId } from "@facility/core";
-import { agentDefs, createDb, insertAuditEvent, runEvents, runs } from "@facility/db";
+import {
+  agentDefs,
+  createDb,
+  type FacilityDb,
+  insertAuditEvent,
+  runEvents,
+  runs,
+} from "@facility/db";
 // Default-import: cron-parser is CJS and its named exports aren't statically
 // visible to Node's ESM loader (tsx runs the worker in real ESM mode).
 import cronParser from "cron-parser";
 import { and, eq, not, notInArray, sql } from "drizzle-orm";
+import {
+  assertBuilderPlanDispatch,
+  isBuilderPlanDenialError,
+  lockBuilderPlanPolicy,
+} from "./builder-plan-policy.js";
 import { TERMINAL_RUN_STATUSES } from "./sandbox/state.js";
 import type { AppConfig } from "./types.js";
 
@@ -66,17 +78,41 @@ export async function runScheduledAgents(
             .limit(1)
         )[0];
         if (!liveRun) {
+          const runTrigger = { type: "schedule", cron: trigger.config.cron };
+          let admittedMode = agent.name;
+          try {
+            const policyTx = tx as unknown as FacilityDb;
+            await lockBuilderPlanPolicy(policyTx, agent.orgId, agent.projectId);
+            const admission = await assertBuilderPlanDispatch(policyTx, {
+              orgId: agent.orgId,
+              projectId: agent.projectId,
+              mode: agent.name,
+              agentDefId: agent.id,
+              trigger: runTrigger,
+              actor: { type: "system", id: "scheduler" },
+              source: "legacy_scheduler",
+            });
+            admittedMode = admission.mode;
+          } catch (error) {
+            if (!isBuilderPlanDenialError(error)) throw error;
+            await tx
+              .update(agentDefs)
+              .set({ lastScheduledAt: now, updatedAt: now })
+              .where(and(eq(agentDefs.orgId, agent.orgId), eq(agentDefs.id, agent.id)));
+            continue;
+          }
           const run = (
             await tx
+              // builder-plan-preflight: scheduled_run
               .insert(runs)
               .values({
                 id: newId("run"),
                 orgId: agent.orgId,
                 projectId: agent.projectId,
                 agentDefId: agent.id,
-                mode: agent.name,
+                mode: admittedMode,
                 engine: agent.engine,
-                trigger: { type: "schedule", cron: trigger.config.cron },
+                trigger: runTrigger,
                 createdBy: { type: "system", id: "scheduler" },
               })
               .returning()

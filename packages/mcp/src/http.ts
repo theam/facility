@@ -22,10 +22,17 @@ export type HttpServerOptions = {
 };
 
 const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
+const MCP_ENDPOINT_PATH = "/mcp";
 
 export function serveHttp(options: HttpServerOptions) {
   const host = options.host ?? "127.0.0.1";
-  const allowedHosts = configuredHosts(options, host);
+  const resourceUrl = options.resourceUrl
+    ? canonicalMcpResourceUrl(options.resourceUrl)
+    : undefined;
+  const protectedResourcePath = resourceUrl
+    ? protectedResourceMetadataPath(resourceUrl)
+    : PROTECTED_RESOURCE_PATH;
+  const allowedHosts = configuredHosts({ ...options, resourceUrl }, host);
   const limiter = new FixedWindowLimiter(options.maxRequestsPerMinute ?? 120, 60_000);
   const credentialValidator = new CredentialValidator(options.apiUrl, options.fetch ?? fetch);
   const trustedProxyHops = nonNegativeInteger(options.trustedProxyHops ?? 0, "trustedProxyHops");
@@ -77,7 +84,20 @@ export function serveHttp(options: HttpServerOptions) {
 
     // Public OAuth discovery document — served without auth so an interactive
     // client can bootstrap the flow before it holds a token.
-    if (request.method === "GET" && path === PROTECTED_RESOURCE_PATH) {
+    if (
+      request.method === "GET" &&
+      resourceUrl &&
+      protectedResourcePath !== PROTECTED_RESOURCE_PATH &&
+      path === PROTECTED_RESOURCE_PATH
+    ) {
+      response.writeHead(308, {
+        "content-type": "application/json",
+        location: protectedResourcePath,
+      });
+      response.end(JSON.stringify({ redirect: protectedResourcePath }));
+      return;
+    }
+    if (request.method === "GET" && path === protectedResourcePath) {
       if (!options.authorizationServer) {
         response.writeHead(404, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "oauth_not_configured" }));
@@ -86,7 +106,7 @@ export function serveHttp(options: HttpServerOptions) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
-          resource: options.resourceUrl ?? "",
+          resource: resourceUrl ?? "",
           authorization_servers: [options.authorizationServer],
           bearer_methods_supported: ["header"],
         }),
@@ -104,11 +124,15 @@ export function serveHttp(options: HttpServerOptions) {
       return;
     }
 
+    // RFC 9728 metadata describes the canonical /mcp resource only. Keep the
+    // authenticated legacy POST / transport alias, but do not tell an
+    // unauthenticated client that the root path represents the /mcp resource.
+    const challengedResourceUrl = path === MCP_ENDPOINT_PATH ? resourceUrl : undefined;
     const bearer = bearerToken(request);
     if (!bearer) {
       response.writeHead(401, {
         "content-type": "application/json",
-        "www-authenticate": wwwAuthenticate(options),
+        "www-authenticate": wwwAuthenticate(challengedResourceUrl, options.authorizationServer),
       });
       response.end(JSON.stringify({ error: "missing or invalid bearer token" }));
       return;
@@ -117,7 +141,7 @@ export function serveHttp(options: HttpServerOptions) {
     if (credential === "invalid") {
       response.writeHead(401, {
         "content-type": "application/json",
-        "www-authenticate": wwwAuthenticate(options),
+        "www-authenticate": wwwAuthenticate(challengedResourceUrl, options.authorizationServer),
       });
       response.end(JSON.stringify({ error: "missing or invalid bearer token" }));
       return;
@@ -130,7 +154,7 @@ export function serveHttp(options: HttpServerOptions) {
       response.end(JSON.stringify({ error: "credential validation unavailable" }));
       return;
     }
-    if (request.method !== "POST" || !["/mcp", "/"].includes(path)) {
+    if (request.method !== "POST" || ![MCP_ENDPOINT_PATH, "/"].includes(path)) {
       response.writeHead(405, { "content-type": "application/json", allow: "POST" });
       response.end(JSON.stringify({ error: "method not allowed" }));
       return;
@@ -359,11 +383,84 @@ function nonNegativeInteger(value: number, label: string) {
   return value;
 }
 
-function wwwAuthenticate(options: HttpServerOptions): string {
-  if (options.authorizationServer && options.resourceUrl) {
-    return `Bearer resource_metadata="${options.resourceUrl}${PROTECTED_RESOURCE_PATH}"`;
+function wwwAuthenticate(resourceUrl: string | undefined, authorizationServer: string | undefined) {
+  if (authorizationServer && resourceUrl) {
+    const metadata = new URL(resourceUrl);
+    metadata.pathname = protectedResourceMetadataPath(resourceUrl);
+    metadata.search = "";
+    metadata.hash = "";
+    return `Bearer resource_metadata="${metadata.toString()}"`;
   }
   return "Bearer";
+}
+
+/**
+ * MCP_PUBLIC_URL historically accepted the MCP origin. Keep accepting that
+ * deployment shape, but turn it into the actual RFC 8707 resource identifier
+ * that clients request and the server protects.
+ */
+export function canonicalMcpResourceUrl(value: string) {
+  const resource = new URL(value);
+  if (
+    !["http:", "https:"].includes(resource.protocol) ||
+    resource.username ||
+    resource.password ||
+    resource.search ||
+    resource.hash
+  ) {
+    throw new Error(
+      "MCP resourceUrl must be an HTTP(S) URL without credentials, query, or fragment",
+    );
+  }
+  if (resource.protocol !== "https:" && !isLoopbackHostname(resource.hostname)) {
+    throw new Error("MCP resourceUrl must use HTTPS unless it is a loopback URL");
+  }
+  const path = resource.pathname.replace(/\/+$/, "");
+  if (path && path !== MCP_ENDPOINT_PATH) {
+    throw new Error(`MCP resourceUrl path must be ${MCP_ENDPOINT_PATH}`);
+  }
+  resource.pathname = MCP_ENDPOINT_PATH;
+  return resource.toString();
+}
+
+/** RFC 9728 section 3.1: insert the well-known suffix before a resource path. */
+export function protectedResourceMetadataPath(resourceUrl: string) {
+  const resource = new URL(resourceUrl);
+  const resourcePath = resource.pathname === "/" ? "" : resource.pathname.replace(/\/+$/, "");
+  return `${PROTECTED_RESOURCE_PATH}${resourcePath}`;
+}
+
+export function canonicalAuthorizationServerUrl(value: string) {
+  const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  let authorizationServer: URL;
+  try {
+    authorizationServer = new URL(candidate);
+  } catch {
+    throw new Error("MCP_AUTHORIZATION_SERVER must be a valid HTTPS origin");
+  }
+  if (
+    !["http:", "https:"].includes(authorizationServer.protocol) ||
+    authorizationServer.username ||
+    authorizationServer.password ||
+    authorizationServer.pathname !== "/" ||
+    authorizationServer.search ||
+    authorizationServer.hash
+  ) {
+    throw new Error(
+      "MCP_AUTHORIZATION_SERVER must be an origin without credentials, path, query, or fragment",
+    );
+  }
+  if (
+    authorizationServer.protocol !== "https:" &&
+    !isLoopbackHostname(authorizationServer.hostname)
+  ) {
+    throw new Error("MCP_AUTHORIZATION_SERVER must use HTTPS unless it is a loopback origin");
+  }
+  return authorizationServer.origin;
+}
+
+function isLoopbackHostname(hostname: string) {
+  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname.toLowerCase());
 }
 
 function writeError(response: ServerResponse, error: unknown) {

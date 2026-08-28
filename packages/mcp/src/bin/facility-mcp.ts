@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { serveHttp } from "../http.js";
+import { canonicalAuthorizationServerUrl, serveHttp } from "../http.js";
 import { createFacilityMcpServer } from "../tools.js";
 
 const [command, ...rest] = process.argv.slice(2);
@@ -19,11 +19,13 @@ if (command === "serve") {
   }
   // OAuth discovery points at this Facility instance's authorization server.
   const authRaw = process.env.MCP_AUTHORIZATION_SERVER;
-  const authorizationServer = authRaw
-    ? /^https?:\/\//.test(authRaw)
-      ? authRaw.replace(/\/+$/, "")
-      : `https://${authRaw.replace(/\/+$/, "")}`
-    : undefined;
+  let authorizationServer: string | undefined;
+  try {
+    authorizationServer = authRaw ? canonicalAuthorizationServerUrl(authRaw) : undefined;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "MCP_AUTHORIZATION_SERVER is invalid");
+    process.exit(2);
+  }
   const host = flag(rest, "--host") ?? process.env.MCP_HOST ?? "127.0.0.1";
   const server = serveHttp({
     apiUrl,

@@ -14,6 +14,7 @@ import { and, desc, eq, notInArray, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import postgres from "postgres";
 import { z } from "zod";
+import { withBuilderPlanPreflight } from "../../builder-plan-policy.js";
 import { readTranscriptObject } from "../../envelopes.js";
 import { ApiError, notFound } from "../../errors.js";
 import { cancelRun } from "../../sandbox/orchestrator.js";
@@ -216,16 +217,16 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
         );
       }
       const agent = await resolveRunAgentDef(p.orgId, projectId, body);
-      const trigger = validatedRunTrigger(agent.name, body.trigger);
-      if ("githubLogin" in trigger) {
-        delete trigger.githubLogin;
-        if (p.githubLogin) trigger.githubLogin = p.githubLogin;
+      const policyTrigger = { ...(body.trigger ?? {}) };
+      if ("githubLogin" in policyTrigger) {
+        delete policyTrigger.githubLogin;
+        if (p.githubLogin) policyTrigger.githubLogin = p.githubLogin;
       }
       // Preserve issue provenance across generic dispatch (retries pass the
       // source run's trigger): without this, a retried issue-run loses its
       // gh linkage and disappears from the issue's history and the pipeline.
-      const triggerRepo = trigger.repo as { owner?: unknown; name?: unknown } | undefined;
-      const triggerIssue = trigger.issue as { number?: unknown } | undefined;
+      const triggerRepo = policyTrigger.repo as { owner?: unknown; name?: unknown } | undefined;
+      const triggerIssue = policyTrigger.issue as { number?: unknown } | undefined;
       const gh =
         typeof triggerRepo?.owner === "string" &&
         typeof triggerRepo?.name === "string" &&
@@ -233,26 +234,48 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
           ? { owner: triggerRepo.owner, repo: triggerRepo.name, issueNumber: triggerIssue.number }
           : {};
       const run = (
-        await db
-          .insert(runs)
-          .values({
-            id: newId("run"),
+        await withBuilderPlanPreflight(
+          db,
+          {
             orgId: p.orgId,
             projectId,
-            agentDefId: agent.id,
-            // The selected agent owns its governed role. Caller labels such as
-            // "manual" must not bypass role-specific progress, delivery, receipt,
-            // or read-only invariants in the runner.
             mode: agent.name,
-            // The agent definition owns execution engine selection. Persisting a
-            // caller-supplied default made CLI/MCP-triggered Claude/BYO runs look
-            // like Codex runs even though orchestration correctly used the agent.
-            engine: agent.engine,
-            trigger,
-            gh,
-            createdBy: { type: p.type, id: p.id },
-          })
-          .returning()
+            agentDefId: agent.id,
+            trigger: policyTrigger,
+            actor: auditActor(p),
+            source: "rest_run",
+          },
+          (tx, admission) => {
+            // Required Builder governance is evaluated before the legacy
+            // objective validation. This keeps the stable Gate 1 denial (and
+            // no-row invariant) authoritative for every Builder request while
+            // optional projects retain the existing objective error.
+            const trigger = validatedRunTrigger(admission.mode, policyTrigger);
+            return (
+              tx
+                // builder-plan-preflight: rest_run
+                .insert(runs)
+                .values({
+                  id: newId("run"),
+                  orgId: p.orgId,
+                  projectId,
+                  agentDefId: agent.id,
+                  // Persist the role admitted under the project lock. Builder
+                  // classification cannot later disappear when an agent's name or
+                  // command triggers are edited.
+                  mode: admission.mode,
+                  // The agent definition owns execution engine selection. Persisting a
+                  // caller-supplied default made CLI/MCP-triggered Claude/BYO runs look
+                  // like Codex runs even though orchestration correctly used the agent.
+                  engine: agent.engine,
+                  trigger,
+                  gh,
+                  createdBy: { type: p.type, id: p.id },
+                })
+                .returning()
+            );
+          },
+        )
       )[0];
       if (!run) throw new ApiError(500, "insert_failed", "Could not create run");
       await db.insert(runEvents).values({
@@ -296,25 +319,40 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
           "Consult dispatches read-only architect agents only",
         );
       }
+      const trigger = {
+        type: "consult",
+        question: body.question,
+        requestedBy: { type: p.type, id: p.id },
+      };
       const run = (
-        await db
-          .insert(runs)
-          .values({
-            id: newId("run"),
+        await withBuilderPlanPreflight(
+          db,
+          {
             orgId: p.orgId,
             projectId,
-            agentDefId: agent.id,
             mode: agent.name,
-            engine: agent.engine,
-            trigger: {
-              type: "consult",
-              question: body.question,
-              requestedBy: { type: p.type, id: p.id },
-            },
-            gh: {},
-            createdBy: { type: p.type, id: p.id },
-          })
-          .returning()
+            agentDefId: agent.id,
+            trigger,
+            actor: auditActor(p),
+            source: "rest_consult",
+          },
+          (tx, admission) =>
+            tx
+              // builder-plan-preflight: rest_consult
+              .insert(runs)
+              .values({
+                id: newId("run"),
+                orgId: p.orgId,
+                projectId,
+                agentDefId: agent.id,
+                mode: admission.mode,
+                engine: agent.engine,
+                trigger,
+                gh: {},
+                createdBy: { type: p.type, id: p.id },
+              })
+              .returning(),
+        )
       )[0];
       if (!run) throw new ApiError(500, "insert_failed", "Could not create run");
       await db.insert(runEvents).values({
@@ -773,20 +811,35 @@ export async function registerRunsRoutes(app: FastifyInstance, context: V1RouteC
       const trigger: Record<string, unknown> = { type: "resume", resumeOf: parent.id };
       if (body.message !== undefined) trigger.message = body.message;
       const run = (
-        await db
-          .insert(runs)
-          .values({
-            id: newId("run"),
+        await withBuilderPlanPreflight(
+          db,
+          {
             orgId: p.orgId,
             projectId: parent.projectId,
-            agentDefId: parent.agentDefId,
             mode: parent.mode,
-            engine: parent.engine,
+            agentDefId: parent.agentDefId,
             trigger,
             gh,
-            createdBy: { type: p.type, id: p.id },
-          })
-          .returning()
+            actor: auditActor(p),
+            source: "rest_resume",
+          },
+          (tx, admission) =>
+            tx
+              // builder-plan-preflight: rest_resume_run
+              .insert(runs)
+              .values({
+                id: newId("run"),
+                orgId: p.orgId,
+                projectId: parent.projectId,
+                agentDefId: parent.agentDefId,
+                mode: admission.mode,
+                engine: parent.engine,
+                trigger,
+                gh,
+                createdBy: { type: p.type, id: p.id },
+              })
+              .returning(),
+        )
       )[0];
       if (!run) throw new ApiError(500, "run_create_failed", "Run could not be created");
       await db.insert(runEvents).values({
@@ -823,6 +876,7 @@ function parentGhForResume(value: unknown) {
   if (typeof gh.owner === "string") out.owner = gh.owner;
   if (typeof gh.repo === "string") out.repo = gh.repo;
   if (typeof gh.branch === "string") out.branch = gh.branch;
+  if (typeof gh.issueNumber === "number") out.issueNumber = gh.issueNumber;
   return out;
 }
 

@@ -132,6 +132,7 @@ export type Octokit = {
           number: number;
           title: string;
           body?: string | null;
+          state?: string;
           html_url: string;
           user?: { login?: string } | null;
           labels?: Array<string | { name?: string }>;

@@ -33,6 +33,7 @@ import {
   gitOutput,
   handleControlMessage,
   parseGitNameStatus,
+  preparedWorkspaceBaseSha,
   prepareWorkspace,
   privateRegistryInstallCommand,
   privateRegistryNpmrc,
@@ -1403,9 +1404,11 @@ describe("Claude resume controls", () => {
   it("replays a workspace checkpoint when the admitted base changed", async () => {
     const root = await mkdtemp(join(tmpdir(), "facility-runner-resume-stale-"));
     const source = join(root, "source");
-    const target = join(root, "target");
+    const workspace = join(root, "workspace");
+    const target = join(workspace, "repo");
     const checkpoint = join(root, "checkpoint");
     await mkdir(source);
+    await mkdir(workspace);
     execFileSync("git", ["init", "--initial-branch=main"], { cwd: source });
     execFileSync("git", ["config", "user.name", "Facility Test"], { cwd: source });
     execFileSync("git", ["config", "user.email", "facility@example.test"], { cwd: source });
@@ -1413,6 +1416,10 @@ describe("Claude resume controls", () => {
     execFileSync("git", ["add", "task.txt"], { cwd: source });
     execFileSync("git", ["commit", "-m", "chore: initialize stale fixture"], { cwd: source });
     execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source });
+    const originalBaseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
     await writeFile(join(source, "task.txt"), "resumable work\n");
     await createWorkspaceCheckpoint(source, checkpoint, "main");
 
@@ -1423,10 +1430,32 @@ describe("Claude resume controls", () => {
     execFileSync("git", ["add", "new-base.txt"], { cwd: target });
     execFileSync("git", ["commit", "-m", "chore: advance admitted base"], { cwd: target });
     execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: target });
+    const currentBaseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: target,
+      encoding: "utf8",
+    }).trim();
 
     await expect(restoreWorkspaceCheckpoint(target, checkpoint, "main")).resolves.toBe(true);
-    await expect(readFile(join(target, "task.txt"), "utf8")).resolves.toBe("resumable work\n");
-    await expect(readFile(join(target, "new-base.txt"), "utf8")).resolves.toBe("new base\n");
+    await expect(
+      preparedWorkspaceBaseSha(
+        bundle({
+          repo: {
+            cloneUrl: "https://github.com/acme/widget.git",
+            branch: "main",
+            expectedHeadSha: null,
+            installationTokenRef: null,
+          },
+        }),
+        workspace,
+      ),
+    ).resolves.toBe(currentBaseSha);
+    expect(currentBaseSha).not.toBe(originalBaseSha);
+    await expect(
+      readFile(join(target, "task.txt"), "utf8").then((body) => body.replace(/\r\n/g, "\n")),
+    ).resolves.toBe("resumable work\n");
+    await expect(
+      readFile(join(target, "new-base.txt"), "utf8").then((body) => body.replace(/\r\n/g, "\n")),
+    ).resolves.toBe("new base\n");
     expect(
       execFileSync("git", ["branch", "--show-current"], { cwd: target, encoding: "utf8" }).trim(),
     ).toBe("main");
