@@ -20,6 +20,12 @@ Typed, linked, validated at write time:
   evidence, sketch, acceptance criteria, WSJF score.
 - **Verification** — the closed loop on shipped work: what actually changed
   for users. Merged is not verified.
+- **Reference** — curated documentation (architecture, conventions, runbooks).
+  Free; no parent required.
+- **Learning** — a durable lesson from delivery or review, stored as `L` in a
+  Product workspace. Free; no parent required. Research workspaces reuse `L`
+  for **Literature** notes instead — the prefix is the same, the meaning
+  follows the space's chain.
 
 The platform enforces the chain mechanically — a task without a decision, a
 verification without a shipped task, a missing backlink: rejected at write

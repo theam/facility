@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { CrepeEditor } from "@/components/product/crepe-editor";
 import { ValidationReportPanel } from "@/components/product/validation-report";
-import { artifactIdFor, type KbEntry, TYPE_LABELS } from "@/lib/kb";
+import { artifactIdFor, type KbChainId, type KbEntry, typeLabelsFor } from "@/lib/kb";
 import { createEntry, createEntryDry, type DryRunResult } from "@/lib/kb-client";
 
 /**
@@ -16,6 +16,7 @@ import { createEntry, createEntryDry, type DryRunResult } from "@/lib/kb-client"
 export function NewEntry({
   projectId,
   type,
+  chain,
   entries,
   onCreated,
   onCancel,
@@ -23,6 +24,7 @@ export function NewEntry({
   projectId: string;
   /** Section-scoped: R (documentation) or D (decision). */
   type: "R" | "D";
+  chain: KbChainId;
   entries: KbEntry[];
   onCreated: (artifactId: string) => void;
   onCancel: () => void;
@@ -139,7 +141,7 @@ export function NewEntry({
                     {candidate.slug.replaceAll("-", " ")}
                   </span>
                   <span className="ml-auto text-[10px] text-(--dim)">
-                    {TYPE_LABELS[candidate.type] ?? candidate.type}
+                    {typeLabelsFor(chain)[candidate.type] ?? candidate.type}
                   </span>
                 </label>
               );

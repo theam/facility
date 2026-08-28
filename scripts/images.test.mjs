@@ -153,6 +153,10 @@ test("one Bake result records an exact, internally consistent digest set", (t) =
 
 test("CI gates release images and the reusable publisher stages digests before promotion", () => {
   assert.match(imagesWorkflow, /on:\n {2}workflow_call:\n {4}inputs:\n {6}version:/);
+  assert.match(
+    imagesWorkflow,
+    /workflow_call:[\s\S]*outputs:\n {6}promoted:[\s\S]*value: \$\{\{ jobs\.promote\.outputs\.promoted \}\}/,
+  );
   assert.match(imagesWorkflow, /\n {2}workflow_dispatch:\n/);
   assert.doesNotMatch(imagesWorkflow, /tags: \["v\*"\]/);
   assert.match(
@@ -209,8 +213,13 @@ test("CI gates release images and the reusable publisher stages digests before p
   assert.match(imagesWorkflow, /promote:\n {4}needs: \[plan, build, scan\]/);
   assert.match(imagesWorkflow, /node scripts\/images\.mjs promote/);
   assert.match(
+    imagesWorkflow,
+    /promote:[\s\S]*outputs:\n {6}promoted: \$\{\{ steps\.promotion\.outputs\.promoted \}\}/,
+  );
+  assert.match(imagesWorkflow, /id: promotion\n {8}run: echo 'promoted=true' >> "\$GITHUB_OUTPUT"/);
+  assert.match(
     ciWorkflow,
-    /publish-images:[\s\S]*needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e\]/,
+    /publish-images:[\s\S]*needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e, allocate-release\]/,
   );
   assert.match(ciWorkflow, /publish-images:[\s\S]*uses: \.\/\.github\/workflows\/images\.yml/);
 });

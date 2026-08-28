@@ -25,6 +25,10 @@ on:
         description: The version decided from the commits
         type: string
         required: true
+    outputs:
+      promoted:
+        description: Whether every immutable GHCR version tag was promoted
+        value: ${{ jobs.promote.outputs.promoted }}
   workflow_dispatch:
 
 permissions:
@@ -217,6 +221,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      promoted: ${{ steps.promotion.outputs.promoted }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -240,3 +246,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAGS_JSON: ${{ needs.plan.outputs.tags }}
         run: node scripts/images.mjs promote "$RUNNER_TEMP/image-digests"
+
+      - name: Record the promoted image version
+        id: promotion
+        run: echo 'promoted=true' >> "$GITHUB_OUTPUT"

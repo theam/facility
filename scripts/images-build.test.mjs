@@ -239,6 +239,17 @@ test("Bake keeps thin target boundaries and publishes every target through one g
       "services/gateway/package.json",
     ].map(async (path) => JSON.parse(await readFile(join(root, path), "utf8"))),
   );
+  for (const [name, dockerfile] of [
+    ["service", controlDockerfile],
+    ["web", webDockerfile],
+    ["runner", runnerDockerfile],
+  ]) {
+    assert.match(
+      dockerfile,
+      /ARG DEBIAN_SECURITY_REFRESH=20260828\s+RUN test -n "\$DEBIAN_SECURITY_REFRESH" \\\s+&& apt-get update \\\s+&& DEBIAN_FRONTEND=noninteractive apt-get upgrade -y/,
+      `${name} image must invalidate its cached Debian upgrade at the reviewed security epoch`,
+    );
+  }
   assert.doesNotMatch(webDockerfile, /^COPY \. \.$/m);
   assert.match(pnpmWorkspace, /^allowUnusedPatches: \$\{FACILITY_ALLOW_UNUSED_PATCHES-false\}$/m);
   for (const dockerfile of [controlDockerfile, webDockerfile]) {
@@ -368,6 +379,19 @@ test("Bake keeps thin target boundaries and publishes every target through one g
   assert.equal((runnerDockerfile.match(/rm -rf \/src "\$archive"/g) ?? []).length, 8);
   assert.match(runnerDockerfile, /go version -m "\$binary"[\s\S]*go1\.26\.6/);
   assert.match(runnerDockerfile, /golang\.org\/x\/net[\s\S]*v0\.56\.0/);
+  assert.equal(
+    runnerDockerfile.match(/golang\.org\/x\/mod=golang\.org\/x\/mod@v0\.40\.0/g)?.length,
+    5,
+    "every copied Go tool with the vulnerable x/mod dependency must use the reviewed replacement",
+  );
+  assert.match(
+    runnerDockerfile,
+    /github\.com\/moby\/go-archive=github\.com\/moby\/go-archive@v0\.3\.0/,
+  );
+  assert.match(
+    runnerDockerfile,
+    /go version -m \/out\/docker-buildx[\s\S]*github\.com\/moby\/go-archive[\s\S]*v0\.3\.0/,
+  );
   assert.match(runnerDockerfile, /COPY --from=go-tools-audit[\s\S]*\/usr\/local\/bin\//);
   assert.match(runnerDockerfile, /COPY --from=docker-tools \/usr\/local\/bin\//);
   assert.doesNotMatch(runnerDockerfile, /^\s+docker\.io\s+\\$/m);

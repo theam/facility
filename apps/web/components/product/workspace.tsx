@@ -11,6 +11,7 @@ import { NavTree } from "@/components/product/nav-tree";
 import { NewEntry } from "@/components/product/new-entry";
 import {
   artifactIdFor,
+  chainIdFromConfig,
   fmtStamp,
   groupSections,
   type KbDecision,
@@ -24,9 +25,10 @@ import { fetchNeighborhood, type Neighborhood, patchEntry, saveSpace } from "@/l
 
 /**
  * The Product workspace: page tree on the left, the unified artifact page on
- * the right. Every artifact — decisions, docs, signals, learnings, and the
- * charter/active context docs — renders through the same template. Selection
- * is URL state (?doc=D001) so artifact links deep-link and survive refreshes.
+ * the right. Every artifact — decisions, docs, signals, L pages (learnings on
+ * the product chain, literature on research), and the charter/active context
+ * docs — renders through the same template. Selection is URL state (?doc=D001)
+ * so artifact links deep-link and survive refreshes.
  */
 export function ProductWorkspace({
   projectId,
@@ -54,7 +56,8 @@ export function ProductWorkspace({
     return map;
   }, [entries]);
 
-  const sections = useMemo(() => groupSections(entries), [entries]);
+  const chain = chainIdFromConfig(space.config);
+  const sections = useMemo(() => groupSections(entries, chain), [entries, chain]);
   const doc = searchParams.get("doc") ?? "active";
   const isPin = doc === "charter" || doc === "active";
   const entry = isPin ? null : (byArtifactId.get(doc) ?? null);
@@ -96,6 +99,7 @@ export function ProductWorkspace({
           <NewEntry
             projectId={projectId}
             type={creating}
+            chain={chain}
             entries={entries}
             onCreated={(artifactId) => {
               setCreating(null);
@@ -181,7 +185,7 @@ export function ProductWorkspace({
         key={entry.id}
         docKey={entry.id}
         meta={{
-          typeLabel: typeLabelFor(entry.type),
+          typeLabel: typeLabelFor(entry.type, chain),
           artifactId: artifactIdFor(entry),
           status: entry.status,
           createdAt: entry.createdAt ?? null,
@@ -216,6 +220,7 @@ export function ProductWorkspace({
           decisions={decisions}
           selected={creating ? "" : doc}
           canWrite={canWrite}
+          chain={chain}
           onSelect={navigate}
           onNew={(type) => setCreating(type)}
         />

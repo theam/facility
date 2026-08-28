@@ -951,6 +951,8 @@ function productChainSeed() {
       D: { name: "Decision", parentTypes: ["S"] },
       T: { name: "Task", parentTypes: ["D"] },
       V: { name: "Verification", parentTypes: ["T"] },
+      R: { name: "Reference", parentTypes: [] },
+      L: { name: "Learning", parentTypes: [] },
     },
   };
 }

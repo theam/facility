@@ -516,6 +516,22 @@ describe("db", async () => {
       ]),
     );
 
+    const productChainItem = bundledItems.find((item) => item.name === "product-chain");
+    if (!productChainItem) throw new Error("product-chain fixture missing");
+    const productChainVersion = (
+      await db
+        .select()
+        .from(schema.registryVersions)
+        .where(eq(schema.registryVersions.itemId, productChainItem.id))
+        .limit(1)
+    )[0];
+    expect(JSON.parse(productChainVersion?.content ?? "{}")).toMatchObject({
+      id: "product",
+      types: {
+        L: { name: "Learning", parentTypes: [] },
+      },
+    });
+
     const learningItem = bundledItems.find((item) => item.name === "learning-agent");
     if (!learningItem) throw new Error("learning-agent fixture missing");
     await db

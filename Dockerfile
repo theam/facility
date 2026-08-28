@@ -4,10 +4,15 @@
 #
 #   docker build --target api     -t facility/api .
 #   docker build --target gateway -t facility/gateway .
-FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS base
+FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
-RUN apt-get update \
+# Keep a digest-pinned base while still making a reviewed Debian security
+# refresh invalidate BuildKit's cached package layer.
+ARG DEBIAN_SECURITY_REFRESH=20260828
+RUN test -n "$DEBIAN_SECURITY_REFRESH" \
+  && apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && curl --fail --silent --show-error --location --retry 3 \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \

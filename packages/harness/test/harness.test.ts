@@ -84,6 +84,26 @@ it("validates product task frontmatter", () => {
   expect(report.errors.map((error) => error.code)).toContain("parent_required");
 });
 
+it("accepts product learnings", () => {
+  const learning = entry({ type: "L", id: "l" });
+  const report = validate({
+    space: activeSpace({ config: { chain: "product" } }),
+    chain: productChain,
+    entries: [learning],
+    links: [],
+    entryId: "l",
+    validateSpecials: false,
+  });
+
+  expect(report.ok).toBe(true);
+  expect(report.errors.map((error) => error.code)).not.toContain("unknown_artifact_type");
+});
+
+it("names L as Learning on product and Literature on research", () => {
+  expect(productChain.types.L?.name).toBe("Learning");
+  expect(researchChain.types.L?.name).toBe("Literature");
+});
+
 it("scores and ranks WSJF", () => {
   expect(wsjfScore({ value: 8, time: 5, risk: 2, effort: 4 })).toBe(3.75);
   expect(

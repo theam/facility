@@ -1,4 +1,4 @@
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS bind-broker-build
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS bind-broker-build
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends gcc libc6-dev \
@@ -39,9 +39,10 @@ RUN archive=/tmp/moby.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && VERSION="$MOBY_VERSION" DOCKER_GITCOMMIT="$MOBY_COMMIT" \
     EXCLUDE_AUTO_BUILDTAG_JOURNALD=1 SOURCE_DATE_EPOCH=1785456000 \
-    ./hack/make.sh binary-daemon binary-proxy \
+    GOFLAGS=-mod=mod ./hack/make.sh binary-daemon binary-proxy \
   && install -m 0755 bundles/binary-daemon/dockerd /out/dockerd \
   && install -m 0755 bundles/binary-proxy/docker-proxy /out/docker-proxy \
   && test "$(/out/dockerd --version | awk '{print $3}' | tr -d ',')" = "$MOBY_VERSION" \
@@ -79,6 +80,7 @@ RUN archive=/tmp/containerd.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
+  && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && make VERSION="v${CONTAINERD_VERSION}" REVISION="$CONTAINERD_COMMIT" STATIC=1 \
     GO_BUILD_FLAGS='-mod=mod -trimpath' \
     bin/containerd bin/containerd-shim-runc-v2 bin/ctr \
@@ -113,7 +115,9 @@ RUN archive=/tmp/buildx.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
-  && CGO_ENABLED=0 go build -mod=vendor -trimpath \
+  && go mod edit -replace=github.com/moby/go-archive=github.com/moby/go-archive@v0.3.0 \
+  && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && CGO_ENABLED=0 go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/docker/buildx/version.Version=${BUILDX_VERSION} \
       -X github.com/docker/buildx/version.Revision=${BUILDX_COMMIT} \
       -X github.com/docker/buildx/version.Package=github.com/docker/buildx" \
@@ -132,6 +136,7 @@ RUN archive=/tmp/compose.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && CGO_ENABLED=0 GOMAXPROCS=1 go build -p=1 -mod=mod -trimpath -tags=e2e \
     -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
     -o /out/docker-compose ./cmd \
@@ -164,6 +169,7 @@ RUN archive=/tmp/gh.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} \
       -X github.com/cli/cli/v2/internal/build.Date=2026-07-31" \
@@ -181,20 +187,26 @@ RUN for binary in /out/*; do \
   && for binary in /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/rootlesskit; do \
     go version -m "$binary" | awk \
       '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.56.0" { found = 1 } END { exit !found }'; \
-  done
+  done \
+  && for binary in /out/dockerd /out/containerd /out/ctr /out/docker-buildx /out/docker-compose /out/gh; do \
+    go version -m "$binary" | awk \
+      '$1 == "=>" && $2 == "golang.org/x/mod" && $3 == "v0.40.0" { found = 1 } END { exit !found }'; \
+  done \
+  && go version -m /out/docker-buildx | awk \
+    '$1 == "=>" && $2 == "github.com/moby/go-archive" && $3 == "v0.3.0" { found = 1 } END { exit !found }'
 
 # The full Node image inherits buildpack-deps and silently carries unrelated
 # database, image-processing, DNS, and web-server development stacks. Agents
 # need a native compiler toolchain, not that entire transitive surface, so start
 # from the official slim variant and install the small explicit toolchain below.
-FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS runner-base
+FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS runner-base
 
 # The digest-pinned Node base can lag Debian security uploads, while BuildKit
 # correctly caches an earlier apt upgrade against the unchanged base digest.
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20260808
+ARG DEBIAN_SECURITY_REFRESH=20260828
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \

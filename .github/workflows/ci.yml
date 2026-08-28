@@ -11,7 +11,7 @@ on:
 
 # A release decision is a read of shared tag state. Serialize main pushes at
 # the workflow boundary so a later merge cannot decide from that state until
-# the prior merge has either recorded its release or failed visibly.
+# the prior merge has allocated its immutable version or failed visibly.
 concurrency:
   group: ci-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -82,7 +82,8 @@ jobs:
   # Stamp the decided version and build the archive once, in a job with no
   # credentials. The npm environment later receives this exact, already-tested
   # archive rather than running package lifecycle code with publication rights.
-  # The stamp is never committed: the tag written at the end is the record.
+  # The stamp is never committed: the tag allocated after acceptance is the
+  # immutable version record.
   package-release:
     needs: [decide-release, verify]
     if: needs.decide-release.outputs.release == 'true' && github.event.repository.visibility == 'public'
@@ -266,12 +267,50 @@ jobs:
         if: steps.policy.outputs.required != 'true'
         run: echo "Sandbox E2E skipped by policy — ${{ steps.policy.outputs.reason }}."
 
+  # Allocate the immutable version only after every acceptance path and the
+  # exact npm artifact have passed, but before either registry can consume it.
+  # This closes the unavoidable uncertainty windows around a lost npm response
+  # and GHCR's per-image (non-atomic) promotion loop.
+  allocate-release:
+    needs: [decide-release, verify, package-release, self-host-build, sandbox-e2e]
+    if: needs.decide-release.outputs.release == 'true' && github.event.repository.visibility == 'public'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Allocate the immutable release version
+        env:
+          TAG: ${{ needs.decide-release.outputs.tag }}
+          VERSION: ${{ needs.decide-release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_sha="$(git rev-parse "refs/tags/$TAG^{commit}")"
+            if [ "$tag_sha" != "$head_sha" ]; then
+              echo "$TAG points to $tag_sha, not accepted commit $head_sha" >&2
+              exit 1
+            fi
+            echo "$TAG already allocates the accepted commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "$VERSION"
+            git push origin "$TAG"
+          fi
+
   # Keep publication in the original accepted main-push run so npm provenance
   # identifies the commit that passed every acceptance job. A downstream
   # workflow_run would instead attest the default branch SHA.
   publish-npm:
     if: needs.decide-release.outputs.release == 'true' && github.event.repository.visibility == 'public'
-    needs: [decide-release, verify, package-release, self-host-build, sandbox-e2e]
+    needs: [decide-release, verify, package-release, self-host-build, sandbox-e2e, allocate-release]
     permissions:
       contents: read
       id-token: write
@@ -291,7 +330,7 @@ jobs:
   # revalidates the release before granting its jobs packages: write.
   publish-images:
     if: needs.decide-release.outputs.release == 'true' && github.event.repository.visibility == 'public'
-    needs: [decide-release, verify, package-release, self-host-build, sandbox-e2e]
+    needs: [decide-release, verify, package-release, self-host-build, sandbox-e2e, allocate-release]
     permissions:
       contents: read
       packages: write
@@ -299,13 +338,21 @@ jobs:
     with:
       version: ${{ needs.decide-release.outputs.version }}
 
-  # The tag is written last, and only after both registries accepted the
-  # release. It records what shipped; it is not the request to ship it. Retry a
-  # failed publisher in this same run so an already-successful peer is not
-  # asked to republish an immutable version.
+  # The tag was allocated before registry mutation. Add a GitHub Release only
+  # when at least one publisher confirms success, preserving the factual status
+  # of the other artifact set while failed publishers keep the workflow red.
   record-release:
-    needs: [decide-release, publish-npm, publish-images]
-    if: needs.decide-release.outputs.release == 'true' && github.event.repository.visibility == 'public'
+    needs: [decide-release, allocate-release, publish-npm, publish-images]
+    if: >-
+      !cancelled()
+      && needs.decide-release.result == 'success'
+      && needs.allocate-release.result == 'success'
+      && needs.decide-release.outputs.release == 'true'
+      && github.event.repository.visibility == 'public'
+      && (
+        needs.publish-npm.outputs.published == 'true'
+        || needs.publish-images.outputs.promoted == 'true'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -321,9 +368,17 @@ jobs:
           TAG: ${{ needs.decide-release.outputs.tag }}
           VERSION: ${{ needs.decide-release.outputs.version }}
           NOTES: ${{ needs.decide-release.outputs.notes }}
+          NPM_PUBLISHED: ${{ needs.publish-npm.outputs.published }}
+          IMAGES_PROMOTED: ${{ needs.publish-images.outputs.promoted }}
         shell: bash
         run: |
           set -euo pipefail
+          npm_published="${NPM_PUBLISHED:-false}"
+          images_promoted="${IMAGES_PROMOTED:-false}"
+          if [ "$npm_published" != "true" ] && [ "$images_promoted" != "true" ]; then
+            echo "refusing to record $TAG because no publisher confirmed an artifact" >&2
+            exit 1
+          fi
           head_sha="$(git rev-parse HEAD)"
           if git show-ref --verify --quiet "refs/tags/$TAG"; then
             tag_sha="$(git rev-parse "refs/tags/$TAG^{commit}")"
@@ -338,7 +393,20 @@ jobs:
             git tag -a "$TAG" -m "$VERSION"
             git push origin "$TAG"
           fi
-          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          {
+            printf '%s\n\n' "$NOTES"
+            printf '%s\n\n' '## Artifact status'
+            if [ "$npm_published" = "true" ]; then
+              printf '%s\n' '- npm package: published'
+            else
+              printf '%s\n' '- npm package: publication was not confirmed'
+            fi
+            if [ "$images_promoted" = "true" ]; then
+              printf '%s\n' '- container image set: promoted'
+            else
+              printf '%s\n' '- container image set: promotion was not confirmed complete'
+            fi
+          } > "$RUNNER_TEMP/notes.md"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "GitHub Release $TAG already exists."
           else

@@ -21,6 +21,10 @@ on:
         description: The version decided from the commits, stamped into the archive
         type: string
         required: true
+    outputs:
+      published:
+        description: Whether npm's immutable version namespace was consumed
+        value: ${{ jobs.publish.outputs.published }}
   workflow_dispatch:
 
 permissions:
@@ -76,6 +80,8 @@ jobs:
       contents: read
       id-token: write
     environment: npm
+    outputs:
+      published: ${{ steps.publication.outputs.published }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -130,6 +136,7 @@ jobs:
         run: node scripts/release.mjs registry-state "$CANDIDATE"
 
       - name: Publish with npm trusted publishing
+        id: oidc
         if: steps.registry.outputs.state == 'existing'
         env:
           CANDIDATE: ${{ steps.candidate.outputs.path }}
@@ -140,8 +147,25 @@ jobs:
       # spawning npm, preventing token fallback for existing packages or
       # uncertain registry state.
       - name: Bootstrap the package once with a granular token
+        id: bootstrap
         if: steps.registry.outputs.state == 'missing'
         env:
           CANDIDATE: ${{ steps.candidate.outputs.path }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: node scripts/release.mjs publish "$CANDIDATE" --auth=bootstrap
+
+      # A version is consumed when an identical artifact already exists or
+      # when the matching authentication branch published it successfully.
+      # Export that fact instead of asking the caller to infer it from a job
+      # result, because skipped reusable jobs can still report success.
+      - name: Record the consumed npm version
+        id: publication
+        if: >-
+          !cancelled()
+          && steps.registry.outcome == 'success'
+          && (
+            steps.registry.outputs.state == 'published'
+            || (steps.registry.outputs.state == 'existing' && steps.oidc.outcome == 'success')
+            || (steps.registry.outputs.state == 'missing' && steps.bootstrap.outcome == 'success')
+          )
+        run: echo 'published=true' >> "$GITHUB_OUTPUT"

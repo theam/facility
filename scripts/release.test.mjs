@@ -131,6 +131,10 @@ test("GitHub publication requires the exact official npm registry", () => {
 
 test("the workflow keeps manual runs credential-free and real publication main-only", () => {
   assert.match(releaseWorkflow, /workflow_call:\n    inputs:\n      version:/);
+  assert.match(
+    releaseWorkflow,
+    /workflow_call:[\s\S]*outputs:\n      published:[\s\S]*value: \$\{\{ jobs\.publish\.outputs\.published \}\}/,
+  );
   assert.doesNotMatch(releaseWorkflow, /workflow_dispatch:\n\s+inputs:/);
   assert.match(releaseWorkflow, /dry-run:\n    if: github\.event_name == 'workflow_dispatch'/);
   assert.match(
@@ -159,6 +163,14 @@ test("the workflow keeps manual runs credential-free and real publication main-o
   assert.match(
     releaseWorkflow,
     /publish:[\s\S]*concurrency:\n      group: npm-theagilemonkeys-facility\n      cancel-in-progress: false/,
+  );
+  assert.match(
+    publishJob,
+    /outputs:\n      published: \$\{\{ steps\.publication\.outputs\.published \}\}/,
+  );
+  assert.match(
+    publishJob,
+    /steps\.registry\.outputs\.state == 'published'[\s\S]*steps\.oidc\.outcome == 'success'[\s\S]*steps\.bootstrap\.outcome == 'success'/,
   );
 });
 
@@ -219,14 +231,47 @@ test("CI publishes only the exact artifact produced after all acceptance jobs", 
   assert.match(ciWorkflow, /name: facility-release-package/);
   assert.match(
     ciWorkflow,
-    /publish-npm:[\s\S]*needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e\]/,
+    /publish-npm:[\s\S]*needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e, allocate-release\]/,
   );
   assert.match(ciWorkflow, /publish-npm:[\s\S]*uses: \.\/\.github\/workflows\/release\.yml/);
 });
 
-test("release recording retries missing notes and rejects a tag on another commit", () => {
+test("CI allocates the version after acceptance and before registry mutation", () => {
+  const allocationJob = ciWorkflow
+    .split("\n  publish-npm:")[0]
+    .split("\n  allocate-release:")[1];
+  assert.ok(allocationJob, "CI workflow must contain an allocate-release job");
+  assert.match(
+    allocationJob,
+    /needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e\]/,
+  );
+  assert.match(allocationJob, /permissions:\n {6}contents: write/);
+  assert.match(allocationJob, /git tag -a "\$TAG" -m "\$VERSION"/);
+  assert.match(allocationJob, /git push origin "\$TAG"/);
+  assert.match(allocationJob, /if \[ "\$tag_sha" != "\$head_sha" \]; then/);
+  assert.ok(
+    ciWorkflow.indexOf("\n  allocate-release:") < ciWorkflow.indexOf("\n  publish-npm:"),
+    "the immutable version must be allocated before npm can consume it",
+  );
+  assert.ok(
+    ciWorkflow.indexOf("\n  allocate-release:") < ciWorkflow.indexOf("\n  publish-images:"),
+    "the immutable version must be allocated before GHCR can consume it",
+  );
+});
+
+test("release recording reports confirmed artifacts without bypassing cancellation", () => {
   const recordJob = ciWorkflow.split("\n  record-release:")[1];
   assert.ok(recordJob, "CI workflow must contain a record-release job");
+  assert.match(recordJob, /if: >-\n      !cancelled\(\)/);
+  assert.doesNotMatch(recordJob, /always\(\)/);
+  assert.match(recordJob, /needs\.decide-release\.result == 'success'/);
+  assert.match(recordJob, /needs\.allocate-release\.result == 'success'/);
+  assert.match(recordJob, /needs\.publish-npm\.outputs\.published == 'true'/);
+  assert.match(recordJob, /needs\.publish-images\.outputs\.promoted == 'true'/);
+  assert.doesNotMatch(recordJob, /needs\.publish-(?:npm|images)\.result == 'success'/);
+  assert.match(recordJob, /NPM_PUBLISHED: \$\{\{ needs\.publish-npm\.outputs\.published \}\}/);
+  assert.match(recordJob, /IMAGES_PROMOTED: \$\{\{ needs\.publish-images\.outputs\.promoted \}\}/);
+  assert.match(recordJob, /if \[ "\$npm_published" != "true" \] && \[ "\$images_promoted" != "true" \]; then/);
   assert.match(recordJob, /tag_sha="\$\(git rev-parse "refs\/tags\/\$TAG\^\{commit\}"\)"/);
   assert.match(recordJob, /if \[ "\$tag_sha" != "\$head_sha" \]; then/);
   assert.match(recordJob, /if gh release view "\$TAG" >\/dev\/null 2>&1; then/);
@@ -235,4 +280,9 @@ test("release recording retries missing notes and rejects a tag on another commi
     recordJob,
     /already exists; the release was recorded by an earlier run\."\n {12}exit 0/,
   );
+  assert.match(recordJob, /## Artifact status/);
+  assert.match(recordJob, /npm package: published/);
+  assert.match(recordJob, /npm package: publication was not confirmed/);
+  assert.match(recordJob, /container image set: promoted/);
+  assert.match(recordJob, /container image set: promotion was not confirmed complete/);
 });
