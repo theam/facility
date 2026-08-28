@@ -1,6 +1,6 @@
 "use client";
 
-import { isBuilderMode } from "@facility/run-objective";
+import { isBuilderAgent } from "@facility/run-objective";
 import {
   Button,
   Divider,
@@ -44,6 +44,7 @@ type Props = {
   myPermissions: string[];
   sandboxProfiles: Array<{ id: string; name: string }>;
   recentRuns: Run[];
+  builderPlanPolicy: "optional" | "required";
 };
 
 type ScheduleTriggerShape = {
@@ -84,7 +85,7 @@ function runCost(run: Run): number | null {
 
 /** The flagship surface: one agent, fully understandable and operable. */
 export function AgentDetail(props: Props) {
-  const { projectId, agent, status } = props;
+  const { projectId, agent, status, builderPlanPolicy } = props;
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<{ scope: string; text: string } | null>(null);
@@ -108,7 +109,7 @@ export function AgentDetail(props: Props) {
 
   async function runNow() {
     const trigger: Record<string, unknown> = { type: "manual", source: "agent-page" };
-    if (isBuilderMode(agent.name)) {
+    if (isBuilderAgent(agent.name, agent.triggers)) {
       const objective = window.prompt(`Run ${agent.name} — what should it do?`);
       if (objective === null) return;
       const message = objective.trim();
@@ -132,6 +133,8 @@ export function AgentDetail(props: Props) {
 
   const health = status ? agentHealth(status) : null;
   const next = fmtIn(status?.nextRunAt ?? null);
+  const builderRequiresPlan =
+    builderPlanPolicy === "required" && isBuilderAgent(agent.name, agent.triggers);
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-10">
@@ -163,11 +166,19 @@ export function AgentDetail(props: Props) {
               size="sm"
               variant="primary"
               tone="agent"
-              disabled={busy !== null || !agent.enabled}
+              disabled={busy !== null || !agent.enabled || builderRequiresPlan}
+              title={
+                builderRequiresPlan
+                  ? "Approve a current Architect plan from the story or GitHub issue"
+                  : undefined
+              }
               onClick={() => void runNow()}
             >
               {busy === "run" ? "starting…" : "run now"}
             </Button>
+            {builderRequiresPlan ? (
+              <span className="font-mono text-[10px] text-(--human)">plan approval required</span>
+            ) : null}
             <Button
               size="sm"
               variant="outline"
@@ -472,8 +483,19 @@ function ContractSection({ item, act, busy, note }: SectionProps) {
   );
 }
 
-function TriggersSection({ projectId, agent, status, catalog, act, busy, note }: SectionProps) {
+function TriggersSection({
+  projectId,
+  agent,
+  status,
+  catalog,
+  act,
+  busy,
+  note,
+  builderPlanPolicy,
+}: SectionProps) {
   const existing = scheduleOf(agent);
+  const builderRequiresPlan =
+    builderPlanPolicy === "required" && isBuilderAgent(agent.name, agent.triggers);
   const [editing, setEditing] = useState(false);
   const [nextSchedule, setNextSchedule] = useState<{ cron: string } | null>(
     existing ? { cron: existing.cron } : null,
@@ -536,11 +558,21 @@ function TriggersSection({ projectId, agent, status, catalog, act, busy, note }:
                 size="sm"
                 variant="outline"
                 className="ml-auto"
-                disabled={busy !== null}
+                disabled={busy !== null || builderRequiresPlan}
+                title={
+                  builderRequiresPlan
+                    ? "Scheduled Builder runs cannot satisfy a per-plan human approval"
+                    : undefined
+                }
                 onClick={() => setEditing(true)}
               >
                 {existing ? "edit" : "add schedule"}
               </Button>
+            ) : null}
+            {builderRequiresPlan ? (
+              <span className="font-mono text-[10px] text-(--human)">
+                disabled by required plan gate
+              </span>
             ) : null}
           </div>
           {editing ? (

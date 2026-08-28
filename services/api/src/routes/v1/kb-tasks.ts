@@ -19,6 +19,7 @@ import { artifactIdFor, validate } from "@facility/harness";
 import { and, asc, desc, eq, ilike, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { withBuilderPlanPreflight } from "../../builder-plan-policy.js";
 import { ApiError, notFound } from "../../errors.js";
 import {
   ensureActive,
@@ -1137,31 +1138,46 @@ export async function registerKbTasksRoutes(app: FastifyInstance, context: V1Rou
         if (!owner) {
           throw new ApiError(400, "no_owner_agent", "Project has no enabled project-owner agent");
         }
+        const trigger = {
+          type: "kb_intake",
+          entryId: entry.id,
+          artifactId,
+          source: body.source,
+          title: body.title,
+          instruction:
+            "A new capture landed in the KB. Read it, read the pipeline and the active decisions, then propose the backlog and decision changes it implies — one proposal per change, citing " +
+            artifactId +
+            " as evidence.",
+        };
         const run = (
-          await db
-            .insert(runs)
-            .values({
-              id: newId("run"),
+          await withBuilderPlanPreflight(
+            db,
+            {
               orgId: p.orgId,
               projectId,
-              agentDefId: owner.id,
               mode: owner.name,
-              engine: owner.engine,
-              trigger: {
-                type: "kb_intake",
-                entryId: entry.id,
-                artifactId,
-                source: body.source,
-                title: body.title,
-                instruction:
-                  "A new capture landed in the KB. Read it, read the pipeline and the active decisions, then propose the backlog and decision changes it implies — one proposal per change, citing " +
-                  artifactId +
-                  " as evidence.",
-              },
-              gh: {},
-              createdBy: { type: p.type, id: p.id },
-            })
-            .returning()
+              agentDefId: owner.id,
+              trigger,
+              actor: { type: p.type, id: p.id },
+              source: "kb_intake_dispatch",
+            },
+            (tx, admission) =>
+              tx
+                // builder-plan-preflight: kb_intake_dispatch
+                .insert(runs)
+                .values({
+                  id: newId("run"),
+                  orgId: p.orgId,
+                  projectId,
+                  agentDefId: owner.id,
+                  mode: admission.mode,
+                  engine: owner.engine,
+                  trigger,
+                  gh: {},
+                  createdBy: { type: p.type, id: p.id },
+                })
+                .returning(),
+          )
         )[0];
         if (!run) throw new ApiError(500, "insert_failed", "Could not dispatch the review run");
         await db.insert(runEvents).values({

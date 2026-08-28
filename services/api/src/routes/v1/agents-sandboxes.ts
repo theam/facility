@@ -1,8 +1,9 @@
 import { newId } from "@facility/core";
-import { agentDefs, projects, registryItems, sandboxProfiles } from "@facility/db";
+import { agentDefs, type FacilityDb, projects, registryItems, sandboxProfiles } from "@facility/db";
 import { and, asc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { lockBuilderPlanPolicy } from "../../builder-plan-policy.js";
 import { ApiError } from "../../errors.js";
 import {
   nestedDockerSettingIsValid,
@@ -258,25 +259,30 @@ function registerCrud(
         validateAgentSchedules(body.triggers);
         await assertAgentReferences(p, params.projectId, body);
         if (body.permissions) assertPermissionsGrantable(p, body.permissions);
-        return (
-          await app.facilityDb
-            .insert(table)
-            .values({
-              id: newId(prefix),
-              orgId: p.orgId,
-              projectId: rowProjectId,
-              name: body.name,
-              engine: body.engine,
-              model: body.model,
-              contractItemId: body.contractItemId,
-              harnessItemId: body.harnessItemId,
-              triggers: body.triggers,
-              sandboxProfileId: body.sandboxProfileId,
-              permissions: body.permissions ?? [],
-              enabled: body.enabled,
-            })
-            .returning()
-        )[0];
+        if (!rowProjectId) throw new ApiError(400, "project_required", "Agent project is required");
+        return app.facilityDb.transaction(async (transaction) => {
+          const tx = transaction as unknown as FacilityDb;
+          await lockBuilderPlanPolicy(tx, p.orgId, rowProjectId);
+          return (
+            await tx
+              .insert(table)
+              .values({
+                id: newId(prefix),
+                orgId: p.orgId,
+                projectId: rowProjectId,
+                name: body.name,
+                engine: body.engine,
+                model: body.model,
+                contractItemId: body.contractItemId,
+                harnessItemId: body.harnessItemId,
+                triggers: body.triggers,
+                sandboxProfileId: body.sandboxProfileId,
+                permissions: body.permissions ?? [],
+                enabled: body.enabled,
+              })
+              .returning()
+          )[0];
+        });
       }
       const body = request.body as {
         name: string;
@@ -366,13 +372,20 @@ function registerCrud(
               network: (request.body as { network?: Record<string, unknown> }).network,
               updatedAt: new Date(),
             });
-      return (
-        await app.facilityDb
+      const update = (database: FacilityDb) =>
+        database
           .update(table)
           .set(set)
           .where(and(...clauses))
-          .returning()
-      )[0];
+          .returning();
+      if (prefix === "agent") {
+        return app.facilityDb.transaction(async (transaction) => {
+          const tx = transaction as unknown as FacilityDb;
+          await lockBuilderPlanPolicy(tx, p.orgId, existing.projectId);
+          return (await update(tx))[0];
+        });
+      }
+      return (await update(app.facilityDb))[0];
     },
   );
   app.delete(
@@ -397,7 +410,15 @@ function registerCrud(
       }
       const clauses = [eq(table.orgId, p.orgId), eq(table.id, id)];
       if (projectId && table.projectId) clauses.push(eq(table.projectId, projectId));
-      await app.facilityDb.delete(table).where(and(...clauses));
+      if (prefix === "agent") {
+        await app.facilityDb.transaction(async (transaction) => {
+          const tx = transaction as unknown as FacilityDb;
+          await lockBuilderPlanPolicy(tx, p.orgId, existing.projectId);
+          await tx.delete(table).where(and(...clauses));
+        });
+      } else {
+        await app.facilityDb.delete(table).where(and(...clauses));
+      }
       return { ok: true };
     },
   );

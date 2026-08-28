@@ -1,5 +1,12 @@
 import { can, newId } from "@facility/core";
-import { actionTypes, platformIssues, proposalEvents, proposals, runs } from "@facility/db";
+import {
+  actionTypes,
+  platformIssues,
+  projects,
+  proposalEvents,
+  proposals,
+  runs,
+} from "@facility/db";
 import { and, asc, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -116,9 +123,32 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         .orderBy(desc(proposals.createdAt), desc(proposals.id))
         .limit(query.limit)
         .offset(query.offset);
+      const failedProposalIds = proposalRows
+        .filter(({ proposal }) => proposal.state === "execution_failed")
+        .map(({ proposal }) => proposal.id);
+      const failureEvents = failedProposalIds.length
+        ? await db
+            .select()
+            .from(proposalEvents)
+            .where(
+              and(
+                eq(proposalEvents.orgId, p.orgId),
+                eq(proposalEvents.type, "execution_failed"),
+                inArray(proposalEvents.proposalId, failedProposalIds),
+              ),
+            )
+            .orderBy(desc(proposalEvents.seq))
+        : [];
+      const executionErrors = new Map<string, string | null>();
+      for (const event of failureEvents) {
+        if (!executionErrors.has(event.proposalId)) {
+          executionErrors.set(event.proposalId, executionErrorFromEvents([event]));
+        }
+      }
       const proposalResponses = proposalRows.map(({ proposal, actionType }) => ({
         ...proposal,
         actionType,
+        executionError: executionErrors.get(proposal.id) ?? null,
       }));
       // Issues are watchtower alerts, not proposals: the `state` query param
       // scopes proposals only. Always surface actionable (error/critical) issues
@@ -173,7 +203,7 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         .from(proposalEvents)
         .where(and(eq(proposalEvents.orgId, p.orgId), eq(proposalEvents.proposalId, proposalId)))
         .orderBy(asc(proposalEvents.seq));
-      return { ...proposal, events };
+      return { ...proposal, executionError: executionErrorFromEvents(events), events };
     },
   );
 
@@ -369,6 +399,13 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
         actionType = await ensureIssueUpdateActionType(p.orgId);
       }
       if (!actionType) throw notFound("Action type not found");
+      if (actionType.name === "plan_acceptance") {
+        throw new ApiError(
+          403,
+          "reserved_action_type",
+          "plan_acceptance proposals are created only from a completed Facility Architect run",
+        );
+      }
       // mcp_tool_call dispatches to privileged operations (create agent, set
       // budget, publish registry version, …) whose per-tool permission is checked
       // ONLY on the dedicated /v1/mcp/tool-proposals route. The generic route
@@ -446,6 +483,27 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
             .limit(1)
         )[0];
         if (!proposal) throw new ApiError(409, "not_open", "Proposal is not open");
+        if (
+          body.decision === "approve" &&
+          proposal.actionType.name === "plan_acceptance" &&
+          proposal.proposal.projectId &&
+          p.type !== "user"
+        ) {
+          const project = (
+            await tx
+              .select({ builderPlanPolicy: projects.builderPlanPolicy })
+              .from(projects)
+              .where(and(eq(projects.orgId, p.orgId), eq(projects.id, proposal.proposal.projectId)))
+              .limit(1)
+          )[0];
+          if (project?.builderPlanPolicy === "required") {
+            throw new ApiError(
+              403,
+              "builder_plan_approval_principal_required",
+              "Required Builder plans must be approved by a human user principal",
+            );
+          }
+        }
         const opener = (
           await tx
             .select()
@@ -537,7 +595,11 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
       )[0];
       if (!proposal) throw notFound("Proposal not found");
       assertBareRowProjectScope(p, proposal.projectId, "Proposal not found");
-      if (proposal.state !== "execution_failed" && proposal.state !== "approved") {
+      if (
+        proposal.state !== "execution_failed" &&
+        proposal.state !== "approved" &&
+        proposal.state !== "executing"
+      ) {
         throw new ApiError(409, "not_executable", "Proposal is not pending execution");
       }
       const claimed = await executeApprovedProposal(
@@ -644,7 +706,28 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
     if (!actionType) {
       throw new ApiError(500, "invalid_proposal", "Proposal action type is missing");
     }
-    return { ...proposal, actionType: actionType.name };
+    return {
+      ...proposal,
+      actionType: actionType.name,
+      executionError: await proposalExecutionError(proposal),
+    };
+  }
+
+  async function proposalExecutionError(proposal: typeof proposals.$inferSelect) {
+    if (proposal.state !== "execution_failed") return null;
+    const events = await db
+      .select()
+      .from(proposalEvents)
+      .where(
+        and(
+          eq(proposalEvents.orgId, proposal.orgId),
+          eq(proposalEvents.proposalId, proposal.id),
+          eq(proposalEvents.type, "execution_failed"),
+        ),
+      )
+      .orderBy(desc(proposalEvents.seq))
+      .limit(1);
+    return executionErrorFromEvents(events);
   }
 
   async function proposalRunProject(p: Principal, runId: string | undefined) {
@@ -659,6 +742,15 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
     if (!run || (p.projectId && run.projectId !== p.projectId)) throw notFound("Run not found");
     return run.projectId;
   }
+}
+
+function executionErrorFromEvents(events: Array<typeof proposalEvents.$inferSelect>) {
+  const failed = [...events].reverse().find((event) => event.type === "execution_failed");
+  const data = failed?.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const error = (data as { error?: unknown }).error;
+  if (typeof error !== "string") return null;
+  return /^[a-z0-9_:-]{1,160}$/i.test(error) ? error : "execution_failed";
 }
 
 function sameActor(left: unknown, right: { type: string; id: string }) {

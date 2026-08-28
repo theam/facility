@@ -51,6 +51,10 @@ export const FacilityReceiptSchema = z.object({
       repo: z.string().optional(),
       issue: z.number().int().optional(),
       pr: z.number().int().optional(),
+      base_sha: z
+        .string()
+        .regex(/^[0-9a-f]{40}$/i)
+        .optional(),
       actor_sha256: z.string().optional(),
     })
     .optional(),
@@ -155,6 +159,10 @@ const LegacyAgentReceiptSchema = z.object({
       repo: z.string().optional(),
       issue: z.number().int().optional(),
       pr: z.number().int().optional(),
+      base_sha: z
+        .string()
+        .regex(/^[0-9a-f]{40}$/i)
+        .optional(),
       actor: z.string().optional(),
       actor_sha256: z.string().optional(),
     })
@@ -206,6 +214,7 @@ export function parseLegacyAgentReceipt(json: unknown): FacilityReceipt {
           repo: receipt.github.repo,
           issue: receipt.github.issue,
           pr: receipt.github.pr,
+          base_sha: receipt.github.base_sha,
           actor_sha256:
             receipt.github.actor_sha256 ??
             (receipt.github.actor ? hashActor(receipt.github.actor) : undefined),

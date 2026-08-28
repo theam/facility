@@ -15,6 +15,7 @@ import {
   spendCounters,
 } from "@facility/db";
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { isBuilderPlanDenialError, withBuilderPlanPreflight } from "./builder-plan-policy.js";
 import {
   createGithubClientFactory,
   FacilityGithubClient,
@@ -473,21 +474,42 @@ export async function runLearningNightly(
         await attachGithubReviewEvidence(db, basePacket, githubFactory),
       );
       const packetUrl = `facility://learning-packets/${agent.projectId}/${packet.date}`;
-      const run = (
-        await db
-          .insert(runs)
-          .values({
-            id: newId("run"),
-            orgId: agent.orgId,
-            projectId: agent.projectId,
-            agentDefId: agent.id,
-            mode: "learning",
-            engine: agent.engine,
-            trigger: { type: "schedule", packetUrl, packet },
-            createdBy: { type: "system", id: "learning.nightly" },
-          })
-          .returning()
-      )[0];
+      const trigger = { type: "schedule", packetUrl, packet };
+      let run: typeof runs.$inferSelect | undefined;
+      try {
+        run = (
+          await withBuilderPlanPreflight(
+            db,
+            {
+              orgId: agent.orgId,
+              projectId: agent.projectId,
+              mode: "learning",
+              agentDefId: agent.id,
+              trigger,
+              actor: { type: "system", id: "learning.nightly" },
+              source: "learning_nightly",
+            },
+            (tx, admission) =>
+              tx
+                // builder-plan-preflight: learning_nightly
+                .insert(runs)
+                .values({
+                  id: newId("run"),
+                  orgId: agent.orgId,
+                  projectId: agent.projectId,
+                  agentDefId: agent.id,
+                  mode: admission.mode,
+                  engine: agent.engine,
+                  trigger,
+                  createdBy: { type: "system", id: "learning.nightly" },
+                })
+                .returning(),
+          )
+        )[0];
+      } catch (error) {
+        if (isBuilderPlanDenialError(error)) continue;
+        throw error;
+      }
       if (run) {
         createdRuns.push(run.id);
         await enqueue("runs.dispatch", { runId: run.id, orgId: run.orgId });

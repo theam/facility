@@ -13,6 +13,7 @@ import { createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, SignJWT } fro
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
+import { oauthBrowserOrigin } from "../src/auth/authorization-server.js";
 import { pkceChallenge } from "../src/auth/identity-provider.js";
 import {
   AccessTokenError,
@@ -25,8 +26,8 @@ import type { AppConfig } from "../src/types.js";
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
 const masterKey = Buffer.alloc(32, 7).toString("base64");
-const issuer = "https://api.facility.test";
-const audience = "https://mcp.facility.test";
+const issuer = "https://facility.test";
+const audience = "https://mcp.facility.test/mcp";
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
 const privateJwk = { ...(await exportJWK(privateKey)), kid: "test-key", alg: "ES256", use: "sig" };
 const publicJwk = { ...(await exportJWK(publicKey)), kid: "test-key", alg: "ES256", use: "sig" };
@@ -36,12 +37,14 @@ const base: AppConfig = {
   databaseUrl,
   secretMasterKey: masterKey,
   port: 4400,
-  publicUrl: "http://localhost:4400",
+  publicUrl: "https://api.facility.test",
+  webUrl: issuer,
   sandboxApiUrl: "http://localhost:4400",
   sandboxGatewayUrl: "http://localhost:4410",
   gatewayUrl: "http://localhost:4410",
   sandboxRunnerImage: "facility-runner:dev",
   sandboxDriver: "docker",
+  authCallbackUrl: `${issuer}/api/auth/callback`,
   facilityInsecureDev: true,
   logLevel: "silent",
 };
@@ -107,6 +110,48 @@ describe("Facility OAuth access-token verification", () => {
   it("recognizes only three-segment JWT values", () => {
     expect(looksLikeJwt("a.b.c")).toBe(true);
     expect(looksLikeJwt("fak_test")).toBe(false);
+  });
+});
+
+describe("Facility OAuth browser-origin runtime guard", () => {
+  it("accepts an exact same-origin callback, including HTTP local development", () => {
+    expect(
+      oauthBrowserOrigin({
+        ...base,
+        publicUrl: "http://localhost:4400",
+        webUrl: "http://localhost:3400",
+        oauthIssuer: "http://localhost:3400",
+        authCallbackUrl: "http://localhost:3400/api/auth/callback",
+      }),
+    ).toBe("http://localhost:3400");
+  });
+
+  it.each([
+    ["web path", { webUrl: `${issuer}/app`, oauthIssuer: issuer }],
+    ["issuer path", { webUrl: issuer, oauthIssuer: `${issuer}/oauth` }],
+    ["issuer credentials", { webUrl: issuer, oauthIssuer: "https://user:secret@facility.test" }],
+    ["different issuer", { webUrl: issuer, oauthIssuer: "https://other.facility.test" }],
+  ])("rejects a non-canonical or mismatched %s at runtime", (_label, overrides) => {
+    expect(() => oauthBrowserOrigin({ ...base, ...overrides })).toThrow(
+      "Facility OAuth WEB_URL and issuer must be the same canonical HTTP(S) origin",
+    );
+  });
+
+  it.each([
+    `${issuer}/auth/callback`,
+    `${issuer}/api/auth/callback/`,
+    `${issuer}/api/auth/callback?tenant=one`,
+    `${issuer}/api/auth/callback#fragment`,
+    "https://other.facility.test/api/auth/callback",
+    "https://user:secret@facility.test/api/auth/callback",
+  ])("rejects a non-exact authentication callback at runtime: %s", (authCallbackUrl) => {
+    expect(() =>
+      oauthBrowserOrigin({
+        ...base,
+        oauthIssuer: issuer,
+        authCallbackUrl,
+      }),
+    ).toThrow("Facility OAuth authentication callback must be exactly WEB_URL /api/auth/callback");
   });
 });
 
@@ -285,6 +330,16 @@ describe("Facility OAuth resource-server integration", async () => {
       code_challenge: await pkceChallenge(verifier),
       code_challenge_method: "S256",
     });
+    const wrongResource = new URLSearchParams(query);
+    wrongResource.set("resource", "https://mcp.facility.test");
+    const rejectedResource = await app.inject({
+      method: "GET",
+      url: `/oauth/authorize?${wrongResource}`,
+      headers: proxyHeaders,
+    });
+    expect(rejectedResource.statusCode).toBe(400);
+    expect(rejectedResource.body).toContain("Unknown OAuth resource");
+
     const authorization = await app.inject({
       method: "GET",
       url: `/oauth/authorize?${query}`,
@@ -292,10 +347,21 @@ describe("Facility OAuth resource-server integration", async () => {
     });
     expect(authorization.statusCode).toBe(303);
     const providerCookies = authorization.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-    const interactionPath = new URL(
+    const interactionUrl = new URL(
       required(authorization.headers.location, "interaction redirect"),
       config.publicUrl,
-    ).pathname;
+    );
+    expect(interactionUrl.origin).toBe(issuer);
+    const interactionPath = interactionUrl.pathname;
+    const signedOutInteraction = await app.inject({
+      method: "GET",
+      url: interactionPath,
+      headers: { cookie: providerCookies.join("; ") },
+    });
+    expect(signedOutInteraction.statusCode).toBe(302);
+    expect(signedOutInteraction.headers.location).toBe(
+      `${issuer}/api/auth/login?returnTo=${encodeURIComponent(interactionPath)}`,
+    );
     const facilityCookie = `facility_session=${await mintSessionCookie(config, userId, orgId)}`;
     const interaction = await app.inject({
       method: "GET",

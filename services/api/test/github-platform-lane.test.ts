@@ -1,5 +1,6 @@
 import { generateApiKey, hashKey, newId } from "@facility/core";
 import {
+  actionTypes,
   agentDefs,
   apiKeys,
   auditEvents,
@@ -17,6 +18,7 @@ import {
   poTasks,
   previewSandboxes,
   projects,
+  proposalEvents,
   proposals,
   registryItems,
   repos,
@@ -34,6 +36,7 @@ import { buildApp } from "../src/app.js";
 import { executeApprovedProposal } from "../src/executors.js";
 import type { GithubClientFactory, Octokit } from "../src/github/client.js";
 import { pullRequestBodyForIssue } from "../src/github/closing-issues.js";
+import { githubIssueRevisionSha256 } from "../src/github/issue-revision.js";
 import { syncRepoIssues, upsertGhIssueFromWebhook } from "../src/github/issues-sync.js";
 import {
   enqueueGithubIssuesSync,
@@ -50,8 +53,10 @@ import {
   finishRun,
   publishRunDelivery,
   RunDeliveryLeaseLostError,
+  reconcileArchitectPlanPublications,
 } from "../src/sandbox/orchestrator.js";
 import type { AppConfig } from "../src/types.js";
+import { expireHitlProposals } from "../src/watchtower/hitl.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
@@ -2382,18 +2387,43 @@ describe("github platform lane", async () => {
         observedAt: new Date("2026-08-01T01:02:00Z"),
       },
     ]);
-    const legacyProposal = await app.inject({
-      method: "POST",
-      url: "/v1/proposals",
-      headers: { cookie },
-      payload: {
-        projectId,
-        actionType: "plan_acceptance",
-        payload: { issueNumber: number },
-        contextMd: "Legacy proposal without a repository id",
-      },
+    const planAcceptance = (
+      await db
+        .select({ id: actionTypes.id })
+        .from(actionTypes)
+        .where(and(eq(actionTypes.orgId, orgId), eq(actionTypes.name, "plan_acceptance")))
+        .limit(1)
+    )[0];
+    if (!planAcceptance) throw new Error("plan_acceptance action fixture missing");
+    const legacyArchitectRun = await insertRun({
+      mode: "architect",
+      status: "succeeded",
+      gh: { issueNumber: number },
     });
-    expect(legacyProposal.statusCode, legacyProposal.body).toBe(200);
+    const legacyProposal = (
+      await db
+        .insert(proposals)
+        .values({
+          id: newId("prop"),
+          orgId,
+          projectId,
+          runId: legacyArchitectRun.id,
+          actionTypeId: planAcceptance.id,
+          payload: { architectRunId: legacyArchitectRun.id, issueNumber: number },
+          contextMd: "Legacy proposal without a repository id",
+          expiresAt: new Date(Date.now() + 3_600_000),
+        })
+        .returning()
+    )[0];
+    if (!legacyProposal) throw new Error("legacy proposal fixture missing");
+    await db.insert(proposalEvents).values({
+      orgId,
+      proposalId: legacyProposal.id,
+      seq: 1,
+      type: "open",
+      actor: { type: "agent", id: legacyArchitectRun.id },
+      data: { source: "architect_run" },
+    });
 
     const pipeline = await app.inject({
       method: "GET",
@@ -3188,7 +3218,14 @@ describe("github platform lane", async () => {
       }) as never;
     const repo = await insertRepoWithInstallation(`trigger-${Date.now()}`);
     await insertIssue(repo.id, 44, "open", "2026-03-01T00:00:00Z");
-    await insertAgent("builder");
+    const storyBuilder = await insertAgent("builder");
+    await db
+      .update(agentDefs)
+      .set({
+        name: "delivery-specialist",
+        triggers: [{ type: "command", handle: "/builder" }],
+      })
+      .where(eq(agentDefs.id, storyBuilder.id));
 
     const forged = await app.inject({
       method: "POST",
@@ -3241,6 +3278,7 @@ describe("github platform lane", async () => {
       payload: { agent: "builder" },
     });
     expect(response.statusCode).toBe(200);
+    expect(response.json().mode).toBe("builder");
     expect(response.json().gh.issueNumber).toBe(44);
     const [manifestSyncedRepo] = await db.select().from(repos).where(eq(repos.id, repo.id));
     expect(manifestSyncedRepo?.renderAnswers).toMatchObject({
@@ -3481,6 +3519,123 @@ describe("github platform lane", async () => {
     });
     expect(denied.statusCode).toBe(403);
     app.githubClientFactory = undefined;
+  });
+
+  it("denies Story Build before GitHub access, row creation, or enqueue when plans are required", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const governedProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: `Governed Story Build ${suffix}`,
+          slug: `governed-story-build-${suffix}`,
+          builderPlanPolicy: "required",
+          settings: {},
+        })
+        .returning()
+    )[0];
+    if (!governedProject) throw new Error("governed project insert failed");
+    const contract = (
+      await db
+        .insert(registryItems)
+        .values({
+          id: newId("item"),
+          orgId,
+          scope: "project",
+          projectId: governedProject.id,
+          kind: "agent_contract",
+          name: `governed-story-build-${suffix}`,
+          latestVersion: 1,
+        })
+        .returning()
+    )[0];
+    if (!contract) throw new Error("governed contract insert failed");
+    const governedBuilder = (
+      await db
+        .insert(agentDefs)
+        .values({
+          id: newId("agent"),
+          orgId,
+          projectId: governedProject.id,
+          name: "delivery-specialist",
+          engine: "codex",
+          model: { primary: "gpt-5.5" },
+          contractItemId: contract.id,
+          triggers: [{ type: "command", handle: "/builder" }],
+          enabled: true,
+        })
+        .returning()
+    )[0];
+    if (!governedBuilder) throw new Error("governed Builder insert failed");
+    const governedRepo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId: governedProject.id,
+          owner: `governed-story-${suffix}`,
+          name: "facility",
+          defaultBranch: "main",
+        })
+        .returning()
+    )[0];
+    if (!governedRepo) throw new Error("governed repository insert failed");
+    await db.insert(ghIssues).values({
+      id: newId("ghi"),
+      orgId,
+      projectId: governedProject.id,
+      repoId: governedRepo.id,
+      number: 204,
+      title: "Build only after Gate 1",
+      state: "open",
+      labels: [],
+      assignees: [],
+      htmlUrl: `https://github.test/${governedRepo.owner}/${governedRepo.name}/issues/204`,
+    });
+
+    const originalFactory = app.githubClientFactory;
+    const originalEnqueue = app.enqueue;
+    let githubFactoryCalls = 0;
+    const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+    app.githubClientFactory = async () => {
+      githubFactoryCalls += 1;
+      throw new Error("Story Build denial reached GitHub");
+    };
+    app.enqueue = async (queue, data) => {
+      enqueued.push({ queue, data });
+      return null;
+    };
+    const before = await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.projectId, governedProject.id));
+    try {
+      const denied = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${governedProject.id}/issues/204/trigger?repoId=${governedRepo.id}`,
+        headers: { cookie },
+        payload: { agent: "builder" },
+      });
+      expect(denied.statusCode, denied.body).toBe(409);
+      expect(denied.json().error.code).toBe("builder_plan_required");
+      expect(
+        await db.select({ id: runs.id }).from(runs).where(eq(runs.projectId, governedProject.id)),
+      ).toHaveLength(before.length);
+      expect(githubFactoryCalls).toBe(0);
+      expect(enqueued).toEqual([]);
+      const denial = (
+        await db.select().from(auditEvents).where(eq(auditEvents.projectId, governedProject.id))
+      ).find((event) => event.action === "run.builder_plan_denied");
+      expect(denial).toMatchObject({
+        payload: { code: "builder_plan_required", source: "web_issue_preflight" },
+      });
+    } finally {
+      app.githubClientFactory = originalFactory;
+      app.enqueue = originalEnqueue;
+    }
   });
 
   it("pins project-scoped keys to their project across the issue mirror (404 elsewhere)", async () => {
@@ -3756,6 +3911,7 @@ describe("github platform lane", async () => {
     const run = await insertRun({
       status: "running",
       gh: { owner: repo.owner, repo: repo.name, issueNumber: 91 },
+      workspaceBaseSha: "b".repeat(40),
     });
     const queued: Array<{ queue: string; data: Record<string, unknown> }> = [];
     await finishRun(
@@ -3767,6 +3923,7 @@ describe("github platform lane", async () => {
           changed: true,
           branch: "feature/exact-delivery",
           headSha: "expected-sha",
+          baseSha: "a".repeat(40),
           pullRequestTitle: "fix: bind delivery to the pushed commit",
           pullRequestBody: "Exact delivery",
         },
@@ -3786,7 +3943,12 @@ describe("github platform lane", async () => {
       owner: repo.owner,
       repoName: repo.name,
       expectedHeadSha: "expected-sha",
+      baseSha: "a".repeat(40),
     });
+    const [finishedRun] = await db.select().from(runs).where(eq(runs.id, run.id));
+    expect((finishedRun?.receipt as { github?: { base_sha?: string } })?.github?.base_sha).toBe(
+      "a".repeat(40),
+    );
 
     let createCalls = 0;
     const blocked = await deliverPendingRunDeliveries(db, config, {
@@ -4631,10 +4793,37 @@ describe("github platform lane", async () => {
 
   it("finishRun publishes an architect plan and opens the human Gate 1 proposal", async () => {
     const repo = await insertRepoWithInstallation(`plan-${Date.now()}`);
+    const workspaceBaseSha = "d".repeat(40);
+    const issueRequest = {
+      title: "Preserve Architect publication marker",
+      body: "Publish one immutable plan.",
+      state: "open",
+      author: "maintainer",
+      url: `https://github.test/${repo.owner}/${repo.name}/issues/71`,
+      labels: ["governance"],
+      comments: [],
+    };
     const run = await insertRun({
       mode: "architect",
       status: "running",
-      gh: { owner: repo.owner, repo: repo.name, issueNumber: 71 },
+      workspaceBaseSha,
+      trigger: {
+        type: "github_comment",
+        repo: { id: repo.id, owner: repo.owner, name: repo.name },
+        issue: { number: 71 },
+        request: issueRequest,
+      },
+      gh: {
+        owner: repo.owner,
+        repo: repo.name,
+        issueNumber: 71,
+        progressComment: {
+          id: 7101,
+          command: "architect",
+          issueTitle: "Preserve Architect publication marker",
+          sender: "maintainer",
+        },
+      },
     });
     await db.insert(runEvents).values({
       orgId,
@@ -4644,7 +4833,255 @@ describe("github platform lane", async () => {
       data: { text: "1. Add the behavior.\n2. Prove it with the mirror test." },
     });
     const comments: string[] = [];
+    let missingProgressUpdates = 0;
+    const publicationFactory = async () =>
+      ({
+        rest: {
+          issues: {
+            listComments: async () => ({ data: [] }),
+            createComment: async ({ body }: { body: string }) => {
+              comments.push(body);
+              return { data: { id: 1 } };
+            },
+            updateComment: async () => {
+              missingProgressUpdates += 1;
+              throw Object.assign(new Error("progress comment deleted"), { status: 404 });
+            },
+          },
+          repos: {},
+          pulls: {},
+          git: {},
+        },
+      }) as never;
+    await expect(
+      finishRun(
+        db,
+        run,
+        { status: "succeeded" },
+        {
+          config,
+          githubClientFactory: publicationFactory,
+          afterArchitectPlanOutboxWrite: () => {
+            throw new Error("injected_outbox_commit_failure");
+          },
+        },
+      ),
+    ).rejects.toThrow("injected_outbox_commit_failure");
+    expect(comments).toHaveLength(0);
+    expect((await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0]?.status).toBe(
+      "running",
+    );
+    expect(await db.select().from(proposals).where(eq(proposals.runId, run.id))).toHaveLength(0);
+
     const finished = await finishRun(
+      db,
+      run,
+      { status: "succeeded" },
+      {
+        config,
+        githubClientFactory: publicationFactory,
+      },
+    );
+    expect(finished.status).toBe("succeeded");
+    expect(missingProgressUpdates).toBe(1);
+    expect(comments).toHaveLength(1);
+    expect(comments.at(-1)).toContain("Human Gate 1");
+    expect(comments.at(-1)).toContain("Prove it with the mirror test");
+    expect(comments.at(-1)).toContain("<!-- facility:architect-plan:");
+    const [proposal] = await db.select().from(proposals).where(eq(proposals.runId, run.id));
+    expect(proposal?.state).toBe("open");
+    expect(proposal?.payload).toMatchObject({
+      issueNumber: 71,
+      repoId: repo.id,
+      workspaceBaseSha,
+      issueRevisionSha256: githubIssueRevisionSha256(issueRequest),
+    });
+  });
+
+  it("keeps a sealed Architect success durable and retries transient plan publication", async () => {
+    const repo = await insertRepoWithInstallation(`plan-retry-${Date.now()}`);
+    const run = await insertRun({
+      mode: "architect",
+      status: "running",
+      gh: { owner: repo.owner, repo: repo.name, issueNumber: 72 },
+    });
+    await db.insert(runEvents).values({
+      orgId,
+      runId: run.id,
+      seq: 1,
+      type: "assistant",
+      data: { text: "Retry this plan publication without rewriting Architect success." },
+    });
+
+    const first = await finishRun(
+      db,
+      run,
+      { status: "succeeded" },
+      {
+        config,
+        githubClientFactory: async () => {
+          throw new Error("transient github outage");
+        },
+      },
+    );
+    expect(first.status).toBe("succeeded");
+    const stored = (await db.select().from(runs).where(eq(runs.id, run.id)).limit(1))[0];
+    expect(stored).toMatchObject({ status: "succeeded", error: null });
+    const planRows = await db.select().from(proposals).where(eq(proposals.runId, run.id));
+    expect(planRows).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, planRows[0]?.id ?? ""),
+            eq(proposalEvents.type, "published"),
+          ),
+        ),
+    ).toHaveLength(0);
+    const publicationError = (
+      await db
+        .select()
+        .from(runEvents)
+        .where(and(eq(runEvents.runId, run.id), eq(runEvents.type, "artifact_error")))
+    ).find((event) => (event.data as { kind?: unknown }).kind === "plan_publication_failed");
+    expect(publicationError?.data).toMatchObject({ error: "transient github outage" });
+    const publicationIssue = (
+      await db
+        .select()
+        .from(platformIssues)
+        .where(eq(platformIssues.fingerprint, `plan_publication_failed:${run.id}`))
+        .limit(1)
+    )[0];
+    expect(publicationIssue?.state).toBe("open");
+
+    const comments: string[] = [];
+    let retryFactoryCalls = 0;
+    const retryFactory = async () => {
+      retryFactoryCalls += 1;
+      return {
+        rest: {
+          issues: {
+            createComment: async ({ body }: { body: string }) => {
+              comments.push(body);
+              await new Promise((resolve) => setTimeout(resolve, 5));
+              return { data: { id: 72 } };
+            },
+            updateComment: async ({ comment_id, body }: { comment_id: number; body: string }) => {
+              comments.push(body);
+              return { data: { id: comment_id } };
+            },
+          },
+          repos: {},
+          pulls: {},
+          git: {},
+        },
+      } as never;
+    };
+    if (!stored) throw new Error("stored Architect run missing");
+    await finishRun(
+      db,
+      stored,
+      { status: "succeeded" },
+      {
+        config,
+        githubClientFactory: retryFactory,
+      },
+    );
+    expect(comments).toHaveLength(0);
+    expect(
+      await reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: planRows[0]?.id, orgId },
+        retryFactory,
+      ),
+    ).toEqual([]);
+    expect(retryFactoryCalls).toBe(0);
+    const retried = await Promise.all([
+      reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: planRows[0]?.id, orgId },
+        retryFactory,
+        new Date(Date.now() + 2 * 60_000),
+      ),
+      reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: planRows[0]?.id, orgId },
+        retryFactory,
+        new Date(Date.now() + 2 * 60_000),
+      ),
+    ]);
+    expect(retried.flat()).toEqual([
+      { proposalId: planRows[0]?.id, status: "published" },
+      { proposalId: planRows[0]?.id, status: "published" },
+    ]);
+    expect(comments).toHaveLength(1);
+    expect(retryFactoryCalls).toBe(1);
+    expect(await db.select().from(proposals).where(eq(proposals.runId, run.id))).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, planRows[0]?.id ?? ""),
+            eq(proposalEvents.type, "published"),
+          ),
+        ),
+    ).toHaveLength(1);
+    const resolvedPublicationIssue = (
+      await db
+        .select()
+        .from(platformIssues)
+        .where(eq(platformIssues.id, publicationIssue?.id ?? ""))
+        .limit(1)
+    )[0];
+    expect(resolvedPublicationIssue?.state).toBe("resolved");
+    await db
+      .update(proposals)
+      .set({ state: "rejected", updatedAt: new Date() })
+      .where(eq(proposals.id, planRows[0]?.id ?? ""));
+    expect(
+      await reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: planRows[0]?.id, orgId },
+        retryFactory,
+      ),
+    ).toEqual([{ proposalId: planRows[0]?.id, status: "closed" }]);
+    expect(comments).toHaveLength(2);
+    expect(comments.at(-1)).not.toContain("Approve this plan");
+    expect(retryFactoryCalls).toBe(2);
+  });
+
+  it("recovers an ambiguous post-comment failure by stable marker without duplicating GitHub", async () => {
+    const repo = await insertRepoWithInstallation(`plan-ambiguous-${Date.now()}`);
+    const run = await insertRun({
+      mode: "architect",
+      status: "running",
+      gh: { owner: repo.owner, repo: repo.name, issueNumber: 73 },
+    });
+    await db.insert(runEvents).values({
+      orgId,
+      runId: run.id,
+      seq: 1,
+      type: "assistant",
+      data: { text: "Publish this plan exactly once across an ambiguous GitHub response." },
+    });
+    const remoteComments: Array<{
+      id: number;
+      body: string;
+      created_at: string;
+      html_url: string;
+      user: { login: string; type: string };
+    }> = [];
+    let creates = 0;
+    let updates = 0;
+    await finishRun(
       db,
       run,
       { status: "succeeded" },
@@ -4654,9 +5091,17 @@ describe("github platform lane", async () => {
           ({
             rest: {
               issues: {
+                listComments: async () => ({ data: [] }),
                 createComment: async ({ body }: { body: string }) => {
-                  comments.push(body);
-                  return { data: { id: 1 } };
+                  creates += 1;
+                  remoteComments.push({
+                    id: 7301,
+                    body,
+                    created_at: new Date().toISOString(),
+                    html_url: "https://github.test/comments/7301",
+                    user: { login: "facility[bot]", type: "Bot" },
+                  });
+                  throw new Error("connection closed after GitHub accepted the comment");
                 },
               },
               repos: {},
@@ -4666,12 +5111,615 @@ describe("github platform lane", async () => {
           }) as never,
       },
     );
-    expect(finished.status).toBe("succeeded");
-    expect(comments[0]).toContain("Human Gate 1");
-    expect(comments[0]).toContain("Prove it with the mirror test");
     const [proposal] = await db.select().from(proposals).where(eq(proposals.runId, run.id));
-    expect(proposal?.state).toBe("open");
-    expect(proposal?.payload).toMatchObject({ issueNumber: 71, repoId: repo.id });
+    expect(proposal).toBeDefined();
+    expect(remoteComments).toHaveLength(1);
+    expect(creates).toBe(1);
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, proposal?.id ?? ""),
+            eq(proposalEvents.type, "published"),
+          ),
+        ),
+    ).toHaveLength(0);
+    await db
+      .update(proposals)
+      .set({ state: "rejected" })
+      .where(eq(proposals.id, proposal?.id ?? ""));
+
+    const recoveryFactory = async () =>
+      ({
+        rest: {
+          issues: {
+            listComments: async () => ({ data: remoteComments }),
+            createComment: async () => {
+              creates += 1;
+              return { data: { id: 7302 } };
+            },
+            updateComment: async ({ comment_id, body }: { comment_id: number; body: string }) => {
+              updates += 1;
+              const comment = remoteComments.find((candidate) => candidate.id === comment_id);
+              if (comment) comment.body = body;
+              return { data: { id: comment_id, html_url: comment?.html_url } };
+            },
+          },
+          repos: {},
+          pulls: {},
+          git: {},
+        },
+      }) as never;
+    expect(
+      await reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: proposal?.id, orgId: `${orgId}-other` },
+        recoveryFactory,
+        new Date(Date.now() + 2 * 60_000),
+      ),
+    ).toEqual([]);
+    expect(
+      await reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: proposal?.id, orgId },
+        recoveryFactory,
+        new Date(Date.now() + 2 * 60_000),
+      ),
+    ).toEqual([{ proposalId: proposal?.id, status: "closed" }]);
+    expect(creates).toBe(1);
+    expect(updates).toBe(1);
+    expect(remoteComments).toHaveLength(1);
+    expect(remoteComments[0]?.body).toContain(`facility:architect-plan:${run.id}:${proposal?.id}`);
+    expect(remoteComments[0]?.body).toContain("Human Gate 1:** no longer open (`rejected`)");
+    expect(remoteComments[0]?.body).not.toContain("Approve this plan");
+    expect(await db.select().from(proposals).where(eq(proposals.runId, run.id))).toHaveLength(1);
+    const published = (
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, proposal?.id ?? ""),
+            eq(proposalEvents.type, "published"),
+          ),
+        )
+        .limit(1)
+    )[0];
+    expect(published?.data).toMatchObject({
+      publicationKey: `architect-plan:${run.id}:${proposal?.id}`,
+      commentId: 7301,
+      commentUrl: "https://github.test/comments/7301",
+    });
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, proposal?.id ?? ""),
+            eq(proposalEvents.type, "publication_closed"),
+          ),
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("reconciler closes a published Gate 1 comment once the proposal is no longer open", async () => {
+    const repo = await insertRepoWithInstallation(`plan-lifecycle-${Date.now()}`);
+    const run = await insertRun({
+      mode: "architect",
+      status: "running",
+      gh: { owner: repo.owner, repo: repo.name, issueNumber: 75 },
+    });
+    await db.insert(runEvents).values({
+      orgId,
+      runId: run.id,
+      seq: 1,
+      type: "assistant",
+      data: { text: "Close the visible approval CTA after this proposal is rejected." },
+    });
+    const remoteComments: Array<{
+      id: number;
+      body: string;
+      created_at: string;
+      html_url: string;
+      user: { login: string; type: string };
+    }> = [];
+    let updates = 0;
+    const installation = (
+      await db
+        .select()
+        .from(githubInstallations)
+        .where(eq(githubInstallations.id, repo.installationId ?? ""))
+        .limit(1)
+    )[0];
+    if (!installation) throw new Error("lifecycle installation missing");
+    const factory = async (installationId: number) => {
+      if (installation.installationId !== installationId) {
+        throw new Error("unrelated publication candidate");
+      }
+      return {
+        rest: {
+          issues: {
+            listComments: async () => ({ data: remoteComments }),
+            createComment: async ({ body }: { body: string }) => {
+              remoteComments.push({
+                id: 7501,
+                body,
+                created_at: new Date().toISOString(),
+                html_url: "https://github.test/comments/7501",
+                user: { login: "facility[bot]", type: "Bot" },
+              });
+              return { data: { id: 7501, html_url: "https://github.test/comments/7501" } };
+            },
+            updateComment: async ({ comment_id, body }: { comment_id: number; body: string }) => {
+              updates += 1;
+              const comment = remoteComments.find((candidate) => candidate.id === comment_id);
+              if (comment) comment.body = body;
+              return { data: { id: comment_id, html_url: comment?.html_url } };
+            },
+          },
+          repos: {},
+          pulls: {},
+          git: {},
+        },
+      } as never;
+    };
+    await finishRun(db, run, { status: "succeeded" }, { config, githubClientFactory: factory });
+    const [proposal] = await db.select().from(proposals).where(eq(proposals.runId, run.id));
+    if (!proposal) throw new Error("lifecycle proposal missing");
+    expect(remoteComments[0]?.body).toContain("Approve this plan");
+    await db
+      .update(proposals)
+      .set({ state: "rejected", updatedAt: new Date() })
+      .where(eq(proposals.id, proposal.id));
+
+    const target = { proposalId: proposal.id, orgId };
+    const first = await reconcileArchitectPlanPublications(db, config, target, factory);
+    expect(first).toContainEqual({ proposalId: proposal.id, status: "closed" });
+    expect(updates).toBe(1);
+    expect(remoteComments[0]?.body).toContain("Human Gate 1:** no longer open (`rejected`)");
+    expect(remoteComments[0]?.body).not.toContain("Approve this plan");
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, proposal.id),
+            eq(proposalEvents.type, "publication_closed"),
+          ),
+        ),
+    ).toHaveLength(1);
+
+    const second = await reconcileArchitectPlanPublications(db, config, target, factory);
+    expect(second).toEqual([{ proposalId: proposal.id, status: "closed" }]);
+    expect(updates).toBe(1);
+  });
+
+  it("closes legacy publications when their tracked GitHub comment is deleted or unavailable", async () => {
+    const createLegacyPublication = async (issueNumber: number, progressCommentId?: number) => {
+      const repo = await insertRepoWithInstallation(`plan-legacy-${issueNumber}-${Date.now()}`);
+      const run = await insertRun({
+        mode: "architect",
+        status: "running",
+        gh: {
+          owner: repo.owner,
+          repo: repo.name,
+          issueNumber,
+          ...(progressCommentId
+            ? {
+                progressComment: {
+                  id: progressCommentId,
+                  command: "architect",
+                  issueTitle: "Legacy Architect publication",
+                  sender: "maintainer",
+                },
+              }
+            : {}),
+        },
+      });
+      await db.insert(runEvents).values({
+        orgId,
+        runId: run.id,
+        seq: 1,
+        type: "assistant",
+        data: { text: "A legacy plan publication without durable comment metadata." },
+      });
+      await finishRun(
+        db,
+        run,
+        { status: "succeeded" },
+        {
+          config,
+          githubClientFactory: async () =>
+            ({
+              rest: {
+                issues: {
+                  listComments: async () => ({ data: [] }),
+                  createComment: async () => ({ data: { id: issueNumber * 100 } }),
+                  updateComment: async ({ comment_id }: { comment_id: number }) => ({
+                    data: { id: comment_id },
+                  }),
+                },
+                repos: {},
+                pulls: {},
+                git: {},
+              },
+            }) as never,
+        },
+      );
+      const [proposal] = await db.select().from(proposals).where(eq(proposals.runId, run.id));
+      if (!proposal) throw new Error("legacy proposal fixture missing");
+      await db
+        .update(proposalEvents)
+        .set({ data: { source: "architect_run", issue: issueNumber } })
+        .where(
+          and(eq(proposalEvents.proposalId, proposal.id), eq(proposalEvents.type, "published")),
+        );
+      await db
+        .update(proposals)
+        .set({ state: "rejected", updatedAt: new Date() })
+        .where(eq(proposals.id, proposal.id));
+      return proposal;
+    };
+
+    const deleted = await createLegacyPublication(76, 7601);
+    const untracked = await createLegacyPublication(77);
+    let updates = 0;
+    let creates = 0;
+    const recoveryFactory = async () =>
+      ({
+        rest: {
+          issues: {
+            listComments: async () => ({ data: [] }),
+            updateComment: async () => {
+              updates += 1;
+              throw Object.assign(new Error("comment deleted"), { status: 404 });
+            },
+            createComment: async () => {
+              creates += 1;
+              return { data: { id: 9999 } };
+            },
+          },
+          repos: {},
+          pulls: {},
+          git: {},
+        },
+      }) as never;
+
+    await expect(
+      reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: deleted.id, orgId },
+        recoveryFactory,
+      ),
+    ).resolves.toEqual([{ proposalId: deleted.id, status: "closed" }]);
+    await expect(
+      reconcileArchitectPlanPublications(
+        db,
+        config,
+        { proposalId: untracked.id, orgId },
+        recoveryFactory,
+      ),
+    ).resolves.toEqual([{ proposalId: untracked.id, status: "closed" }]);
+    expect({ updates, creates }).toEqual({ updates: 1, creates: 0 });
+    const closures = await db
+      .select({ proposalId: proposalEvents.proposalId, data: proposalEvents.data })
+      .from(proposalEvents)
+      .where(
+        and(
+          inArray(proposalEvents.proposalId, [deleted.id, untracked.id]),
+          eq(proposalEvents.type, "publication_closed"),
+        ),
+      );
+    expect(closures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          proposalId: deleted.id,
+          data: expect.objectContaining({ reason: "deleted_comment", commentId: null }),
+        }),
+        expect.objectContaining({
+          proposalId: untracked.id,
+          data: expect.objectContaining({ reason: "legacy_comment_untracked", commentId: null }),
+        }),
+      ]),
+    );
+  });
+
+  it("suppresses an expired unpublished Architect proposal without creating a stale CTA", async () => {
+    const repo = await insertRepoWithInstallation(`plan-closed-${Date.now()}`);
+    const run = await insertRun({
+      mode: "architect",
+      status: "running",
+      gh: { owner: repo.owner, repo: repo.name, issueNumber: 74 },
+    });
+    await db.insert(runEvents).values({
+      orgId,
+      runId: run.id,
+      seq: 1,
+      type: "assistant",
+      data: { text: "Do not publish a Gate 1 CTA after this proposal closes." },
+    });
+    await finishRun(
+      db,
+      run,
+      { status: "succeeded" },
+      {
+        config,
+        githubClientFactory: async () => {
+          throw new Error("github unavailable before comment");
+        },
+      },
+    );
+    const [proposal] = await db.select().from(proposals).where(eq(proposals.runId, run.id));
+    if (!proposal) throw new Error("closed proposal fixture missing");
+    await db
+      .update(proposals)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(proposals.id, proposal.id));
+    let creates = 0;
+    let updates = 0;
+    const result = await reconcileArchitectPlanPublications(
+      db,
+      config,
+      { proposalId: proposal.id, orgId },
+      async () =>
+        ({
+          rest: {
+            issues: {
+              listComments: async () => ({ data: [] }),
+              createComment: async () => {
+                creates += 1;
+                return { data: { id: 7401 } };
+              },
+              updateComment: async () => {
+                updates += 1;
+                return { data: { id: 7401 } };
+              },
+            },
+            repos: {},
+            pulls: {},
+            git: {},
+          },
+        }) as never,
+      new Date(Date.now() + 2 * 60_000),
+    );
+    expect(result).toEqual([{ proposalId: proposal.id, status: "suppressed" }]);
+    expect({ creates, updates }).toEqual({ creates: 0, updates: 0 });
+    const suppressed = await db
+      .select()
+      .from(proposalEvents)
+      .where(
+        and(
+          eq(proposalEvents.proposalId, proposal.id),
+          eq(proposalEvents.type, "publication_suppressed"),
+        ),
+      );
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0]?.data).toMatchObject({ proposalState: "expired" });
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(eq(proposalEvents.proposalId, proposal.id), eq(proposalEvents.type, "published")),
+        ),
+    ).toHaveLength(0);
+    const expirationClaims = await Promise.all([expireHitlProposals(db), expireHitlProposals(db)]);
+    expect(expirationClaims.reduce((total, count) => total + count, 0)).toBeGreaterThanOrEqual(1);
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(and(eq(proposalEvents.proposalId, proposal.id), eq(proposalEvents.type, "expired"))),
+    ).toHaveLength(1);
+  });
+
+  it("cron publication gives a never-attempted tenant progress past more than one page of poison", async () => {
+    const actionType = (
+      await db
+        .select()
+        .from(actionTypes)
+        .where(and(eq(actionTypes.orgId, orgId), eq(actionTypes.name, "plan_acceptance")))
+        .limit(1)
+    )[0];
+    if (!actionType) throw new Error("plan acceptance action fixture missing");
+    const fairnessNow = new Date();
+    const poisonProposalIds: string[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      const poisonRunId = newId("run");
+      const poisonProposalId = newId("prop");
+      poisonProposalIds.push(poisonProposalId);
+      await db.insert(runs).values({
+        id: poisonRunId,
+        orgId,
+        projectId,
+        mode: "architect",
+        engine: "codex",
+        status: "succeeded",
+        receipt: {},
+        gh: { issueNumber: 8_000 + index },
+        trigger: {},
+        createdBy: { type: "system", id: "fairness-poison" },
+      });
+      await db.insert(proposals).values({
+        id: poisonProposalId,
+        orgId,
+        projectId,
+        runId: poisonRunId,
+        actionTypeId: actionType.id,
+        payload: {},
+        contextMd: "permanently invalid poison",
+        expiresAt: new Date(fairnessNow.getTime() + 60 * 60_000),
+      });
+      await db.insert(proposalEvents).values({
+        orgId,
+        proposalId: poisonProposalId,
+        seq: 1,
+        type: "open",
+        actor: { type: "agent", id: poisonRunId },
+        data: { source: "architect_run" },
+      });
+    }
+
+    const otherOrgId = newId("org");
+    const otherProjectId = newId("proj");
+    await db.insert(orgs).values({
+      id: otherOrgId,
+      name: "Publication Fairness Tenant",
+      slug: `publication-fairness-${Date.now()}`,
+    });
+    await db.insert(projects).values({
+      id: otherProjectId,
+      orgId: otherOrgId,
+      name: "Publication Fairness Project",
+      slug: `publication-fairness-project-${Date.now()}`,
+      settings: {},
+    });
+    const otherActionType = (
+      await db
+        .insert(actionTypes)
+        .values({
+          id: newId("act"),
+          orgId: otherOrgId,
+          name: "plan_acceptance",
+          payloadSchema: actionType.payloadSchema,
+          resolver: actionType.resolver,
+          executor: actionType.executor,
+          defaultTtlHours: actionType.defaultTtlHours,
+        })
+        .returning()
+    )[0];
+    const otherInstallation = (
+      await db
+        .insert(githubInstallations)
+        .values({
+          id: newId("int"),
+          orgId: otherOrgId,
+          installationId: nextInstallationId(),
+          accountLogin: "fairness-owner",
+          targetType: "Organization",
+        })
+        .returning()
+    )[0];
+    if (!otherActionType || !otherInstallation) throw new Error("fairness tenant fixtures missing");
+    const otherRepo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId: otherOrgId,
+          projectId: otherProjectId,
+          installationId: otherInstallation.id,
+          owner: "fairness-owner",
+          name: "repo",
+          defaultBranch: "main",
+        })
+        .returning()
+    )[0];
+    const targetRun = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId: otherOrgId,
+          projectId: otherProjectId,
+          mode: "architect",
+          engine: "codex",
+          status: "running",
+          trigger: {},
+          gh: { owner: "fairness-owner", repo: "repo", issueNumber: 99 },
+          createdBy: { type: "user", id: "fairness-human" },
+        })
+        .returning()
+    )[0];
+    if (!otherRepo || !targetRun) throw new Error("fairness run fixtures missing");
+    await db.insert(runEvents).values({
+      orgId: otherOrgId,
+      runId: targetRun.id,
+      seq: 1,
+      type: "assistant",
+      data: { text: "This never-attempted tenant must not starve behind poison rows." },
+    });
+    await finishRun(
+      db,
+      targetRun,
+      { status: "succeeded" },
+      {
+        config,
+        githubClientFactory: async () => {
+          throw new Error("first fairness publication attempt fails");
+        },
+      },
+    );
+    const [targetProposal] = await db
+      .select()
+      .from(proposals)
+      .where(and(eq(proposals.orgId, otherOrgId), eq(proposals.runId, targetRun.id)));
+    if (!targetProposal) throw new Error("fairness proposal missing");
+    await db
+      .delete(platformIssues)
+      .where(
+        and(
+          eq(platformIssues.orgId, otherOrgId),
+          eq(platformIssues.fingerprint, `plan_publication_failed:${targetRun.id}`),
+        ),
+      );
+    let creates = 0;
+    const publicationFactory = async (installationId: number) => {
+      if (installationId !== otherInstallation.installationId) {
+        throw new Error("unrelated publication candidate");
+      }
+      return {
+        rest: {
+          issues: {
+            listComments: async () => ({ data: [] }),
+            createComment: async ({ issue_number }: { issue_number: number }) => {
+              if (issue_number === 99) creates += 1;
+              return { data: { id: 9901 } };
+            },
+          },
+          repos: {},
+          pulls: {},
+          git: {},
+        },
+      } as never;
+    };
+    const publicationOrgCount = (
+      await db.selectDistinct({ orgId: proposals.orgId }).from(proposals)
+    ).length;
+    const maxSweeps = Math.max(1, Math.ceil(publicationOrgCount / 25));
+    const sweepEpoch = Math.floor(fairnessNow.getTime() / 60_000) * 60_000;
+    const results = [];
+    for (let index = 0; index < maxSweeps; index += 1) {
+      const sweep = await reconcileArchitectPlanPublications(
+        db,
+        config,
+        {},
+        publicationFactory,
+        new Date(sweepEpoch + index * 60_000),
+      );
+      results.push(...sweep);
+      if (sweep.some((entry) => entry.proposalId === targetProposal.id)) break;
+    }
+    expect(results).toContainEqual({ proposalId: targetProposal.id, status: "published" });
+    expect(creates).toBe(1);
+    expect(
+      await db
+        .select()
+        .from(proposalEvents)
+        .where(
+          and(
+            inArray(proposalEvents.proposalId, poisonProposalIds),
+            eq(proposalEvents.type, "published"),
+          ),
+        ),
+    ).toHaveLength(0);
   });
 
   it("keeps a successful run durable while transient PR delivery retries", async () => {
@@ -5308,6 +6356,7 @@ describe("github platform lane", async () => {
       trigger?: Record<string, unknown>;
       gh?: Record<string, unknown>;
       sandbox?: Record<string, unknown>;
+      workspaceBaseSha?: string;
     } = {},
   ) {
     const row = (
@@ -5323,6 +6372,7 @@ describe("github platform lane", async () => {
           trigger: input.trigger ?? {},
           sandbox: input.sandbox ?? {},
           gh: input.gh ?? {},
+          workspaceBaseSha: input.workspaceBaseSha,
           createdBy: { type: "user", id: "test" },
         })
         .returning()

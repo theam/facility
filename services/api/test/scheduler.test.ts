@@ -9,11 +9,13 @@ import {
   registryItems,
   runEvents,
   runs,
+  schedulerWatermarks,
 } from "@facility/db";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runScheduledAgents } from "../src/scheduler.js";
+import { runAgentSchedules } from "../src/schedules.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
@@ -203,9 +205,98 @@ describe("scheduled agents", async () => {
     expect(stored?.lastScheduledAt?.toISOString()).toBe(now.toISOString());
   });
 
+  it("does not create or enqueue a legacy scheduled Builder run when plans are required", async () => {
+    const now = new Date("2032-09-14T11:08:30.000Z");
+    const agent = await insertAgent("governed-legacy-schedule", {
+      triggers: [
+        { type: "schedule", config: { cron: "* * * * *", timezone: "UTC" } },
+        { type: "command", command: "builder" },
+      ],
+      lastScheduledAt: new Date("2032-09-14T11:07:00.000Z"),
+      builderPlanPolicy: "required",
+    });
+    const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+
+    await runScheduledAgents(
+      config,
+      async (queue, data) => {
+        enqueued.push({ queue, data });
+      },
+      { now },
+    );
+
+    expect(await db.select().from(runs).where(eq(runs.agentDefId, agent.id))).toEqual([]);
+    expect(enqueued.filter((job) => job.data.orgId === agent.orgId)).toEqual([]);
+    const denial = (
+      await db.select().from(auditEvents).where(eq(auditEvents.orgId, agent.orgId))
+    ).find(
+      (event) =>
+        event.action === "run.builder_plan_denied" &&
+        (event.payload as { source?: unknown }).source === "legacy_scheduler",
+    );
+    expect(denial).toMatchObject({
+      projectId: agent.projectId,
+      payload: { code: "builder_plan_required", source: "legacy_scheduler" },
+    });
+    const stored = (
+      await db.select().from(agentDefs).where(eq(agentDefs.id, agent.id)).limit(1)
+    )[0];
+    expect(stored?.lastScheduledAt?.toISOString()).toBe(now.toISOString());
+  });
+
+  it("does not create or enqueue a canonical scheduled Builder run when plans are required", async () => {
+    const now = new Date("2032-09-14T12:08:30.000Z");
+    const agent = await insertAgent("governed-canonical-schedule", {
+      triggers: [
+        { type: "schedule", config: { cron: "* * * * *", timezone: "UTC" } },
+        { type: "command", command: "builder" },
+      ],
+      lastScheduledAt: new Date("2032-09-14T12:07:00.000Z"),
+      builderPlanPolicy: "required",
+    });
+    await db
+      .insert(schedulerWatermarks)
+      .values({
+        name: "agent.schedules",
+        lastTick: new Date("2032-09-14T12:07:00.000Z"),
+      })
+      .onConflictDoUpdate({
+        target: schedulerWatermarks.name,
+        set: { lastTick: new Date("2032-09-14T12:07:00.000Z"), updatedAt: new Date() },
+      });
+    const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+
+    await runAgentSchedules(
+      config,
+      async (queue, data) => {
+        enqueued.push({ queue, data });
+        return null;
+      },
+      now,
+    );
+
+    expect(await db.select().from(runs).where(eq(runs.agentDefId, agent.id))).toEqual([]);
+    expect(enqueued.filter((job) => job.data.orgId === agent.orgId)).toEqual([]);
+    const denial = (
+      await db.select().from(auditEvents).where(eq(auditEvents.orgId, agent.orgId))
+    ).find(
+      (event) =>
+        event.action === "run.builder_plan_denied" &&
+        (event.payload as { source?: unknown }).source === "agent_scheduler",
+    );
+    expect(denial).toMatchObject({
+      projectId: agent.projectId,
+      payload: { code: "builder_plan_required", source: "agent_scheduler" },
+    });
+  });
+
   async function insertAgent(
     name: string,
-    input: { triggers: unknown[]; lastScheduledAt: Date | null },
+    input: {
+      triggers: unknown[];
+      lastScheduledAt: Date | null;
+      builderPlanPolicy?: "optional" | "required";
+    },
   ) {
     const suffix = `${name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const orgId = newId("org");
@@ -216,6 +307,7 @@ describe("scheduled agents", async () => {
       orgId,
       name: `Project ${suffix}`,
       slug: `project-${suffix}`,
+      builderPlanPolicy: input.builderPlanPolicy ?? "optional",
       settings: {},
     });
     const item = (

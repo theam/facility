@@ -11,6 +11,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { type AssistantModelDriver, runAssistantTurn } from "../../assistant/loop.js";
+import { withBuilderPlanPreflight } from "../../builder-plan-policy.js";
 import { ApiError, notFound } from "../../errors.js";
 import { terminalStatus } from "../../sandbox/state.js";
 import { assertProjectScope, IdParams, principal, type V1RouteContext } from "./shared.js";
@@ -75,6 +76,11 @@ export async function registerAssistantRoutes(app: FastifyInstance, context: V1R
       if (!owner) {
         throw new ApiError(400, "no_owner_agent", "Project has no project-owner agent");
       }
+      const policyTrigger = {
+        type: "conversation",
+        ...(body.conversationId ? { conversationId: body.conversationId } : {}),
+        message: body.body,
+      };
       const ownerModel = modelFrom(owner.model) ?? "claude-sonnet-5";
 
       let conversationId = body.conversationId;
@@ -122,86 +128,100 @@ export async function registerAssistantRoutes(app: FastifyInstance, context: V1R
         conversationId = created.id;
       }
 
-      const result = await db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
-        const thread = (
-          await tx
-            .select()
-            .from(conversations)
-            .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)))
-            .limit(1)
-        )[0];
-        if (!thread) throw notFound("Conversation not found");
-        if (thread.status === "running") {
-          // Self-heal: a turn whose pinned run already ended (or died without a
-          // trace — API crash before the reconcile sweep) must not deadlock the
-          // thread. Anything genuinely in flight stays locked.
-          const pinned = thread.lastRunId
-            ? (
-                await tx
-                  .select({ status: runs.status, startedAt: runs.startedAt })
-                  .from(runs)
-                  .where(and(eq(runs.orgId, p.orgId), eq(runs.id, thread.lastRunId)))
-                  .limit(1)
-              )[0]
-            : undefined;
-          const stale =
-            !pinned ||
-            terminalStatus(pinned.status) ||
-            (pinned.startedAt !== null && Date.now() - pinned.startedAt.getTime() > STALE_TURN_MS);
-          if (!stale) {
-            throw new ApiError(409, "turn_in_flight", "The thread already has a turn in flight");
+      const result = await withBuilderPlanPreflight(
+        db,
+        {
+          orgId: p.orgId,
+          projectId,
+          mode: "assistant",
+          agentDefId: owner.id,
+          trigger: policyTrigger,
+          actor: { type: p.type, id: p.id },
+          source: "assistant_conversation",
+        },
+        async (tx, admission) => {
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+          const thread = (
+            await tx
+              .select()
+              .from(conversations)
+              .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)))
+              .limit(1)
+          )[0];
+          if (!thread) throw notFound("Conversation not found");
+          if (thread.status === "running") {
+            // Self-heal: a turn whose pinned run already ended (or died without a
+            // trace — API crash before the reconcile sweep) must not deadlock the
+            // thread. Anything genuinely in flight stays locked.
+            const pinned = thread.lastRunId
+              ? (
+                  await tx
+                    .select({ status: runs.status, startedAt: runs.startedAt })
+                    .from(runs)
+                    .where(and(eq(runs.orgId, p.orgId), eq(runs.id, thread.lastRunId)))
+                    .limit(1)
+                )[0]
+              : undefined;
+            const stale =
+              !pinned ||
+              terminalStatus(pinned.status) ||
+              (pinned.startedAt !== null &&
+                Date.now() - pinned.startedAt.getTime() > STALE_TURN_MS);
+            if (!stale) {
+              throw new ApiError(409, "turn_in_flight", "The thread already has a turn in flight");
+            }
           }
-        }
-        await tx
-          .update(conversations)
-          .set({ status: "running", updatedAt: new Date() })
-          .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
-        const seqRows = await tx
-          .select({ max: sql<number>`coalesce(max(seq), 0)` })
-          .from(conversationMessages)
-          .where(eq(conversationMessages.conversationId, conversationId));
-        const seq = Number(seqRows[0]?.max ?? 0) + 1;
-        const message = (
           await tx
-            .insert(conversationMessages)
-            .values({
-              id: newId("evt"),
-              orgId: p.orgId,
-              conversationId,
-              seq,
-              role: "user",
-              body: body.body,
-            })
-            .returning()
-        )[0];
-        // status starts at "running" — never "queued": the reconcile backstop
-        // re-enqueues stale queued runs into runs.dispatch, which would launch
-        // a sandbox for what is an in-process turn.
-        const run = (
+            .update(conversations)
+            .set({ status: "running", updatedAt: new Date() })
+            .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
+          const seqRows = await tx
+            .select({ max: sql<number>`coalesce(max(seq), 0)` })
+            .from(conversationMessages)
+            .where(eq(conversationMessages.conversationId, conversationId));
+          const seq = Number(seqRows[0]?.max ?? 0) + 1;
+          const message = (
+            await tx
+              .insert(conversationMessages)
+              .values({
+                id: newId("evt"),
+                orgId: p.orgId,
+                conversationId,
+                seq,
+                role: "user",
+                body: body.body,
+              })
+              .returning()
+          )[0];
+          // status starts at "running" — never "queued": the reconcile backstop
+          // re-enqueues stale queued runs into runs.dispatch, which would launch
+          // a sandbox for what is an in-process turn.
+          const run = (
+            await tx
+              // builder-plan-preflight: assistant_conversation
+              .insert(runs)
+              .values({
+                id: newId("run"),
+                orgId: p.orgId,
+                projectId,
+                agentDefId: owner.id,
+                mode: admission.mode,
+                engine: "inline",
+                status: "running",
+                startedAt: new Date(),
+                trigger: { type: "conversation", conversationId, message: body.body },
+                createdBy: { type: p.type, id: p.id },
+              })
+              .returning()
+          )[0];
+          if (!message || !run) throw new Error("assistant_turn_create_failed");
           await tx
-            .insert(runs)
-            .values({
-              id: newId("run"),
-              orgId: p.orgId,
-              projectId,
-              agentDefId: owner.id,
-              mode: "assistant",
-              engine: "inline",
-              status: "running",
-              startedAt: new Date(),
-              trigger: { type: "conversation", conversationId, message: body.body },
-              createdBy: { type: p.type, id: p.id },
-            })
-            .returning()
-        )[0];
-        if (!message || !run) throw new Error("assistant_turn_create_failed");
-        await tx
-          .update(conversations)
-          .set({ lastRunId: run.id, updatedAt: new Date() })
-          .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
-        return { message, run };
-      });
+            .update(conversations)
+            .set({ lastRunId: run.id, updatedAt: new Date() })
+            .where(and(eq(conversations.orgId, p.orgId), eq(conversations.id, conversationId)));
+          return { message, run };
+        },
+      );
 
       await insertAuditEvent(db, {
         orgId: p.orgId,

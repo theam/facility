@@ -134,6 +134,16 @@ run "managed_preview_needs_no_domain_or_certificate" {
     condition     = !contains(keys(aws_lb_target_group.service), "gateway") && length(aws_lb_listener_rule.http_vercel_gateway) == 0 && length(aws_lb_listener_rule.https_vercel_gateway) == 0 && length(aws_vpc_security_group_ingress_rule.gateway_from_alb) == 0
     error_message = "The AWS sandbox path must keep the model gateway private."
   }
+
+  assert {
+    condition     = !local.interactive_mcp_oauth_enabled && length([for entry in local.api_environment : entry if contains(["FACILITY_OAUTH_ISSUER", "MCP_PUBLIC_URL"], entry.name)]) == 0 && length([for entry in local.api_secrets : entry if entry.name == "FACILITY_OAUTH_JWKS"]) == 0 && length([for entry in local.mcp_environment : entry if contains(["MCP_PUBLIC_URL", "MCP_AUTHORIZATION_SERVER"], entry.name)]) == 0
+    error_message = "Certificate-less validation must not configure or advertise interactive MCP OAuth."
+  }
+
+  assert {
+    condition     = one([for entry in local.mcp_environment : entry.value if entry.name == "MCP_ALLOWED_HOSTS"]) == "mcp.example.com"
+    error_message = "Certificate-less validation must retain the MCP listener for scoped fak_ API keys without an OAuth resource."
+  }
 }
 
 run "managed_preview_uses_the_existing_https_api_origin" {
@@ -169,6 +179,11 @@ run "managed_preview_uses_the_existing_https_api_origin" {
   assert {
     condition     = length(aws_vpc_security_group_ingress_rule.alb_preview_cloudfront) == 1 && aws_vpc_security_group_ingress_rule.alb_preview_cloudfront[0].from_port == 443 && aws_vpc_security_group_ingress_rule.alb_preview_cloudfront[0].to_port == 443
     error_message = "Production managed previews must admit CloudFront only on the HTTPS origin port."
+  }
+
+  assert {
+    condition     = local.interactive_mcp_oauth_enabled && one([for entry in local.api_environment : entry.value if entry.name == "FACILITY_OAUTH_ISSUER"]) == "https://app.example.com" && one([for entry in local.api_environment : entry.value if entry.name == "MCP_PUBLIC_URL"]) == "https://mcp.example.com" && length([for entry in local.api_secrets : entry if entry.name == "FACILITY_OAUTH_JWKS"]) == 1 && one([for entry in local.mcp_environment : entry.value if entry.name == "MCP_AUTHORIZATION_SERVER"]) == "https://app.example.com" && one([for entry in local.mcp_environment : entry.value if entry.name == "MCP_PUBLIC_URL"]) == "https://mcp.example.com"
+    error_message = "Certificate-backed stacks must configure the web issuer, signing key, and MCP advertisement together."
   }
 }
 
