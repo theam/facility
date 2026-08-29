@@ -254,3 +254,16 @@ test("decide validates and classifies only messages after the latest stable tag"
   assert.equal(decision.considered, 1);
   assert.equal(decision.releasing, 1);
 });
+
+test("a backfilled consumed-version tag advances the next main change", (t) => {
+  const repoDir = localRepository(t, "consumed-version");
+  commit(repoDir, "fix(mcp)!: publish npm before the image gate failed");
+  tagRelease(repoDir, "v0.9.0");
+  commit(repoDir, "feat(governance): require approved plans for Builder");
+
+  const decision = decide({ repoDir });
+  assert.equal(decision.previous, "0.9.0");
+  assert.equal(decision.version, "0.9.1");
+  assert.equal(decision.considered, 1);
+  assert.equal(decision.releasing, 1);
+});

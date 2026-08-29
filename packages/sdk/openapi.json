@@ -3603,6 +3603,13 @@
                       "systemVersion": {
                         "type": "string"
                       },
+                      "builderPlanPolicy": {
+                        "type": "string",
+                        "enum": [
+                          "optional",
+                          "required"
+                        ]
+                      },
                       "settings": {
                         "type": "object",
                         "additionalProperties": {}
@@ -3626,6 +3633,7 @@
                       "slug",
                       "description",
                       "systemVersion",
+                      "builderPlanPolicy",
                       "settings",
                       "status",
                       "createdAt",
@@ -3750,6 +3758,13 @@
                   "description": {
                     "type": "string"
                   },
+                  "builderPlanPolicy": {
+                    "type": "string",
+                    "enum": [
+                      "optional",
+                      "required"
+                    ]
+                  },
                   "settings": {
                     "type": "object",
                     "additionalProperties": {}
@@ -3790,6 +3805,13 @@
                     "systemVersion": {
                       "type": "string"
                     },
+                    "builderPlanPolicy": {
+                      "type": "string",
+                      "enum": [
+                        "optional",
+                        "required"
+                      ]
+                    },
                     "settings": {
                       "type": "object",
                       "additionalProperties": {}
@@ -3813,6 +3835,7 @@
                     "slug",
                     "description",
                     "systemVersion",
+                    "builderPlanPolicy",
                     "settings",
                     "status",
                     "createdAt",
@@ -3972,6 +3995,13 @@
                     "systemVersion": {
                       "type": "string"
                     },
+                    "builderPlanPolicy": {
+                      "type": "string",
+                      "enum": [
+                        "optional",
+                        "required"
+                      ]
+                    },
                     "settings": {
                       "type": "object",
                       "additionalProperties": {}
@@ -3995,6 +4025,7 @@
                     "slug",
                     "description",
                     "systemVersion",
+                    "builderPlanPolicy",
                     "settings",
                     "status",
                     "createdAt",
@@ -4118,6 +4149,13 @@
                   "status": {
                     "type": "string"
                   },
+                  "builderPlanPolicy": {
+                    "type": "string",
+                    "enum": [
+                      "optional",
+                      "required"
+                    ]
+                  },
                   "settings": {
                     "type": "object",
                     "additionalProperties": {}
@@ -4164,6 +4202,13 @@
                     "systemVersion": {
                       "type": "string"
                     },
+                    "builderPlanPolicy": {
+                      "type": "string",
+                      "enum": [
+                        "optional",
+                        "required"
+                      ]
+                    },
                     "settings": {
                       "type": "object",
                       "additionalProperties": {}
@@ -4187,6 +4232,7 @@
                     "slug",
                     "description",
                     "systemVersion",
+                    "builderPlanPolicy",
                     "settings",
                     "status",
                     "createdAt",
@@ -6639,6 +6685,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "workspaceBaseSha": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "error": {
                         "nullable": true,
                         "type": "string"
@@ -6685,6 +6735,7 @@
                       "engineSessionId",
                       "transcriptUri",
                       "sessionStateUri",
+                      "workspaceBaseSha",
                       "error",
                       "queuedAt",
                       "startedAt",
@@ -6968,6 +7019,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -7014,6 +7069,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -7463,6 +7519,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -7509,6 +7569,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -7923,6 +7984,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "workspaceBaseSha": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "error": {
                         "nullable": true,
                         "type": "string"
@@ -7989,6 +8054,7 @@
                       "engineSessionId",
                       "transcriptUri",
                       "sessionStateUri",
+                      "workspaceBaseSha",
                       "error",
                       "queuedAt",
                       "startedAt",
@@ -8234,6 +8300,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -8280,6 +8350,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -8534,6 +8605,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -8580,6 +8655,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -9809,6 +9885,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -9855,6 +9935,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -11605,7 +11686,8 @@
                               "building",
                               "validating",
                               "review",
-                              "shipped"
+                              "shipped",
+                              "abandoned"
                             ]
                           },
                           "label": {
@@ -11710,6 +11792,35 @@
                                   "type": "string",
                                   "format": "date-time"
                                 },
+                                "wsjf": {
+                                  "nullable": true,
+                                  "type": "object",
+                                  "properties": {
+                                    "value": {
+                                      "type": "number"
+                                    },
+                                    "time": {
+                                      "type": "number"
+                                    },
+                                    "risk": {
+                                      "type": "number"
+                                    },
+                                    "effort": {
+                                      "type": "number"
+                                    },
+                                    "score": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "value",
+                                    "time",
+                                    "risk",
+                                    "effort",
+                                    "score"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "stageState": {
                                   "type": "string",
                                   "enum": [
@@ -11723,7 +11834,8 @@
                                     "checks_running",
                                     "checks_failed",
                                     "awaiting_review",
-                                    "shipped_recently"
+                                    "shipped_recently",
+                                    "abandoned_recently"
                                   ]
                                 },
                                 "runState": {
@@ -11894,6 +12006,7 @@
                                 "ghCreatedAt",
                                 "ghUpdatedAt",
                                 "closedAt",
+                                "wsjf",
                                 "stageState",
                                 "runState",
                                 "currentRun",
@@ -12451,6 +12564,35 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "wsjf": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "number"
+                        },
+                        "time": {
+                          "type": "number"
+                        },
+                        "risk": {
+                          "type": "number"
+                        },
+                        "effort": {
+                          "type": "number"
+                        },
+                        "score": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "time",
+                        "risk",
+                        "effort",
+                        "score"
+                      ],
+                      "additionalProperties": false
+                    },
                     "prs": {
                       "type": "array",
                       "items": {
@@ -12574,7 +12716,8 @@
                             "building",
                             "validating",
                             "review",
-                            "shipped"
+                            "shipped",
+                            "abandoned"
                           ]
                         },
                         "label": {
@@ -12600,7 +12743,8 @@
                               "building",
                               "validating",
                               "review",
-                              "shipped"
+                              "shipped",
+                              "abandoned"
                             ]
                           },
                           "label": {
@@ -12689,6 +12833,7 @@
                     "stateReason",
                     "closedBy",
                     "closeReason",
+                    "wsjf",
                     "prs",
                     "ciState",
                     "ciUrl",
@@ -13435,6 +13580,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "workspaceBaseSha": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -13481,6 +13630,7 @@
                     "engineSessionId",
                     "transcriptUri",
                     "sessionStateUri",
+                    "workspaceBaseSha",
                     "error",
                     "queuedAt",
                     "startedAt",
@@ -18667,6 +18817,10 @@
                           "state": {
                             "type": "string"
                           },
+                          "executionError": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "decidedBy": {
                             "nullable": true,
                             "type": "string"
@@ -18741,6 +18895,10 @@
                             "type": "string"
                           },
                           "state": {
+                            "type": "string"
+                          },
+                          "executionError": {
+                            "nullable": true,
                             "type": "string"
                           },
                           "decidedBy": {
@@ -19016,6 +19174,10 @@
                     "state": {
                       "type": "string"
                     },
+                    "executionError": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "decidedBy": {
                       "nullable": true,
                       "type": "string"
@@ -19279,6 +19441,10 @@
                     "state": {
                       "type": "string"
                     },
+                    "executionError": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "decidedBy": {
                       "nullable": true,
                       "type": "string"
@@ -19508,6 +19674,10 @@
                       "type": "string"
                     },
                     "state": {
+                      "type": "string"
+                    },
+                    "executionError": {
+                      "nullable": true,
                       "type": "string"
                     },
                     "decidedBy": {
@@ -19749,6 +19919,10 @@
                     "state": {
                       "type": "string"
                     },
+                    "executionError": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "decidedBy": {
                       "nullable": true,
                       "type": "string"
@@ -19948,6 +20122,10 @@
                       "type": "string"
                     },
                     "state": {
+                      "type": "string"
+                    },
+                    "executionError": {
+                      "nullable": true,
                       "type": "string"
                     },
                     "decidedBy": {
@@ -27801,6 +27979,10 @@
                       "type": "string"
                     },
                     "state": {
+                      "type": "string"
+                    },
+                    "executionError": {
+                      "nullable": true,
                       "type": "string"
                     },
                     "decidedBy": {

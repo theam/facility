@@ -228,6 +228,25 @@ export function expectedArtifactId(entry: Pick<HarnessKbEntry, "type" | "number"
   return `${entry.type}${String(entry.number).padStart(3, "0")}`;
 }
 
+export type StrandedEntry = { entryId: string; artifactId: string; type: string };
+
+/**
+ * Entries a chain leaves undeclared. A space is re-chained by rewriting its
+ * config, and `validate()` judges every entry by the chain configured *now* —
+ * so an entry that was legal when written fails as `unknown_artifact_type` on
+ * every later validation, with nothing having been written wrongly. A caller
+ * changing a space's config refuses the change while this is non-empty,
+ * instead of storing a config that re-litigates history.
+ */
+export function entriesStrandedByChain(
+  entries: HarnessKbEntry[],
+  chain: ArtifactChainConfig,
+): StrandedEntry[] {
+  return entries
+    .filter((entry) => !chain.types[entry.type])
+    .map((entry) => ({ entryId: entry.id, artifactId: artifactIdFor(entry), type: entry.type }));
+}
+
 export function wikilinks(markdown: string): string[] {
   const matches = markdown.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g);
   return [...matches]

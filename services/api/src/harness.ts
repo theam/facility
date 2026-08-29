@@ -10,7 +10,7 @@ import {
   type HarnessKbSpace,
   validate,
 } from "@facility/harness";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 type Db = ReturnType<typeof createDb>["db"];
 
@@ -127,6 +127,101 @@ export function toHarnessLink(link: typeof kbLinks.$inferSelect): HarnessKbLink 
 
 export function toHarnessSpace(space: typeof kbSpaces.$inferSelect): HarnessKbSpace {
   return { charterMd: space.charterMd, activeMd: space.activeMd, config: space.config };
+}
+
+/**
+ * Serialize KB entry writers against chain changes. A chain change takes the
+ * space row FOR UPDATE before deciding (the kb/space PUT); every entry writer
+ * calls this first inside its write transaction to take the same row at
+ * NO KEY UPDATE strength and re-check that the chain still declares the type
+ * it validated outside the transaction. Neither side can interleave with the
+ * other, so a stranded entry cannot slip in between the chain check and the
+ * config commit. The strength matters: several writers end their transaction
+ * by updating the space row (ACTIVE upkeep), so a shared lock here would
+ * deadlock two concurrent writers at that upgrade — NO KEY UPDATE serializes
+ * writers per space up front (they serialized at that tail update anyway,
+ * and this also removes the duplicate max+1 numbering race) while staying
+ * compatible with the KEY SHARE locks their entry inserts take through the
+ * space foreign key.
+ *
+ * Losing the race throws the host-agnostic SpaceChainChangedError below; each
+ * caller translates it into its own idiom (the routes answer 409, the
+ * proposal executor records the code like its other coded failures).
+ */
+export async function lockSpaceAgainstChainChange(
+  tx: Pick<Db, "select">,
+  orgId: string,
+  spaceId: string,
+  type: string,
+) {
+  const row = (
+    await tx
+      .select()
+      .from(kbSpaces)
+      .where(and(eq(kbSpaces.orgId, orgId), eq(kbSpaces.id, spaceId)))
+      .for("no key update")
+  )[0];
+  if (!row) throw new Error("kb_space_missing");
+  if (!chainFromConfig(row.config).types[type]) {
+    throw new SpaceChainChangedError(type);
+  }
+}
+
+/**
+ * Domain failure for the writer-side chain re-check, free of transport
+ * semantics so the harness helper can serve any writer host.
+ */
+export class SpaceChainChangedError extends Error {
+  readonly code = "space_chain_changed";
+  constructor(readonly type: string) {
+    super(`space_chain_changed: the chain no longer declares type ${type}`);
+  }
+}
+
+/**
+ * Allocate the next entry number for a type and derive the draft that carries
+ * it. Both halves must run inside the caller's write transaction, after the
+ * space lock: the number is only unique while that lock is held, and
+ * `normalizeKbDraft` bakes it into the artifact id, the aliases and the body
+ * links — so allocating without re-deriving them would store a row whose id
+ * contradicts its number, which `validate` rejects as `id_number_mismatch`.
+ */
+export async function allocateNormalizedKbEntry(
+  tx: Pick<Db, "select">,
+  input: {
+    orgId: string;
+    spaceId: string;
+    type: string;
+    slug: string;
+    frontmatter: Record<string, unknown>;
+    bodyMd: string;
+    parentEntries: HarnessKbEntry[];
+  },
+) {
+  const number =
+    ((
+      await tx
+        .select({ number: kbEntries.number })
+        .from(kbEntries)
+        .where(
+          and(
+            eq(kbEntries.orgId, input.orgId),
+            eq(kbEntries.spaceId, input.spaceId),
+            eq(kbEntries.type, input.type),
+          ),
+        )
+        .orderBy(desc(kbEntries.number))
+        .limit(1)
+    )[0]?.number ?? 0) + 1;
+  const normalized = normalizeKbDraft({
+    type: input.type,
+    number,
+    slug: input.slug,
+    frontmatter: input.frontmatter,
+    bodyMd: input.bodyMd,
+    parentEntries: input.parentEntries,
+  });
+  return { number, frontmatter: normalized.frontmatter, bodyMd: normalized.bodyMd };
 }
 
 export function normalizeKbDraft(input: {

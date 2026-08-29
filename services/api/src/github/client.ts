@@ -139,8 +139,8 @@ export type Octokit = {
           number: number;
           title: string;
           body?: string | null;
-          html_url: string;
           state?: string;
+          html_url: string;
           state_reason?: string | null;
           closed_at?: string | null;
           updated_at?: string | null;

@@ -11,6 +11,12 @@ locals {
   # already own a separate registered site can keep routing it through the ALB.
   managed_preview_origin = trimspace(var.preview_hostname) == ""
 
+  # Interactive MCP OAuth is browser-facing and must never be advertised over
+  # the certificate-less validation stack. That mode keeps MCP available with
+  # scoped fak_ API keys; adding ACM enables the issuer, signing key, and
+  # authorization-server advertisement as one unit.
+  interactive_mcp_oauth_enabled = trimspace(var.acm_certificate_arn) != ""
+
   tags = {
     Project     = var.project
     Environment = var.environment
@@ -92,7 +98,12 @@ locals {
     { name = "FACILITY_PREVIEW_SURFACE_TOKEN", value = random_password.preview_surface[0].result },
   ] : []
 
-  api_environment = concat(local.common_environment, local.sandbox_provider_environment, local.preview_surface_environment, [
+  api_oauth_environment = local.interactive_mcp_oauth_enabled ? [
+    { name = "FACILITY_OAUTH_ISSUER", value = local.public_urls.web },
+    { name = "MCP_PUBLIC_URL", value = local.public_urls.mcp },
+  ] : []
+
+  api_environment = concat(local.common_environment, local.sandbox_provider_environment, local.preview_surface_environment, local.api_oauth_environment, [
     { name = "PORT", value = tostring(local.ports.api) },
     { name = "PUBLIC_URL", value = local.public_urls.api },
     { name = "WEB_URL", value = local.public_urls.web },
@@ -102,8 +113,6 @@ locals {
     { name = "GITHUB_OAUTH_ALLOWED_ORGANIZATION", value = lower(trimspace(var.github_oauth_allowed_organization)) },
     { name = "OIDC_ISSUER", value = var.oidc_issuer },
     { name = "FACILITY_INSTANCE_ID", value = var.facility_instance_id },
-    { name = "FACILITY_OAUTH_ISSUER", value = local.public_urls.api },
-    { name = "MCP_PUBLIC_URL", value = local.public_urls.mcp },
     { name = "GATEWAY_URL", value = "http://${aws_service_discovery_service.gateway.name}.${aws_service_discovery_private_dns_namespace.facility.name}:${local.ports.gateway}" },
     # AWS sandboxes reach the gateway over private service discovery. Vercel
     # sandboxes use the authenticated provider paths routed through the existing
@@ -135,13 +144,16 @@ locals {
     { name = "FACILITY_API_URL", value = local.public_urls.api },
   ]
 
-  mcp_environment = [
+  mcp_oauth_environment = local.interactive_mcp_oauth_enabled ? [
+    { name = "MCP_PUBLIC_URL", value = local.public_urls.mcp },
+    { name = "MCP_AUTHORIZATION_SERVER", value = local.public_urls.web },
+  ] : []
+
+  mcp_environment = concat([
     { name = "NODE_ENV", value = "production" },
     { name = "FACILITY_API_URL", value = local.public_urls.api },
-    { name = "MCP_PUBLIC_URL", value = local.public_urls.mcp },
-    { name = "MCP_AUTHORIZATION_SERVER", value = local.public_urls.api },
     { name = "MCP_ALLOWED_HOSTS", value = var.mcp_hostname },
-  ]
+  ], local.mcp_oauth_environment)
 
   app_secret_names = toset([
     "database_url",
@@ -190,7 +202,7 @@ locals {
   api_secrets = concat(
     local.core_secrets,
     local.identity_secrets,
-    [{ name = "FACILITY_OAUTH_JWKS", valueFrom = aws_secretsmanager_secret.app["facility_oauth_jwks"].arn }],
+    local.interactive_mcp_oauth_enabled ? [{ name = "FACILITY_OAUTH_JWKS", valueFrom = aws_secretsmanager_secret.app["facility_oauth_jwks"].arn }] : [],
     var.enable_package_registry_token ? local.package_registry_secrets : [],
     local.sandbox_provider_secrets
   )

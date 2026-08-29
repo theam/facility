@@ -10,6 +10,7 @@ import {
   runs,
 } from "@facility/db";
 import { and, eq } from "drizzle-orm";
+import { withBuilderPlanPreflight } from "../builder-plan-policy.js";
 import { ApiError } from "../errors.js";
 import {
   type IssueSeverity,
@@ -185,25 +186,42 @@ async function maybeEnqueueRun(
   const projectId = await resolveProjectId(db, event.orgId, integration.projectId, payload, config);
   if (!projectId) throw new Error("generic_inbound_run_project_required");
   const agent = await resolveAgent(db, event.orgId, projectId, runConfig, config);
+  const mode = stringField(runConfig, "mode") ?? stringField(config, "mode") ?? agent.name;
+  const engine = stringField(runConfig, "engine") ?? stringField(config, "engine") ?? agent.engine;
+  const trigger = {
+    type: "generic_inbound",
+    integrationId: integration.id,
+    inboundEventId: event.id,
+    eventType: event.eventType,
+  };
   const run = (
-    await db
-      .insert(runs)
-      .values({
-        id: newId("run"),
+    await withBuilderPlanPreflight(
+      db,
+      {
         orgId: event.orgId,
         projectId,
+        mode,
         agentDefId: agent.id,
-        mode: stringField(runConfig, "mode") ?? stringField(config, "mode") ?? agent.name,
-        engine: stringField(runConfig, "engine") ?? stringField(config, "engine") ?? agent.engine,
-        trigger: {
-          type: "generic_inbound",
-          integrationId: integration.id,
-          inboundEventId: event.id,
-          eventType: event.eventType,
-        },
-        createdBy: { type: "system", id: `integration:${integration.id}` },
-      })
-      .returning()
+        trigger,
+        actor: { type: "system", id: `integration:${integration.id}` },
+        source: "generic_inbound",
+      },
+      (tx, admission) =>
+        tx
+          // builder-plan-preflight: inbound_dispatch
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId: event.orgId,
+            projectId,
+            agentDefId: agent.id,
+            mode: admission.mode,
+            engine,
+            trigger,
+            createdBy: { type: "system", id: `integration:${integration.id}` },
+          })
+          .returning(),
+    )
   )[0];
   if (!run) throw new Error("generic_inbound_run_insert_failed");
   await db.insert(runEvents).values({

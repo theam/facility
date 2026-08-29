@@ -26,11 +26,11 @@ export function releaseMode({ eventName, ref, visibility, acceptancePassed, rele
 /**
  * What proves a release is no longer a tag someone pushed: it is the version
  * decided from the commit subjects (scripts/version.mjs), stamped into the two
- * package.json files inside this run. The tag is written afterwards, as the
- * record of what was published. So the checks here are that the run is a push
- * of main, that the stamp matches the decision, and that the commit really is
- * the head of main — plus the guard that outlives all of them, in
- * `registryState`, which refuses a version npm already has.
+ * package.json files inside this run. CI allocates the tag after acceptance
+ * and before either registry can consume the version. The checks here are that
+ * the run is a push of main, that the stamp matches the decision, and that the
+ * commit really is the head of main — plus the guard that outlives all of them,
+ * in `registryState`, which refuses a conflicting version npm already has.
  */
 export function validateReleasePolicy({
   eventName,
@@ -105,8 +105,8 @@ export function validateReleaseCandidate({
 
 /**
  * Writes the decided version into the two package.json files the release reads.
- * This happens inside the run and is never committed: the tags are the record of
- * what shipped, so main carries no version-bump commits and the two files cannot
+ * This happens inside the run and is never committed: tags allocate immutable
+ * versions, so main carries no version-bump commits and the two files cannot
  * drift apart between releases.
  */
 export function stampVersion(version, { repoDir = process.cwd() } = {}) {

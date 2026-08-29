@@ -65,6 +65,15 @@ export function ProposalCard({ proposal, focused }: { proposal: Proposal; focuse
           headings, lists, and code spans) — render it, don't dump the source. */}
       <Markdown source={proposal.contextMd} />
 
+      {proposal.executionError ? (
+        <p className="border border-(--bad) bg-(--bad-subtle) p-3 font-mono text-[11px] text-(--bad)">
+          {proposal.actionType === "plan_acceptance"
+            ? "Builder dispatch blocked"
+            : "Execution failed"}
+          : {proposal.executionError}
+        </p>
+      ) : null}
+
       <details className="group">
         <summary className="cursor-pointer select-none text-[12px] font-medium text-(--dim) hover:text-(--mut)">
           payload

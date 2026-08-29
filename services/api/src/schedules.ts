@@ -10,7 +10,8 @@ import {
   schedulerWatermarks,
 } from "@facility/db";
 import { and, eq, not, sql } from "drizzle-orm";
-import { laneFor } from "./github/router.js";
+import { isBuilderPlanDenialError, withBuilderPlanPreflight } from "./builder-plan-policy.js";
+import { laneFor } from "./github/agent-routing.js";
 import type { AppConfig } from "./types.js";
 
 type Enqueue = (
@@ -77,39 +78,59 @@ export async function runAgentSchedules(config: AppConfig, enqueue: Enqueue, now
           if (!cronMatches(trigger.config.cron, instant, trigger.config.timezone ?? "UTC"))
             continue;
           const runId = scheduledRunId(agent.id, index, instant);
-          const inserted = await db.transaction(async (tx) => {
-            const run = (
-              await tx
-                .insert(runs)
-                .values({
-                  id: runId,
+          const runTrigger = {
+            type: "schedule",
+            agentName: agent.name,
+            cron: trigger.config.cron,
+            timezone: trigger.config.timezone ?? "UTC",
+            scheduledFor: minuteIso(instant),
+          };
+          let inserted = false;
+          try {
+            inserted = await withBuilderPlanPreflight(
+              db,
+              {
+                orgId: agent.orgId,
+                projectId: agent.projectId,
+                mode: agent.name,
+                agentDefId: agent.id,
+                trigger: runTrigger,
+                actor: { type: "system", id: "agent-scheduler" },
+                source: "agent_scheduler",
+              },
+              async (tx, admission) => {
+                const run = (
+                  await tx
+                    // builder-plan-preflight: schedule_dispatch
+                    .insert(runs)
+                    .values({
+                      id: runId,
+                      orgId: agent.orgId,
+                      projectId: agent.projectId,
+                      agentDefId: agent.id,
+                      mode: admission.mode,
+                      engine: agent.engine,
+                      trigger: runTrigger,
+                      createdBy: { type: "system", id: "agent-scheduler" },
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: runs.id })
+                )[0];
+                if (!run) return false;
+                await tx.insert(runEvents).values({
                   orgId: agent.orgId,
-                  projectId: agent.projectId,
-                  agentDefId: agent.id,
-                  mode: agent.name,
-                  engine: agent.engine,
-                  trigger: {
-                    type: "schedule",
-                    agentName: agent.name,
-                    cron: trigger.config.cron,
-                    timezone: trigger.config.timezone ?? "UTC",
-                    scheduledFor: minuteIso(instant),
-                  },
-                  createdBy: { type: "system", id: "agent-scheduler" },
-                })
-                .onConflictDoNothing()
-                .returning({ id: runs.id })
-            )[0];
-            if (!run) return false;
-            await tx.insert(runEvents).values({
-              orgId: agent.orgId,
-              runId,
-              seq: 1,
-              type: "queued",
-              data: { queue: "runs.dispatch", source: "schedule" },
-            });
-            return true;
-          });
+                  runId,
+                  seq: 1,
+                  type: "queued",
+                  data: { queue: "runs.dispatch", source: "schedule" },
+                });
+                return true;
+              },
+            );
+          } catch (error) {
+            if (isBuilderPlanDenialError(error)) continue;
+            throw error;
+          }
           if (inserted) {
             await insertAuditEvent(db, {
               orgId: agent.orgId,

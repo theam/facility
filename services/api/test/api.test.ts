@@ -20,6 +20,7 @@ import {
   inboundEvents,
   insertAuditEvent,
   integrations,
+  kbEntries,
   kbSpaces,
   llmRequests,
   migrate,
@@ -46,7 +47,7 @@ import {
   verifyAuditChain,
   webhookDeliveries,
 } from "@facility/db";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
@@ -410,7 +411,7 @@ describe("api", async () => {
       await db
         .select()
         .from(agentDefs)
-        .where(and(eq(agentDefs.projectId, project.json().id), ne(agentDefs.name, "learning")))
+        .where(and(eq(agentDefs.projectId, project.json().id), eq(agentDefs.name, "architect")))
         .limit(1)
     )[0];
     expect(agent).toBeTruthy();
@@ -648,6 +649,7 @@ describe("api", async () => {
       payload: { name: "Project", slug },
     });
     expect(created.statusCode).toBe(200);
+    expect(created.json().builderPlanPolicy).toBe("optional");
     projectId = created.json().id;
     const projectSpaces = await db
       .select()
@@ -1779,7 +1781,16 @@ describe("api", async () => {
           owner: repoOwner,
           name: "plan-dispatch",
           defaultBranch: "main",
-          renderAnswers: { execution_lane: { architect: "platform", builder: "platform" } },
+          renderAnswers: {
+            execution_lane: {
+              architect: "platform",
+              builder: "platform",
+              "codex-builder": "platform",
+            },
+          },
+          fingerprintStatus: "ok",
+          fingerprint: { files: [] },
+          fingerprintVerifiedAt: new Date(),
         })
         .returning()
     )[0];
@@ -1827,6 +1838,205 @@ describe("api", async () => {
     if (!planRepo || !builder || !architectRun || !planAcceptance) {
       throw new Error("plan fixtures missing");
     }
+    const createInternalPlanProposal = async (
+      runId: string,
+      contextMd: string,
+      payload: Record<string, unknown> = {},
+    ) => {
+      const id = newId("prop");
+      await db.insert(proposals).values({
+        id,
+        orgId,
+        projectId: planProjectId,
+        runId,
+        actionTypeId: planAcceptance.id,
+        payload,
+        contextMd,
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+      await db.insert(proposalEvents).values({
+        orgId,
+        proposalId: id,
+        seq: 1,
+        type: "open",
+        actor: { type: "agent", id: runId },
+        data: { source: "architect_run" },
+      });
+      return { statusCode: 200, json: () => ({ id }) };
+    };
+    await db
+      .update(repos)
+      .set({ fingerprintStatus: "pending_merge" })
+      .where(eq(repos.id, planRepo.id));
+    const unverifiedPolicy = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: { builderPlanPolicy: "required" },
+    });
+    expect(unverifiedPolicy.statusCode).toBe(409);
+    expect(unverifiedPolicy.json().error.code).toBe("builder_plan_platform_lane_required");
+    await db
+      .update(repos)
+      .set({ fingerprintStatus: "ok", fingerprintVerifiedAt: new Date() })
+      .where(eq(repos.id, planRepo.id));
+    await db
+      .update(agentDefs)
+      .set({
+        name: "delivery-specialist",
+        triggers: [{ type: "command", command: "/builder" }],
+      })
+      .where(eq(agentDefs.id, builder.id));
+    const activeLegacyBuilder = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${planProjectId}/runs`,
+      headers: { cookie },
+      payload: {
+        agentDefId: builder.id,
+        trigger: { type: "manual", message: "Persist the admitted Builder identity" },
+      },
+    });
+    expect(activeLegacyBuilder.statusCode).toBe(200);
+    expect(activeLegacyBuilder.json().mode).toBe("builder");
+    await db.update(agentDefs).set({ triggers: [] }).where(eq(agentDefs.id, builder.id));
+    const activeRunPolicy = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: { builderPlanPolicy: "required" },
+    });
+    expect(activeRunPolicy.statusCode).toBe(409);
+    expect(activeRunPolicy.json().error.code).toBe("builder_plan_active_runs_present");
+    await db
+      .update(runs)
+      .set({ status: "failed", endedAt: new Date() })
+      .where(eq(runs.id, activeLegacyBuilder.json().id));
+    const opaqueLegacyRun = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: planProjectId,
+          agentDefId: builder.id,
+          mode: "delivery-specialist",
+          engine: builder.engine,
+          trigger: { type: "manual", source: "pre-immutable-admission" },
+          createdBy: { type: "user", id: "legacy-fixture" },
+        })
+        .returning({ id: runs.id })
+    )[0];
+    const opaqueLegacyPolicy = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: { builderPlanPolicy: "required" },
+    });
+    expect(opaqueLegacyPolicy.statusCode).toBe(409);
+    expect(opaqueLegacyPolicy.json().error.code).toBe("builder_plan_active_runs_present");
+    await db
+      .update(runs)
+      .set({ status: "failed", endedAt: new Date() })
+      .where(eq(runs.id, opaqueLegacyRun?.id ?? ""));
+    await db
+      .update(agentDefs)
+      .set({ triggers: [{ type: "command", command: "builder" }] })
+      .where(eq(agentDefs.id, builder.id));
+    const requiredPolicy = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: { builderPlanPolicy: "required" },
+    });
+    expect(requiredPolicy.statusCode).toBe(200);
+    expect(requiredPolicy.json().builderPlanPolicy).toBe("required");
+
+    await db
+      .update(repos)
+      .set({ fingerprintStatus: "pending", fingerprintVerifiedAt: null })
+      .where(eq(repos.id, planRepo.id));
+    const requiredSettingsDuringDrift = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: {
+        builderPlanPolicy: "required",
+        settings: { gateRegression: "lane-drift" },
+      },
+    });
+    expect(requiredSettingsDuringDrift.statusCode).toBe(200);
+    expect(requiredSettingsDuringDrift.json().settings).toEqual({ gateRegression: "lane-drift" });
+    await db
+      .update(repos)
+      .set({ fingerprintStatus: "ok", fingerprintVerifiedAt: new Date() })
+      .where(eq(repos.id, planRepo.id));
+    const activeRequiredRun = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: planProjectId,
+          mode: "architect",
+          engine: "codex",
+          trigger: { type: "manual", message: "Keep required settings editable" },
+          createdBy: { type: "user", id: "fixture" },
+        })
+        .returning({ id: runs.id })
+    )[0];
+    const requiredSettingsWithActiveRun = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: {
+        builderPlanPolicy: "required",
+        settings: { gateRegression: "active-run" },
+      },
+    });
+    expect(requiredSettingsWithActiveRun.statusCode).toBe(200);
+    expect(requiredSettingsWithActiveRun.json().settings).toEqual({ gateRegression: "active-run" });
+    await db
+      .update(runs)
+      .set({ status: "failed", endedAt: new Date() })
+      .where(eq(runs.id, activeRequiredRun?.id ?? ""));
+
+    const beforeDenied = await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.orgId, orgId), eq(runs.projectId, planProjectId)));
+    const missingPlan = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${planProjectId}/runs`,
+      headers: { cookie },
+      payload: {
+        agentDefId: builder.id,
+        trigger: { type: "manual", message: "Do not bypass Gate 1" },
+      },
+    });
+    expect(missingPlan.statusCode).toBe(409);
+    expect(missingPlan.json().error.code).toBe("builder_plan_required");
+    const missingPlanAndObjective = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${planProjectId}/runs`,
+      headers: { cookie },
+      payload: { agentDefId: builder.id },
+    });
+    expect(missingPlanAndObjective.statusCode).toBe(409);
+    expect(missingPlanAndObjective.json().error.code).toBe("builder_plan_required");
+    expect(
+      await db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(and(eq(runs.orgId, orgId), eq(runs.projectId, planProjectId))),
+    ).toHaveLength(beforeDenied.length);
+    const optionalPolicy = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${planProjectId}`,
+      headers: { cookie },
+      payload: { builderPlanPolicy: "optional" },
+    });
+    expect(optionalPolicy.statusCode).toBe(200);
+
     const forgedPlanRun = await app.inject({
       method: "POST",
       url: `/v1/projects/${planProjectId}/runs`,
@@ -1841,7 +2051,7 @@ describe("api", async () => {
     expect(forgedPlanRun.statusCode).toBe(400);
     expect(forgedPlanRun.json().error.code).toBe("reserved_trigger_source");
 
-    const proposal = await app.inject({
+    const reservedPlanProposal = await app.inject({
       method: "POST",
       url: "/v1/proposals",
       headers: { cookie },
@@ -1853,6 +2063,26 @@ describe("api", async () => {
         contextMd: "Approve the implementation plan",
       },
     });
+    expect(reservedPlanProposal.statusCode).toBe(403);
+    expect(reservedPlanProposal.json().error.code).toBe("reserved_action_type");
+    const reservedNamedPlan = await app.inject({
+      method: "POST",
+      url: "/v1/proposals",
+      headers: { cookie },
+      payload: {
+        projectId: planProjectId,
+        runId: architectRun.id,
+        actionType: "plan_acceptance",
+        payload: {},
+        contextMd: "Attempt the reserved action by name",
+      },
+    });
+    expect(reservedNamedPlan.statusCode).toBe(403);
+    expect(reservedNamedPlan.json().error.code).toBe("reserved_action_type");
+    const proposal = await createInternalPlanProposal(
+      architectRun.id,
+      "Approve the implementation plan",
+    );
     expect(proposal.statusCode).toBe(200);
     const approved = await app.inject({
       method: "POST",
@@ -1870,7 +2100,7 @@ describe("api", async () => {
         and(
           eq(runs.orgId, orgId),
           eq(runs.projectId, planProjectId),
-          eq(runs.mode, "builder"),
+          eq(runs.mode, "codex-builder"),
           sql`${runs.trigger} @> ${JSON.stringify({
             source: "plan_acceptance",
             proposalId: proposal.json().id,
@@ -1878,6 +2108,7 @@ describe("api", async () => {
         ),
       );
     expect(builderRuns).toHaveLength(1);
+    expect(builderRuns[0]?.mode).toBe("codex-builder");
     const codexBuilder = (
       await db
         .select()
@@ -1911,18 +2142,31 @@ describe("api", async () => {
       data: { source: "plan_acceptance", architectRunId: architectRun.id },
     });
 
-    const duplicateProposal = await app.inject({
+    // Optional projects preserve the legacy resume shape: provenance is used
+    // only for the policy preflight and is not copied into the new row, where
+    // the plan-acceptance uniqueness indexes would reject it.
+    await db
+      .update(runs)
+      .set({ status: "failed", engine: "claude_code", engineSessionId: "plan-resume-session" })
+      .where(eq(runs.id, builderRuns[0]?.id ?? ""));
+    const resumedPlanRun = await app.inject({
       method: "POST",
-      url: "/v1/proposals",
+      url: `/v1/runs/${builderRuns[0]?.id}/resume`,
       headers: { cookie },
-      payload: {
-        projectId: planProjectId,
-        runId: architectRun.id,
-        actionTypeId: planAcceptance.id,
-        payload: {},
-        contextMd: "A duplicate approval for the same architect plan",
-      },
+      payload: { message: "Continue the optional legacy run" },
     });
+    expect(resumedPlanRun.statusCode).toBe(200);
+    expect(resumedPlanRun.json().trigger).toMatchObject({
+      type: "resume",
+      resumeOf: builderRuns[0]?.id,
+    });
+    expect(resumedPlanRun.json().trigger).not.toHaveProperty("source");
+    expect(resumedPlanRun.json().trigger).not.toHaveProperty("proposalId");
+
+    const duplicateProposal = await createInternalPlanProposal(
+      architectRun.id,
+      "A duplicate approval for the same architect plan",
+    );
     const duplicateApproval = await app.inject({
       method: "POST",
       url: `/v1/proposals/${duplicateProposal.json().id}/decide`,
@@ -1985,6 +2229,89 @@ describe("api", async () => {
     expect(retriedBuilderRuns).toHaveLength(1);
     expect(retriedBuilderRuns[0]?.agentDefId).toBe(codexBuilder.id);
 
+    const racedArchitect = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: planProjectId,
+          mode: "codex-architect",
+          engine: "codex",
+          status: "succeeded",
+          trigger: { type: "github_comment", repo: { id: planRepo.id } },
+          gh: { owner: repoOwner, repo: planRepo.name, issueNumber: 44 },
+          createdBy: { type: "user", id: "architect-requester" },
+        })
+        .returning()
+    )[0];
+    if (!racedArchitect) throw new Error("raced Architect fixture missing");
+    const racedProposal = await createInternalPlanProposal(
+      racedArchitect.id,
+      "Reject repository lane drift inside the admission lock",
+    );
+    const beforeRacedApproval = await db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        sql`${runs.trigger} @> ${JSON.stringify({
+          source: "plan_acceptance",
+          proposalId: racedProposal.json().id,
+        })}::jsonb`,
+      );
+    let racedApproval:
+      | Promise<{ statusCode: number; body: string; json: () => unknown }>
+      | undefined;
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`builder-plan:${orgId}:${planProjectId}`}, 0))`,
+      );
+      await tx
+        .update(repos)
+        .set({ renderAnswers: { execution_lane: { architect: "platform", builder: "repo" } } })
+        .where(eq(repos.id, planRepo.id));
+      racedApproval = app.inject({
+        method: "POST",
+        url: `/v1/proposals/${racedProposal.json().id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: { decision: "approve" },
+      });
+      let executing = false;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const candidate = (
+          await db
+            .select({ state: proposals.state })
+            .from(proposals)
+            .where(eq(proposals.id, racedProposal.json().id))
+            .limit(1)
+        )[0];
+        if (candidate?.state === "executing") {
+          executing = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(executing).toBe(true);
+    });
+    if (!racedApproval) throw new Error("raced approval did not start");
+    const racedResult = await racedApproval;
+    expect(racedResult.statusCode, racedResult.body).toBe(200);
+    expect(racedResult.json()).toMatchObject({
+      state: "execution_failed",
+      executionError: "plan_acceptance_builder_uses_repo_lane",
+    });
+    expect(
+      await db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          sql`${runs.trigger} @> ${JSON.stringify({
+            source: "plan_acceptance",
+            proposalId: racedProposal.json().id,
+          })}::jsonb`,
+        ),
+    ).toHaveLength(beforeRacedApproval.length);
+
     await db
       .update(repos)
       .set({ renderAnswers: { execution_lane: { architect: "platform", builder: "repo" } } })
@@ -2006,18 +2333,10 @@ describe("api", async () => {
         .returning()
     )[0];
     if (!repoLaneArchitect) throw new Error("repo-lane architect fixture missing");
-    const repoLaneProposal = await app.inject({
-      method: "POST",
-      url: "/v1/proposals",
-      headers: { cookie },
-      payload: {
-        projectId: planProjectId,
-        runId: repoLaneArchitect.id,
-        actionTypeId: planAcceptance.id,
-        payload: {},
-        contextMd: "Repo lane must still require /builder",
-      },
-    });
+    const repoLaneProposal = await createInternalPlanProposal(
+      repoLaneArchitect.id,
+      "Repo lane must still require /builder",
+    );
     const repoLaneApproval = await app.inject({
       method: "POST",
       url: `/v1/proposals/${repoLaneProposal.json().id}/decide`,
@@ -2025,6 +2344,7 @@ describe("api", async () => {
       payload: { decision: "approve" },
     });
     expect(repoLaneApproval.json().state).toBe("execution_failed");
+    expect(repoLaneApproval.json().executionError).toBe("plan_acceptance_builder_uses_repo_lane");
     const repoLaneEvents = await db
       .select()
       .from(proposalEvents)
@@ -2637,6 +2957,239 @@ describe("api", async () => {
     expect(archived?.status).toBe("archived");
   });
 
+  it("denies MCP Builder trigger families without creating or enqueueing runs when plans are required", async () => {
+    const target = await createProjectWithAgent("MCP Governed Builder");
+    await db
+      .update(agentDefs)
+      .set({
+        name: "delivery-specialist",
+        engine: "claude_code",
+        triggers: [{ type: "command", handle: "/builder" }],
+        enabled: true,
+      })
+      .where(eq(agentDefs.id, target.agent.id));
+    await db
+      .update(projects)
+      .set({ builderPlanPolicy: "required" })
+      .where(and(eq(projects.orgId, orgId), eq(projects.id, target.projectId)));
+
+    const role = await app.inject({
+      method: "POST",
+      url: "/v1/roles",
+      headers: { cookie },
+      payload: {
+        name: `mcp-governed-builder-${Date.now()}`,
+        permissions: ["org:read", "runs:trigger", "repos:write"],
+      },
+    });
+    expect(role.statusCode, role.body).toBe(200);
+    const issued = await app.inject({
+      method: "POST",
+      url: "/v1/keys",
+      headers: { cookie },
+      payload: {
+        name: `mcp-governed-builder-${Date.now()}`,
+        roleId: role.json().id,
+        projectId: target.projectId,
+      },
+    });
+    expect(issued.statusCode, issued.body).toBe(200);
+
+    const installation = (
+      await db
+        .insert(githubInstallations)
+        .values({
+          id: newId("int"),
+          orgId,
+          installationId: Date.now(),
+          accountLogin: `mcp-governed-${Date.now()}`,
+          targetType: "Organization",
+        })
+        .returning()
+    )[0];
+    const repo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId: target.projectId,
+          installationId: installation?.id,
+          owner: `mcp-governed-${Date.now()}`,
+          name: "facility",
+          defaultBranch: "main",
+        })
+        .returning()
+    )[0];
+    if (!installation || !repo) throw new Error("governed MCP repository fixture missing");
+    await db.insert(ghIssues).values({
+      id: newId("evt"),
+      orgId,
+      projectId: target.projectId,
+      repoId: repo.id,
+      number: 204,
+      title: "Do not bypass Gate 1 from MCP",
+      state: "open",
+      htmlUrl: `https://github.com/${repo.owner}/${repo.name}/issues/204`,
+    });
+    const terminalBuilder = (
+      await db
+        .insert(runs)
+        .values({
+          id: newId("run"),
+          orgId,
+          projectId: target.projectId,
+          agentDefId: target.agent.id,
+          mode: "delivery-specialist",
+          engine: "claude_code",
+          engineSessionId: "governed-mcp-resume",
+          status: "succeeded",
+          createdBy: { type: "test", id: "governed-mcp" },
+        })
+        .returning()
+    )[0];
+    if (!terminalBuilder) throw new Error("governed MCP resume fixture missing");
+    const governedConversation = (
+      await db
+        .insert(conversations)
+        .values({
+          id: newId("evt"),
+          orgId,
+          projectId: target.projectId,
+          agentDefId: target.agent.id,
+          title: "Governed Builder conversation",
+          createdBy: { type: "test", id: "governed-mcp" },
+        })
+        .returning()
+    )[0];
+    if (!governedConversation) throw new Error("governed MCP conversation fixture missing");
+
+    const originalEnqueue = app.enqueue;
+    const originalFactory = app.githubClientFactory;
+    const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+    let githubFactoryCalls = 0;
+    app.enqueue = async (queue, data) => {
+      enqueued.push({ queue, data });
+      return null;
+    };
+    app.githubClientFactory = (async () => {
+      githubFactoryCalls += 1;
+      throw new Error("MCP Builder denial reached GitHub");
+    }) as unknown as GithubClientFactory;
+
+    const executeDenied = async (toolName: string, args: Record<string, unknown>) => {
+      const before = await db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(eq(runs.projectId, target.projectId));
+      const proposed = await app.inject({
+        method: "POST",
+        url: "/v1/mcp/tool-proposals",
+        headers: { authorization: `Bearer ${issued.json().secret}` },
+        payload: {
+          toolName,
+          permission: "runs:trigger",
+          projectId: target.projectId,
+          summary: `Attempt governed ${toolName}`,
+          args,
+        },
+      });
+      expect(proposed.statusCode, proposed.body).toBe(200);
+      const approved = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposed.json().id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: { decision: "approve" },
+      });
+      expect(approved.statusCode, approved.body).toBe(200);
+      expect(approved.json()).toMatchObject({
+        state: "execution_failed",
+        executionError: "builder_plan_required",
+      });
+      expect(
+        await db.select({ id: runs.id }).from(runs).where(eq(runs.projectId, target.projectId)),
+      ).toHaveLength(before.length);
+    };
+
+    try {
+      await executeDenied("facility_trigger_run", {
+        projectId: target.projectId,
+        agentName: "builder",
+        input: { objective: "Attempt direct Builder dispatch" },
+      });
+      await executeDenied("facility_trigger_github_issue", {
+        projectId: target.projectId,
+        repoId: repo.id,
+        number: 204,
+        agentName: "builder",
+      });
+      await executeDenied("facility_resume_run", {
+        runId: terminalBuilder.id,
+        message: "Attempt governed MCP resume",
+      });
+      await executeDenied("facility_send_conversation_message", {
+        conversationId: governedConversation.id,
+        body: "Attempt governed Builder conversation turn",
+      });
+      const beforeRepos = await db
+        .select({ id: repos.id })
+        .from(repos)
+        .where(eq(repos.projectId, target.projectId));
+      const repoProposal = await app.inject({
+        method: "POST",
+        url: "/v1/mcp/tool-proposals",
+        headers: { authorization: `Bearer ${issued.json().secret}` },
+        payload: {
+          toolName: "facility_connect_repo",
+          permission: "repos:write",
+          projectId: target.projectId,
+          summary: "Attempt repo connection while Gate 1 is required",
+          args: {
+            projectId: target.projectId,
+            owner: installation.accountLogin,
+            name: "unverified-required-repo",
+          },
+        },
+      });
+      expect(repoProposal.statusCode, repoProposal.body).toBe(200);
+      const repoApproval = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${repoProposal.json().id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: { decision: "approve" },
+      });
+      expect(repoApproval.statusCode, repoApproval.body).toBe(200);
+      expect(repoApproval.json()).toMatchObject({
+        state: "execution_failed",
+        executionError: "builder_plan_platform_lane_required",
+      });
+      expect(
+        await db.select({ id: repos.id }).from(repos).where(eq(repos.projectId, target.projectId)),
+      ).toHaveLength(beforeRepos.length);
+      expect(enqueued).toEqual([]);
+      expect(githubFactoryCalls).toBe(0);
+      const sources = (
+        await db
+          .select({ action: auditEvents.action, payload: auditEvents.payload })
+          .from(auditEvents)
+          .where(eq(auditEvents.projectId, target.projectId))
+      )
+        .filter((event) => event.action === "run.builder_plan_denied")
+        .map((event) => (event.payload as { source?: unknown }).source);
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          "mcp_trigger_run",
+          "mcp_trigger_github_issue",
+          "mcp_resume_run",
+          "mcp_conversation_message",
+        ]),
+      );
+    } finally {
+      app.enqueue = originalEnqueue;
+      app.githubClientFactory = originalFactory;
+    }
+  });
+
   it("executes approved MCP sessions, conversations, and GitHub issue workflows end to end", async () => {
     const target = await createProjectWithAgent("MCP Interactive Lifecycle");
     await db
@@ -2744,6 +3297,11 @@ describe("api", async () => {
             engine: "claude_code",
             engineSessionId: "session_mcp_resume",
             status: "succeeded",
+            trigger: {
+              source: "plan_acceptance",
+              proposalId: newId("prop"),
+              architectRunId: newId("run"),
+            },
             createdBy: { type: "test", id: "mcp-interactive" },
           })
           .returning()
@@ -2766,6 +3324,8 @@ describe("api", async () => {
         resumeOf: terminal?.id,
         message: "Continue from the verified checkpoint",
       });
+      expect(resumed?.trigger).not.toHaveProperty("source");
+      expect(resumed?.trigger).not.toHaveProperty("proposalId");
 
       const title = `MCP conversation ${Date.now()}`;
       await execute("facility_start_conversation", "runs:trigger", {
@@ -3378,6 +3938,212 @@ describe("api", async () => {
     expect(child.statusCode).toBe(200);
   });
 
+  it("refuses a chain change that would strand stored entries", async () => {
+    // A space with an empty config resolves to the research chain, so an H
+    // written under it is legal. Rewriting the config to the product chain
+    // would leave that H undeclared — uneditable, and a permanent whole-space
+    // validation failure — so the PUT is refused, names the entry, and the
+    // stored config survives untouched.
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Chain change", slug: `chain-change-${Date.now()}` },
+    });
+    const chainProjectId = created.json().id as string;
+    expect(chainProjectId).toBeTruthy();
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { charterMd: "", activeMd: "" },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    expect(space.json().config).toEqual({});
+    const stored = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${chainProjectId}/kb/entries`,
+      headers: { cookie },
+      payload: { type: "H", slug: "written-under-research", bodyMd: "body", links: [] },
+    });
+    expect(stored.statusCode, stored.body).toBe(200);
+
+    const refused = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { config: { chain: "product" } },
+    });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json().error.code).toBe("chain_change_strands_entries");
+    expect(refused.json().error.details).toEqual({
+      chain: "product",
+      stranded: [{ entryId: stored.json().id, artifactId: "H001", type: "H" }],
+    });
+    const unchanged = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+    });
+    expect(unchanged.json().config).toEqual({});
+
+    // A doc-only save never touches the chain, and naming the chain the
+    // entries already belong to strands nothing — both still go through.
+    const charterOnly = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { charterMd: "## Blocked Stop Condition\nNone\n" },
+    });
+    expect(charterOnly.statusCode, charterOnly.body).toBe(200);
+    const explicit = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${chainProjectId}/kb/space`,
+      headers: { cookie },
+      payload: { config: { chain: "research" } },
+    });
+    expect(explicit.statusCode, explicit.body).toBe(200);
+    expect(explicit.json().config).toEqual({ chain: "research" });
+  });
+
+  it("serializes entry writers against chain changes", async () => {
+    const wait = (ms: number) =>
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), ms));
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Chain race", slug: `chain-race-${Date.now()}` },
+    });
+    const raceProjectId = created.json().id as string;
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${raceProjectId}/kb/space`,
+      headers: { cookie },
+      payload: {
+        charterMd: "## Blocked Stop Condition\nNone\n",
+        activeMd: "## Objective\n\n## Next Step\n\n## Blocker\n\n## Links\n",
+      },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    const spaceId = space.json().id as string;
+    const raw = postgres(databaseUrl, { max: 1 });
+    try {
+      // The interleaving the lock exists for: a writer validates under the
+      // old chain, then a chain change lands before its insert. The chain
+      // change holds the space row FOR UPDATE, so the writer parks at its
+      // FOR SHARE and its in-transaction re-check turns it away.
+      await raw.unsafe("begin");
+      await raw.unsafe("select id from kb_spaces where id = $1 for update", [spaceId]);
+      const write = app.inject({
+        method: "POST",
+        url: `/v1/projects/${raceProjectId}/kb/entries`,
+        headers: { cookie },
+        payload: { type: "H", slug: "raced", bodyMd: "body", links: [] },
+      });
+      expect(await Promise.race([write.then(() => "resolved" as const), wait(300)])).toBe(
+        "waiting",
+      );
+      await raw.unsafe(`update kb_spaces set config = '{"chain":"product"}' where id = $1`, [
+        spaceId,
+      ]);
+      await raw.unsafe("commit");
+      const turnedAway = await write;
+      expect(turnedAway.statusCode, turnedAway.body).toBe(409);
+      expect(turnedAway.json().error.code).toBe("space_chain_changed");
+      expect((await validateProjectKb(db, orgId, raceProjectId)).ok).toBe(true);
+
+      // And the reverse: a writer holding its lock parks the chain change
+      // until it commits.
+      await raw.unsafe("begin");
+      await raw.unsafe("select id from kb_spaces where id = $1 for no key update", [spaceId]);
+      const rechain = app.inject({
+        method: "PUT",
+        url: `/v1/projects/${raceProjectId}/kb/space`,
+        headers: { cookie },
+        payload: { config: { chain: "research" } },
+      });
+      expect(await Promise.race([rechain.then(() => "resolved" as const), wait(300)])).toBe(
+        "waiting",
+      );
+      await raw.unsafe("commit");
+      const rechained = await rechain;
+      expect(rechained.statusCode, rechained.body).toBe(200);
+    } finally {
+      await raw.end({ timeout: 1 });
+    }
+  });
+
+  it("allocates distinct numbers to concurrent same-type writers", async () => {
+    const wait = (ms: number) =>
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), ms));
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie },
+      payload: { name: "Number race", slug: `number-race-${Date.now()}` },
+    });
+    const raceProjectId = created.json().id as string;
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${raceProjectId}/kb/space`,
+      headers: { cookie },
+      payload: {
+        charterMd: "## Blocked Stop Condition\nNone\n",
+        activeMd: "## Objective\n\n## Next Step\n\n## Blocker\n\n## Links\n",
+      },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    const spaceId = space.json().id as string;
+    const raw = postgres(databaseUrl, { max: 1 });
+    try {
+      // Two H creates queued behind one space lock. Allocating the number
+      // before the lock handed both writers the same one, and the loser died
+      // on the unique constraint; allocating after it has to hand them
+      // consecutive numbers instead.
+      await raw.unsafe("begin");
+      await raw.unsafe("select id from kb_spaces where id = $1 for no key update", [spaceId]);
+      const first = app.inject({
+        method: "POST",
+        url: `/v1/projects/${raceProjectId}/kb/entries`,
+        headers: { cookie },
+        payload: { type: "H", slug: "raced-one", bodyMd: "first", links: [] },
+      });
+      const second = app.inject({
+        method: "POST",
+        url: `/v1/projects/${raceProjectId}/kb/entries`,
+        headers: { cookie },
+        payload: { type: "H", slug: "raced-two", bodyMd: "second", links: [] },
+      });
+      expect(
+        await Promise.race([
+          Promise.all([first, second]).then(() => "resolved" as const),
+          wait(300),
+        ]),
+      ).toBe("waiting");
+      await raw.unsafe("commit");
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.statusCode, one.body).toBe(200);
+      expect(two.statusCode, two.body).toBe(200);
+      const numbers = [one.json().number as number, two.json().number as number].sort(
+        (a, b) => a - b,
+      );
+      expect(numbers).toEqual([1, 2]);
+      // Each row's artifact id has to come from the number it was finally
+      // given, not the one it previewed before the lock — so normalization
+      // has to run under the lock too, not just the allocation.
+      for (const response of [one, two]) {
+        const entry = response.json();
+        const expected = `H${String(entry.number).padStart(3, "0")}`;
+        expect(entry.frontmatter.id).toBe(expected);
+        expect(entry.bodyMd).toContain(`[[${expected}]]`);
+      }
+      expect((await validateProjectKb(db, orgId, raceProjectId)).ok).toBe(true);
+    } finally {
+      await raw.end({ timeout: 1 });
+    }
+  });
+
   it("links cited artifacts on body edits and captures the prior version", async () => {
     // Partial PUT: only config — charter/active must survive untouched.
     const space = await app.inject({
@@ -3441,6 +4207,70 @@ describe("api", async () => {
     });
     const linkedAfter = hoodAfter.json().linked.map((neighbor: { id: string }) => neighbor.id);
     expect(linkedAfter).not.toContain(first.json().id);
+  });
+
+  it("edits existing product learning entries", async () => {
+    const learningProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: "Product Learning KB",
+          slug: `product-learning-kb-${Date.now()}`,
+          settings: {},
+        })
+        .returning()
+    )[0];
+    expect(learningProject).toBeTruthy();
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${learningProject?.id}/kb/space`,
+      headers: { cookie },
+      payload: { config: { chain: "product" } },
+    });
+    expect(space.statusCode, space.body).toBe(200);
+    const learningSpace = (
+      await db
+        .select()
+        .from(kbSpaces)
+        .where(and(eq(kbSpaces.orgId, orgId), eq(kbSpaces.projectId, learningProject?.id ?? "")))
+        .limit(1)
+    )[0];
+    expect(learningSpace).toBeTruthy();
+    const learning = (
+      await db
+        .insert(kbEntries)
+        .values({
+          id: newId("kb"),
+          orgId,
+          spaceId: learningSpace?.id ?? "",
+          type: "L",
+          number: 1,
+          slug: "agent-learning",
+          frontmatter: {
+            id: "L001",
+            aliases: ["L001"],
+            type: "L",
+            created: "2026-07-03",
+            tags: [],
+          },
+          bodyMd: "Agent-written learning.\n\n## Links\n\n- [[L001]]\n",
+        })
+        .returning()
+    )[0];
+    expect(learning).toBeTruthy();
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/v1/kb/entries/${learning?.id}`,
+      headers: { cookie },
+      payload: { bodyMd: "Human-edited learning." },
+    });
+
+    expect(patched.statusCode, patched.body).toBe(200);
+    expect(patched.json().error?.code).not.toBe("unknown_artifact_type");
+    expect(patched.json().bodyMd).toContain("Human-edited learning.");
   });
 
   it("returns null for a project whose KB space has not been created", async () => {
@@ -6209,6 +7039,31 @@ describe("api", async () => {
       });
       expect(codex.statusCode).toBe(409);
       expect(codex.json().error.code).toBe("not_resumable");
+
+      // A resume is a new Builder row, not a second consumption of the
+      // parent's plan acceptance. Required projects therefore deny it before
+      // insertion instead of copying provenance into a non-canonical trigger.
+      await db
+        .update(projects)
+        .set({ builderPlanPolicy: "required" })
+        .where(and(eq(projects.orgId, orgId), eq(projects.id, target.projectId)));
+      const beforeRequiredResume = await db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(eq(runs.projectId, target.projectId));
+      const dispatchedBeforeRequiredResume = dispatched.length;
+      const governedResume = await app.inject({
+        method: "POST",
+        url: `/v1/runs/${parent?.id}/resume`,
+        headers: { cookie },
+        payload: { message: "attempt a governed resume" },
+      });
+      expect(governedResume.statusCode, governedResume.body).toBe(409);
+      expect(governedResume.json().error.code).toBe("builder_plan_required");
+      expect(
+        await db.select({ id: runs.id }).from(runs).where(eq(runs.projectId, target.projectId)),
+      ).toHaveLength(beforeRequiredResume.length);
+      expect(dispatched).toHaveLength(dispatchedBeforeRequiredResume);
 
       const other = (
         await db

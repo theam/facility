@@ -20,12 +20,23 @@ Typed, linked, validated at write time:
   evidence, sketch, acceptance criteria, WSJF score.
 - **Verification** — the closed loop on shipped work: what actually changed
   for users. Merged is not verified.
+- **Reference** — curated documentation (architecture, conventions, runbooks).
+  Free; no parent required.
+- **Learning** — a durable lesson from delivery or review, stored as `L` in a
+  Product workspace. Free; no parent required. Research workspaces reuse `L`
+  for **Literature** notes instead — the prefix is the same, the meaning
+  follows the space's chain.
 
 The platform enforces the chain mechanically — a task without a decision, a
 verification without a shipped task, a missing backlink: rejected at write
 time, not discovered in review. The `ACTIVE` state note stays deliberately
 narrow (objective, next step, blocker, links) so sessions recover cleanly
 every time.
+
+The chain a space runs is part of that contract. Reconfiguring it is refused
+while an entry already stored would be left undeclared — the refusal names the
+entries and the stored config stays as it was — so a chain switch can never
+strand what was legitimately written under the previous one.
 
 ## Task flow
 

@@ -12,10 +12,12 @@ import {
   type FacilityDb,
   githubInstallations,
   insertAuditEvent,
+  projects,
   proposals,
   repos,
 } from "@facility/db";
 import { and, eq } from "drizzle-orm";
+import { lockBuilderPlanPolicy } from "../builder-plan-policy.js";
 import { ApiError } from "../errors.js";
 import type { AppConfig, Principal } from "../types.js";
 import { raisePlatformIssue } from "../watchtower/issues.js";
@@ -182,37 +184,124 @@ export async function syncRepoFacilityConfig(args: {
     args.client ??
     (args.factory ? await createGithubClientForRepo(args.db, args.factory, args.repo) : undefined);
   if (!client) throw new Error("syncRepoFacilityConfig requires a GitHub client or factory");
-  const current =
-    args.repo.renderAnswers &&
-    typeof args.repo.renderAnswers === "object" &&
-    !Array.isArray(args.repo.renderAnswers)
-      ? (args.repo.renderAnswers as Record<string, unknown>)
-      : {};
   const content = await readFacilityManifest(client, args.repo.defaultBranch);
-  if (!content) {
-    // Removing the manifest is an explicit opt-out. Clear every repo-owned
-    // runtime override so stale state cannot keep routing or configuring runs.
-    const renderAnswers = clearManifestOverrides(current);
-    await args.db
+  let manifest: FacilityRepoManifest | null = null;
+  let manifestError: unknown;
+  if (content) {
+    try {
+      manifest = parseFacilityRepoManifest(content);
+    } catch (error) {
+      manifestError = error;
+    }
+  }
+  const outcome = await args.db.transaction(async (transaction) => {
+    const tx = transaction as unknown as FacilityDb;
+    await lockBuilderPlanPolicy(tx, args.repo.orgId, args.repo.projectId);
+    const project = (
+      await tx
+        .select({ builderPlanPolicy: projects.builderPlanPolicy })
+        .from(projects)
+        .where(and(eq(projects.orgId, args.repo.orgId), eq(projects.id, args.repo.projectId)))
+        .limit(1)
+    )[0];
+    const liveRepo = (
+      await tx
+        .select()
+        .from(repos)
+        .where(and(eq(repos.orgId, args.repo.orgId), eq(repos.id, args.repo.id)))
+        .limit(1)
+    )[0];
+    if (!liveRepo) throw new ApiError(404, "repo_not_found", "Repository not found");
+    const requiredBuilderPlan = project?.builderPlanPolicy === "required";
+    const current =
+      liveRepo.renderAnswers &&
+      typeof liveRepo.renderAnswers === "object" &&
+      !Array.isArray(liveRepo.renderAnswers)
+        ? (liveRepo.renderAnswers as Record<string, unknown>)
+        : {};
+    if (!content) {
+      if (requiredBuilderPlan) {
+        await markRequiredBuilderLaneDrift(tx, liveRepo);
+        return { error: requiredBuilderLaneError(liveRepo, "facility_manifest_missing") };
+      }
+      const renderAnswers = clearManifestOverrides(current);
+      await tx
+        .update(repos)
+        .set({ renderAnswers, updatedAt: new Date() })
+        .where(and(eq(repos.orgId, liveRepo.orgId), eq(repos.id, liveRepo.id)));
+      return { renderAnswers };
+    }
+    if (manifestError || !manifest) {
+      if (requiredBuilderPlan) {
+        await markRequiredBuilderLaneDrift(tx, liveRepo);
+        return { error: requiredBuilderLaneError(liveRepo, "facility_manifest_invalid") };
+      }
+      return { error: manifestError ?? new Error("facility_manifest_invalid") };
+    }
+    const builderLane = manifest.executionLane?.builder ?? manifest.executionLane?.["/builder"];
+    const codexBuilderLane =
+      manifest.executionLane?.["codex-builder"] ?? manifest.executionLane?.["/codex-builder"];
+    if (requiredBuilderPlan && (builderLane !== "platform" || codexBuilderLane !== "platform")) {
+      await markRequiredBuilderLaneDrift(tx, liveRepo);
+      return { error: requiredBuilderLaneError(liveRepo, "builder_platform_lane_missing") };
+    }
+    const renderAnswers = {
+      ...current,
+      packageInstallCmd: manifest.packageInstall ?? null,
+      provisionCmd: manifest.provision ?? null,
+      checkCmds: manifest.checks ?? [],
+      models: manifest.models ?? {},
+      execution_lane: manifest.executionLane ?? {},
+    };
+    await tx
       .update(repos)
       .set({ renderAnswers, updatedAt: new Date() })
-      .where(and(eq(repos.orgId, args.repo.orgId), eq(repos.id, args.repo.id)));
-    return renderAnswers;
-  }
-  const manifest = parseFacilityRepoManifest(content);
-  const renderAnswers = {
-    ...current,
-    packageInstallCmd: manifest.packageInstall ?? null,
-    provisionCmd: manifest.provision ?? null,
-    checkCmds: manifest.checks ?? [],
-    models: manifest.models ?? {},
-    execution_lane: manifest.executionLane ?? {},
-  };
-  await args.db
+      .where(and(eq(repos.orgId, liveRepo.orgId), eq(repos.id, liveRepo.id)));
+    return { renderAnswers };
+  });
+  if (outcome.error) throw outcome.error;
+  return outcome.renderAnswers;
+}
+
+async function markRequiredBuilderLaneDrift(db: FacilityDb, repo: RepoRow) {
+  await db
     .update(repos)
-    .set({ renderAnswers, updatedAt: new Date() })
-    .where(and(eq(repos.orgId, args.repo.orgId), eq(repos.id, args.repo.id)));
-  return renderAnswers;
+    .set({ fingerprintStatus: "drifted", fingerprintVerifiedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(repos.orgId, repo.orgId), eq(repos.id, repo.id)));
+}
+
+async function markRepoFingerprintPending(db: FacilityDb, repo: RepoRow) {
+  await updateRepoFingerprintUnderPolicyLock(db, repo, {
+    fingerprintStatus: "pending",
+    fingerprintVerifiedAt: null,
+  });
+}
+
+async function updateRepoFingerprintUnderPolicyLock(
+  db: FacilityDb,
+  repo: RepoRow,
+  values: Pick<
+    Partial<typeof repos.$inferInsert>,
+    "fingerprint" | "fingerprintStatus" | "fingerprintVerifiedAt" | "renderAnswers"
+  >,
+) {
+  await db.transaction(async (transaction) => {
+    const tx = transaction as unknown as FacilityDb;
+    await lockBuilderPlanPolicy(tx, repo.orgId, repo.projectId);
+    await tx
+      .update(repos)
+      .set({ ...values, updatedAt: new Date() })
+      .where(and(eq(repos.orgId, repo.orgId), eq(repos.id, repo.id)));
+  });
+}
+
+function requiredBuilderLaneError(repo: RepoRow, reason: string) {
+  return new ApiError(
+    409,
+    "builder_plan_platform_lane_required",
+    "A required Builder plan project cannot accept default-branch configuration without platform lanes for /builder and /codex-builder",
+    { repo: `${repo.owner}/${repo.name}`, reason },
+  );
 }
 
 function clearManifestOverrides(current: Record<string, unknown>) {
@@ -309,6 +398,37 @@ export async function kickstartRepo(args: {
     workflowNames: args.answers.workflowNames ?? detection.workflowNames,
     execution_lane: args.answers.execution_lane ?? { architect: "repo", builder: "repo" },
   };
+  await args.db.transaction(async (transaction) => {
+    const tx = transaction as unknown as FacilityDb;
+    await lockBuilderPlanPolicy(tx, args.repo.orgId, args.repo.projectId);
+    const project = (
+      await tx
+        .select({ builderPlanPolicy: projects.builderPlanPolicy })
+        .from(projects)
+        .where(and(eq(projects.orgId, args.repo.orgId), eq(projects.id, args.repo.projectId)))
+        .limit(1)
+    )[0];
+    const lanes = renderAnswers.execution_lane ?? {};
+    const builderLane = lanes.builder ?? lanes["/builder"];
+    const codexBuilderLane = lanes["codex-builder"] ?? lanes["/codex-builder"];
+    if (
+      project?.builderPlanPolicy === "required" &&
+      (builderLane !== "platform" || codexBuilderLane !== "platform")
+    ) {
+      throw requiredBuilderLaneError(args.repo, "kickstart_builder_platform_lane_missing");
+    }
+    // Reserve the repo as unverified before any remote side effect. A
+    // concurrent required-policy activation sees pending_merge and fails,
+    // while a pre-existing required project has already validated the lanes.
+    await tx
+      .update(repos)
+      .set({
+        fingerprintStatus: "pending_merge",
+        fingerprintVerifiedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(repos.orgId, args.repo.orgId), eq(repos.id, args.repo.id)));
+  });
   const render = await renderFacilityInit(renderAnswers, { existingFiles: existing });
   const branch = "facility/kickstart";
   const baseSha = await client.getDefaultBranchSha();
@@ -322,15 +442,11 @@ export async function kickstartRepo(args: {
     head: branch,
     body: kickstartPrBody(render.files.map((file) => file.path)),
   });
-  await args.db
-    .update(repos)
-    .set({
-      fingerprintStatus: "pending_merge",
-      fingerprint: { ...render.manifest, files: render.manifest.files },
-      renderAnswers,
-      updatedAt: new Date(),
-    })
-    .where(eq(repos.id, args.repo.id));
+  await updateRepoFingerprintUnderPolicyLock(args.db, args.repo, {
+    fingerprintStatus: "pending_merge",
+    fingerprint: { ...render.manifest, files: render.manifest.files },
+    renderAnswers,
+  });
   await createKickstartProposal(
     args.db,
     args.repo.orgId,
@@ -416,7 +532,9 @@ export async function verifyFingerprints(args: {
 }) {
   const expected = args.repo.fingerprint as ReturnType<typeof manifestFor> | null;
   if (!expected) return { status: "unknown" as const };
+  await markRepoFingerprintPending(args.db, args.repo);
   const client = await createGithubClientForRepo(args.db, args.factory, args.repo);
+  await syncRepoFacilityConfig({ db: args.db, client, repo: args.repo });
   const files = await readRepoFiles(
     client,
     args.repo.defaultBranch,
@@ -426,10 +544,10 @@ export async function verifyFingerprints(args: {
   const diff = diffManifest(expected, actual);
   const status =
     diff.missing.length || diff.modified.length || diff.extra.length ? "drifted" : "ok";
-  await args.db
-    .update(repos)
-    .set({ fingerprintStatus: status, fingerprintVerifiedAt: new Date(), updatedAt: new Date() })
-    .where(eq(repos.id, args.repo.id));
+  await updateRepoFingerprintUnderPolicyLock(args.db, args.repo, {
+    fingerprintStatus: status,
+    fingerprintVerifiedAt: new Date(),
+  });
   if (status !== "ok") {
     await upsertPlatformIssue(args.db, args.repo, status, diff);
   }
@@ -444,21 +562,19 @@ export async function adoptFingerprints(args: {
 }) {
   const expected = args.repo.fingerprint as ReturnType<typeof manifestFor> | null;
   const paths = expected?.files.map((file) => file.path) ?? MANAGED_FACILITY_PATHS;
+  await markRepoFingerprintPending(args.db, args.repo);
   const client = await createGithubClientForRepo(args.db, args.factory, args.repo);
+  await syncRepoFacilityConfig({ db: args.db, client, repo: args.repo });
   const files = await readRepoFiles(client, args.repo.defaultBranch, paths);
   if (!expected && files.size === 0) {
     throw new ApiError(400, "nothing_to_adopt", "No managed Facility files were found to adopt");
   }
   const manifest = manifestFor([...files.entries()].map(([path, content]) => ({ path, content })));
-  await args.db
-    .update(repos)
-    .set({
-      fingerprint: manifest,
-      fingerprintStatus: "ok",
-      fingerprintVerifiedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(repos.id, args.repo.id));
+  await updateRepoFingerprintUnderPolicyLock(args.db, args.repo, {
+    fingerprint: manifest,
+    fingerprintStatus: "ok",
+    fingerprintVerifiedAt: new Date(),
+  });
   await insertAuditEvent(args.db, {
     orgId: args.repo.orgId,
     projectId: args.repo.projectId,

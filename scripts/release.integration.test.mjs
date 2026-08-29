@@ -188,6 +188,32 @@ async function assertMissing(path) {
   await assert.rejects(access(path), { code: "ENOENT" });
 }
 
+async function releaseAllocationScript() {
+  const workflow = await readFile(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  const allocationStep = workflow.split("      - name: Allocate the immutable release version\n")[1];
+  assert(allocationStep, "CI workflow must contain the release-allocation step");
+  const indentedScript = allocationStep.split("        run: |\n")[1];
+  assert(indentedScript, "release-allocation step must contain a shell script");
+  const lines = [];
+  for (const line of indentedScript.split("\n")) {
+    if (line && !line.startsWith("          ")) break;
+    lines.push(line.startsWith("          ") ? line.slice(10) : line);
+  }
+  return lines.join("\n");
+}
+
+async function releaseRecordingScript() {
+  const workflow = await readFile(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  const recordStep = workflow.split("      - name: Tag the released commit and publish its notes\n")[1];
+  assert(recordStep, "CI workflow must contain the release-recording step");
+  const indentedScript = recordStep.split("        run: |\n")[1];
+  assert(indentedScript, "release-recording step must contain a shell script");
+  return indentedScript
+    .split("\n")
+    .map((line) => (line.startsWith("          ") ? line.slice(10) : line))
+    .join("\n");
+}
+
 async function releaseCheckout(t) {
   const repoDir = await mkdtemp(join(tmpdir(), "facility-release-checkout-"));
   await mkdir(join(repoDir, "packages/cli"), { recursive: true });
@@ -270,6 +296,76 @@ test("a fresh checkout must be stamped before the decided release validates", as
   assert.equal(validated.code, 0, validated.stderr);
 });
 
+test("release allocation reserves the accepted commit before publication", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "facility-release-allocation-"));
+  const repoDir = join(root, "checkout");
+  const remoteDir = join(root, "origin.git");
+  await mkdir(repoDir);
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const git = (args, cwd = repoDir) =>
+    spawnSync(
+      "git",
+      [
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "user.name=Facility Tests",
+        "-c",
+        "user.email=facility-tests@example.invalid",
+        ...args,
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      },
+    );
+
+  assert.equal(git(["init", "--bare", "--initial-branch=main", remoteDir], root).status, 0);
+  assert.equal(git(["init", "--initial-branch=main"]).status, 0);
+  await writeFile(join(repoDir, "change.txt"), "accepted release\n");
+  assert.equal(git(["add", "change.txt"]).status, 0);
+  assert.equal(git(["commit", "-m", "fix: publish the accepted release"]).status, 0);
+  assert.equal(git(["remote", "add", "origin", remoteDir]).status, 0);
+  assert.equal(git(["push", "-u", "origin", "main"]).status, 0);
+  const acceptedSha = git(["rev-parse", "HEAD"]).stdout.trim();
+
+  const script = await releaseAllocationScript();
+  const environment = { ...process.env, TAG: "v0.4.0", VERSION: "0.4.0" };
+  const allocated = spawnSync("bash", ["-c", script], {
+    cwd: repoDir,
+    encoding: "utf8",
+    env: environment,
+  });
+  assert.equal(allocated.status, 0, allocated.stderr);
+  assert.equal(
+    git(["--git-dir", remoteDir, "rev-parse", "refs/tags/v0.4.0^{commit}"], root).stdout.trim(),
+    acceptedSha,
+  );
+
+  const replay = spawnSync("bash", ["-c", script], {
+    cwd: repoDir,
+    encoding: "utf8",
+    env: environment,
+  });
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.match(replay.stdout, /already allocates the accepted commit/);
+
+  await writeFile(join(repoDir, "change.txt"), "later commit\n");
+  assert.equal(git(["add", "change.txt"]).status, 0);
+  assert.equal(git(["commit", "-m", "fix: advance after allocation"]).status, 0);
+  const conflict = spawnSync("bash", ["-c", script], {
+    cwd: repoDir,
+    encoding: "utf8",
+    env: environment,
+  });
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /not accepted commit/);
+});
+
 test("release recording retries after tag push and rejects a tag on another commit", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "facility-release-record-"));
   const repoDir = join(root, "checkout");
@@ -316,27 +412,22 @@ test("release recording retries after tag push and rejects a tag on another comm
   await writeFile(
     ghCommand,
     `#!/usr/bin/env node
-const { appendFileSync, existsSync, writeFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
 appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
-const [resource, action] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const [resource, action] = args;
 if (resource !== "release") process.exit(64);
 if (action === "view") process.exit(existsSync(process.env.FAKE_RELEASE_MARKER) ? 0 : 1);
 if (action !== "create") process.exit(64);
 if (process.env.FAKE_GH_FAIL_CREATE === "1") process.exit(23);
-writeFileSync(process.env.FAKE_RELEASE_MARKER, "created\\n");
+const notesIndex = args.indexOf("--notes-file");
+if (notesIndex === -1) process.exit(64);
+writeFileSync(process.env.FAKE_RELEASE_MARKER, readFileSync(args[notesIndex + 1], "utf8"));
 `,
   );
   await chmod(ghCommand, 0o755);
 
-  const workflow = await readFile(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
-  const recordStep = workflow.split("      - name: Tag the released commit and publish its notes\n")[1];
-  assert(recordStep, "CI workflow must contain the release-recording step");
-  const indentedScript = recordStep.split("        run: |\n")[1];
-  assert(indentedScript, "release-recording step must contain a shell script");
-  const script = indentedScript
-    .split("\n")
-    .map((line) => (line.startsWith("          ") ? line.slice(10) : line))
-    .join("\n");
+  const script = await releaseRecordingScript();
   const baseEnv = {
     ...process.env,
     FAKE_GH_LOG: ghLog,
@@ -347,6 +438,8 @@ writeFileSync(process.env.FAKE_RELEASE_MARKER, "created\\n");
     RUNNER_TEMP: runnerTemp,
     TAG: "v0.4.0",
     VERSION: "0.4.0",
+    NPM_PUBLISHED: "true",
+    IMAGES_PROMOTED: "false",
   };
 
   const interrupted = spawnSync("bash", ["-c", script], {
@@ -368,7 +461,10 @@ writeFileSync(process.env.FAKE_RELEASE_MARKER, "created\\n");
     env: baseEnv,
   });
   assert.equal(retried.status, 0, retried.stderr);
-  assert.equal((await readFile(releaseMarker, "utf8")).trim(), "created");
+  const releaseNotes = await readFile(releaseMarker, "utf8");
+  assert.match(releaseNotes, /^fixture release notes/);
+  assert.match(releaseNotes, /- npm package: published/);
+  assert.match(releaseNotes, /- container image set: promotion was not confirmed complete/);
 
   await writeFile(join(repoDir, "change.txt"), "later commit\n");
   git(["add", "change.txt"]);
@@ -394,6 +490,136 @@ writeFileSync(process.env.FAKE_RELEASE_MARKER, "created\\n");
       ["release", "create", "v0.4.0"],
     ],
   );
+});
+
+test("release recording publishes status exactly when a publisher confirms an artifact", async (t) => {
+  const script = await releaseRecordingScript();
+  const cases = [
+    {
+      name: "npm only",
+      npmPublished: "true",
+      imagesPromoted: "false",
+      npmStatus: "published",
+      imageStatus: "promotion was not confirmed complete",
+      recorded: true,
+    },
+    {
+      name: "images only",
+      npmPublished: "false",
+      imagesPromoted: "true",
+      npmStatus: "publication was not confirmed",
+      imageStatus: "promoted",
+      recorded: true,
+    },
+    {
+      name: "both registries",
+      npmPublished: "true",
+      imagesPromoted: "true",
+      npmStatus: "published",
+      imageStatus: "promoted",
+      recorded: true,
+    },
+    {
+      name: "neither registry",
+      npmPublished: "false",
+      imagesPromoted: "false",
+      recorded: false,
+    },
+  ];
+
+  for (const releaseCase of cases) {
+    await t.test(releaseCase.name, async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "facility-release-consumption-"));
+      const repoDir = join(root, "checkout");
+      const remoteDir = join(root, "origin.git");
+      const binDir = join(root, "bin");
+      const runnerTemp = join(root, "runner-temp");
+      const releaseMarker = join(root, "release-notes");
+      await mkdir(repoDir);
+      await mkdir(binDir);
+      await mkdir(runnerTemp);
+      t.after(() => rm(root, { recursive: true, force: true }));
+
+      const git = (args, cwd = repoDir) =>
+        spawnSync(
+          "git",
+          [
+            "-c",
+            "commit.gpgSign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "user.name=Facility Tests",
+            "-c",
+            "user.email=facility-tests@example.invalid",
+            ...args,
+          ],
+          {
+            cwd,
+            encoding: "utf8",
+            env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+          },
+        );
+      assert.equal(git(["init", "--bare", "--initial-branch=main", remoteDir], root).status, 0);
+      assert.equal(git(["init", "--initial-branch=main"]).status, 0);
+      await writeFile(join(repoDir, "change.txt"), "release\n");
+      assert.equal(git(["add", "change.txt"]).status, 0);
+      assert.equal(git(["commit", "-m", "fix: publish the fixture"]).status, 0);
+      assert.equal(git(["remote", "add", "origin", remoteDir]).status, 0);
+      assert.equal(git(["push", "-u", "origin", "main"]).status, 0);
+
+      const ghCommand = join(binDir, "gh");
+      await writeFile(
+        ghCommand,
+        `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] !== "release") process.exit(64);
+if (args[1] === "view") process.exit(1);
+if (args[1] !== "create") process.exit(64);
+const notesIndex = args.indexOf("--notes-file");
+if (notesIndex === -1) process.exit(64);
+writeFileSync(process.env.FAKE_RELEASE_MARKER, readFileSync(args[notesIndex + 1], "utf8"));
+`,
+      );
+      await chmod(ghCommand, 0o755);
+
+      const result = spawnSync("bash", ["-c", script], {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_RELEASE_MARKER: releaseMarker,
+          GH_TOKEN: "local-test-token",
+          IMAGES_PROMOTED: releaseCase.imagesPromoted,
+          NOTES: "fixture release notes",
+          NPM_PUBLISHED: releaseCase.npmPublished,
+          PATH: `${binDir}:${process.env.PATH}`,
+          RUNNER_TEMP: runnerTemp,
+          TAG: "v0.4.0",
+          VERSION: "0.4.0",
+        },
+      });
+
+      if (!releaseCase.recorded) {
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /no publisher confirmed an artifact/);
+        assert.notEqual(git(["show-ref", "--verify", "--quiet", "refs/tags/v0.4.0"]).status, 0);
+        await assertMissing(releaseMarker);
+        return;
+      }
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(git(["show-ref", "--verify", "--quiet", "refs/tags/v0.4.0"]).status, 0);
+      assert.equal(
+        git(["--git-dir", remoteDir, "show-ref", "--verify", "--quiet", "refs/tags/v0.4.0"], root).status,
+        0,
+      );
+      const notes = await readFile(releaseMarker, "utf8");
+      assert.match(notes, new RegExp(`- npm package: ${releaseCase.npmStatus}`));
+      assert.match(notes, new RegExp(`- container image set: ${releaseCase.imageStatus}`));
+    });
+  }
 });
 
 test("an exact 404 permits bootstrap publication without running package lifecycle scripts", async (t) => {

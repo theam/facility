@@ -43,6 +43,13 @@ its parent will be rejected:
 - **Verification (V)** — the closed loop on a shipped Task: PR/deploy
   reference, what actually changed for users, metric movement or its absence.
   A merged PR is not a verified outcome; say which one you have.
+
+Free types (no parent required):
+
+- **Reference (R)** — curated documentation that should stay current:
+  architecture, conventions, runbooks.
+- **Learning (L)** — a durable lesson from delivery or review. In Product
+  workspaces `L` is Learning, not research Literature.
 </artifact_model>
 
 <how_you_work>

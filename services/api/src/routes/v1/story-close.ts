@@ -75,21 +75,27 @@ export async function registerStoryCloseRoutes(app: FastifyInstance, context: V1
         attemptId: attemptId(request),
         appSlug: context.config.githubAppSlug,
       });
-      await request.audit(
-        "story.closed",
-        { type: "project", id: projectId },
-        {
-          repoId: target.repo.id,
-          number,
-          stateReason,
-          reason,
-          // The display label the timeline reads back; the actor field on the
-          // event itself stays the authoritative principal id.
-          actor: actorLabel(p),
-          commentId: result.commentId,
-          changed: result.changed,
-        },
-      );
+      // Only a transition Facility performed is a decision Facility can claim.
+      // A no-op against a story someone already closed elsewhere records
+      // nothing, so no later reader can read it as the reason for that closure.
+      if (result.changed) {
+        await request.audit(
+          "story.closed",
+          { type: "project", id: projectId },
+          {
+            repoId: target.repo.id,
+            number,
+            stateReason,
+            reason,
+            // The display label the timeline reads back; the actor field on the
+            // event itself stays the authoritative principal id.
+            actor: actorLabel(p),
+            // Binds this rationale to the exact closure it explains.
+            closedAt: result.closedAt?.toISOString() ?? null,
+            commentId: result.commentId,
+          },
+        );
+      }
       return mutationResponse(target.repo.id, number, result);
     },
   );
@@ -121,11 +127,13 @@ export async function registerStoryCloseRoutes(app: FastifyInstance, context: V1
         repo: target.repo,
         issueNumber: number,
       });
-      await request.audit(
-        "story.reopened",
-        { type: "project", id: projectId },
-        { repoId: target.repo.id, number, changed: result.changed },
-      );
+      if (result.changed) {
+        await request.audit(
+          "story.reopened",
+          { type: "project", id: projectId },
+          { repoId: target.repo.id, number, actor: actorLabel(p) },
+        );
+      }
       return mutationResponse(target.repo.id, number, result);
     },
   );

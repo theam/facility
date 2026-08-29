@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, test } from "vitest";
-import { serveHttp } from "../src/http.js";
+import { canonicalAuthorizationServerUrl, serveHttp } from "../src/http.js";
 import { createFacilityMcpServer, toolDefinitions } from "../src/tools.js";
 
 const acceptCredential: typeof fetch = async () =>
@@ -98,6 +98,37 @@ async function connect(stub: {
 }
 
 describe("@facility/mcp", () => {
+  test("accepts only HTTPS or loopback HTTP authorization-server origins", () => {
+    expect(canonicalAuthorizationServerUrl("auth.facility.test")).toBe(
+      "https://auth.facility.test",
+    );
+    expect(canonicalAuthorizationServerUrl("https://auth.facility.test/")).toBe(
+      "https://auth.facility.test",
+    );
+    expect(canonicalAuthorizationServerUrl("http://localhost:3400")).toBe("http://localhost:3400");
+    expect(canonicalAuthorizationServerUrl("http://127.0.0.1:3400")).toBe("http://127.0.0.1:3400");
+    expect(canonicalAuthorizationServerUrl("http://[::1]:3400")).toBe("http://[::1]:3400");
+    for (const invalid of [
+      "http://auth.facility.test",
+      "https://user:secret@auth.facility.test",
+      "https://auth.facility.test/oauth",
+      "https://auth.facility.test?tenant=one",
+      "https://auth.facility.test#fragment",
+    ]) {
+      expect(() => canonicalAuthorizationServerUrl(invalid)).toThrow(/MCP_AUTHORIZATION_SERVER/);
+    }
+  });
+
+  test("accepts HTTP MCP resources only on loopback", () => {
+    expect(() =>
+      serveHttp({
+        apiUrl: "http://facility.test",
+        port: 0,
+        resourceUrl: "http://mcp.facility.test",
+      }),
+    ).toThrow("MCP resourceUrl must use HTTPS unless it is a loopback URL");
+  });
+
   test("tools/list exposes the spec tool names and schemas", async () => {
     const { client, server } = await connect({ request: async () => ({ ok: true }) });
     const result = await client.listTools();
@@ -624,7 +655,7 @@ describe("@facility/mcp", () => {
 
     const oauthDiscovery = await requestWithAuthority({
       port,
-      path: "/.well-known/oauth-protected-resource",
+      path: "/.well-known/oauth-protected-resource/mcp",
       authority: privateAuthority,
     });
     expect(oauthDiscovery.status).toBe(421);
@@ -739,19 +770,27 @@ describe("@facility/mcp", () => {
     const server = serveHttp({
       apiUrl: "http://facility.test",
       port: 0,
-      resourceUrl: "https://mcp.facility.test",
+      resourceUrl: "https://mcp.facility.test/mcp",
       authorizationServer: "https://auth.facility.test",
     });
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
-    const response = await fetch(`http://127.0.0.1:${port}/.well-known/oauth-protected-resource`);
+    const response = await fetch(
+      `http://127.0.0.1:${port}/.well-known/oauth-protected-resource/mcp`,
+    );
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
       resource: string;
       authorization_servers: string[];
     };
-    assert.equal(body.resource, "https://mcp.facility.test");
+    assert.equal(body.resource, "https://mcp.facility.test/mcp");
     assert.deepEqual(body.authorization_servers, ["https://auth.facility.test"]);
+    const legacyAlias = await fetch(
+      `http://127.0.0.1:${port}/.well-known/oauth-protected-resource`,
+      { redirect: "manual" },
+    );
+    assert.equal(legacyAlias.status, 308);
+    assert.equal(legacyAlias.headers.get("location"), "/.well-known/oauth-protected-resource/mcp");
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
@@ -759,8 +798,10 @@ describe("@facility/mcp", () => {
     const server = serveHttp({
       apiUrl: "http://facility.test",
       port: 0,
+      // Keep the historical origin-only deployment value as an accepted input.
       resourceUrl: "https://mcp.facility.test",
       authorizationServer: "https://auth.facility.test",
+      fetch: acceptCredential,
     });
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
@@ -768,8 +809,24 @@ describe("@facility/mcp", () => {
     assert.equal(response.status, 401);
     assert.match(
       response.headers.get("www-authenticate") ?? "",
-      /resource_metadata="https:\/\/mcp\.facility\.test\/\.well-known\/oauth-protected-resource"/,
+      /resource_metadata="https:\/\/mcp\.facility\.test\/\.well-known\/oauth-protected-resource\/mcp"/,
     );
+    const legacyUnauthenticated = await fetch(`http://127.0.0.1:${port}/`, {
+      method: "POST",
+      body: "{}",
+    });
+    assert.equal(legacyUnauthenticated.status, 401);
+    assert.equal(legacyUnauthenticated.headers.get("www-authenticate"), "Bearer");
+    const legacyAuthenticated = await fetch(`http://127.0.0.1:${port}/`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer fak_legacy",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    assert.notEqual(legacyAuthenticated.status, 401);
+    assert.notEqual(legacyAuthenticated.status, 405);
     // Metadata discovery is unconfigured (no authorization server) => 404.
     const bare = serveHttp({ apiUrl: "http://facility.test", port: 0 });
     await once(bare, "listening");

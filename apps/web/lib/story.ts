@@ -15,6 +15,7 @@ const TIMELINE_STAGES: Record<PipelineStageKey, PipelineStageKey> = {
   validating: "validating",
   review: "review",
   shipped: "shipped",
+  abandoned: "abandoned",
 };
 
 export type StoryItem =
@@ -31,7 +32,13 @@ export type StoryItem =
   | { kind: "pr_opened"; ts: string; outcome: Outcome | null; pr: StoryPr }
   | { kind: "pr_closed"; ts: string; outcome: Outcome | null; pr: StoryPr }
   | { kind: "ci"; ts: string; event: StoryCiEvent; pr: StoryPr }
-  | { kind: "issue_closed"; ts: string; actor: string | null; reason: string | null }
+  | {
+      kind: "issue_closed";
+      ts: string;
+      actor: string | null;
+      reason: string | null;
+      abandoned: boolean;
+    }
   | { kind: "stage"; ts: string; stage: PipelineStageKey; label: string };
 
 function stamp(value: unknown): string | null {
@@ -91,7 +98,8 @@ function stageEntered(item: StoryItem): PipelineStageKey | null {
     case "ci":
       return item.event.state === "pending" ? TIMELINE_STAGES.validating : TIMELINE_STAGES.review;
     case "issue_closed":
-      return TIMELINE_STAGES.shipped;
+      // Abandoned work never shipped; its replay must not claim otherwise.
+      return item.abandoned ? TIMELINE_STAGES.abandoned : TIMELINE_STAGES.shipped;
     default:
       return null;
   }
@@ -195,6 +203,7 @@ export function deriveStoryTimeline(input: {
       ts: closed,
       actor: detail.closedBy,
       reason: detail.closeReason,
+      abandoned: detail.stateReason === "not_planned",
     });
   }
 

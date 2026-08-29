@@ -24,6 +24,7 @@ const STATUS_ORDER: Record<PipelineStageKey, PipelineStageState[]> = {
   validating: ["checks_running", "checks_failed"],
   review: ["in_progress", "awaiting_review", "failed"],
   shipped: ["shipped_recently"],
+  abandoned: ["abandoned_recently"],
 };
 
 const STATUS_TONE: Record<PipelineStageState, PipelineStatusTone> = {
@@ -38,6 +39,7 @@ const STATUS_TONE: Record<PipelineStageState, PipelineStatusTone> = {
   checks_failed: "bad",
   awaiting_review: "human",
   shipped_recently: "ok",
+  abandoned_recently: "machine",
 };
 
 export function pipelineStageStateLabel(
@@ -70,6 +72,8 @@ export function pipelineStageStateLabel(
       return "Awaiting your review";
     case "shipped_recently":
       return "Shipped this week";
+    case "abandoned_recently":
+      return "Abandoned this week";
   }
 }
 
@@ -90,6 +94,19 @@ export function pipelineStageSummaries(stage: PipelineStage) {
       tone: pipelineStageStateTone(state),
     }))
     .filter((summary) => summary.count > 0);
+}
+
+export type StoryWsjf = {
+  value: number;
+  time: number;
+  risk: number;
+  effort: number;
+  score: number;
+};
+
+/** The provenance behind a story's position: the components that made the score. */
+export function wsjfBreakdown(wsjf: StoryWsjf) {
+  return `value ${wsjf.value} · time ${wsjf.time} · risk ${wsjf.risk} · effort ${wsjf.effort}`;
 }
 
 /** Stable story identity for projects that mirror more than one repository. */

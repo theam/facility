@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { storyStateRequest } from "@/lib/story-close";
+import { attemptKey, storyStateRequest } from "@/lib/story-close";
 
 describe("story close and reopen requests", () => {
   it("requires a reason to close and sends the chosen GitHub state reason", () => {
@@ -25,5 +25,24 @@ describe("story close and reopen requests", () => {
     expect(
       storyStateRequest({ state: "closed", reason: " Back on ", stateReason: "completed" }),
     ).toEqual({ ok: true, verb: "reopen", body: {} });
+  });
+
+  it("keeps one idempotency key across retries of the same close attempt", () => {
+    let minted = 0;
+    const mint = () => {
+      minted += 1;
+      return `key-${minted}`;
+    };
+
+    // First submit mints; the retry after a failure reuses, so the server sees
+    // one attempt and corrects its own comment instead of posting a second.
+    const first = attemptKey(null, mint);
+    const retry = attemptKey(first, mint);
+    expect(retry).toBe(first);
+    expect(minted).toBe(1);
+
+    // Cleared once the attempt finishes: the next close is a new decision.
+    expect(attemptKey(null, mint)).not.toBe(first);
+    expect(minted).toBe(2);
   });
 });

@@ -2,7 +2,13 @@
 
 import { cx } from "@facility/ui";
 import { useMemo, useState } from "react";
-import { artifactIdFor, type KbDecision, type KbEntry, type KbSection } from "@/lib/kb";
+import {
+  artifactIdFor,
+  type KbChainId,
+  type KbDecision,
+  type KbEntry,
+  type KbSection,
+} from "@/lib/kb";
 
 /**
  * The left page tree: pinned context docs, then Decisions / Documentation /
@@ -13,14 +19,23 @@ const EMPTY_HINTS: Record<string, string> = {
   D: "no decisions recorded yet — capture the first ADR",
   R: "no documentation pages yet",
   S: "no signals yet — paste a transcript into the chat",
-  L: "no learnings yet — the learning agent files them after runs",
 };
+
+function emptyHintFor(sectionKey: string, chain: KbChainId): string {
+  if (sectionKey === "L") {
+    return chain === "product"
+      ? "no learnings yet — the learning agent files them after runs"
+      : "no literature notes yet";
+  }
+  return EMPTY_HINTS[sectionKey] ?? "nothing here yet";
+}
 
 export function NavTree({
   sections,
   decisions,
   selected,
   canWrite,
+  chain,
   onSelect,
   onNew,
 }: {
@@ -28,6 +43,7 @@ export function NavTree({
   decisions: KbDecision[];
   selected: string;
   canWrite: boolean;
+  chain: KbChainId;
   onSelect: (doc: string) => void;
   onNew: (type: "R" | "D") => void;
 }) {
@@ -74,7 +90,7 @@ export function NavTree({
             >
               {rows.length === 0 ? (
                 <p className="px-2 py-1.5 text-[11.5px] italic text-(--dim)">
-                  {EMPTY_HINTS[section.key] ?? "nothing here yet"}
+                  {emptyHintFor(section.key, chain)}
                 </p>
               ) : (
                 rows.map((entry) => (

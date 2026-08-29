@@ -2,8 +2,8 @@
 
 import { Button, Field, Select, TextArea } from "@facility/ui";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { storyStateRequest } from "@/lib/story-close";
+import { useRef, useState } from "react";
+import { attemptKey, storyStateRequest } from "@/lib/story-close";
 
 /**
  * The abandon verb: the one decision an operator previously had to leave the
@@ -27,6 +27,8 @@ export function CloseStory({
   const [stateReason, setStateReason] = useState<"completed" | "not_planned">("not_planned");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Survives re-renders so a retry of a failed close keeps its attempt identity.
+  const attempt = useRef<string | null>(null);
 
   async function submit() {
     const request = storyStateRequest({ state, reason, stateReason });
@@ -38,13 +40,14 @@ export function CloseStory({
     setError(null);
     try {
       const query = new URLSearchParams({ repoId });
+      attempt.current = attemptKey(attempt.current, () => crypto.randomUUID());
       const response = await fetch(
         `/api/v1/projects/${projectId}/stories/${storyNumber}/${request.verb}?${query}`,
         {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": crypto.randomUUID(),
+            "idempotency-key": attempt.current,
           },
           body: JSON.stringify(request.body),
         },
@@ -55,6 +58,8 @@ export function CloseStory({
       if (!response.ok) {
         throw new Error(body?.error?.message ?? `${request.verb} failed (${response.status})`);
       }
+      // The attempt is finished; the next close is a new decision.
+      attempt.current = null;
       setOpen(false);
       setReason("");
       router.refresh();
@@ -127,7 +132,15 @@ export function CloseStory({
             </Select>
           </Field>
           <div>
-            <Button size="sm" variant="textual" disabled={busy} onClick={() => setOpen(false)}>
+            <Button
+              size="sm"
+              variant="textual"
+              disabled={busy}
+              onClick={() => {
+                attempt.current = null;
+                setOpen(false);
+              }}
+            >
               cancel
             </Button>
           </div>

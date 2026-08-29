@@ -3,8 +3,9 @@
 //
 // The full commit messages since the last release are the input; the repository has
 // no version-bump commit and no release pull request. `package.json` is stamped
-// from this decision inside the release run, so the git tag written afterwards
-// is the record of what was published rather than a request to publish it.
+// from this decision inside the release run. After every acceptance gate passes,
+// CI allocates the git tag before either immutable registry can consume the
+// version, preventing a partial or uncertain publish from reusing the number.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import {

@@ -17,3 +17,13 @@ export function storyStateRequest(input: {
   if (!reason) return { ok: false, message: "A reason is required to close a story" };
   return { ok: true, verb: "close", body: { reason, stateReason: input.stateReason } };
 }
+
+/**
+ * One key per close attempt, held until that attempt succeeds. A retry after a
+ * failed close is the same attempt, so the server recovers the reason comment
+ * it already posted instead of writing a second one; a fresh key per click
+ * would make every retry look like a new decision.
+ */
+export function attemptKey(existing: string | null, mint: () => string): string {
+  return existing ?? mint();
+}

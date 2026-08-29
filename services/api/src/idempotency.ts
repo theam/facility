@@ -29,11 +29,17 @@ export async function beginIdempotentRequest(
   }
   const principal = request.principal;
   if (!principal) throw new ApiError(401, "unauthorized", "Authentication required");
-  const path = request.url.split("?")[0] ?? request.url;
+  const [rawPath, rawQuery] = request.url.split("?");
+  const path = rawPath ?? request.url;
+  // Query parameters select the resource on several routes — `?repoId=` picks
+  // which repository's story is being mutated. Two such requests are different
+  // operations even under one key, so the selector belongs in the identity or a
+  // replay would answer for a resource it never touched.
+  const query = canonicalQuery(rawQuery);
   const keyHash = sha256(key);
   const requestHash = sha256(stableJson(request.body));
   const id = `idem_${sha256(
-    `${principal.orgId}:${principal.type}:${principal.id}:${request.method}:${path}:${keyHash}`,
+    `${principal.orgId}:${principal.type}:${principal.id}:${request.method}:${path}?${query}:${keyHash}`,
   )}`;
   const expiresAt = new Date(Date.now() + IDEMPOTENCY_TTL_MS);
   const inserted = await db
@@ -140,6 +146,16 @@ export async function expireIdempotencyRecords(db: FacilityDb, now = new Date())
     .where(lt(idempotencyRecords.expiresAt, now))
     .returning({ id: idempotencyRecords.id });
   return rows.length;
+}
+
+/** Order-independent so the same selection cannot depend on parameter order. */
+function canonicalQuery(value: string | undefined) {
+  if (!value) return "";
+  const entries = [...new URLSearchParams(value).entries()].sort(
+    ([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue),
+  );
+  return new URLSearchParams(entries).toString();
 }
 
 function stableJson(value: unknown): string {

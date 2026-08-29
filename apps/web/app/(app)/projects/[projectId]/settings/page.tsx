@@ -91,7 +91,11 @@ export default async function ProjectSettingsPage({
 
       <section className="flex flex-col gap-4">
         <Eyebrow>gates</Eyebrow>
-        <GatesEditor projectId={projectId} settings={settings} />
+        <GatesEditor
+          projectId={projectId}
+          settings={settings}
+          builderPlanPolicy={p.builderPlanPolicy ?? "optional"}
+        />
       </section>
 
       <Divider />

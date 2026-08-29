@@ -103,7 +103,9 @@ function TimelineItem({
         <div className="flex flex-col gap-1.5">
           <MilestoneLine
             ts={item.ts}
-            text={`issue closed${item.actor ? ` by ${item.actor}` : ""}`}
+            text={`${item.abandoned ? "issue abandoned" : "issue closed"}${
+              item.actor ? ` by ${item.actor}` : ""
+            }`}
             tone={item.reason ? "human" : "ok"}
           />
           {item.reason ? (
@@ -316,7 +318,11 @@ function humanizeAction(actionType: string | undefined): string {
 
 function decisionOf(proposal: Proposal): string {
   if (proposal.state === "rejected") return "rejected";
-  if (proposal.state === "execution_failed") return "approved · execution failed";
+  if (proposal.state === "execution_failed") {
+    return proposal.executionError
+      ? `approved · blocked (${proposal.executionError})`
+      : "approved · execution failed";
+  }
   return proposal.state === "approved" ? "approved" : proposal.state;
 }
 

@@ -106,6 +106,7 @@ export const projects = pgTable(
     slug: text("slug").notNull(),
     description: text("description"),
     systemVersion: text("system_version").notNull().default("v1"),
+    builderPlanPolicy: text("builder_plan_policy").notNull().default("optional"),
     settings: jsonb("settings").notNull().default(sql`'{}'::jsonb`),
     status: text("status").notNull().default("active"),
     ...timestamps,
@@ -113,6 +114,10 @@ export const projects = pgTable(
   (table) => [
     unique("projects_org_slug_uidx").on(table.orgId, table.slug),
     index("projects_org_idx").on(table.orgId),
+    check(
+      "projects_builder_plan_policy_check",
+      sql`${table.builderPlanPolicy} IN ('optional', 'required')`,
+    ),
   ],
 );
 
@@ -494,6 +499,7 @@ export const runs = pgTable(
     ciRepairKey: text("ci_repair_key"),
     transcriptUri: text("transcript_uri"),
     sessionStateUri: text("session_state_uri"),
+    workspaceBaseSha: text("workspace_base_sha"),
     error: text("error"),
     queuedAt: timestamp("queued_at", { withTimezone: true }).defaultNow().notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -552,6 +558,7 @@ export const runDeliveries = pgTable(
     repoName: text("repo_name").notNull(),
     headBranch: text("head_branch").notNull(),
     expectedHeadSha: text("expected_head_sha").notNull(),
+    baseSha: text("base_sha"),
     baseBranch: text("base_branch").notNull(),
     title: text("title").notNull(),
     body: text("body").notNull(),

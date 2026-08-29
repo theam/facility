@@ -21,11 +21,14 @@ export type KbEntry = {
 export type KbSpace = {
   charterMd: string;
   activeMd: string;
+  config?: unknown;
   createdAt?: string;
   updatedAt?: string;
   charterUpdatedAt?: string | null;
   activeUpdatedAt?: string | null;
 };
+
+export type KbChainId = "product" | "research";
 
 export type KbDecision = KbEntry & {
   artifactId: string;
@@ -72,7 +75,13 @@ const TYPE_SINGULAR: Record<string, string> = {
   SR: "status report",
 };
 
-export function typeLabelFor(type: string): string {
+export function typeLabelsFor(chain: KbChainId): Record<string, string> {
+  if (chain === "research") return { ...TYPE_LABELS, L: "literature" };
+  return TYPE_LABELS;
+}
+
+export function typeLabelFor(type: string, chain: KbChainId = "product"): string {
+  if (type === "L" && chain === "research") return "literature";
   return TYPE_SINGULAR[type] ?? type.toLowerCase();
 }
 
@@ -104,6 +113,24 @@ export function artifactIdFor(entry: Pick<KbEntry, "type" | "number" | "frontmat
   const id = entry.frontmatter?.id;
   if (typeof id === "string" && id.trim()) return id.trim();
   return `${entry.type}${String(entry.number).padStart(3, "0")}`;
+}
+
+/** Mirror of packages/harness/src/chain.ts chainFromConfig — keep in sync. */
+export function chainIdFromConfig(config: unknown): KbChainId {
+  const value = config && typeof config === "object" ? (config as Record<string, unknown>) : {};
+  const explicit = value.chain ?? value.harnessChain;
+  if (explicit === "product" || explicit === "product-chain") return "product";
+  if (explicit === "research" || explicit === "research-chain") return "research";
+  const artifactTypes = Array.isArray(value.artifact_types) ? value.artifact_types : [];
+  const prefixes = new Set(
+    artifactTypes
+      .map((item) =>
+        item && typeof item === "object" ? (item as Record<string, unknown>).prefix : undefined,
+      )
+      .filter((item): item is string => typeof item === "string"),
+  );
+  if (["S", "D", "T", "V"].some((prefix) => prefixes.has(prefix))) return "product";
+  return "research";
 }
 
 const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -139,8 +166,10 @@ const PRIMARY_ORDER = ["D", "R", "S", "L"] as const;
  * Learnings as first-class sections; every remaining type (pipeline T/V,
  * research chain, …) lands in one "additional resources" freeform group —
  * which also hosts the charter/active context docs in the nav.
+ *
+ * `L` is "learnings" on the product chain and "literature" on research.
  */
-export function groupSections(entries: KbEntry[]): KbSection[] {
+export function groupSections(entries: KbEntry[], chain: KbChainId = "product"): KbSection[] {
   const byType = new Map<string, KbEntry[]>();
   for (const entry of entries) {
     byType.set(entry.type, [...(byType.get(entry.type) ?? []), entry]);
@@ -152,7 +181,7 @@ export function groupSections(entries: KbEntry[]): KbSection[] {
     D: "decisions (ADRs)",
     R: "documentation",
     S: "signals",
-    L: "learnings",
+    L: chain === "research" ? "literature" : "learnings",
   };
   const sections: KbSection[] = [];
   for (const type of PRIMARY_ORDER) {

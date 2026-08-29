@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CiStatusLink } from "@/components/ci-status";
+import { WsjfChip } from "@/components/issues/wsjf-chip";
 import type { PipelineStory } from "@/lib/pipeline";
 import { storyHref } from "@/lib/pipeline";
 
@@ -21,10 +22,12 @@ export function IssueRow({
   projectId,
   story,
   canTrigger,
+  builderPlanRequired,
 }: {
   projectId: string;
   story: PipelineStory;
   canTrigger: boolean;
+  builderPlanRequired: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -90,6 +93,13 @@ export function IssueRow({
       );
     }
     if (story.stageState === "ready_to_build" && canTrigger && story.storyType === "issue") {
+      if (builderPlanRequired) {
+        return (
+          <ButtonLink size="sm" href={storyHref(projectId, story)}>
+            Review Gate 1
+          </ButtonLink>
+        );
+      }
       return (
         <Button
           size="sm"
@@ -103,6 +113,13 @@ export function IssueRow({
       );
     }
     if (story.stageState === "failed" && failedAgent && canTrigger) {
+      if (failedAgent === "builder" && builderPlanRequired) {
+        return (
+          <ButtonLink size="sm" variant="danger" href={storyHref(projectId, story)}>
+            Review Gate 1
+          </ButtonLink>
+        );
+      }
       return (
         <Button
           size="sm"
@@ -194,6 +211,7 @@ export function IssueRow({
             {label}
           </span>
         ))}
+        {story.wsjf ? <WsjfChip wsjf={story.wsjf} /> : null}
         <span className="font-mono text-[10.5px] text-(--dim)">{fmtAgo(story.ghUpdatedAt)}</span>
         {action()}
       </div>

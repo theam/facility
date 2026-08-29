@@ -29,6 +29,7 @@ test("collects a privacy-preserving, tamper-evident agent receipt", async () => 
     FACILITY_RECEIPT_RESULT: "success",
     FACILITY_RECEIPT_STARTED_AT: "2026-07-19T00:00:00.000Z",
     FACILITY_RECEIPT_ENGINE_JSONL: enginePath,
+    FACILITY_RECEIPT_BASE_SHA: "a".repeat(40),
     FACILITY_RECEIPT_OUTPUT: outputPath,
     GITHUB_EVENT_PATH: eventPath,
     GITHUB_REPOSITORY: "theam/mirror",
@@ -40,6 +41,7 @@ test("collects a privacy-preserving, tamper-evident agent receipt", async () => 
   const receipt = collectReceipt(env, new Date("2026-07-19T00:01:00.000Z"));
   assert.equal(receipt.schema, "facility.run.v1");
   assert.equal(receipt.github.pr, 42);
+  assert.equal(receipt.github.base_sha, "a".repeat(40));
   assert.equal(receipt.usage.input_tokens, 10);
   assert.equal(receipt.activity.turns, 1);
   assert.equal(receipt.activity.shell_commands, 1);
@@ -85,5 +87,6 @@ test("reports the full check count when receipt details are bounded", async () =
   assert.equal(receipt.checks_truncated, true);
   assert.equal(receipt.checks[0].name, "check-1");
   assert.equal(receipt.checks.at(-1).name, "check-200");
+  assert.equal(receipt.github.base_sha, undefined);
   assert.equal(verifyReceipt(receipt), true);
 });
