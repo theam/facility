@@ -3,6 +3,7 @@ import {
   githubIssueRevisionContext,
   githubIssueRevisionSha256,
 } from "../src/github/issue-revision.js";
+import { githubRequestContext } from "../src/github/router.js";
 
 describe("GitHub issue revision", () => {
   const issue = {
@@ -91,5 +92,52 @@ describe("GitHub issue revision", () => {
         githubIssueRevisionContext({ ...issue, body: "A changed scope." }, comments),
       ),
     ).not.toBe(baseline);
+  });
+});
+
+describe("GitHub issue revision producers agree", () => {
+  // Two different producers feed the same digest. At Architect dispatch the
+  // router stores `githubRequestContext(...)` in `run.trigger.request`, and
+  // `ensureArchitectPlanAcceptance` seals its digest into the proposal payload.
+  // At Builder dispatch `resolveBuilderPlanFreshnessForProposal` re-derives the
+  // digest from a live `GET /issues/:number` read. A project on
+  // `builderPlanPolicy: "required"` compares the two, so they have to agree
+  // whenever the issue itself did not change.
+  const issueWithBody = (body: string | null) => ({
+    number: 204,
+    title: "Keep sources consistent",
+    body,
+    state: "open",
+    user: { login: "requester" },
+    labels: [{ name: "frontend" }, "delivery"],
+    html_url: "https://github.test/theam/aifindr-ui/issues/116",
+  });
+  type LiveIssue = ReturnType<typeof issueWithBody>;
+
+  /** What Facility sealed into the proposal at Architect time. */
+  const storedDigest = (issue: LiveIssue) =>
+    githubIssueRevisionSha256(githubRequestContext({ issue }, []));
+
+  /** What the Builder gate observes from GitHub at dispatch time. */
+  const liveDigest = (issue: LiveIssue) =>
+    githubIssueRevisionSha256(githubIssueRevisionContext(issue, []));
+
+  it.each([
+    ["absent since creation", null],
+    ["cleared after creation", ""],
+    ["spaces only", "   "],
+    ["a newline only", "\n"],
+    ["CRLF only", "\r\n"],
+    ["ordinary prose", "Apply the same rule on every surface."],
+  ])("digests an unchanged issue whose body is %s identically on both sides", (_case, body) => {
+    const issue = issueWithBody(body);
+    expect(liveDigest(issue)).toBe(storedDigest(issue));
+  });
+
+  it("still detects an issue that gained or lost material body text", () => {
+    const empty = issueWithBody("");
+    const filled = issueWithBody("A changed scope.");
+    expect(liveDigest(filled)).not.toBe(storedDigest(empty));
+    expect(liveDigest(empty)).not.toBe(storedDigest(filled));
   });
 });
