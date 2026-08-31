@@ -13,7 +13,7 @@ import { createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, SignJWT } fro
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
-import { oauthBrowserOrigin } from "../src/auth/authorization-server.js";
+import { oauthBrowserOrigin, oidcScopesForConsent } from "../src/auth/authorization-server.js";
 import { pkceChallenge } from "../src/auth/identity-provider.js";
 import {
   AccessTokenError,
@@ -155,6 +155,22 @@ describe("Facility OAuth browser-origin runtime guard", () => {
   });
 });
 
+describe("Facility OAuth consent scopes", () => {
+  it("grants every requested advertised OIDC scope in canonical order", () => {
+    expect(oidcScopesForConsent("profile openid email offline_access")).toBe(
+      "openid offline_access email profile",
+    );
+  });
+
+  it("does not promote resource or unknown scopes into the OIDC grant", () => {
+    expect(oidcScopesForConsent("openid facility:mcp projects:write unknown")).toBe("openid");
+  });
+
+  it.each([undefined, null, 42, ["openid"]])("handles a non-string scope value: %j", (scope) => {
+    expect(oidcScopesForConsent(scope)).toBe("");
+  });
+});
+
 describe("Facility OAuth resource-server integration", async () => {
   const sql = postgres(databaseUrl, { max: 1, connect_timeout: 2 });
   let reachable = true;
@@ -239,6 +255,8 @@ describe("Facility OAuth resource-server integration", async () => {
       token_endpoint: `${issuer}/oauth/token`,
       registration_endpoint: `${issuer}/oauth/register`,
       code_challenge_methods_supported: ["S256"],
+      scopes_supported: ["openid", "offline_access", "email", "profile", "facility:mcp"],
+      authorization_response_iss_parameter_supported: true,
     });
     const poisonedMetadata = await app.inject({
       method: "GET",
@@ -269,14 +287,31 @@ describe("Facility OAuth resource-server integration", async () => {
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
+        scope: "openid offline_access email profile facility:mcp",
       },
     });
     expect(registration.statusCode, registration.body).toBe(201);
     expect(registration.json()).toMatchObject({
       client_name: "Facility MCP test",
       token_endpoint_auth_method: "none",
+      scope: "openid offline_access email profile facility:mcp",
     });
     expect(registration.json().client_secret).toBeUndefined();
+    const rejectedRegistration = await app.inject({
+      method: "POST",
+      url: "/oauth/register",
+      headers: proxyHeaders,
+      payload: {
+        client_name: "Invalid scope client",
+        redirect_uris: ["http://127.0.0.1:32123/callback"],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        scope: "openid facility:unknown",
+      },
+    });
+    expect(rejectedRegistration.statusCode).toBe(400);
+    expect(rejectedRegistration.json()).toMatchObject({ error: "invalid_client_metadata" });
   });
 
   it("resolves a current member and rejects cross-tenant claims", async () => {
@@ -324,7 +359,7 @@ describe("Facility OAuth resource-server integration", async () => {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: "openid offline_access facility:mcp",
+      scope: "openid offline_access email profile facility:mcp",
       resource: audience,
       state: "oauth-state",
       code_challenge: await pkceChallenge(verifier),
@@ -394,6 +429,7 @@ describe("Facility OAuth resource-server integration", async () => {
     });
     expect(resumed.statusCode).toBe(303);
     const callback = new URL(required(resumed.headers.location, "OAuth callback redirect"));
+    expect(callback.searchParams.get("iss")).toBe(issuer);
     expect(callback.searchParams.get("state")).toBe("oauth-state");
     const code = required(callback.searchParams.get("code"), "authorization code");
     const exchange = await tokenRequest(app, proxyHeaders, {
@@ -408,6 +444,7 @@ describe("Facility OAuth resource-server integration", async () => {
     const first = exchange.json();
     expect(first.access_token.split(".")).toHaveLength(3);
     expect(first.refresh_token).toBeTypeOf("string");
+    expect(decodeJwt(first.access_token).scope).toBe("facility:mcp");
     const persisted = JSON.stringify(await db.select().from(oauthArtifacts));
     expect(persisted).not.toContain(first.refresh_token);
     expect(persisted).not.toContain(first.access_token);

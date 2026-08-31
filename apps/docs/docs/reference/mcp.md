@@ -50,6 +50,27 @@ same issuer. `MCP_AUTHORIZATION_SERVER` must be an HTTPS origin; HTTP is accepte
 loopback development origin. The web origin proxies `/.well-known/*` and `/oauth/*` to the API so authorization,
 interaction, GitHub login/callback, and resume retain host-only cookies on one browser origin.
 
+### Codex remote OAuth smoke test
+
+Register the canonical MCP transport URL, complete browser authorization, and inspect the
+configured server:
+
+```console
+codex mcp add facility --url https://mcp.facility.yourorg.com/mcp
+codex mcp login facility
+codex mcp list
+```
+
+Restart any Codex session that was already open when the server was added, then read
+`facility://me` to verify authenticated access. Codex requests all authorization-server scopes
+advertised by `scopes_supported`. Facility advertises `facility:mcp` there so DCR can register it,
+also identifies it in protected-resource metadata, and grants it only for `MCP_PUBLIC_URL`; the
+requested `openid`, `offline_access`, `email`, and `profile` scopes remain in the OIDC grant.
+Authorization-code callbacks include the exact configured issuer in `iss`, as advertised by
+`authorization_response_iss_parameter_supported`. A repeated consent screen usually indicates an
+advertised scope was not persisted in the grant. A client error about a missing issuer means the
+authorization response did not satisfy that metadata contract.
+
 ### Breaking upgrade: same-origin, path-aware OAuth
 
 This OAuth layout changes both token identity boundaries: the issuer moves from the API origin to

@@ -23,6 +23,7 @@ export type HttpServerOptions = {
 
 const PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource";
 const MCP_ENDPOINT_PATH = "/mcp";
+const MCP_OAUTH_SCOPE = "facility:mcp";
 
 export function serveHttp(options: HttpServerOptions) {
   const host = options.host ?? "127.0.0.1";
@@ -109,6 +110,7 @@ export function serveHttp(options: HttpServerOptions) {
           resource: resourceUrl ?? "",
           authorization_servers: [options.authorizationServer],
           bearer_methods_supported: ["header"],
+          scopes_supported: [MCP_OAUTH_SCOPE],
         }),
       );
       return;
