@@ -463,6 +463,40 @@ test("init installs the method end to end", async (t) => {
   assert.ok(again.stdout.includes("left untouched"), "second init should skip existing files");
 });
 
+// Regression coverage for #229: the closing checklist tells the user to
+// "re-run init with --canary-bot=<your-app>[bot]", but the flag was missing
+// from validateLocalFlags's allowlist, so that documented command failed
+// before init() ever ran. https://github.com/theam/facility/issues/229
+test("init accepts --canary-bot and renders it into the crew workflow", async (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const result = runCli(
+    ["init", "--yes", `--dir=${dir}`, "--provision=npm run setup", "--canary-bot=my-app[bot]"],
+    dir,
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const crew = readFileSync(join(dir, ".github/workflows/facility-crew.yml"), "utf8");
+  assert.ok(crew.includes("my-app[bot]"), "custom canary bot login must be rendered");
+  assert.ok(
+    !crew.includes("facility-canary[bot]"),
+    "default canary bot login must not leak in once overridden",
+  );
+});
+
+test("init rejects a valueless --canary-bot and documents the flag in help", () => {
+  const dir = makeTargetRepo();
+  const rejected = runCli(["init", "--yes", `--dir=${dir}`, "--canary-bot"], dir);
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /--canary-bot requires a value/);
+  rmSync(dir, { recursive: true, force: true });
+
+  const help = runCli(["help"]);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /--canary-bot=<your-app>\[bot\]/, "global help must document --canary-bot");
+});
+
 test("init renders every supported Anthropic authentication mode consistently", async (t) => {
   const expectations = {
     "api-key": "anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}",
