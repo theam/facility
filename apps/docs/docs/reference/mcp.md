@@ -66,6 +66,7 @@ Restart any Codex session that was already open when the server was added, then 
 advertised by `scopes_supported`. Facility advertises `facility:mcp` there so DCR can register it,
 also identifies it in protected-resource metadata, and grants it only for `MCP_PUBLIC_URL`; the
 requested `openid`, `offline_access`, `email`, and `profile` scopes remain in the OIDC grant.
+Clients must request `facility:mcp`; omitting that scope never grants MCP API access implicitly.
 Authorization-code callbacks include the exact configured issuer in `iss`, as advertised by
 `authorization_response_iss_parameter_supported`. A repeated consent screen usually indicates an
 advertised scope was not persisted in the grant. A client error about a missing issuer means the

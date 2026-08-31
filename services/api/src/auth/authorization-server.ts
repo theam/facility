@@ -94,9 +94,11 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
     extraTokenClaims: async (_ctx: unknown, token: { accountId?: string; scope?: string }) => {
       if (!token.accountId) return {};
       const account = await activeAccount(app, token.accountId);
-      return account
-        ? { org_id: account.member.orgId, scope: token.scope ?? FACILITY_MCP_SCOPE }
-        : {};
+      if (!account) return {};
+      return {
+        org_id: account.member.orgId,
+        ...(token.scope ? { scope: token.scope } : {}),
+      };
     },
   });
   provider.proxy = true;
@@ -207,12 +209,11 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
   );
 }
 
-export function oidcScopesForConsent(requestedScope: unknown) {
-  const requested = requestedScope instanceof Set ? requestedScope : oauthScopes(requestedScope);
+export function oidcScopesForConsent(requested: ReadonlySet<string>) {
   return FACILITY_OIDC_SCOPES.filter((scope) => requested.has(scope)).join(" ");
 }
 
-function oauthScopes(value: unknown) {
+export function oauthScopes(value: unknown) {
   return new Set(typeof value === "string" ? value.split(/\s+/).filter(Boolean) : []);
 }
 

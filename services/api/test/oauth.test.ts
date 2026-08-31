@@ -13,7 +13,11 @@ import { createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, SignJWT } fro
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
-import { oauthBrowserOrigin, oidcScopesForConsent } from "../src/auth/authorization-server.js";
+import {
+  oauthBrowserOrigin,
+  oauthScopes,
+  oidcScopesForConsent,
+} from "../src/auth/authorization-server.js";
 import { pkceChallenge } from "../src/auth/identity-provider.js";
 import {
   AccessTokenError,
@@ -157,17 +161,19 @@ describe("Facility OAuth browser-origin runtime guard", () => {
 
 describe("Facility OAuth consent scopes", () => {
   it("grants every requested advertised OIDC scope in canonical order", () => {
-    expect(oidcScopesForConsent("profile openid email offline_access")).toBe(
+    expect(oidcScopesForConsent(oauthScopes("profile openid email offline_access"))).toBe(
       "openid offline_access email profile",
     );
   });
 
   it("does not promote resource or unknown scopes into the OIDC grant", () => {
-    expect(oidcScopesForConsent("openid facility:mcp projects:write unknown")).toBe("openid");
+    expect(oidcScopesForConsent(oauthScopes("openid facility:mcp projects:write unknown"))).toBe(
+      "openid",
+    );
   });
 
   it.each([undefined, null, 42, ["openid"]])("handles a non-string scope value: %j", (scope) => {
-    expect(oidcScopesForConsent(scope)).toBe("");
+    expect(oauthScopes(scope)).toEqual(new Set());
   });
 });
 
@@ -375,63 +381,14 @@ describe("Facility OAuth resource-server integration", async () => {
     expect(rejectedResource.statusCode).toBe(400);
     expect(rejectedResource.body).toContain("Unknown OAuth resource");
 
-    const authorization = await app.inject({
-      method: "GET",
-      url: `/oauth/authorize?${query}`,
-      headers: proxyHeaders,
+    const code = await completePkceConsent({
+      app,
+      config,
+      userId,
+      orgId,
+      proxyHeaders,
+      query,
     });
-    expect(authorization.statusCode).toBe(303);
-    const providerCookies = authorization.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-    const interactionUrl = new URL(
-      required(authorization.headers.location, "interaction redirect"),
-      config.publicUrl,
-    );
-    expect(interactionUrl.origin).toBe(issuer);
-    const interactionPath = interactionUrl.pathname;
-    const signedOutInteraction = await app.inject({
-      method: "GET",
-      url: interactionPath,
-      headers: { cookie: providerCookies.join("; ") },
-    });
-    expect(signedOutInteraction.statusCode).toBe(302);
-    expect(signedOutInteraction.headers.location).toBe(
-      `${issuer}/api/auth/login?returnTo=${encodeURIComponent(interactionPath)}`,
-    );
-    const facilityCookie = `facility_session=${await mintSessionCookie(config, userId, orgId)}`;
-    const interaction = await app.inject({
-      method: "GET",
-      url: interactionPath,
-      headers: { cookie: [facilityCookie, ...providerCookies].join("; ") },
-    });
-    expect(interaction.statusCode).toBe(200);
-    expect(interaction.body).toContain("Authorize Facility MCP");
-    expect(interaction.body).toContain(redirectUri);
-    const consent = await app.inject({
-      method: "POST",
-      url: interactionPath,
-      headers: {
-        ...proxyHeaders,
-        cookie: [facilityCookie, ...providerCookies].join("; "),
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      payload: "confirm=yes",
-    });
-    expect(consent.statusCode).toBe(303);
-    const resumedCookies = [
-      ...providerCookies,
-      ...consent.cookies.map((cookie) => `${cookie.name}=${cookie.value}`),
-    ];
-    const consentLocation = required(consent.headers.location, "consent redirect");
-    const resumed = await app.inject({
-      method: "GET",
-      url: new URL(consentLocation, issuer).pathname + new URL(consentLocation, issuer).search,
-      headers: { ...proxyHeaders, cookie: resumedCookies.join("; ") },
-    });
-    expect(resumed.statusCode).toBe(303);
-    const callback = new URL(required(resumed.headers.location, "OAuth callback redirect"));
-    expect(callback.searchParams.get("iss")).toBe(issuer);
-    expect(callback.searchParams.get("state")).toBe("oauth-state");
-    const code = required(callback.searchParams.get("code"), "authorization code");
     const exchange = await tokenRequest(app, proxyHeaders, {
       grant_type: "authorization_code",
       client_id: clientId,
@@ -465,7 +422,15 @@ describe("Facility OAuth resource-server integration", async () => {
       resource: audience,
     });
     expect(rotated.statusCode, rotated.body).toBe(200);
-    expect(rotated.json().refresh_token).not.toBe(first.refresh_token);
+    const rotatedBody = rotated.json();
+    expect(rotatedBody.refresh_token).not.toBe(first.refresh_token);
+    expect(decodeJwt(rotatedBody.access_token).scope).toBe("facility:mcp");
+    const refreshedMe = await app.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${rotatedBody.access_token}` },
+    });
+    expect(refreshedMe.statusCode, refreshedMe.body).toBe(200);
     const replay = await tokenRequest(app, proxyHeaders, {
       grant_type: "refresh_token",
       client_id: clientId,
@@ -475,7 +440,222 @@ describe("Facility OAuth resource-server integration", async () => {
     expect(replay.statusCode).toBe(400);
     expect(replay.json().error).toBe("invalid_grant");
   });
+
+  it("does not grant MCP access when the client omits the MCP scope", async () => {
+    const proxyHeaders = {
+      host: "api.facility.test",
+      "x-forwarded-host": "api.facility.test",
+      "x-forwarded-proto": "https",
+    };
+    const redirectUri = "http://127.0.0.1:32125/callback";
+    const registration = await app.inject({
+      method: "POST",
+      url: "/oauth/register",
+      headers: proxyHeaders,
+      payload: {
+        client_name: "OIDC-only regression client",
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        scope: "openid offline_access email",
+      },
+    });
+    expect(registration.statusCode, registration.body).toBe(201);
+    const clientId = registration.json().client_id as string;
+    const verifier = "oidc-only-pkce-verifier-".padEnd(64, "x");
+    const query = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope: "openid offline_access email",
+      resource: audience,
+      state: "oidc-only-state",
+      code_challenge: await pkceChallenge(verifier),
+      code_challenge_method: "S256",
+    });
+    const code = await completePkceConsent({
+      app,
+      config,
+      userId,
+      orgId,
+      proxyHeaders,
+      query,
+    });
+    const exchange = await tokenRequest(app, proxyHeaders, {
+      grant_type: "authorization_code",
+      client_id: clientId,
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+      resource: audience,
+    });
+    expect(exchange.statusCode, exchange.body).toBe(200);
+    const first = exchange.json();
+    expect(first.refresh_token).toBeTypeOf("string");
+    await expectMcpAccessDenied(app, first.access_token, { userId, orgId });
+
+    const rotated = await tokenRequest(app, proxyHeaders, {
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: first.refresh_token,
+      resource: audience,
+    });
+    expect(rotated.statusCode, rotated.body).toBe(200);
+    await expectMcpAccessDenied(app, rotated.json().access_token, { userId, orgId });
+  });
+
+  it("does not grant MCP access when the authorization request omits scope", async () => {
+    const proxyHeaders = {
+      host: "api.facility.test",
+      "x-forwarded-host": "api.facility.test",
+      "x-forwarded-proto": "https",
+    };
+    const redirectUri = "http://127.0.0.1:32126/callback";
+    const registration = await app.inject({
+      method: "POST",
+      url: "/oauth/register",
+      headers: proxyHeaders,
+      payload: {
+        client_name: "Scope-less regression client",
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code"],
+        response_types: ["code"],
+      },
+    });
+    expect(registration.statusCode, registration.body).toBe(201);
+    const clientId = registration.json().client_id as string;
+    const verifier = "scope-less-pkce-verifier-".padEnd(64, "x");
+    const query = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      resource: audience,
+      state: "scope-less-state",
+      code_challenge: await pkceChallenge(verifier),
+      code_challenge_method: "S256",
+    });
+    const callback = await completePkceConsentCallback({
+      app,
+      config,
+      userId,
+      orgId,
+      proxyHeaders,
+      query,
+    });
+    expect(callback.searchParams.get("error"), callback.toString()).toBe("access_denied");
+    expect(callback.searchParams.get("code")).toBeNull();
+  });
 });
+
+async function expectMcpAccessDenied(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  accessToken: string,
+  expected: { userId: string; orgId: string },
+) {
+  const claims = decodeJwt(accessToken);
+  expect(claims).toMatchObject({
+    iss: issuer,
+    aud: audience,
+    sub: expected.userId,
+    org_id: expected.orgId,
+  });
+  expect(claims.scope).toBeUndefined();
+  await expect(verifyAccessToken(accessToken, oauthConfig)).rejects.toBeInstanceOf(
+    AccessTokenError,
+  );
+  const denied = await app.inject({
+    method: "GET",
+    url: "/v1/me",
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  expect(denied.statusCode).toBe(401);
+  expect(denied.json()).toEqual({
+    error: { code: "unauthorized", message: "Invalid access token" },
+  });
+}
+
+type PkceConsentInput = {
+  app: Awaited<ReturnType<typeof buildApp>>;
+  config: AppConfig;
+  userId: string;
+  orgId: string;
+  proxyHeaders: Record<string, string>;
+  query: URLSearchParams;
+};
+
+async function completePkceConsent(input: PkceConsentInput) {
+  const callback = await completePkceConsentCallback(input);
+  return required(callback.searchParams.get("code"), "authorization code");
+}
+
+async function completePkceConsentCallback(input: PkceConsentInput) {
+  const redirectUri = required(input.query.get("redirect_uri"), "redirect URI");
+  const state = required(input.query.get("state"), "OAuth state");
+  const authorization = await input.app.inject({
+    method: "GET",
+    url: `/oauth/authorize?${input.query}`,
+    headers: input.proxyHeaders,
+  });
+  expect(authorization.statusCode).toBe(303);
+  const providerCookies = authorization.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
+  const interactionUrl = new URL(
+    required(authorization.headers.location, "interaction redirect"),
+    input.config.publicUrl,
+  );
+  expect(interactionUrl.origin).toBe(issuer);
+  const interactionPath = interactionUrl.pathname;
+  const signedOutInteraction = await input.app.inject({
+    method: "GET",
+    url: interactionPath,
+    headers: { cookie: providerCookies.join("; ") },
+  });
+  expect(signedOutInteraction.statusCode).toBe(302);
+  expect(signedOutInteraction.headers.location).toBe(
+    `${issuer}/api/auth/login?returnTo=${encodeURIComponent(interactionPath)}`,
+  );
+  const facilityCookie = `facility_session=${await mintSessionCookie(
+    input.config,
+    input.userId,
+    input.orgId,
+  )}`;
+  const interaction = await input.app.inject({
+    method: "GET",
+    url: interactionPath,
+    headers: { cookie: [facilityCookie, ...providerCookies].join("; ") },
+  });
+  expect(interaction.statusCode).toBe(200);
+  expect(interaction.body).toContain("Authorize Facility MCP");
+  expect(interaction.body).toContain(redirectUri);
+  const consent = await input.app.inject({
+    method: "POST",
+    url: interactionPath,
+    headers: {
+      ...input.proxyHeaders,
+      cookie: [facilityCookie, ...providerCookies].join("; "),
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    payload: "confirm=yes",
+  });
+  expect(consent.statusCode).toBe(303);
+  const resumedCookies = [
+    ...providerCookies,
+    ...consent.cookies.map((cookie) => `${cookie.name}=${cookie.value}`),
+  ];
+  const consentLocation = required(consent.headers.location, "consent redirect");
+  const resumedUrl = new URL(consentLocation, issuer);
+  const resumed = await input.app.inject({
+    method: "GET",
+    url: resumedUrl.pathname + resumedUrl.search,
+    headers: { ...input.proxyHeaders, cookie: resumedCookies.join("; ") },
+  });
+  expect(resumed.statusCode).toBe(303);
+  const callback = new URL(required(resumed.headers.location, "OAuth callback redirect"));
+  expect(callback.searchParams.get("iss")).toBe(issuer);
+  expect(callback.searchParams.get("state")).toBe(state);
+  return callback;
+}
 
 function tokenRequest(
   app: Awaited<ReturnType<typeof buildApp>>,
