@@ -25,6 +25,12 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libseccomp-dev pkg-config \
   && rm -rf /var/lib/apt/lists/*
 
+# GitHub-hosted runners have repeatedly received HTTP/2 INTERNAL_ERROR resets
+# from proxy.golang.org during these clean, cacheless source builds. Go still
+# verifies every downloaded module against go.sum; use HTTP/1.1 so a transport
+# stream reset cannot abort publication after the release checks have passed.
+ENV GODEBUG=http2client=0
+
 # Keep these stages in a dependency chain so BuildKit cannot materialize eight
 # complete Go source trees and compiler caches at once. Each successful stage
 # retains only /out before the next source build begins.

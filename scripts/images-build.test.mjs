@@ -363,6 +363,11 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     runnerDockerfile,
     /^FROM golang:1\.26\.6-trixie@sha256:[0-9a-f]{64} AS go-tools-base$/m,
   );
+  assert.match(
+    runnerDockerfile,
+    /^ENV GODEBUG=http2client=0$/m,
+    "clean Go tool builds must avoid the flaky HTTP/2 module transport",
+  );
   for (const [parent, stage] of [
     ["go-tools-base", "moby-build"],
     ["moby-build", "docker-cli-build"],
