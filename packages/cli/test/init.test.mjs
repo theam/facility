@@ -540,6 +540,48 @@ test("add database module wires the triple", async (t) => {
     encoding: "utf8",
   });
   assert.equal(parse.status, 0, parse.stderr);
+
+  // Windows sends tool_input.file_path with backslashes; the module's
+  // migration guard must still fire (issue #227).
+  const windowsMigration = spawnSync(process.execPath, [".claude/hooks/protect-files.mjs"], {
+    cwd: dir,
+    encoding: "utf8",
+    input: JSON.stringify({
+      tool_name: "Edit",
+      tool_input: { file_path: "C:\\repo\\supabase\\migrations\\0001_init.sql" },
+    }),
+  });
+  assert.equal(windowsMigration.status, 2, windowsMigration.stdout + windowsMigration.stderr);
+});
+
+test("protect-files.mjs blocks a real .env on a Windows-style path (issue #227)", async (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  runCli(["init", "--yes", `--dir=${dir}`, "--provision=npm run setup", "--checks=npm test"], dir);
+  const hookPath = ".claude/hooks/protect-files.mjs";
+
+  const posix = spawnSync(process.execPath, [hookPath], {
+    cwd: dir,
+    encoding: "utf8",
+    input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: "/repo/.env" } }),
+  });
+  assert.equal(posix.status, 2, posix.stdout + posix.stderr);
+
+  const windows = spawnSync(process.execPath, [hookPath], {
+    cwd: dir,
+    encoding: "utf8",
+    input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: "C:\\repo\\.env" } }),
+  });
+  assert.equal(windows.status, 2, windows.stdout + windows.stderr);
+
+  // .env.example stays writable on both path styles.
+  const windowsExample = spawnSync(process.execPath, [hookPath], {
+    cwd: dir,
+    encoding: "utf8",
+    input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: "C:\\repo\\.env.example" } }),
+  });
+  assert.equal(windowsExample.status, 0, windowsExample.stdout + windowsExample.stderr);
 });
 
 test("doctor reports missing install", async (t) => {
