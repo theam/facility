@@ -55,6 +55,10 @@ import {
 } from "../builder-plan-policy.js";
 import { ApiError } from "../errors.js";
 import {
+  insertGithubPlanAcceptanceReplacingSiblings,
+  supersedeOpenGithubPlanAcceptances,
+} from "../github/plan-acceptance.js";
+import {
   architectPlanPublicationKey,
   architectPlanPublicationMarker,
   effectiveArchitectPlanProposalState,
@@ -1090,7 +1094,7 @@ async function ensureArchitectPlanAcceptance(
     ...(issueRevisionSha256 ? { issueRevisionSha256 } : {}),
   };
   await db.execute(
-    sql`select pg_advisory_xact_lock(hashtextextended(${`architect-plan:${run.id}`}, 0))`,
+    sql`select pg_advisory_xact_lock(hashtextextended(${`architect-plan-issue:${run.orgId}:${repo.id}:${issueNumber}`}, 0))`,
   );
   const candidates = await db
     .select()
@@ -1159,33 +1163,31 @@ async function ensureArchitectPlanAcceptance(
         })
         .onConflictDoNothing();
     }
+    // Same-run retry: keep this proposal and cancel any other live Gate 1 rows.
+    await supersedeOpenGithubPlanAcceptances(db, {
+      orgId: run.orgId,
+      projectId: run.projectId,
+      repoId: repo.id,
+      issueNumber,
+      architectRunId: run.id,
+      keepProposalId: existing.id,
+    });
     return existing;
   }
-  const created = (
-    await db
-      .insert(proposals)
-      .values({
-        id: newId("prop"),
-        orgId: run.orgId,
-        projectId: run.projectId,
-        runId: run.id,
-        actionTypeId: actionType.id,
-        payload: canonicalPayload,
-        contextMd: plan,
-        expiresAt: new Date(Date.now() + actionType.defaultTtlHours * 3_600_000),
-      })
-      .returning()
-  )[0];
-  if (!created) throw new Error("plan_acceptance_create_failed");
-  await db.insert(proposalEvents).values({
+  return insertGithubPlanAcceptanceReplacingSiblings(db, {
     orgId: run.orgId,
-    proposalId: created.id,
-    seq: 1,
-    type: "open",
-    actor: { type: "agent", id: run.id },
-    data: { source: "architect_run" },
+    projectId: run.projectId,
+    repoId: repo.id,
+    owner: repo.owner,
+    repo: repo.name,
+    issueNumber,
+    architectRunId: run.id,
+    actionTypeId: actionType.id,
+    proposalId: newId("prop"),
+    payload: canonicalPayload,
+    contextMd: plan,
+    expiresAt: new Date(Date.now() + actionType.defaultTtlHours * 3_600_000),
   });
-  return created;
 }
 
 export async function reconcileArchitectPlanPublications(

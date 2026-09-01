@@ -819,6 +819,13 @@ describe("github integration", async () => {
       agentCommand: "codex-builder",
       ambiguous: false,
     });
+    expect(resolveSlashCommand("/builder prop_abc123def456")).toEqual({
+      command: "builder",
+      agentCommand: "builder",
+      proposalId: "prop_abc123def456",
+      ambiguous: false,
+    });
+    expect(resolveSlashCommand("/builder prop_a\n/builder prop_b")).toEqual({ ambiguous: true });
   });
 
   it("routes only creation actions and denies replay-prone GitHub updates", async () => {

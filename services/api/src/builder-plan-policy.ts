@@ -22,6 +22,8 @@ export type BuilderPlanDenialCode =
   | "builder_plan_context_invalid"
   | "builder_plan_expired"
   | "builder_plan_rejected"
+  | "builder_plan_superseded"
+  | "builder_plan_ambiguous"
   | "builder_plan_already_consumed"
   | "builder_plan_stale"
   | "builder_plan_freshness_unavailable";
@@ -31,6 +33,8 @@ const BUILDER_PLAN_DENIAL_CODES = new Set<BuilderPlanDenialCode>([
   "builder_plan_context_invalid",
   "builder_plan_expired",
   "builder_plan_rejected",
+  "builder_plan_superseded",
+  "builder_plan_ambiguous",
   "builder_plan_already_consumed",
   "builder_plan_stale",
   "builder_plan_freshness_unavailable",
@@ -427,6 +431,9 @@ async function validatePlanAcceptance(
   }
   if (proposal.state === "rejected") {
     return invalid("builder_plan_rejected", "proposal_rejected");
+  }
+  if (proposal.state === "cancelled") {
+    return invalid("builder_plan_superseded", "proposal_superseded");
   }
   if (
     (proposal.state === "open" && proposal.expiresAt.getTime() <= Date.now()) ||
