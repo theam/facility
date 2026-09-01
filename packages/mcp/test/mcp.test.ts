@@ -782,9 +782,11 @@ describe("@facility/mcp", () => {
     const body = (await response.json()) as {
       resource: string;
       authorization_servers: string[];
+      scopes_supported: string[];
     };
     assert.equal(body.resource, "https://mcp.facility.test/mcp");
     assert.deepEqual(body.authorization_servers, ["https://auth.facility.test"]);
+    assert.deepEqual(body.scopes_supported, ["facility:mcp"]);
     const legacyAlias = await fetch(
       `http://127.0.0.1:${port}/.well-known/oauth-protected-resource`,
       { redirect: "manual" },

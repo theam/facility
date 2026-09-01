@@ -363,6 +363,11 @@ test("Bake keeps thin target boundaries and publishes every target through one g
     runnerDockerfile,
     /^FROM golang:1\.26\.6-trixie@sha256:[0-9a-f]{64} AS go-tools-base$/m,
   );
+  assert.match(
+    runnerDockerfile,
+    /^ENV GODEBUG=http2client=0$/m,
+    "clean Go tool builds must avoid the flaky HTTP/2 module transport",
+  );
   for (const [parent, stage] of [
     ["go-tools-base", "moby-build"],
     ["moby-build", "docker-cli-build"],
@@ -379,6 +384,20 @@ test("Bake keeps thin target boundaries and publishes every target through one g
   assert.equal((runnerDockerfile.match(/rm -rf \/src "\$archive"/g) ?? []).length, 8);
   assert.match(runnerDockerfile, /go version -m "\$binary"[\s\S]*go1\.26\.6/);
   assert.match(runnerDockerfile, /golang\.org\/x\/net[\s\S]*v0\.56\.0/);
+  assert.equal(
+    runnerDockerfile.match(/golang\.org\/x\/crypto=golang\.org\/x\/crypto@v0\.55\.0/g)?.length,
+    3,
+    "every copied Go tool with the vulnerable x/crypto dependency must use the fixed release",
+  );
+  assert.match(
+    runnerDockerfile,
+    /for binary in \/out\/containerd \/out\/rootlesskit \/out\/docker-compose; do[\s\S]*golang\.org\/x\/crypto[\s\S]*v0\.55\.0/,
+  );
+  assert.equal(
+    (runnerDockerfile.match(/\|\| exit 1; \\\n\s+done/g) ?? []).length,
+    4,
+    "every multi-binary Go audit must stop on the first failed binary",
+  );
   assert.equal(
     runnerDockerfile.match(/golang\.org\/x\/mod=golang\.org\/x\/mod@v0\.40\.0/g)?.length,
     5,

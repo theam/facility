@@ -25,6 +25,12 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libseccomp-dev pkg-config \
   && rm -rf /var/lib/apt/lists/*
 
+# GitHub-hosted runners have repeatedly received HTTP/2 INTERNAL_ERROR resets
+# from proxy.golang.org during these clean, cacheless source builds. Go still
+# verifies every downloaded module against go.sum; use HTTP/1.1 so a transport
+# stream reset cannot abort publication after the release checks have passed.
+ENV GODEBUG=http2client=0
+
 # Keep these stages in a dependency chain so BuildKit cannot materialize eight
 # complete Go source trees and compiler caches at once. Each successful stage
 # retains only /out before the next source build begins.
@@ -79,6 +85,7 @@ RUN archive=/tmp/containerd.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.55.0 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && make VERSION="v${CONTAINERD_VERSION}" REVISION="$CONTAINERD_COMMIT" STATIC=1 \
@@ -99,6 +106,7 @@ RUN archive=/tmp/rootlesskit.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.55.0 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags='-s -w' -o /out/rootlesskit ./cmd/rootlesskit \
   && test "$(/out/rootlesskit --version | awk '{print $3}')" = "3.0.2" \
@@ -136,6 +144,7 @@ RUN archive=/tmp/compose.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.55.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && CGO_ENABLED=0 GOMAXPROCS=1 go build -p=1 -mod=mod -trimpath -tags=e2e \
     -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
@@ -178,19 +187,23 @@ RUN archive=/tmp/gh.tar.gz \
   && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
 # Keep the toolchain claim executable: fail the image build if any copied Go
-# binary was not produced by the patched compiler, or if the two projects that
-# pinned vulnerable x/net code did not resolve the reviewed replacement.
+# binary was not produced by the patched compiler, or if projects that pinned
+# vulnerable Go modules did not resolve the reviewed replacements.
 FROM gh-build AS go-tools-audit
 RUN for binary in /out/*; do \
-    test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.26.6"; \
+    test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.26.6" || exit 1; \
   done \
   && for binary in /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/rootlesskit; do \
     go version -m "$binary" | awk \
-      '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.56.0" { found = 1 } END { exit !found }'; \
+      '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.56.0" { found = 1 } END { exit !found }' || exit 1; \
+  done \
+  && for binary in /out/containerd /out/rootlesskit /out/docker-compose; do \
+    go version -m "$binary" | awk \
+      '$1 == "=>" && $2 == "golang.org/x/crypto" && $3 == "v0.55.0" { found = 1 } END { exit !found }' || exit 1; \
   done \
   && for binary in /out/dockerd /out/containerd /out/ctr /out/docker-buildx /out/docker-compose /out/gh; do \
     go version -m "$binary" | awk \
-      '$1 == "=>" && $2 == "golang.org/x/mod" && $3 == "v0.40.0" { found = 1 } END { exit !found }'; \
+      '$1 == "=>" && $2 == "golang.org/x/mod" && $3 == "v0.40.0" { found = 1 } END { exit !found }' || exit 1; \
   done \
   && go version -m /out/docker-buildx | awk \
     '$1 == "=>" && $2 == "github.com/moby/go-archive" && $3 == "v0.3.0" { found = 1 } END { exit !found }'

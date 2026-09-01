@@ -6,6 +6,7 @@ declare module "oidc-provider" {
 
   interface GrantInstance {
     addOIDCScope(scope: string): void;
+    rejectOIDCScope(scope: string): void;
     addResourceScope(resource: string, scope: string): void;
     save(): Promise<string>;
   }

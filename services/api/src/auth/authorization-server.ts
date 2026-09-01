@@ -9,6 +9,9 @@ import { ApiError } from "../errors.js";
 import type { AppConfig } from "../types.js";
 import { oauthAdapterFactory } from "./oauth-adapter.js";
 
+export const FACILITY_OIDC_SCOPES = ["openid", "offline_access", "email", "profile"] as const;
+export const FACILITY_MCP_SCOPE = "facility:mcp";
+
 export async function registerAuthorizationServer(app: FastifyInstance, config: AppConfig) {
   if (!config.oauthIssuer || !config.oauthJwks || !config.mcpPublicUrl) return;
   const browserOrigin = oauthBrowserOrigin(config);
@@ -37,7 +40,7 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
           if (resource !== config.mcpPublicUrl)
             throw new ApiError(400, "invalid_target", "Unknown OAuth resource");
           return {
-            scope: "facility:mcp",
+            scope: FACILITY_MCP_SCOPE,
             audience: config.mcpPublicUrl,
             accessTokenTTL: 900,
             accessTokenFormat: "jwt",
@@ -55,7 +58,7 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       end_session: "/oauth/session/end",
       userinfo: "/oauth/userinfo",
     },
-    scopes: ["openid", "offline_access"],
+    scopes: [...FACILITY_OIDC_SCOPES, FACILITY_MCP_SCOPE],
     claims: { openid: ["sub"], email: ["email", "email_verified"], profile: ["name"] },
     formats: { AccessToken: "jwt" },
     pkce: { required: () => true, methods: ["S256"] },
@@ -91,7 +94,11 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
     extraTokenClaims: async (_ctx: unknown, token: { accountId?: string; scope?: string }) => {
       if (!token.accountId) return {};
       const account = await activeAccount(app, token.accountId);
-      return account ? { org_id: account.member.orgId, scope: token.scope ?? "facility:mcp" } : {};
+      if (!account) return {};
+      return {
+        org_id: account.member.orgId,
+        ...(token.scope ? { scope: token.scope } : {}),
+      };
     },
   });
   provider.proxy = true;
@@ -177,8 +184,16 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
         throw new ApiError(400, "invalid_target", "Unknown OAuth resource");
       let grant = details.grantId ? await provider.Grant.find(details.grantId) : undefined;
       if (!grant) grant = new provider.Grant({ accountId: request.principal.userId, clientId });
-      grant.addOIDCScope("openid offline_access");
-      grant.addResourceScope(resource, "facility:mcp");
+      const requestedScopes = oauthScopes(details.params?.scope);
+      const oidcScopes = oidcScopesForConsent(requestedScopes);
+      if (oidcScopes) grant.addOIDCScope(oidcScopes);
+      if (requestedScopes.has(FACILITY_MCP_SCOPE)) {
+        // The AS advertises this scope so clients may register and request it, but it must remain
+        // resource-bound. Mark it encountered-but-rejected in the unbound OIDC grant and grant it
+        // only for the canonical MCP resource below.
+        grant.rejectOIDCScope(FACILITY_MCP_SCOPE);
+        grant.addResourceScope(resource, FACILITY_MCP_SCOPE);
+      }
       const grantId = await grant.save();
       await provider.interactionFinished(
         request.raw,
@@ -192,6 +207,14 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       return reply.hijack();
     },
   );
+}
+
+export function oidcScopesForConsent(requested: ReadonlySet<string>) {
+  return FACILITY_OIDC_SCOPES.filter((scope) => requested.has(scope)).join(" ");
+}
+
+export function oauthScopes(value: unknown) {
+  return new Set(typeof value === "string" ? value.split(/\s+/).filter(Boolean) : []);
 }
 
 async function activeAccount(app: FastifyInstance, userId: string) {
