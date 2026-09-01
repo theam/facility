@@ -1,6 +1,7 @@
 import { newId } from "@facility/core";
 import {
   actionTypes,
+  auditEvents,
   ghCiEvents,
   ghIssues,
   ghPullRequests,
@@ -174,6 +175,7 @@ const PipelineStageSchema = z.enum([
   "validating",
   "review",
   "shipped",
+  "abandoned",
 ]);
 const PipelineStageStateSchema = z.enum([
   "ready_to_plan",
@@ -187,6 +189,7 @@ const PipelineStageStateSchema = z.enum([
   "checks_failed",
   "awaiting_review",
   "shipped_recently",
+  "abandoned_recently",
 ]);
 const PipelineStageKindSchema = z.enum(["human", "agent", "machine", "done"]);
 const PipelinePullRequestSchema = z.object({
@@ -272,6 +275,10 @@ const StoryDetailSchema = z.object({
   ghCreatedAt: DateValue.nullable(),
   ghUpdatedAt: DateValue.nullable(),
   closedAt: DateValue.nullable(),
+  stateReason: z.string().nullable(),
+  /** The human who closed this story from Facility, and why, from the audit log. */
+  closedBy: z.string().nullable(),
+  closeReason: z.string().nullable(),
   wsjf: StoryWsjfSchema.nullable(),
   prs: z.array(PipelinePullRequestSchema),
   ciState: z.enum(["pending", "success", "failure"]).nullable(),
@@ -666,8 +673,12 @@ export async function registerGithubV1Routes(app: FastifyInstance, context: V1Ro
         ? (staged.get(stageDefinition.key) ?? []).find((story) => story.key === selected.key)
         : null;
       const { linkedRuns: _linkedRuns, ...story } = selected;
+      const closeDecision = await latestStoryClose(db, p.orgId, projectId, selected);
       return {
         ...story,
+        stateReason: story.stateReason ?? null,
+        closedBy: closeDecision.closedBy,
+        closeReason: closeDecision.reason,
         bodyMd: bodyRow?.bodyMd ?? null,
         ciState: placedStory?.ciState ?? null,
         ciUrl: placedStory?.ciUrl ?? null,
@@ -1486,7 +1497,54 @@ function proposalKeysForAssembly(
   return keys;
 }
 
-async function loadIssue(
+export /**
+ * Who closed this story from Facility and why. The audit log is the only place
+ * that record exists — GitHub has no field for a closing rationale — so the
+ * timeline reads the decision back from the event the close verb wrote. The
+ * event is matched on the closure it recorded, never merely the latest one:
+ * after an external reopen and close, an older Facility rationale explains a
+ * closure that is no longer the current one.
+ */
+async function latestStoryClose(
+  db: FastifyInstance["facilityDb"],
+  orgId: string,
+  projectId: string,
+  story: {
+    storyType: string;
+    state: string;
+    repoId: string;
+    number: number;
+    closedAt: Date | null;
+  },
+): Promise<{ closedBy: string | null; reason: string | null }> {
+  if (story.storyType !== "issue" || story.state !== "closed" || !story.closedAt) {
+    return { closedBy: null, reason: null };
+  }
+  const event = (
+    await db
+      .select({ payload: auditEvents.payload })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.orgId, orgId),
+          eq(auditEvents.projectId, projectId),
+          eq(auditEvents.action, "story.closed"),
+          sql`${auditEvents.payload}->>'repoId' = ${story.repoId}`,
+          sql`${auditEvents.payload}->>'number' = ${String(story.number)}`,
+          sql`${auditEvents.payload}->>'closedAt' = ${story.closedAt.toISOString()}`,
+        ),
+      )
+      .orderBy(desc(auditEvents.seq))
+      .limit(1)
+  )[0];
+  const payload = objectOrEmpty(event?.payload);
+  return {
+    closedBy: typeof payload.actor === "string" ? payload.actor : null,
+    reason: typeof payload.reason === "string" ? payload.reason : null,
+  };
+}
+
+export async function loadIssue(
   db: FastifyInstance["facilityDb"],
   orgId: string,
   projectId: string,

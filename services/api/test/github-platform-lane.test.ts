@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { generateApiKey, hashKey, newId } from "@facility/core";
 import {
   actionTypes,
@@ -75,6 +76,30 @@ type IssueBackfillRecord = {
 };
 
 type IssueBackfillCall = { page: number; since: string | undefined; numbers: number[] };
+
+type FakeComment = {
+  id: number;
+  user: { login: string; type: string };
+  body: string;
+  created_at: string;
+  html_url: string;
+};
+
+type FakeIssueState = {
+  state: "open" | "closed";
+  stateReason?: string | null;
+  comments: FakeComment[];
+};
+
+const FACILITY_APP_SLUG = "facility-test";
+const FACILITY_BOT = `${FACILITY_APP_SLUG}[bot]`;
+
+type FakeIssueCalls = {
+  updates: Array<{ state: string; stateReason: string }>;
+  created: number;
+  edited: number;
+  failClose: boolean;
+};
 
 function issueBackfillRecords(count: number): IssueBackfillRecord[] {
   const start = Date.parse("2026-01-01T00:00:00.000Z");
@@ -179,6 +204,9 @@ describe("github platform lane", async () => {
     webUrl: "http://localhost:3000",
     facilityInsecureDev: true,
     logLevel: "silent",
+    // Story close recovery only reuses a comment GitHub attributes to this app,
+    // which requires the deployment to know its own slug.
+    githubAppSlug: FACILITY_APP_SLUG,
   };
   const { db, client } = createDb(databaseUrl);
   const app = await buildApp(config);
@@ -3064,6 +3092,664 @@ describe("github platform lane", async () => {
       });
       expect(suspended.statusCode).toBe(409);
       expect(suspended.json().error.code).toBe("installation_suspended");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  function issueLifecycleFactory(state: FakeIssueState) {
+    const calls: FakeIssueCalls = { updates: [], created: 0, edited: 0, failClose: false };
+    const factory = async () =>
+      ({
+        rest: {
+          issues: {
+            get: async () => ({
+              data: {
+                number: 0,
+                title: "Story",
+                html_url: "https://github.test/issues/0",
+                state: state.state,
+                state_reason: state.stateReason ?? null,
+                closed_at: state.state === "closed" ? "2026-08-02T00:00:00Z" : null,
+                updated_at: "2026-08-02T00:00:00Z",
+              },
+            }),
+            update: async (input: Record<string, unknown>) => {
+              if (calls.failClose) throw new Error("GitHub issue update rejected");
+              calls.updates.push({
+                state: String(input.state),
+                stateReason: String(input.state_reason),
+              });
+              state.state = input.state === "closed" ? "closed" : "open";
+              // GitHub echoes the stored reason back on the updated issue.
+              state.stateReason = String(input.state_reason);
+              return {
+                data: {
+                  number: Number(input.issue_number),
+                  html_url: "https://github.test/issues/0",
+                  state: state.state,
+                  state_reason: state.stateReason,
+                  closed_at: state.state === "closed" ? "2026-08-02T03:00:00Z" : null,
+                  updated_at: "2026-08-02T03:00:00Z",
+                },
+              };
+            },
+            listComments: async () => ({ data: state.comments }),
+            createComment: async (input: Record<string, unknown>) => {
+              calls.created += 1;
+              const comment = {
+                id: 5_000 + state.comments.length,
+                user: { login: FACILITY_BOT, type: "Bot" },
+                body: String(input.body),
+                created_at: "2026-08-02T01:00:00Z",
+                html_url: "https://github.test/comment/1",
+              };
+              state.comments.push(comment);
+              return { data: comment };
+            },
+            updateComment: async (input: Record<string, unknown>) => {
+              calls.edited += 1;
+              const target = state.comments.find((comment) => comment.id === input.comment_id);
+              if (target) target.body = String(input.body);
+              return { data: { id: Number(input.comment_id) } };
+            },
+          },
+          repos: {},
+          git: {},
+          pulls: {},
+        },
+      }) as never;
+    return { factory, calls };
+  }
+
+  it("closes a story by posting the reason, closing on GitHub, then mirroring the confirmed state", async () => {
+    const repo = await insertRepoWithInstallation(`close-${Date.now()}`);
+    const issueNumber = 97_100;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const idempotencyKey = `close-story-${Date.now()}`;
+      const request = {
+        method: "POST" as const,
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": idempotencyKey },
+        payload: { reason: "Superseded by the new pipeline", stateReason: "not_planned" },
+      };
+      const closed = await app.inject(request);
+      const replayed = await app.inject(request);
+
+      expect(closed.statusCode, closed.body).toBe(200);
+      expect(closed.json()).toMatchObject({
+        repoId: repo.id,
+        number: issueNumber,
+        state: "closed",
+        changed: true,
+      });
+      expect(replayed.headers["idempotency-status"]).toBe("replayed");
+      expect(calls.updates).toEqual([{ state: "closed", stateReason: "not_planned" }]);
+      expect(calls.created).toBe(1);
+      expect(remote.comments[0]?.body).toContain("Superseded by the new pipeline");
+      expect(remote.comments[0]?.body).toContain("not planned");
+
+      const mirrored = (
+        await db
+          .select()
+          .from(ghIssues)
+          .where(and(eq(ghIssues.repoId, repo.id), eq(ghIssues.number, issueNumber)))
+      )[0];
+      expect(mirrored?.state).toBe("closed");
+      expect(mirrored?.stateReason).toBe("not_planned");
+      expect(mirrored?.closedAt?.toISOString()).toBe("2026-08-02T03:00:00.000Z");
+
+      const audits = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.orgId, orgId),
+            eq(auditEvents.action, "story.closed"),
+            sql`${auditEvents.payload}->>'repoId' = ${repo.id}`,
+            sql`${auditEvents.payload}->>'number' = ${String(issueNumber)}`,
+          ),
+        );
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.payload).toMatchObject({
+        reason: "Superseded by the new pipeline",
+        stateReason: "not_planned",
+      });
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("closes as not planned when the caller omits the state reason", async () => {
+    const repo = await insertRepoWithInstallation(`close-default-${Date.now()}`);
+    const issueNumber = 97_150;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const closed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie },
+        payload: { reason: "Abandoned; no state reason given" },
+      });
+
+      expect(closed.statusCode, closed.body).toBe(200);
+      // GitHub ignores state_reason without a state change, so the value the
+      // default sends is the one this story keeps.
+      expect(calls.updates).toEqual([{ state: "closed", stateReason: "not_planned" }]);
+      const audits = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.orgId, orgId),
+            eq(auditEvents.action, "story.closed"),
+            sql`${auditEvents.payload}->>'repoId' = ${repo.id}`,
+            sql`${auditEvents.payload}->>'number' = ${String(issueNumber)}`,
+          ),
+        );
+      expect(audits[0]?.payload).toMatchObject({ stateReason: "not_planned" });
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("leaves the mirror open when GitHub rejects the close, and never repeats the reason on retry", async () => {
+    const repo = await insertRepoWithInstallation(`close-fail-${Date.now()}`);
+    const issueNumber = 97_200;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    calls.failClose = true;
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const payload = { reason: "Duplicate of #12", stateReason: "not_planned" };
+      // The idempotency key names the attempt, so the retry below is the same
+      // attempt rather than a new decision.
+      const idempotencyKey = `close-retry-${Date.now()}`;
+      const failed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": idempotencyKey },
+        payload,
+      });
+      expect(failed.statusCode).toBe(500);
+      expect(calls.created).toBe(1);
+
+      const mirroredAfterFailure = (
+        await db
+          .select()
+          .from(ghIssues)
+          .where(and(eq(ghIssues.repoId, repo.id), eq(ghIssues.number, issueNumber)))
+      )[0];
+      expect(mirroredAfterFailure?.state).toBe("open");
+      const closed = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.orgId, orgId),
+            eq(auditEvents.action, "story.closed"),
+            sql`${auditEvents.payload}->>'repoId' = ${repo.id}`,
+            sql`${auditEvents.payload}->>'number' = ${String(issueNumber)}`,
+          ),
+        );
+      expect(closed).toHaveLength(0);
+
+      // The orphan reason comment is Facility's own: the retry corrects it in
+      // place instead of stacking a second copy on the issue.
+      calls.failClose = false;
+      const retried = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": idempotencyKey },
+        payload: { ...payload, reason: "Duplicate of #12 — closing there" },
+      });
+      expect(retried.statusCode, retried.body).toBe(200);
+      expect(calls.created).toBe(1);
+      expect(calls.edited).toBe(1);
+      expect(remote.comments).toHaveLength(1);
+      expect(remote.comments[0]?.body).toContain("closing there");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("treats a story already closed on GitHub as a no-op that only reconciles the mirror", async () => {
+    const repo = await insertRepoWithInstallation(`close-noop-${Date.now()}`);
+    const issueNumber = 97_300;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "closed", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie },
+        payload: { reason: "Closed on GitHub already" },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ state: "closed", changed: false });
+      expect(calls.created).toBe(0);
+      expect(calls.updates).toEqual([]);
+      const mirrored = (
+        await db
+          .select()
+          .from(ghIssues)
+          .where(and(eq(ghIssues.repoId, repo.id), eq(ghIssues.number, issueNumber)))
+      )[0];
+      expect(mirrored?.state).toBe("closed");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("reopens a closed story without posting a comment, and records the decision", async () => {
+    const repo = await insertRepoWithInstallation(`reopen-${Date.now()}`);
+    const issueNumber = 97_400;
+    await insertIssue(repo.id, issueNumber, "closed", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "closed", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/reopen?repoId=${repo.id}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ state: "open", changed: true });
+      expect(calls.updates).toEqual([{ state: "open", stateReason: "reopened" }]);
+      expect(calls.created).toBe(0);
+      const mirrored = (
+        await db
+          .select()
+          .from(ghIssues)
+          .where(and(eq(ghIssues.repoId, repo.id), eq(ghIssues.number, issueNumber)))
+      )[0];
+      expect(mirrored?.state).toBe("open");
+      expect(mirrored?.closedAt).toBeNull();
+      const audits = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.orgId, orgId),
+            eq(auditEvents.action, "story.reopened"),
+            sql`${auditEvents.payload}->>'repoId' = ${repo.id}`,
+            sql`${auditEvents.payload}->>'number' = ${String(issueNumber)}`,
+          ),
+        );
+      expect(audits).toHaveLength(1);
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("never edits a forged marker comment that GitHub does not attribute to this app", async () => {
+    const repo = await insertRepoWithInstallation(`close-forged-${Date.now()}`);
+    const issueNumber = 97_600;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    // Anyone can write the marker text. Only this app can author as this app.
+    const idempotencyKey = `close-forged-${Date.now()}`;
+    const attemptId = createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 16);
+    const forged = {
+      id: 4_242,
+      user: { login: "impostor", type: "User" },
+      body: `<!-- facility:story-close:${attemptId} -->\nPlease edit me`,
+      created_at: "2026-08-01T12:00:00Z",
+      html_url: "https://github.test/comment/4242",
+    };
+    const remote: FakeIssueState = { state: "open", comments: [forged] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const closed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": idempotencyKey },
+        payload: { reason: "Abandoning this" },
+      });
+
+      expect(closed.statusCode, closed.body).toBe(200);
+      expect(calls.edited).toBe(0);
+      expect(forged.body).toBe(`<!-- facility:story-close:${attemptId} -->\nPlease edit me`);
+      expect(calls.created).toBe(1);
+      expect(remote.comments).toHaveLength(2);
+      expect(remote.comments[1]?.body).toContain("Abandoning this");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("keeps the earlier rationale when a story is closed again after being reopened", async () => {
+    const repo = await insertRepoWithInstallation(`close-again-${Date.now()}`);
+    const issueNumber = 97_700;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const close = (reason: string, key: string) =>
+        app.inject({
+          method: "POST",
+          url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+          headers: { cookie, "idempotency-key": key },
+          payload: { reason },
+        });
+
+      expect((await close("Not worth doing now", `first-${Date.now()}`)).statusCode).toBe(200);
+      const reopened = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/reopen?repoId=${repo.id}`,
+        headers: { cookie },
+      });
+      expect(reopened.statusCode, reopened.body).toBe(200);
+      expect((await close("Superseded by #99", `second-${Date.now()}`)).statusCode).toBe(200);
+
+      // Two decisions, two records: the second close is a new attempt, so it
+      // never overwrites the rationale the first one left on the issue.
+      expect(calls.created).toBe(2);
+      expect(calls.edited).toBe(0);
+      expect(remote.comments).toHaveLength(2);
+      expect(remote.comments[0]?.body).toContain("Not worth doing now");
+      expect(remote.comments[1]?.body).toContain("Superseded by #99");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("refuses to close or reopen a story belonging to another organization", async () => {
+    const otherOrgId = newId("org");
+    await db
+      .insert(orgs)
+      .values({ id: otherOrgId, name: "Other Close", slug: `other-close-${Date.now()}` });
+    const otherProjectId = newId("proj");
+    await db.insert(projects).values({
+      id: otherProjectId,
+      orgId: otherOrgId,
+      name: "Other Close Project",
+      slug: `other-close-${Date.now()}`,
+      settings: {},
+    });
+    const otherRepo = await insertRepo({
+      orgId: otherOrgId,
+      projectId: otherProjectId,
+      owner: `other-close-${Date.now()}`,
+      name: "repo",
+    });
+    const issueNumber = 97_800;
+    await db.insert(ghIssues).values({
+      id: newId("ghi"),
+      orgId: otherOrgId,
+      projectId: otherProjectId,
+      repoId: otherRepo.id,
+      number: issueNumber,
+      title: "Another tenant's story",
+      state: "open",
+      labels: [],
+      assignees: [],
+      htmlUrl: `https://github.com/o/r/issues/${issueNumber}`,
+      ghUpdatedAt: new Date("2026-08-01T00:00:00Z"),
+    });
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      // This session's principal belongs to `orgId`, never to `otherOrgId`.
+      const closed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${otherProjectId}/stories/${issueNumber}/close?repoId=${otherRepo.id}`,
+        headers: { cookie },
+        payload: { reason: "Not mine to close" },
+      });
+      expect(closed.statusCode).toBe(404);
+      const reopened = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${otherProjectId}/stories/${issueNumber}/reopen?repoId=${otherRepo.id}`,
+        headers: { cookie },
+      });
+      expect(reopened.statusCode).toBe(404);
+
+      // Same story number inside this org must not be reachable either.
+      const byNumber = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close`,
+        headers: { cookie },
+        payload: { reason: "Not mine to close" },
+      });
+      expect(byNumber.statusCode).toBe(404);
+      expect(calls.created).toBe(0);
+      expect(calls.updates).toEqual([]);
+
+      const untouched = (
+        await db
+          .select()
+          .from(ghIssues)
+          .where(and(eq(ghIssues.repoId, otherRepo.id), eq(ghIssues.number, issueNumber)))
+      )[0];
+      expect(untouched?.state).toBe("open");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("does not replay one repository's close for the same story number in another", async () => {
+    const stamp = Date.now();
+    const repoA = await insertRepoWithInstallation(`close-repo-a-${stamp}`);
+    const repoB = await insertRepoWithInstallation(`close-repo-b-${stamp}`);
+    const issueNumber = 97_900;
+    await insertIssue(repoA.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+    await insertIssue(repoB.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remoteA: FakeIssueState = { state: "open", comments: [] };
+    const remoteB: FakeIssueState = { state: "open", comments: [] };
+    const factoryA = issueLifecycleFactory(remoteA);
+    const factoryB = issueLifecycleFactory(remoteB);
+    const previousFactory = app.githubClientFactory;
+    try {
+      // Same principal, key, body and story number; only ?repoId= differs.
+      const idempotencyKey = `two-repo-${stamp}`;
+      const payload = { reason: "Abandoning both", stateReason: "not_planned" };
+      const closeIn = async (repoId: string) =>
+        app.inject({
+          method: "POST",
+          url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repoId}`,
+          headers: { cookie, "idempotency-key": idempotencyKey },
+          payload,
+        });
+
+      app.githubClientFactory = factoryA.factory;
+      const first = await closeIn(repoA.id);
+      app.githubClientFactory = factoryB.factory;
+      const second = await closeIn(repoB.id);
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.headers["idempotency-status"]).not.toBe("replayed");
+      expect(first.json().repoId).toBe(repoA.id);
+      expect(second.json().repoId).toBe(repoB.id);
+      expect(factoryA.calls.updates).toHaveLength(1);
+      expect(factoryB.calls.updates).toHaveLength(1);
+
+      for (const repo of [repoA, repoB]) {
+        const mirrored = (
+          await db
+            .select()
+            .from(ghIssues)
+            .where(and(eq(ghIssues.repoId, repo.id), eq(ghIssues.number, issueNumber)))
+        )[0];
+        expect(mirrored?.state, `repo ${repo.id} must close on its own`).toBe("closed");
+      }
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("never attributes an external closure, or an old rationale, to the current one", async () => {
+    const repo = await insertRepoWithInstallation(`close-attrib-${Date.now()}`);
+    const issueNumber = 98_000;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    const storyQuery = new URLSearchParams({ repoId: repo.id, storyType: "issue" });
+    const readStory = async () =>
+      (
+        await app.inject({
+          method: "GET",
+          url: `/v1/projects/${projectId}/stories/${issueNumber}?${storyQuery}`,
+          headers: { cookie },
+        })
+      ).json();
+    try {
+      const closed = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": `attrib-${Date.now()}` },
+        payload: { reason: "Facility closed this one" },
+      });
+      expect(closed.statusCode, closed.body).toBe(200);
+      expect(await readStory()).toMatchObject({
+        closeReason: "Facility closed this one",
+        closedBy: expect.any(String),
+      });
+
+      // Someone reopens and recloses on GitHub. The mirror follows the webhook,
+      // and the old Facility rationale must not resurface for a closure it
+      // never caused.
+      await upsertGhIssueFromWebhook(db, orgId, {
+        action: "closed",
+        repository: { owner: { login: repo.owner }, name: repo.name },
+        issue: {
+          number: issueNumber,
+          title: `Issue ${issueNumber}`,
+          state: "closed",
+          state_reason: "not_planned",
+          html_url: `https://github.com/o/r/issues/${issueNumber}`,
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-09T00:00:00Z",
+          closed_at: "2026-08-09T00:00:00Z",
+        },
+      });
+      expect(await readStory()).toMatchObject({ closedBy: null, closeReason: null });
+
+      // A no-op close against a story already closed elsewhere records nothing,
+      // so it cannot claim the closure it did not perform.
+      const noop = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`,
+        headers: { cookie, "idempotency-key": `attrib-noop-${Date.now()}` },
+        payload: { reason: "Not the reason this closed" },
+      });
+      expect(noop.statusCode, noop.body).toBe(200);
+      expect(noop.json().changed).toBe(false);
+      expect(calls.created).toBe(1);
+      expect(await readStory()).toMatchObject({ closedBy: null, closeReason: null });
+
+      const claimed = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.orgId, orgId),
+            eq(auditEvents.action, "story.closed"),
+            sql`${auditEvents.payload}->>'repoId' = ${repo.id}`,
+            sql`${auditEvents.payload}->>'number' = ${String(issueNumber)}`,
+          ),
+        );
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]?.payload).toMatchObject({ reason: "Facility closed this one" });
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
+  });
+
+  it("rejects an empty reason, an unknown story, a viewer, and a suspended installation", async () => {
+    const repo = await insertRepoWithInstallation(`close-guards-${Date.now()}`);
+    const issueNumber = 97_500;
+    await insertIssue(repo.id, issueNumber, "open", "2026-08-01T00:00:00Z");
+
+    const remote: FakeIssueState = { state: "open", comments: [] };
+    const { factory, calls } = issueLifecycleFactory(remote);
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = factory;
+    try {
+      const url = `/v1/projects/${projectId}/stories/${issueNumber}/close?repoId=${repo.id}`;
+      const blank = await app.inject({
+        method: "POST",
+        url,
+        headers: { cookie },
+        payload: { reason: "   " },
+      });
+      expect(blank.statusCode).toBe(400);
+
+      const missing = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/stories/97501/close?repoId=${repo.id}`,
+        headers: { cookie },
+        payload: { reason: "No such story" },
+      });
+      expect(missing.statusCode).toBe(404);
+
+      const viewer = await generateApiKey("fak");
+      await db.insert(apiKeys).values({
+        id: viewer.id,
+        orgId,
+        name: `close-viewer-${Date.now()}`,
+        prefix: viewer.lookup,
+        last4: viewer.last4,
+        hash: viewer.hash,
+        scopeType: "org",
+        roleId: "role_bundled_viewer",
+      });
+      const forbidden = await app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: `Bearer ${viewer.secret}` },
+        payload: { reason: "Not allowed" },
+      });
+      expect(forbidden.statusCode).toBe(403);
+      expect(calls.created).toBe(0);
+
+      await db
+        .update(githubInstallations)
+        .set({ suspendedAt: new Date() })
+        .where(eq(githubInstallations.id, repo.installationId ?? ""));
+      const suspended = await app.inject({
+        method: "POST",
+        url,
+        headers: { cookie },
+        payload: { reason: "Installation is suspended" },
+      });
+      expect(suspended.statusCode).toBe(409);
+      expect(suspended.json().error.code).toBe("installation_suspended");
+      expect(calls.created).toBe(0);
     } finally {
       app.githubClientFactory = previousFactory;
     }

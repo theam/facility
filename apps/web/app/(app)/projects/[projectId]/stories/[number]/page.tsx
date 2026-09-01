@@ -5,6 +5,7 @@ import { CiStatusLink } from "@/components/ci-status";
 import { Markdown } from "@/components/markdown";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { CloseStory } from "@/components/story/close-story";
 import { PullRequestLinks } from "@/components/story/pull-request-links";
 import { StoryTimeline } from "@/components/story/timeline";
 import { StoryTriggerButtons } from "@/components/story/trigger-buttons";
@@ -195,6 +196,15 @@ export default async function StoryPage({
           ) : null}
         </div>
       </div>
+
+      {has("repos:write") && story.storyType === "issue" ? (
+        <CloseStory
+          projectId={projectId}
+          repoId={story.repoId}
+          storyNumber={story.number}
+          state={story.state}
+        />
+      ) : null}
 
       {has("repos:write") ? (
         <PullRequestLinks

@@ -10,7 +10,8 @@ export type PipelineStage =
   | "building"
   | "validating"
   | "review"
-  | "shipped";
+  | "shipped"
+  | "abandoned";
 
 export type PipelineStageState =
   | "ready_to_plan"
@@ -23,7 +24,8 @@ export type PipelineStageState =
   | "checks_running"
   | "checks_failed"
   | "awaiting_review"
-  | "shipped_recently";
+  | "shipped_recently"
+  | "abandoned_recently";
 
 export type StageKind = "human" | "agent" | "machine" | "done";
 
@@ -34,6 +36,9 @@ export const PIPELINE_STAGES = [
   { key: "validating", label: "Validating", sub: "run the checks", kind: "machine" },
   { key: "review", label: "In review", sub: "review and merge", kind: "human" },
   { key: "shipped", label: "Shipped", sub: "merged · last 7 days", kind: "done" },
+  // Abandoned work is decided, not delivered. It keeps its own terminal column
+  // so the decision, its history, and the reopen action stay reachable.
+  { key: "abandoned", label: "Abandoned", sub: "not planned · last 7 days", kind: "done" },
 ] as const satisfies ReadonlyArray<{
   key: PipelineStage;
   label: string;
@@ -76,6 +81,11 @@ export type PipelineStoryInput = {
   number: number;
   title: string;
   state: "open" | "closed" | "merged";
+  /**
+   * GitHub's reason for a closed issue; `not_planned` is abandoned, not
+   * delivered. Absent on pull-request stories, which have no issue state.
+   */
+  stateReason?: string | null;
   labels: string[];
   assignees: string[];
   author: string | null;
@@ -105,6 +115,7 @@ export type PipelineIssueRecord = {
   number: number;
   title: string;
   state: string;
+  stateReason: string | null;
   labels: unknown;
   assignees: unknown;
   author: string | null;
@@ -224,6 +235,7 @@ export function assemblePipelineStories(input: {
       number: issue.number,
       title: issue.title,
       state: issue.state === "closed" ? "closed" : "open",
+      stateReason: issue.stateReason,
       labels: stringArray(issue.labels),
       assignees: stringArray(issue.assignees),
       author: issue.author,
@@ -360,11 +372,16 @@ export function classifyPipeline(
       stages.get(stage)?.push(placed);
       continue;
     }
-    const shipped =
+    // A story abandoned as `not_planned` was decided against, not delivered:
+    // it lands in its own terminal stage rather than among the work that
+    // shipped, and stays there on the same recency terms.
+    const abandoned = story.storyType === "issue" && story.stateReason === "not_planned";
+    const terminal =
       story.storyType === "issue" ? story.state === "closed" : story.state === "merged";
     const closedStamp = story.closedAt ?? story.ghUpdatedAt;
-    if (shipped && closedStamp && now - closedStamp.getTime() < WEEK_MS) {
-      stages.get("shipped")?.push(placeBase(story, "shipped_recently"));
+    if (terminal && closedStamp && now - closedStamp.getTime() < WEEK_MS) {
+      if (abandoned) stages.get("abandoned")?.push(placeBase(story, "abandoned_recently"));
+      else stages.get("shipped")?.push(placeBase(story, "shipped_recently"));
     }
   }
   for (const [stage, placed] of stages) {

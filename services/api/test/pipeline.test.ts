@@ -246,6 +246,7 @@ describe("server-owned story pipeline", () => {
       "validating",
       "review",
       "shipped",
+      "abandoned",
     ]);
   });
 
@@ -402,6 +403,31 @@ describe("server-owned story pipeline", () => {
     ]);
     expect(shipped?.every((story) => story.stageState === "shipped_recently")).toBe(true);
   });
+
+  it("keeps a story abandoned as not planned reachable in its own terminal stage", () => {
+    const recent = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+    const delivered = {
+      ...storyWith({}),
+      state: "closed" as const,
+      stateReason: "completed",
+      closedAt: recent,
+      prs: [],
+    };
+    const abandoned = {
+      ...delivered,
+      key: "repo_a:issue:41",
+      number: 41,
+      stateReason: "not_planned",
+    };
+
+    const stages = classifyPipeline([delivered, abandoned], new Set(), NOW.getTime());
+    expect(stages.get("shipped")?.map((story) => story.key)).toEqual(["repo_a:issue:1"]);
+    // Decided against, not delivered — but still findable, so its history and
+    // the reopen action stay reachable after leaving the detail page.
+    expect(stages.get("abandoned")?.map((story) => story.key)).toEqual(["repo_a:issue:41"]);
+    expect(stages.get("abandoned")?.[0]?.stageState).toBe("abandoned_recently");
+    expect(PIPELINE_STAGES.map((stage) => stage.key)).toContain("abandoned");
+  });
 });
 
 function issue(
@@ -415,6 +441,7 @@ function issue(
     number,
     title: `Issue ${number}`,
     state: "open",
+    stateReason: null,
     labels: [],
     assignees: [],
     author: "octocat",

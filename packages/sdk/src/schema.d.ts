@@ -935,6 +935,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectId}/stories/{number}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close story */
+        post: operations["postProjectsByProjectIdStoriesByNumberClose"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/stories/{number}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen story */
+        post: operations["postProjectsByProjectIdStoriesByNumberReopen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/providers": {
         parameters: {
             query?: never;
@@ -8935,7 +8969,7 @@ export interface operations {
                     "application/json": {
                         stages: {
                             /** @enum {string} */
-                            key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped";
+                            key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped" | "abandoned";
                             label: string;
                             sub: string;
                             /** @enum {string} */
@@ -8972,7 +9006,7 @@ export interface operations {
                                     score: number;
                                 } | null;
                                 /** @enum {string} */
-                                stageState: "ready_to_plan" | "needs_attention" | "in_progress" | "needs_review" | "ready_to_build" | "failed" | "draft_pr" | "checks_running" | "checks_failed" | "awaiting_review" | "shipped_recently";
+                                stageState: "ready_to_plan" | "needs_attention" | "in_progress" | "needs_review" | "ready_to_build" | "failed" | "draft_pr" | "checks_running" | "checks_failed" | "awaiting_review" | "shipped_recently" | "abandoned_recently";
                                 /** @enum {string|null} */
                                 runState: "live" | "failed" | null;
                                 currentRun: {
@@ -9265,6 +9299,9 @@ export interface operations {
                         ghUpdatedAt: string | null;
                         /** Format: date-time */
                         closedAt: string | null;
+                        stateReason: string | null;
+                        closedBy: string | null;
+                        closeReason: string | null;
                         wsjf: {
                             value: number;
                             time: number;
@@ -9298,12 +9335,12 @@ export interface operations {
                         ciFailureNames: string[];
                         stage: {
                             /** @enum {string} */
-                            key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped";
+                            key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped" | "abandoned";
                             label: string;
                         } | null;
                         pipelineStages: {
                             /** @enum {string} */
-                            key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped";
+                            key: "backlog" | "planning" | "building" | "validating" | "review" | "shipped" | "abandoned";
                             label: string;
                         }[];
                         allowLegacyProposalNumber: boolean;
@@ -9926,6 +9963,233 @@ export interface operations {
                         pullNumber: number;
                         issueNumber: number;
                         closingIssues: number[];
+                        changed: boolean;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The requested resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    postProjectsByProjectIdStoriesByNumberClose: {
+        parameters: {
+            query?: {
+                repoId?: string;
+            };
+            header?: {
+                /** @description Replays the original response for the same principal, path, key, and request body for 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                    /**
+                     * @default not_planned
+                     * @enum {string}
+                     */
+                    stateReason?: "completed" | "not_planned";
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        repoId: string;
+                        number: number;
+                        /** @enum {string} */
+                        state: "open" | "closed";
+                        /** Format: date-time */
+                        closedAt: string | null;
+                        changed: boolean;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The requested resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    postProjectsByProjectIdStoriesByNumberReopen: {
+        parameters: {
+            query?: {
+                repoId?: string;
+            };
+            header?: {
+                /** @description Replays the original response for the same principal, path, key, and request body for 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        repoId: string;
+                        number: number;
+                        /** @enum {string} */
+                        state: "open" | "closed";
+                        /** Format: date-time */
+                        closedAt: string | null;
                         changed: boolean;
                     };
                 };

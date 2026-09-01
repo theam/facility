@@ -234,6 +234,8 @@ export const ghIssues = pgTable(
     number: integer("number").notNull(),
     title: text("title").notNull(),
     state: text("state").notNull(),
+    /** GitHub's reason for the current state; `not_planned` means abandoned. */
+    stateReason: text("state_reason"),
     author: text("author"),
     labels: jsonb("labels").notNull().default(sql`'[]'::jsonb`),
     assignees: jsonb("assignees").notNull().default(sql`'[]'::jsonb`),
