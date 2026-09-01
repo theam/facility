@@ -239,11 +239,21 @@ test("Bake keeps thin target boundaries and publishes every target through one g
       "services/gateway/package.json",
     ].map(async (path) => JSON.parse(await readFile(join(root, path), "utf8"))),
   );
-  for (const [name, dockerfile] of [
-    ["service", controlDockerfile],
-    ["web", webDockerfile],
-    ["runner", runnerDockerfile],
+  for (const [name, dockerfile, stage] of [
+    ["service", controlDockerfile, "base"],
+    ["web", webDockerfile, "base"],
+    ["runner", runnerDockerfile, "runner-base"],
   ]) {
+    assert.match(
+      dockerfile,
+      new RegExp(`^FROM node:24-trixie-slim@sha256:[0-9a-f]{64} AS ${stage}$`, "m"),
+      `${name} image must use the digest-pinned Node 24 slim base`,
+    );
+    assert.equal(
+      dockerfile.match(/^FROM node:/gm)?.length,
+      1,
+      `${name} image must have one explicit official Node base`,
+    );
     assert.match(
       dockerfile,
       /ARG DEBIAN_SECURITY_REFRESH=20260828\s+RUN test -n "\$DEBIAN_SECURITY_REFRESH" \\\s+&& apt-get update \\\s+&& DEBIAN_FRONTEND=noninteractive apt-get upgrade -y/,

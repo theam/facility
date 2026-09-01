@@ -29,9 +29,12 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // Extensions such as Grammarly inject body attributes before React hydrates.
   return (
     <html lang="en" className={`${plexMono.variable} ${plexSans.variable}`}>
-      <body className="grain min-h-dvh">{children}</body>
+      <body suppressHydrationWarning className="grain min-h-dvh">
+        {children}
+      </body>
     </html>
   );
 }

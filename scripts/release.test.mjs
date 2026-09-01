@@ -243,7 +243,7 @@ test("CI allocates the version after acceptance and before registry mutation", (
   assert.ok(allocationJob, "CI workflow must contain an allocate-release job");
   assert.match(
     allocationJob,
-    /needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e\]/,
+    /needs: \[decide-release, verify, minimum-node, package-release, self-host-build, sandbox-e2e\]/,
   );
   assert.match(allocationJob, /permissions:\n {6}contents: write/);
   assert.match(allocationJob, /git tag -a "\$TAG" -m "\$VERSION"/);
