@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { detect } from "./detect.mjs";
+import { escapeRegExp, yamlQuotedScalar } from "./escaping.mjs";
 import { render, hasManagedBlock, appendManagedBlock } from "./render.mjs";
 import { ask, confirm, closePrompts } from "./prompts.mjs";
 import { addModule } from "./add.mjs";
@@ -100,7 +101,8 @@ function boardReviewStep(org, projectNumber) {
 
 function doctorWatch(workflowNames) {
   const watched = [...new Set([...workflowNames, "facility-review"])];
-  const lines = watched.map((name) => `      - ${name}`);
+  // Quote workflow names so colons and other YAML syntax in CI titles cannot break the list.
+  const lines = watched.map((name) => `      - ${yamlQuotedScalar(name)}`);
   if (workflowNames.length === 0) {
     lines.unshift("      # facility: no existing check workflows detected at init time —");
     lines.unshift("      # add your CI workflow names here so the doctor watches them.");
@@ -110,7 +112,8 @@ function doctorWatch(workflowNames) {
 
 function checksAllowJson(checks) {
   if (!checks.length) return "";
-  return checks.map((c) => `      "Bash(${c})",`).join("\n");
+  // Each allow entry must be valid JSON even when the shell command contains quotes.
+  return checks.map((c) => `      ${JSON.stringify(`Bash(${c})`)},`).join("\n");
 }
 
 function checksList(checks) {
@@ -394,6 +397,8 @@ export async function init(flags, pkgRoot, version) {
   const vars = {
     FACILITY_VERSION: version,
     DEFAULT_BRANCH: defaultBranch,
+    // Regex fragment for protect-branch.mjs — branch names may contain / or . metacharacters.
+    DEFAULT_BRANCH_PATTERN: escapeRegExp(defaultBranch),
     BUILD_MODEL: models.build,
     REVIEW_MODEL: models.review,
     PLAN_MODEL: models.plan,

@@ -379,7 +379,7 @@ test("init installs the method end to end", async (t) => {
     /path: \.facility-sweep\/\s+include-hidden-files: true/,
     "security sweep must upload its hidden audit context",
   );
-  assert.ok(doctorWf.includes("- facility-review"), "doctor watch list must include facility-review");
+  assert.ok(doctorWf.includes('"facility-review"'), "doctor watch list must include facility-review");
   assert.ok(
     !doctorWf.includes("workflow_run.conclusion == 'failure'"),
     "doctor must evaluate the complete rollup after every watched completion",

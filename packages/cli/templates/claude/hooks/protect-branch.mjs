@@ -7,7 +7,7 @@
 // development.
 import { readFileSync } from "node:fs";
 
-const PROTECTED = /^(origin\/)?({{DEFAULT_BRANCH}}|main|master)$/;
+const PROTECTED = /^(origin\/)?({{DEFAULT_BRANCH_PATTERN}}|main|master)$/;
 
 function readPayload() {
   try {
@@ -22,7 +22,7 @@ if (!command) process.exit(0);
 
 const tokens = command.split(/\s+/);
 const has = (t) => tokens.includes(t);
-const targetsProtected = (t) => PROTECTED.test(t) || /:({{DEFAULT_BRANCH}}|main|master)$/.test(t);
+const targetsProtected = (t) => PROTECTED.test(t) || /:({{DEFAULT_BRANCH_PATTERN}}|main|master)$/.test(t);
 const targetsProtectedRef = tokens.some(targetsProtected);
 const isForce = has("--force") || has("-f") || has("--force-with-lease");
 
