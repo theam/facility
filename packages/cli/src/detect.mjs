@@ -20,11 +20,71 @@ function git(cwd, args) {
   }
 }
 
+// A non-Node repo used to start on the "empty job site" the method warns
+// against: detection only knew package.json, so a Python project got an empty
+// check list and a "add your language setup steps" stub. Detect the next
+// biggest ecosystem too, so the crew gets a real toolchain to build and verify
+// against. Zero runtime dependencies — no TOML parser, just presence checks and
+// narrow text probes; `init` still asks the operator to confirm every default.
+function detectPython(dir) {
+  const has = (file) => existsSync(join(dir, file));
+  const pyproject = has("pyproject.toml") ? readFileSync(join(dir, "pyproject.toml"), "utf8") : "";
+  const isPython =
+    has("pyproject.toml") || has("requirements.txt") || has("setup.py") || has("setup.cfg") || has("Pipfile") || has("Pipfile.lock");
+  if (!isPython) return null;
+
+  // Tool selection drives both the install command and how checks are invoked
+  // (poetry/pipenv run inside their managed environment; pip runs in place).
+  let packageManager;
+  let prefix;
+  let install;
+  if (has("poetry.lock") || /\[tool\.poetry/.test(pyproject)) {
+    packageManager = "poetry";
+    prefix = "poetry run ";
+    install = "poetry install";
+  } else if (has("Pipfile") || has("Pipfile.lock")) {
+    packageManager = "pipenv";
+    prefix = "pipenv run ";
+    install = "pipenv install --dev";
+  } else {
+    packageManager = "pip";
+    prefix = "";
+    install = has("requirements.txt") ? "pip install -r requirements.txt" : "pip install -e .";
+  }
+
+  // Only propose a check we have configuration evidence for — a dependency
+  // being present is not proof the team runs it.
+  const checks = [];
+  if (/\[tool\.ruff/.test(pyproject) || has("ruff.toml") || has(".ruff.toml")) checks.push(`${prefix}ruff check .`);
+  if (/\[tool\.black\]/.test(pyproject)) checks.push(`${prefix}black --check .`);
+  if (/\[tool\.mypy\]/.test(pyproject) || has("mypy.ini") || has(".mypy.ini")) checks.push(`${prefix}mypy .`);
+  if (
+    /\[tool\.pytest/.test(pyproject) ||
+    has("pytest.ini") ||
+    has("tox.ini") ||
+    has("conftest.py") ||
+    existsSync(join(dir, "tests")) ||
+    existsSync(join(dir, "test"))
+  ) {
+    checks.push(`${prefix}pytest`);
+  }
+
+  let pythonVersion = "3.x";
+  if (has(".python-version")) {
+    const pinned = readFileSync(join(dir, ".python-version"), "utf8").trim().split("\n")[0].trim();
+    if (pinned) pythonVersion = pinned;
+  }
+
+  // Dependency install runs in the toolchain step, mirroring `npm ci`;
+  // `provision` stays for DB/seeds/browsers, which cannot be inferred here.
+  return { packageManager, checks, provision: "", install, pythonVersion };
+}
+
 export function detect(dir) {
   const pkg = readJson(join(dir, "package.json"));
   const scripts = pkg?.scripts ?? {};
 
-  const packageManager = existsSync(join(dir, "pnpm-lock.yaml"))
+  const nodePackageManager = existsSync(join(dir, "pnpm-lock.yaml"))
     ? "pnpm"
     : existsSync(join(dir, "yarn.lock"))
       ? "yarn"
@@ -32,17 +92,31 @@ export function detect(dir) {
         ? "npm"
         : pkg
           ? "npm"
-          : "none";
+          : null;
 
-  const runner = packageManager === "none" ? null : packageManager === "npm" ? "npm run" : `${packageManager} run`;
-  const checks = [];
-  if (runner) {
+  // Node is detected first: a repo carrying package.json is a Node repo even if
+  // it also ships a helper script in another language. Only when there is no
+  // Node manifest do we probe the other ecosystems.
+  let packageManager;
+  let checks = [];
+  let provision = "";
+  let install;
+  let pythonVersion;
+  if (nodePackageManager) {
+    packageManager = nodePackageManager;
+    const runner = nodePackageManager === "npm" ? "npm run" : `${nodePackageManager} run`;
     for (const name of ["typecheck", "lint", "test", "build"]) {
       if (scripts[name]) checks.push(`${runner} ${name}`);
     }
+    provision = scripts["setup"] ? `${runner} setup` : "";
+  } else {
+    const python = detectPython(dir);
+    if (python) {
+      ({ packageManager, checks, provision, install, pythonVersion } = python);
+    } else {
+      packageManager = "none";
+    }
   }
-
-  const provision = runner && scripts["setup"] ? `${runner} setup` : "";
 
   const isGitRepo = git(dir, ["rev-parse", "--is-inside-work-tree"]) === "true";
   let defaultBranch = "main";
@@ -58,9 +132,14 @@ export function detect(dir) {
   const remoteMatch = remote.match(/[/:]([^/:]+)\/([^/]+?)(\.git)?$/);
   if (remoteMatch) org = remoteMatch[1];
 
-  const migrationDirs = ["migrations", "supabase/migrations", "db/migrations", "prisma/migrations"].filter((d) =>
-    existsSync(join(dir, d))
-  );
+  const migrationDirs = [
+    "migrations",
+    "supabase/migrations",
+    "db/migrations",
+    "prisma/migrations",
+    "alembic/versions",
+    "migrations/versions",
+  ].filter((d) => existsSync(join(dir, d)));
 
   // Existing check workflows (by their `name:`), so the doctor knows what to
   // watch. Facility's own workflows are excluded — the watchtower covers them.
@@ -89,6 +168,8 @@ export function detect(dir) {
     packageManager,
     checks,
     provision,
+    install,
+    pythonVersion,
     org,
     workflowNames,
     deploymentProviders: [...deploymentProviders].sort(),
