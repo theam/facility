@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { doctor } from "../src/doctor.mjs";
 import { runPlatformCommand } from "../src/platform.mjs";
+import { expectPrivateConfigMode } from "./gh-stub.mjs";
 
 function sink() {
   return {
@@ -48,7 +49,7 @@ test("login verifies /v1/me and writes config with 0600 permissions", async (t) 
 
   assert.equal(exit, 0);
   assert.deepEqual(calls, [{ url: "http://facility.test/v1/me", auth: "Bearer fak_secret" }]);
-  assert.equal((statSync(path).mode & 0o777).toString(8), "600");
+  assert.equal(expectPrivateConfigMode(statSync(path).mode), "600");
   assert.ok(!stdout.text.includes("fak_secret"), "config secret must not be logged");
 });
 
@@ -780,7 +781,7 @@ test("profiles can be listed and switched without authenticating", async (t) => 
     0,
   );
   assert.equal(JSON.parse(readFileSync(path, "utf8")).currentProfile, "staging");
-  assert.equal((statSync(path).mode & 0o777).toString(8), "600");
+  assert.equal(expectPrivateConfigMode(statSync(path).mode), "600");
 
   const human = sink();
   assert.equal(

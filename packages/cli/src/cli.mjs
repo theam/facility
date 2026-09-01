@@ -93,6 +93,7 @@ function help() {
   item(dim('            --build-model=<id> --review-model=<id> --plan-model=<id>'));
   item(dim('            --codex-build-model=<id> --codex-plan-model=<id> --org=<org> --project=<n>'));
   item(dim('            --preview-image=<image> --preview-command=<cmd> --preview-port=<n> --preview-readiness-path=</health> --preview-ttl-hours=<n>'));
+  item(dim("            --canary-bot=<login>  weekly canary GitHub App login (default facility-canary[bot])"));
   item(dim("Run facility <command> --help for precise usage."));
   item(dim("Global platform flags: --profile <name> --json --timeout <seconds>"));
   console.log("");
@@ -215,6 +216,7 @@ function validateLocalFlags(command, flags) {
       "preview-port",
       "preview-readiness-path",
       "preview-ttl-hours",
+      "canary-bot",
       "help",
     ]),
     add: new Set(["dir", "help"]),
@@ -277,6 +279,7 @@ function validateLocalFlags(command, flags) {
             "preview-port",
             "preview-readiness-path",
             "preview-ttl-hours",
+            "canary-bot",
           ]
         : ["dir"];
   for (const name of valueNames) {

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { installGhStub, isolateGhEnv, prependPath } from "./gh-stub.mjs";
 import {
   classifyFailure,
   countBranchAttempts,
@@ -374,7 +375,6 @@ function runResolverFixture(t, overrides) {
   const fixturePath = join(directory, "fixtures.json");
   const outputPath = join(directory, "github-output.txt");
   const commentLog = join(directory, "comments.txt");
-  const ghPath = join(bin, "gh");
   mkdirSync(bin);
   const event = {
     workflow_run: {
@@ -397,10 +397,9 @@ function runResolverFixture(t, overrides) {
 
   writeFileSync(eventPath, overrides.eventText ?? JSON.stringify(event));
   writeFileSync(fixturePath, JSON.stringify(fixtures));
-  writeFileSync(
-    ghPath,
+  installGhStub(
+    bin,
     [
-      "#!/usr/bin/env node",
       'import { appendFileSync, readFileSync } from "node:fs";',
       "if (process.env.FAKE_GH_FAIL === 'true') {",
       '  process.stderr.write("GitHub unavailable: fixture-secret\\n");',
@@ -418,7 +417,6 @@ function runResolverFixture(t, overrides) {
       "process.stdout.write(JSON.stringify(fixtures[endpoint]));",
     ].join("\n"),
   );
-  chmodSync(ghPath, 0o755);
   writeFileSync(outputPath, "");
   writeFileSync(commentLog, "");
 
@@ -426,9 +424,9 @@ function runResolverFixture(t, overrides) {
   const spawned = spawnSync(process.execPath, [resolver], {
     cwd: directory,
     encoding: "utf8",
-    env: {
+    env: isolateGhEnv({
       ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
+      ...prependPath(bin),
       GITHUB_REPOSITORY: "acme/demo",
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_OUTPUT: outputPath,
@@ -437,7 +435,7 @@ function runResolverFixture(t, overrides) {
       FAKE_GH_COMMENT_LOG: commentLog,
       FAKE_GH_FAIL: overrides.failGithub ? "true" : "false",
       FACILITY_BOT_LOGIN: "facility-agent",
-    },
+    }),
   });
 
   return {
