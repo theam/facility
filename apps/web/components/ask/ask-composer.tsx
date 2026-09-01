@@ -15,7 +15,7 @@ export type TurnStart = { conversationId: string; runId: string; question: strin
 export function AskComposer({
   projectId,
   conversationId,
-  placeholder = "chat with the digital product owner",
+  placeholder = "talk with the product owner",
   inputRef: externalRef,
   onTurnStarted,
 }: {
@@ -107,7 +107,7 @@ export function AskComposer({
           data-lpignore="true"
           data-bwignore="true"
           data-form-type="other"
-          aria-label="Chat with the digital product owner"
+          aria-label="Talk with the product owner"
           value={value}
           onChange={(event) => {
             setValue(event.target.value);
