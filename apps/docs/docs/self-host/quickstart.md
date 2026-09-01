@@ -8,12 +8,13 @@ Facility is containers + Postgres + S3-compatible storage. Nothing else.
 
 ## Development / evaluation
 
-With Node.js 22 or newer, pnpm 11, and Docker running:
+With Node.js 24 LTS, pnpm 11.20.0, and Docker running (Node.js 22 is also
+supported from 22.13.0):
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack enable
+npm install --global pnpm@11.20.0
 pnpm dev
 ```
 

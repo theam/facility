@@ -220,9 +220,17 @@ test("an exported S3 endpoint overrides the env file and selects external storag
   assert.equal(blank.localStorage, true);
 });
 
-test("requires Node.js 22 or newer", () => {
-  assert.doesNotThrow(() => assertSupportedNode("22.0.0"));
-  assert.throws(() => assertSupportedNode("21.7.3"), /Node\.js 22 or newer is required/);
+test("recommends Node.js 24 and enforces the supported LTS lines", () => {
+  assert.doesNotThrow(() => assertSupportedNode("22.13.0"));
+  assert.doesNotThrow(() => assertSupportedNode("22.23.1"));
+  assert.doesNotThrow(() => assertSupportedNode("24.0.0"));
+  assert.doesNotThrow(() => assertSupportedNode("24.11.1"));
+  for (const version of ["22.12.0", "23.11.1", "25.1.0", "26.0.0", "not-a-version"]) {
+    assert.throws(
+      () => assertSupportedNode(version),
+      /Node\.js 24 LTS is recommended; supported versions are \^22\.13\.0 or \^24\.0\.0/,
+    );
+  }
 });
 
 test("development services use the compose network unless the operator selects one", () => {

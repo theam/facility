@@ -59,10 +59,10 @@ the variable-by-variable reference.
 
 ## Before you start
 
-Locally: Node.js 22 or newer, pnpm 11, Docker with `buildx`, Terraform, the AWS
-CLI, `jq`, and OpenSSL. Fresh AWS credentials — an old `.env` may carry an
-expired session token, so confirm with `aws sts get-caller-identity` before
-applying anything.
+Locally: Node.js 24 LTS, pnpm 11.20.0, Docker with `buildx`, Terraform, the AWS
+CLI, `jq`, and OpenSSL. Node.js 22 is also supported from 22.13.0. Fresh AWS
+credentials — an old `.env` may carry an expired session token, so confirm with
+`aws sts get-caller-identity` before applying anything.
 
 On GitHub: the App configured for both human OAuth and repository automation,
 then installed on the repositories you will automate, with its webhook
@@ -79,7 +79,8 @@ repositories, or webhook URL.
 
 ```bash
 git switch main && git pull --ff-only
-corepack enable && pnpm install --frozen-lockfile
+npm install --global pnpm@11.20.0
+pnpm install --frozen-lockfile
 
 export FACILITY_AWS_REGION=us-east-1
 export FACILITY_ENV="prod"

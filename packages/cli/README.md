@@ -18,7 +18,8 @@ One binary with two jobs, and you rarely need both:
 npx @theagilemonkeys/facility --help
 ```
 
-Node.js 20 or newer. Zero configuration to read; one dependency.
+Node.js 24 LTS recommended; Node.js 22 supported from 22.13.0. Zero
+configuration to read; one dependency.
 
 **Early software.** Facility is published while it is still being built: the
 API is young, generated files change shape between `0.x` releases, and no

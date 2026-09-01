@@ -165,9 +165,14 @@ function defaultOauthJwks() {
 }
 
 export function assertSupportedNode(version = process.versions.node) {
-  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
-  if (!Number.isInteger(major) || major < 22) {
-    throw new Error(`Node.js 22 or newer is required (found ${version})`);
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  const major = Number.parseInt(match?.[1] ?? "", 10);
+  const minor = Number.parseInt(match?.[2] ?? "", 10);
+  const supported = (major === 22 && minor >= 13) || major === 24;
+  if (!supported) {
+    throw new Error(
+      `Node.js 24 LTS is recommended; supported versions are ^22.13.0 or ^24.0.0 (found ${version})`,
+    );
   }
 }
 
