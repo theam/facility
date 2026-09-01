@@ -7,6 +7,28 @@ export function laneFor(repo: typeof repos.$inferSelect, command: string): "repo
   return lane === "platform" ? "platform" : "repo";
 }
 
+export function agentHandlesCommand(
+  agent: Pick<typeof agentDefs.$inferSelect, "name" | "triggers">,
+  command: string,
+) {
+  const triggers = agent.triggers as unknown;
+  if (!Array.isArray(triggers)) return agent.name === command;
+
+  const boundCommands = triggers.flatMap((trigger): string[] => {
+    if (!trigger || typeof trigger !== "object") return [];
+    const value =
+      (trigger as { command?: unknown; handle?: unknown }).command ??
+      (trigger as { handle?: unknown }).handle;
+    return typeof value === "string" ? [value] : [];
+  });
+
+  // Older seeded agents can contain only their manual trigger. The web UI
+  // still promises that every enabled agent is available on demand by name,
+  // so retain that compatibility unless an explicit command binding remaps it.
+  if (boundCommands.length === 0) return agent.name === command;
+  return boundCommands.some((value) => value === command || value === `/${command}`);
+}
+
 export async function findAgentDef(
   db: FacilityDb,
   orgId: string,
@@ -23,15 +45,5 @@ export async function findAgentDef(
         eq(agentDefs.enabled, true),
       ),
     );
-  return rows.find((row) => {
-    const triggers = row.triggers as unknown;
-    if (!Array.isArray(triggers)) return row.name === command;
-    return triggers.some((trigger) => {
-      if (!trigger || typeof trigger !== "object") return false;
-      const value =
-        (trigger as { command?: unknown; handle?: unknown }).command ??
-        (trigger as { handle?: unknown }).handle;
-      return value === command || value === `/${command}`;
-    });
-  });
+  return rows.find((row) => agentHandlesCommand(row, command));
 }
