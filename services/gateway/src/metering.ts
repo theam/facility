@@ -17,12 +17,8 @@ export function resolveMeteredCost(record: RequestRecord): number {
   const measuredCost = record.priced ? (computedCost ?? 0) : 0;
   const usageIncomplete = record.usageComplete === false;
   const conservativeFallback =
-    record.status === "error" &&
-    record.providerMayHaveCharged &&
-    (measuredCost === 0 || usageIncomplete);
-  return conservativeFallback
-    ? Math.max(measuredCost, record.estimatedCents ?? 0)
-    : measuredCost;
+    record.providerMayHaveCharged && (measuredCost === 0 || usageIncomplete);
+  return conservativeFallback ? Math.max(measuredCost, record.estimatedCents ?? 0) : measuredCost;
 }
 
 export function enqueueMetering(

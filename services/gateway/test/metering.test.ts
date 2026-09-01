@@ -22,6 +22,25 @@ describe("resolveMeteredCost", () => {
     ).toBe(1800);
   });
 
+  it("uses the preflight estimate when a successful stream ends with incomplete usage", () => {
+    expect(
+      resolveMeteredCost(
+        baseRecord({
+          status: "ok",
+          providerMayHaveCharged: true,
+          usageComplete: false,
+          estimatedCents: 1800,
+          usage: {
+            inputTokens: 1_000_000,
+            outputTokens: 1,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+        }),
+      ),
+    ).toBe(1800);
+  });
+
   it("preserves zero-usage conservative fallback for provider-charged errors", () => {
     expect(
       resolveMeteredCost(

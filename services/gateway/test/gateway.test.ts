@@ -1056,7 +1056,7 @@ describe("gateway", async () => {
     expect(counter?.spentCents).toBeGreaterThan(0);
   });
 
-  it("9c. interrupted streams with incomplete usage keep hard-budget reservations conservative", async () => {
+  it("9d. interrupted streams with incomplete usage keep hard-budget reservations conservative", async () => {
     const setup = await setupVirtualKey({
       provider: "anthropic",
       baseUrl: `${stubOrigin}/anthropic/v1`,
@@ -1097,6 +1097,43 @@ describe("gateway", async () => {
     expect(counter?.spentCents).toBeGreaterThan(partialInputCost);
   });
 
+  it("9e. a 200 stream ending after message_start keeps hard-budget reservations conservative", async () => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      budgetMode: "hard",
+      budgetLimitCents: 10_000,
+    });
+    const response = await fetch(`${gatewayOrigin}/anthropic/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": setup.secret, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-5",
+        max_tokens: 1_000_000,
+        estimated_input_tokens: 1_000_000,
+        closeStreamPartialUsage: true,
+        stream: true,
+        messages: [],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    await waitForRequestCount(1);
+    const row = (
+      await db.select().from(llmRequests).where(eq(llmRequests.virtualKeyId, setup.keyId))
+    )[0];
+    expect(row?.status).toBe("ok");
+    expect(row?.inputTokens).toBe(1_000_000);
+    expect(row?.outputTokens).toBe(1);
+    const partialInputCost = 300;
+    expect(row?.costCents).toBeGreaterThan(partialInputCost);
+    const counter = (
+      await db.select().from(spendCounters).where(eq(spendCounters.budgetId, setup.budgetId))
+    )[0];
+    expect(counter?.spentCents).toBe(row?.costCents);
+    expect(counter?.spentCents).toBeGreaterThan(partialInputCost);
+  });
+
   it("9b. rejects private BYO provider base URLs before upstream fetch", async () => {
     const setup = await setupVirtualKey({
       provider: "anthropic",
@@ -1120,7 +1157,7 @@ describe("gateway", async () => {
     expect(counter?.spentCents ?? 0).toBe(0);
   });
 
-  it("9c. hard budget reservation includes cache read/write exposure", async () => {
+  it("9f. hard budget reservation includes cache read/write exposure", async () => {
     const setup = await setupVirtualKey({
       provider: "anthropic",
       baseUrl: `${stubOrigin}/anthropic/v1`,
@@ -1334,6 +1371,7 @@ async function buildStub(state: StubState) {
       stream?: boolean;
       abortStream?: boolean;
       abortStreamPartialUsage?: boolean;
+      closeStreamPartialUsage?: boolean;
       tinyUsage?: boolean;
       authFailure?: "expired" | "revoked";
     };
@@ -1345,6 +1383,14 @@ async function buildStub(state: StubState) {
     }
     if ((body as { slow?: boolean }).slow) {
       await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (body.closeStreamPartialUsage) {
+      reply.raw.writeHead(200, { "content-type": "text/event-stream" });
+      reply.raw.write(
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_stub","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"usage":{"input_tokens":1000000,"output_tokens":1}}}\n\n',
+      );
+      reply.raw.end();
+      return reply;
     }
     if (body.abortStreamPartialUsage) {
       reply.raw.on("close", () => {
