@@ -64,7 +64,7 @@ infra/              # docker-compose (self-host), terraform/aws (reference deplo
 
 | # | decision | why (alternatives rejected) |
 |---|---|---|
-| 1 | TypeScript everywhere, Node 22+ (Node 24 production images), pnpm + Turborepo | one language across api/web/cli/mcp/runner; team fluency; turbo caching. Nx heavier, polyglot unnecessary. |
+| 1 | TypeScript everywhere, Node 24 LTS recommended (22.13+ compatibility), pnpm + Turborepo | one language and one production runtime across api/web/cli/mcp/runner; team fluency; turbo caching. Nx heavier, polyglot unnecessary. |
 | 2 | Next.js 16 App Router + React 19 + Tailwind v4 for web | matches Facility's web stack; RSC for fast dashboards. |
 | 3 | Fastify 5 + Zod (type-provider) + OpenAPI for api & gateway | schema-first: the SDK's schema.d.ts is generated from the emitted OpenAPI doc and the ergonomic route contracts are hand-maintained on top, guarded against drift by a route-coverage test; mature plugin ecosystem (ws, sse, rate-limit); long-lived Node servers. tRPC rejected (CLI/MCP/GitHub are non-TS-web consumers; OpenAPI is the lingua franca). NestJS rejected (ceremony without payoff). |
 | 4 | Postgres 16 + Drizzle ORM | boring, portable, SQL-first migrations; JSONB for payloads; LISTEN/NOTIFY for cheap realtime. Supabase-compatible but not required. |
