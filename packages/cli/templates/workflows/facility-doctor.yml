@@ -151,10 +151,11 @@ jobs:
           FACILITY_RECEIPT_CHECKS_FILE: ${{ github.workspace }}/.agent-sdlc/checks.jsonl
           FACILITY_RECEIPT_OUTPUT: ${{ runner.temp }}/facility-receipt/facility-run.json
           GH_TOKEN: ${{ github.token }}
+          FACILITY_DEFAULT_BRANCH: {{DEFAULT_BRANCH_YAML}}
         run: |
           trusted="$RUNNER_TEMP/facility-receipt-collector.mjs"
-          git show "origin/{{DEFAULT_BRANCH}}:.github/facility/receipts/collect.mjs" > "$trusted" 2>/dev/null || \
-            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/receipts/collect.mjs?ref={{DEFAULT_BRANCH}}" --jq .content | base64 -d > "$trusted"
+          git show "origin/${FACILITY_DEFAULT_BRANCH}:.github/facility/receipts/collect.mjs" > "$trusted" 2>/dev/null || \
+            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/receipts/collect.mjs?ref=${FACILITY_DEFAULT_BRANCH}" --jq .content | base64 -d > "$trusted"
           node "$trusted"
 
       - name: Attest agent run receipt

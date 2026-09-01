@@ -397,6 +397,7 @@ export async function init(flags, pkgRoot, version) {
   const vars = {
     FACILITY_VERSION: version,
     DEFAULT_BRANCH: defaultBranch,
+    DEFAULT_BRANCH_YAML: yamlQuotedScalar(defaultBranch),
     // Regex fragment for protect-branch.mjs — branch names may contain / or . metacharacters.
     DEFAULT_BRANCH_PATTERN: escapeRegExp(defaultBranch),
     BUILD_MODEL: models.build,

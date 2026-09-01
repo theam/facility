@@ -152,10 +152,11 @@ jobs:
           FACILITY_RECEIPT_CHECKS_FILE: ${{ github.workspace }}/.agent-sdlc/checks.jsonl
           FACILITY_RECEIPT_OUTPUT: ${{ runner.temp }}/facility-receipt/facility-run.json
           GH_TOKEN: ${{ github.token }}
+          FACILITY_DEFAULT_BRANCH: {{DEFAULT_BRANCH_YAML}}
         run: |
           trusted="$RUNNER_TEMP/facility-receipt-collector.mjs"
-          git show "origin/{{DEFAULT_BRANCH}}:.github/facility/receipts/collect.mjs" > "$trusted" 2>/dev/null || \
-            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/receipts/collect.mjs?ref={{DEFAULT_BRANCH}}" --jq .content | base64 -d > "$trusted"
+          git show "origin/${FACILITY_DEFAULT_BRANCH}:.github/facility/receipts/collect.mjs" > "$trusted" 2>/dev/null || \
+            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/receipts/collect.mjs?ref=${FACILITY_DEFAULT_BRANCH}" --jq .content | base64 -d > "$trusted"
           node "$trusted"
 
       - name: Attest agent run receipt
@@ -184,7 +185,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: {{DEFAULT_BRANCH}}
+          ref: {{DEFAULT_BRANCH_YAML}}
           fetch-depth: 1
 
       - name: Download structured security findings
@@ -197,8 +198,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          FACILITY_DEFAULT_BRANCH: {{DEFAULT_BRANCH_YAML}}
         run: |
           trusted="$RUNNER_TEMP/facility-security-sync.mjs"
-          git show "origin/{{DEFAULT_BRANCH}}:.github/facility/security/sync-findings.mjs" > "$trusted" 2>/dev/null || \
-            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/security/sync-findings.mjs?ref={{DEFAULT_BRANCH}}" --jq .content | base64 -d > "$trusted"
+          git show "origin/${FACILITY_DEFAULT_BRANCH}:.github/facility/security/sync-findings.mjs" > "$trusted" 2>/dev/null || \
+            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/security/sync-findings.mjs?ref=${FACILITY_DEFAULT_BRANCH}" --jq .content | base64 -d > "$trusted"
           node "$trusted" "$RUNNER_TEMP/facility-security-findings/security-findings.json"

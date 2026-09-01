@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(pkgRoot, "bin", "facility.mjs");
 
-function makeHostileRepo() {
+function makeHostileRepo(branch) {
   const dir = mkdtempSync(join(tmpdir(), "facility-escape-"));
-  execFileSync("git", ["init", "-b", "release/2026"], { cwd: dir });
+  execFileSync("git", ["init", "-b", branch], { cwd: dir });
   writeFileSync(
     join(dir, "package.json"),
     JSON.stringify(
@@ -33,7 +33,7 @@ function makeHostileRepo() {
   return dir;
 }
 
-function runInit(dir) {
+function runInit(dir, branch) {
   return spawnSync(
     process.execPath,
     [
@@ -43,7 +43,7 @@ function runInit(dir) {
       "--dir",
       dir,
       "--branch",
-      "release/2026",
+      branch,
       "--checks",
       'node -e "console.log(1)"',
     ],
@@ -51,9 +51,27 @@ function runInit(dir) {
   );
 }
 
+function assertWorkflowShellUsesBranchEnv(workflowText, branch) {
+  assert.doesNotMatch(
+    workflowText,
+    new RegExp(`origin/${escapeRegExp(branch)}:`),
+    "default branch must not be embedded in privileged shell command text",
+  );
+  assert.match(
+    workflowText,
+    /origin\/\$\{FACILITY_DEFAULT_BRANCH\}:/,
+    "trusted script fetch must read the branch from an environment variable",
+  );
+  assert.match(
+    workflowText,
+    /ref=\$\{FACILITY_DEFAULT_BRANCH\}/,
+    "gh api ref must read the branch from an environment variable",
+  );
+}
+
 test("init escapes workflow names, check commands, and default branch for their target formats", () => {
-  const dir = makeHostileRepo();
-  const result = runInit(dir);
+  const dir = makeHostileRepo("release/2026");
+  const result = runInit(dir, "release/2026");
   assert.equal(result.status, 0, result.stderr || result.stdout);
 
   const settings = JSON.parse(readFileSync(join(dir, ".claude/settings.json"), "utf8"));
@@ -72,3 +90,23 @@ test("init escapes workflow names, check commands, and default branch for their 
     "protect-branch regex must escape slash metacharacters in the default branch",
   );
 });
+
+test("init keeps hostile but valid branch refs out of workflow shell source", () => {
+  for (const branch of ['$(id)', 'foo"bar']) {
+    const dir = makeHostileRepo("main");
+    const result = runInit(dir, branch);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+
+    const doctor = readFileSync(join(dir, ".github/workflows/facility-doctor.yml"), "utf8");
+    assertWorkflowShellUsesBranchEnv(doctor, branch);
+    assert.match(doctor, /FACILITY_DEFAULT_BRANCH: /, "receipt steps must bind the branch through env");
+
+    const crew = readFileSync(join(dir, ".github/workflows/facility-crew.yml"), "utf8");
+    assertWorkflowShellUsesBranchEnv(crew, branch);
+    assert.match(crew, /DEFAULT_BRANCH: /, "delivery verify must bind the branch through env");
+  }
+});
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
