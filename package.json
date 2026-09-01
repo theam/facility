@@ -7,7 +7,7 @@
   "author": "The Agile Monkeys (https://theagilemonkeys.com)",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "^22.13.0 || ^24.0.0"
   },
   "packageManager": "pnpm@11.20.0",
   "scripts": {

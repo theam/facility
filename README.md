@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/theam/facility/actions/workflows/ci.yml"><img src="https://github.com/theam/facility/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/node-%E2%89%A522-161B22" alt="Node.js 22 or newer">
+  <img src="https://img.shields.io/badge/node-24%20LTS-161B22" alt="Node.js 24 LTS">
   <img src="https://img.shields.io/badge/license-Apache--2.0-FFD923" alt="Apache License 2.0">
 </p>
 
@@ -87,15 +87,16 @@ itself when the team wants agents running in its own CI.
 ## Quick start: run Facility
 
 Running Facility locally takes one command for the stack plus a one-time GitHub
-App setup for sign-in and repository automation. You need Docker, Node.js 22 or
-newer, and pnpm 11 (via corepack).
+App setup for sign-in and repository automation. You need Docker, Node.js 24
+LTS, and the repository-pinned pnpm 11.20.0. Node.js 22 remains supported from
+22.13.0.
 
 ### 1. Clone and boot the stack
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack enable
+npm install --global pnpm@11.20.0
 pnpm dev
 ```
 
@@ -292,9 +293,9 @@ wants the process *in* the repository — agents running in its own CI, invoked
 from issue comments — the standalone installer writes it there. This is the
 second step, not the entry price, and it is the only step that adds files.
 
-The installer needs a GitHub repository and Node.js 20 or newer; its runtime
-floor is lower than the platform's, and it does not require you to deploy
-Facility at all.
+The installer needs a GitHub repository and uses the same runtime contract:
+Node.js 24 LTS is recommended, with Node.js 22 supported from 22.13.0. It does
+not require you to deploy Facility at all.
 
 ```bash
 git clone https://github.com/theam/facility.git /absolute/path/to/facility
@@ -494,7 +495,7 @@ can be agreed on.
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack enable
+npm install --global pnpm@11.20.0
 pnpm install --frozen-lockfile
 pnpm verify
 ```
