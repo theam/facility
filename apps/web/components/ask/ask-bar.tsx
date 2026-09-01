@@ -78,7 +78,7 @@ export function AskBar({ projectId }: { projectId: string }) {
           <AskComposer
             projectId={projectId}
             conversationId={conversationId}
-            placeholder="chat with the digital product owner ( / to focus )"
+            placeholder="talk with the product owner ( / to focus )"
             inputRef={inputRef}
             onTurnStarted={({ conversationId: nextId, runId, question }) => {
               setConversationId(nextId);
