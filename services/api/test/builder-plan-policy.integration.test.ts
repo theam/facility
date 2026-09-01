@@ -25,9 +25,12 @@ import {
   withBuilderPlanPreflight,
 } from "../src/builder-plan-policy.js";
 import { ApiError } from "../src/errors.js";
-import { githubIssueRevisionSha256 } from "../src/github/issue-revision.js";
+import {
+  githubIssueRevisionContext,
+  githubIssueRevisionSha256,
+} from "../src/github/issue-revision.js";
 import { syncRepoFacilityConfig } from "../src/github/kickstart.js";
-import { routeTrigger, type TriggerPayload } from "../src/github/router.js";
+import { githubRequestContext, routeTrigger, type TriggerPayload } from "../src/github/router.js";
 import { dispatchRun } from "../src/sandbox/orchestrator.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -132,6 +135,35 @@ describe("builder plan policy integration", async () => {
         trigger: { ...fixture.dispatch.trigger, proposalId: duplicateProposalId },
       }),
     ).rejects.toMatchObject({ code: "builder_plan_already_consumed" });
+  });
+
+  it("admits a fresh plan whose issue body GitHub reports as empty rather than absent", async () => {
+    // An issue body cleared after creation reads back as `""` from
+    // `GET /issues/:number`, while `githubRequestContext` stored the same issue
+    // with `body: null`. Nothing about the issue changed between the Architect
+    // run and this dispatch, so the required gate has to admit it rather than
+    // report `builder_plan_stale` against a revision that never moved.
+    const fixture = await canonicalFixture({ issueBody: "" });
+    await expect(assertBuilderPlanDispatch(db, fixture.dispatch)).resolves.toEqual({
+      mode: "builder",
+      isBuilder: true,
+    });
+  });
+
+  it("still denies an empty-bodied issue whose live revision moved", async () => {
+    const fixture = await canonicalFixture({ issueBody: "" });
+    const before = await projectRuns(fixture.orgId, fixture.projectId);
+    await expect(
+      assertBuilderPlanDispatch(db, {
+        ...fixture.dispatch,
+        freshnessEvidence: {
+          ...fixture.dispatch.freshnessEvidence,
+          issueRevisionSha256: createHash("sha256").update("moved").digest("hex"),
+        },
+      }),
+    ).rejects.toMatchObject({ code: "builder_plan_stale" });
+    expect(await projectRuns(fixture.orgId, fixture.projectId)).toHaveLength(before.length);
+    await expect(lastDenialCode(fixture.orgId)).resolves.toBe("builder_plan_stale");
   });
 
   it("recognizes a Builder by agentDefId when the run mode is a surface alias", async () => {
@@ -922,7 +954,9 @@ describe("builder plan policy integration", async () => {
     await expect(lastDenialCode(fixture.orgId)).resolves.toBe(expected);
   });
 
-  async function canonicalFixture(options: { state?: string; expiresAt?: Date } = {}): Promise<{
+  async function canonicalFixture(
+    options: { state?: string; expiresAt?: Date; issueBody?: string | null } = {},
+  ): Promise<{
     orgId: string;
     projectId: string;
     proposalId: string;
@@ -941,17 +975,28 @@ describe("builder plan policy integration", async () => {
     const actionTypeId = `act_plan_${suffix}`;
     const baseSha = "a".repeat(40);
     const issueUrl = `https://github.test/facility-test/plan-${suffix}/issues/204`;
-    const issueRequest = {
+    // Derive each side of the freshness comparison the way production does
+    // rather than sharing one literal digest between them: `trigger.request` is
+    // whatever `githubRequestContext` stored at Architect dispatch, while the
+    // Builder gate re-derives its digest from a live `GET /issues/:number` read.
+    // Reusing a single value here would hide any disagreement between the two.
+    const liveIssue = {
+      number: 204,
       title: "Require a plan",
-      body: "Implement it",
+      body: options.issueBody === undefined ? "Implement it" : options.issueBody,
       state: "open",
-      author: "requester",
-      url: issueUrl,
+      user: { login: "requester" },
       labels: [],
-      comments: [],
+      html_url: issueUrl,
     };
+    const issueRequest = githubRequestContext({ issue: liveIssue }, []);
     const issueRevisionSha256 = githubIssueRevisionSha256(issueRequest);
-    if (!issueRevisionSha256) throw new Error("issue revision fixture missing");
+    const liveIssueRevisionSha256 = githubIssueRevisionSha256(
+      githubIssueRevisionContext(liveIssue, []),
+    );
+    if (!issueRevisionSha256 || !liveIssueRevisionSha256) {
+      throw new Error("issue revision fixture missing");
+    }
     const plan = "Implement the reviewed change and run the named checks.";
     const planSha256 = createHash("sha256").update(plan).digest("hex");
     const decidedAt = new Date();
@@ -1109,7 +1154,7 @@ describe("builder plan policy integration", async () => {
         source: "integration_test",
         freshnessEvidence: {
           baseSha,
-          issueRevisionSha256,
+          issueRevisionSha256: liveIssueRevisionSha256,
           checkedAt: new Date().toISOString(),
         },
       },

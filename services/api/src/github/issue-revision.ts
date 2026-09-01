@@ -110,8 +110,18 @@ function issueLabels(value: unknown) {
   ].sort();
 }
 
+/**
+ * Fold every representation of "no text" onto `null` before it reaches the
+ * digest. The producers disagree about which one they emit for the same issue:
+ * `githubRequestContext` stores empty or whitespace-only text as `null`, while
+ * a live `GET /issues/:number` read returns `""` for a body that was cleared
+ * after creation. A revision digest has to describe the issue, not the producer
+ * that observed it, so both spellings have to canonicalize the same way.
+ */
 function normalizedText(value: unknown): string | null {
-  return typeof value === "string" ? value.replace(/\r\n?/g, "\n") : null;
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\r\n?/g, "\n");
+  return normalized.trim() ? normalized : null;
 }
 
 function stringValue(value: unknown) {
