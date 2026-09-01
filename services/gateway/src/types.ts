@@ -55,6 +55,8 @@ export type RequestRecord = {
   reservations?: Array<{ budget: BudgetState; estimatedCents: number }>;
   estimatedCents?: number;
   providerMayHaveCharged?: boolean;
+  /** False when a provider stream ended before its terminal usage-bearing frame. */
+  usageComplete?: boolean;
 };
 
 export type BudgetState = {

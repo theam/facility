@@ -6,6 +6,20 @@ import type { FastifyBaseLogger } from "fastify";
 import { addBudgetSpend, reconcileBudgetReservations, reserveHardBudgets } from "./budgets.js";
 import type { AuthedKey, BudgetState, EnvelopeStore, RequestRecord } from "./types.js";
 
+/** Cost applied to budget reconciliation — conservative when provider usage is incomplete. */
+export function billableCostCents(
+  record: Pick<
+    RequestRecord,
+    "status" | "providerMayHaveCharged" | "usageComplete" | "estimatedCents"
+  >,
+  measuredCost: number,
+): number {
+  if (record.status === "ok") return measuredCost;
+  if (!record.providerMayHaveCharged) return measuredCost;
+  if (record.usageComplete !== false && measuredCost > 0) return measuredCost;
+  return record.estimatedCents ?? measuredCost;
+}
+
 export function enqueueMetering(
   db: FacilityDb,
   store: EnvelopeStore,
@@ -56,10 +70,7 @@ export async function writeMetering(
     cacheWriteTokens: record.usage.cacheWriteTokens,
   });
   const measuredCost = record.priced ? (computedCost ?? 0) : 0;
-  const cost =
-    record.status === "error" && record.providerMayHaveCharged && measuredCost === 0
-      ? (record.estimatedCents ?? 0)
-      : measuredCost;
+  const cost = billableCostCents(record, measuredCost);
   let envelopeUri: string | null = null;
   try {
     envelopeUri = await store.putEnvelope({

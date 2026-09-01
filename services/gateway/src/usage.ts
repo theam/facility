@@ -47,6 +47,8 @@ function nestedNumber(value: unknown, key: string): number | undefined {
 
 export class UsageTee extends Transform {
   readonly usage = emptyUsage();
+  /** True once a terminal provider usage frame or a complete non-stream body is parsed. */
+  usageComplete = false;
   readonly textParts: string[] = [];
   private pending = "";
   private retainedBytes = 0;
@@ -124,8 +126,20 @@ export class UsageTee extends Transform {
         for (const source of [parsed, parsed?.message, parsed?.delta]) {
           mergeUsage(this.usage, usageFromJson("anthropic", source));
         }
+        if (parsed?.type === "message_delta") {
+          const outputTokens = (parsed as { usage?: { output_tokens?: unknown } }).usage
+            ?.output_tokens;
+          if (typeof outputTokens === "number" && Number.isFinite(outputTokens)) {
+            this.usageComplete = true;
+          }
+        } else if (parsed?.type === "message" && parsed?.usage) {
+          this.usageComplete = true;
+        }
       } else {
         mergeUsage(this.usage, usageFromJson("openai", parsed));
+        if ((parsed as { usage?: unknown }).usage) {
+          this.usageComplete = true;
+        }
       }
     } catch {
       // Provider bytes are still passed through; malformed telemetry frames only affect metering.

@@ -1,4 +1,4 @@
-import { allowedModelsForEngine, generateApiKey, newId, seal } from "@facility/core";
+import { allowedModelsForEngine, costCents, generateApiKey, newId, seal } from "@facility/core";
 import type { FacilityDb } from "@facility/db";
 import {
   budgets,
@@ -1025,10 +1025,12 @@ describe("gateway", async () => {
     expect(counter?.spentCents).toBeGreaterThan(0);
   });
 
-  it("9. Client abort aborts upstream and records partial usage", async () => {
+  it("9. Client abort aborts upstream and keeps hard-budget spend conservative when usage is incomplete", async () => {
     const setup = await setupVirtualKey({
       provider: "anthropic",
       baseUrl: `${stubOrigin}/anthropic/v1`,
+      budgetMode: "hard",
+      budgetLimitCents: 1_000_000,
     });
     const controller = new AbortController();
     const response = await fetch(`${gatewayOrigin}/anthropic/v1/messages`, {
@@ -1049,10 +1051,66 @@ describe("gateway", async () => {
     const row = (
       await db.select().from(llmRequests).where(eq(llmRequests.virtualKeyId, setup.keyId))
     )[0];
-    expect(row?.outputTokens).toBe(333);
+    expect(row?.status).toBe("error");
+    expect(row?.inputTokens).toBe(1_000_000);
+    expect(row?.outputTokens).toBe(0);
+    const partialMeasuredCost =
+      costCents({
+        model: "claude-sonnet-5",
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }) ?? 0;
+    expect(row?.costCents).toBeGreaterThan(partialMeasuredCost);
     const counter = (
       await db.select().from(spendCounters).where(eq(spendCounters.budgetId, setup.budgetId))
     )[0];
+    expect(counter?.spentCents).toBe(row?.costCents);
+    expect(counter?.spentCents).toBeGreaterThan(partialMeasuredCost);
+  });
+
+  it("9a. Client abort after terminal usage reconciles hard-budget spend to measured cost", async () => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      budgetMode: "hard",
+      budgetLimitCents: 1_000_000,
+    });
+    const controller = new AbortController();
+    const response = await fetch(`${gatewayOrigin}/anthropic/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": setup.secret, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-5",
+        abortStream: true,
+        abortStreamTerminal: true,
+        stream: true,
+        messages: [],
+      }),
+      signal: controller.signal,
+    });
+    await response.body?.getReader().read();
+    controller.abort();
+    await waitFor(() => stubState.abortObserved);
+    await waitForRequestCount(1);
+    const row = (
+      await db.select().from(llmRequests).where(eq(llmRequests.virtualKeyId, setup.keyId))
+    )[0];
+    expect(row?.outputTokens).toBe(333);
+    const measuredCost =
+      costCents({
+        model: "claude-sonnet-5",
+        inputTokens: row?.inputTokens ?? 0,
+        outputTokens: row?.outputTokens ?? 0,
+        cacheReadTokens: row?.cacheRead ?? 0,
+        cacheWriteTokens: row?.cacheWrite ?? 0,
+      }) ?? 0;
+    expect(row?.costCents).toBeCloseTo(measuredCost, 6);
+    const counter = (
+      await db.select().from(spendCounters).where(eq(spendCounters.budgetId, setup.budgetId))
+    )[0];
+    expect(counter?.spentCents).toBeCloseTo(measuredCost, 6);
     expect(counter?.spentCents).toBeGreaterThan(0);
   });
 
@@ -1292,6 +1350,7 @@ async function buildStub(state: StubState) {
       model: string;
       stream?: boolean;
       abortStream?: boolean;
+      abortStreamTerminal?: boolean;
       tinyUsage?: boolean;
       authFailure?: "expired" | "revoked";
     };
@@ -1309,9 +1368,15 @@ async function buildStub(state: StubState) {
         state.abortObserved = true;
       });
       reply.raw.writeHead(200, { "content-type": "text/event-stream" });
-      reply.raw.write(
-        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":333}}\n\n',
-      );
+      if (body.abortStreamTerminal) {
+        reply.raw.write(
+          'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":333}}\n\n',
+        );
+      } else {
+        reply.raw.write(
+          'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1000000,"output_tokens":0}}}\n\n',
+        );
+      }
       await new Promise((resolve) => setTimeout(resolve, 10_000));
       return reply;
     }
