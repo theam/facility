@@ -4,23 +4,24 @@ import { cx } from "@facility/ui";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { NavIcon, type NavIconName } from "./nav-icons";
 
 export type NavProject = { id: string; slug: string; name?: string };
 
-type NavItem = { href: string; label: string; badge?: number; sub?: string };
+type NavItem = { href: string; icon: NavIconName; label: string; badge?: number };
 
 /** Org mode is the projects dashboard; everything else is the platform beneath it. */
 export function orgNav(): NavItem[] {
-  return [{ href: "/projects", label: "Projects" }];
+  return [{ href: "/projects", icon: "projects", label: "Projects" }];
 }
 
-/** Cross-project operator surfaces — secondary by design; explained, not assumed. */
+/** Cross-project operator surfaces — secondary by design. */
 export function orgPlatformNav(): NavItem[] {
   return [
-    { href: "/sessions", label: "Activity", sub: "live agent work, all projects" },
-    { href: "/harness", label: "Skills & Rules", sub: "what your agents know" },
-    { href: "/audit", label: "Audit log", sub: "every action, recorded" },
-    { href: "/settings", label: "Settings" },
+    { href: "/sessions", icon: "activity", label: "Activity" },
+    { href: "/harness", icon: "skills", label: "Skills & Rules" },
+    { href: "/audit", icon: "audit", label: "Audit log" },
+    { href: "/settings", icon: "settings", label: "Settings" },
   ];
 }
 
@@ -28,22 +29,18 @@ export function orgPlatformNav(): NavItem[] {
 export function projectNav(projectId: string, inboxCount?: number): NavItem[] {
   const base = `/projects/${projectId}`;
   return [
-    { href: base, label: "Overview" },
-    {
-      href: `${base}/product`,
-      label: "Product",
-      sub: "decisions & docs — the project's knowledge base",
-    },
-    { href: `${base}/stories`, label: "Stories", sub: "the story of every unit of work" },
-    { href: `${base}/sessions`, label: "Runs", sub: "agent work on this project" },
+    { href: base, icon: "overview", label: "Overview" },
+    { href: `${base}/product`, icon: "product", label: "Product Owner" },
+    { href: `${base}/stories`, icon: "stories", label: "Stories" },
+    { href: `${base}/sessions`, icon: "runs", label: "Runs" },
     {
       href: `${base}/approvals`,
+      icon: "approvals",
       label: "Approvals",
       badge: inboxCount,
-      sub: "decisions waiting on you",
     },
-    { href: `${base}/agents`, label: "Agents" },
-    { href: `${base}/settings`, label: "Settings" },
+    { href: `${base}/agents`, icon: "agents", label: "Agents" },
+    { href: `${base}/settings`, icon: "settings", label: "Settings" },
   ];
 }
 
@@ -73,21 +70,20 @@ function NavLinks({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cx(
-              "group flex items-baseline gap-3 border-l-2 px-5 py-2 text-[13px] transition-colors",
+              "group flex items-center gap-3 border-l-2 px-5 py-3.5 text-[13px] transition-colors lg:py-2",
               active
                 ? "border-(--line-strong) font-medium text-(--ink)"
                 : "border-transparent text-(--mut) hover:text-(--ink)",
             )}
           >
-            <span className={cx("font-mono text-[10px]", active ? "text-(--ink)" : "text-(--dim)")}>
-              {String(i + 1).padStart(2, "0")}
-            </span>
-            <span className="flex min-w-0 flex-col">
-              {item.label}
-              {item.sub ? (
-                <span className="text-[10px] leading-snug text-(--dim)">{item.sub}</span>
-              ) : null}
-            </span>
+            <NavIcon
+              name={item.icon}
+              className={cx(
+                "size-4 shrink-0 transition-colors",
+                active ? "text-(--ink)" : "text-(--dim) group-hover:text-(--ink)",
+              )}
+            />
+            <span className="min-w-0">{item.label}</span>
             {item.badge ? (
               <span className="ml-auto font-mono text-[11px] text-(--human)">{item.badge}</span>
             ) : null}
@@ -129,7 +125,7 @@ function NavSections({
   // Project mode: the sidebar belongs to the project. The way out is explicit
   // (back link on top) and the section is titled by the project itself.
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-6">
       <Link
         href="/projects"
         onClick={onNavigate}
@@ -148,34 +144,17 @@ function NavSections({
   );
 }
 
-function FacilityMark() {
+function FooterSignature() {
   return (
-    <span
-      aria-hidden
-      className="relative h-8 w-8 shrink-0 overflow-hidden rounded-[1.5px] bg-(--card)"
-    >
-      <span className="absolute left-1 right-1 top-1/2 h-px -translate-y-1/2 bg-(--machine)" />
-      <span className="absolute left-[9px] top-2 h-4 w-px bg-(--ink)" />
-      <span className="absolute right-[9px] top-2 h-4 w-px bg-(--ink)" />
-      <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 bg-(--accent)" />
-    </span>
-  );
-}
-
-function FooterSignature({ compact = false }: { compact?: boolean }) {
-  return (
-    <div className={cx("flex items-center gap-3 px-5", compact && "items-start")}>
-      <FacilityMark />
-      <p className="font-mono text-[10px] leading-relaxed text-(--dim)">
-        An initiative by{" "}
-        <a
-          href="https://theagilemonkeys.com"
-          className="underline-offset-4 hover:text-(--mut) hover:underline"
-        >
-          The Agile Monkeys
-        </a>
-      </p>
-    </div>
+    <p className="px-5 font-mono text-[10px] leading-relaxed text-(--dim)">
+      An initiative by{" "}
+      <a
+        href="https://theagilemonkeys.com"
+        className="underline-offset-4 hover:text-(--mut) hover:underline"
+      >
+        The Agile Monkeys
+      </a>
+    </p>
   );
 }
 
@@ -250,7 +229,7 @@ export function MobileNav({ project, inboxCount }: { project?: NavProject; inbox
             inboxCount={inboxCount}
             onNavigate={() => setOpen(false)}
           />
-          <FooterSignature compact />
+          <FooterSignature />
         </div>
       ) : null}
     </div>
