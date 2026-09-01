@@ -4,6 +4,7 @@ import {
   qualifyingSecurityFindings,
   redactSecurityText,
   SecurityReportSchema,
+  syncSecurityFindings,
 } from "../src/github/security-findings.js";
 import { ensureTrackedIssue, trackedIssueMarker } from "../src/github/tracked-issues.js";
 
@@ -120,5 +121,55 @@ describe("trusted GitHub issue projection", () => {
     expect(redactSecurityText("credential ghp_abcdefghijklmnopqrstuvwxyz123456")).toBe(
       "credential «redacted»",
     );
+  });
+
+  it("re-proves finalization ownership before each finding it syncs", async () => {
+    // The sync is the long tail of run finalization — several GitHub calls per
+    // finding — so ownership of the finalization lease is asserted per finding,
+    // not only around the whole step: an attempt superseded mid-report must
+    // stop before it races the winner into a duplicate tracked issue.
+    const finding = {
+      fingerprint: "auth-bypass",
+      title: "Authorization bypass",
+      severity: "high" as const,
+      confidence: "high" as const,
+      actionable: true,
+      risk: "Reachable admin path",
+      locations: ["src/admin.ts:4"],
+      smallest_fix: "Apply the authorization guard",
+      evidence: [],
+    };
+    const report = SecurityReportSchema.parse({
+      schema: "facility.security.findings.v1",
+      findings: [finding, { ...finding, fingerprint: "second" }],
+    });
+    let created = 0;
+    const client = new FacilityGithubClient(
+      {
+        rest: {
+          issues: {
+            listForRepo: async () => ({ data: [] }),
+            createLabel: async () => ({ data: {} }),
+            create: async () => {
+              created += 1;
+              return {
+                data: { number: created, html_url: `https://github.test/issues/${created}` },
+              };
+            },
+          },
+        },
+      } as unknown as Octokit,
+      { owner: "acme", repo: "app", defaultBranch: "main" },
+    );
+    let assertionsLeft = 1;
+    await expect(
+      syncSecurityFindings(client, report, { runId: "run_test" }, async () => {
+        assertionsLeft -= 1;
+        if (assertionsLeft < 0) throw new Error("finalization superseded");
+      }),
+    ).rejects.toThrow("finalization superseded");
+    // The report carries two qualifying findings; ownership held for the first
+    // and was lost before the second, so exactly one issue was created.
+    expect(created).toBe(1);
   });
 });

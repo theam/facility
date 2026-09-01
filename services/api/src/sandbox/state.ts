@@ -49,9 +49,32 @@ export type RunSandboxState = {
   projectId?: string;
   bundle?: RunBundle;
   launchedAt?: string;
+  // Written by finishRun's terminal claim, in the same commit as the status.
   finishedAt?: string;
+  // Written once every step that follows that claim — resource reclamation,
+  // delivery, events, audit, the conversation turn — has landed. Until it is,
+  // the /result route admits a replay so an interrupted finalization resumes;
+  // see resultFinalizationPending.
+  finalizedAt?: string;
+  // The lease on that finalization: written by the claim and taken over by a
+  // replayed /result only once it is RESULT_FINALIZATION_LEASE_MS old, so two
+  // attempts never run the steps at once — the attempt a rolling restart cut
+  // the runner off from may still be running on the old process while the
+  // runner replays to the new one. A live attempt renews it for as long as it
+  // works (between steps and on a timer inside long ones), so expiry means the
+  // holder is dead or stalled, not merely slow.
+  finalizingAt?: string;
+  // Which attempt holds that lease: minted by the claim, replaced by a
+  // takeover. Renewal compare-and-sets on it, so a stalled attempt that was
+  // taken over discovers the loss atomically at its next step and aborts
+  // instead of running beside — and duplicating the effects of — the winner.
+  finalizingToken?: string;
   destroyedAt?: string;
   lastStatus?: string;
+  // First reconcile tick that observed the sandbox exited/lost while the run
+  // was still live. Cleared when a later probe sees the sandbox alive;
+  // confirmation rules live at SANDBOX_LOSS_GRACE_MS.
+  lossObservedAt?: string;
   // True for in-process assistant turns: no container, no driver — the key
   // lifecycle and orphan sweeps still apply through virtualKeyId.
   inline?: boolean;
@@ -70,6 +93,29 @@ export const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "canceled"] as cons
 export function terminalStatus(status: string) {
   return (TERMINAL_RUN_STATUSES as readonly string[]).includes(status);
 }
+
+// A run whose terminal status finishRun committed but whose finalization it
+// never recorded as complete: the control plane went down, or a step threw,
+// between the claim and finalizedAt. Only that claim writes finishedAt — a
+// cancel or a failRun leaves it unset — so this is exactly the window a
+// replayed /result is admitted to close. A run finalized before finalizedAt
+// existed reads as pending too; resuming one re-runs guarded steps that all
+// find their work done and then records the marker.
+export function resultFinalizationPending(sandbox: RunSandboxState) {
+  return Boolean(sandbox.finishedAt) && !sandbox.finalizedAt;
+}
+
+// How long one attempt at finalization holds the run without renewing before a
+// replay may take it over. Not a bound on how long a finalization may take —
+// a security sync can spend minutes on GitHub — but on how long a live attempt
+// goes between renewals, which happen at every step boundary and on a
+// RESULT_FINALIZATION_RENEW_MS timer inside a step. Short against the runner's
+// five-minute result budget, which has to cover a control-plane restart plus
+// this wait.
+export const RESULT_FINALIZATION_LEASE_MS = 60_000;
+// How often an attempt renews mid-step. A third of the lease, so a takeover
+// needs several missed renewals, not one late timer tick.
+export const RESULT_FINALIZATION_RENEW_MS = RESULT_FINALIZATION_LEASE_MS / 3;
 
 export async function appendRunEvents(
   db: FacilityDb,

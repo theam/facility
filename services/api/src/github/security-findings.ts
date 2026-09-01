@@ -63,9 +63,16 @@ export async function syncSecurityFindings(
   client: FacilityGithubClient,
   report: SecurityReport,
   source: { runId: string },
+  assertOwnership?: () => Promise<void>,
 ) {
   const synced = [];
   for (const finding of qualifyingSecurityFindings(report)) {
+    // Each finding costs several GitHub calls, so a long report is where a
+    // finalization attempt outlives its lease. The caller's assertion re-proves
+    // ownership before every finding, not only between finalization steps: an
+    // attempt that stalled and was superseded stops here, before it can race
+    // the winning attempt's ensureTrackedIssue into a duplicate issue.
+    await assertOwnership?.();
     const issue = await ensureTrackedIssue(client, {
       kind: "security",
       fingerprint: finding.fingerprint,

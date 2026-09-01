@@ -14,17 +14,66 @@ import {
   createGithubInstallationTokenFactory,
 } from "../github/client.js";
 import { collectGithubSecuritySweepEvidence } from "../github/security-sweep.js";
-import { finishRun, updateGithubRunProgress } from "../sandbox/orchestrator.js";
+import {
+  FinalizationInProgressError,
+  finishRun,
+  updateGithubRunProgress,
+} from "../sandbox/orchestrator.js";
 import {
   appendRunEvents,
   type RunSandboxState,
   readSandbox,
+  resultFinalizationPending,
   terminalStatus,
 } from "../sandbox/state.js";
 import type { AppConfig } from "../types.js";
 
 const Params = z.object({ runId: z.string() });
 const GitCommitSha = z.string().regex(/^[0-9a-f]{40}$/i);
+// Exactly what newId("evt") produces. An ack names rows to mutate, so this
+// route takes only ids it could have issued: a list carrying anything else is
+// refused whole, before any of it reaches a query.
+const ACK_ID = /^evt_[0-9a-f]{32}$/;
+// How many ids one request may name. A caller is expected to name ids from a
+// batch this route served — STEER_BATCH caps a batch — but that is the caller's
+// convention and nothing here checks it: what this route enforces is the id
+// shape, this length, and the run and org the update runs under, so an id that
+// never reached this caller is simply an id the update matches no row for. The
+// bound has to stay at or above STEER_BATCH, which a steer-ack test pins,
+// because an ack of a full batch past it is refused whole and the runner
+// re-sends that same list on every later poll.
+export const STEER_ACK_MAX = 32;
+// The most rows one poll is answered with. Exported for the test that keeps it
+// inside the bound above.
+export const STEER_BATCH = 10;
+// One ack parameter, or several, each holding a comma-separated list. The
+// parameter absent stays undefined rather than becoming an empty list: presence
+// is what tells this route which protocol the caller speaks, and a poll with
+// nothing to acknowledge still carries the parameter, empty. Exported so the id
+// rule can be tested as a rule: from outside the route every refusal is the same
+// 400, which says nothing about which shapes the rule refuses.
+export const SteerAck = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    // Joined before splitting so that a wholly empty parameter — and only that —
+    // is the acknowledgment of nothing. An empty entry beside others survives
+    // into the list and fails the id rule below, which refuses the request whole.
+    const joined = Array.isArray(value) ? value.join(",") : value;
+    return joined === "" ? [] : joined.split(",");
+  })
+  .refine(
+    (ids) =>
+      ids === undefined || (ids.length <= STEER_ACK_MAX && ids.every((id) => ACK_ID.test(id))),
+    `ack takes up to ${STEER_ACK_MAX} comma-separated message ids`,
+  );
+// The cursor this route took before the ack. A request this route reads the
+// cursor from marks rows delivered from the select that served them, so the
+// cursor is held to the same id rule for the same reason: only an id this route
+// could have issued reaches a query, and a list — which the cursor never was —
+// is refused outright.
+const SteerAfterId = z.string().regex(ACK_ID).optional();
 const TRANSCRIPT_MAX_BYTES = 50 * 1024 * 1024;
 const SESSION_STATE_MAX_BYTES = 200 * 1024 * 1024;
 const EventBatch = z.array(
@@ -57,19 +106,35 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
     );
   }
 
-  async function authenticate(request: FastifyRequest) {
+  async function authenticateRunner(
+    request: FastifyRequest,
+    // Whether a terminal run is still admitted while the finalization its
+    // /result claim started has not been recorded complete. Only /result asks
+    // for it: that is the request the runner replays after a lost response, and
+    // the one finishRun knows how to resume. Every other route stays refused
+    // the moment the run is terminal — an event or a steer poll has nothing
+    // left to do for a run whose verdict is committed.
+    resumesFinalization: boolean,
+  ) {
     const { runId } = request.params as { runId: string };
     const token = bearer(request.headers.authorization);
     if (!token) throw new ApiError(401, "unauthorized", "Runner token required");
     const run = (await db.select().from(runs).where(eq(runs.id, runId)).limit(1))[0];
     if (!run) throw notFound("Run not found");
-    if (terminalStatus(run.status)) throw new ApiError(409, "run_terminal", "Run is terminal");
     const sandbox = readSandbox(run.sandbox);
+    if (
+      terminalStatus(run.status) &&
+      !(resumesFinalization && resultFinalizationPending(sandbox))
+    ) {
+      throw new ApiError(409, "run_terminal", "Run is terminal");
+    }
     if (!sandbox.runnerTokenHash || !(await verifyKey(token, sandbox.runnerTokenHash))) {
       throw new ApiError(401, "unauthorized", "Invalid runner token");
     }
     (request as RunnerRequest).runnerRun = run;
   }
+  const authenticate = (request: FastifyRequest) => authenticateRunner(request, false);
+  const authenticateResult = (request: FastifyRequest) => authenticateRunner(request, true);
 
   app.post(
     "/internal/runs/:runId/hello",
@@ -265,37 +330,120 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
       preHandler: authenticate,
       schema: {
         params: Params,
-        querystring: z.object({ afterId: z.string().optional() }),
+        querystring: z.object({ ack: SteerAck, afterId: SteerAfterId }),
         response: { 200: z.array(z.record(z.string(), z.unknown())) },
       },
     },
     async (request) => {
       const run = (request as RunnerRequest).runnerRun;
       if (!run) throw notFound("Run not found");
-      const { afterId } = request.query as { afterId?: string };
+      const { ack, afterId } = request.query as { ack?: string[]; afterId?: string };
+      if (ack !== undefined && ack.length > 0) {
+        // Delivery is recorded from the ack, not from the select that served the
+        // batch: marking on the select loses a message whenever the response
+        // drops on the wire — an operator's stop goes with it, and no error
+        // surfaces anywhere. What the server enforces is exactly this much — a
+        // row flips to delivered when a poll authenticated for its run names its
+        // exact id inside that run's org. That the runner names an id only once
+        // the message's durable action landed is the runner's half of the
+        // contract: assumed here, not checked. Redelivery reaches that same
+        // runner, because dispatch claims a run out of "queued" before launching
+        // one sandbox for it, and /resume starts a new run id whose steer rows
+        // are separate. Exact ids also spare a row that became visible only
+        // after this ack was earned: ids come from per-process uuidv7 counters,
+        // so two API tasks can commit one run's messages in an order that
+        // disagrees with their id order, and a range ack would mark such a row
+        // delivered without ever serving it.
+        await db
+          .update(steerMessages)
+          .set({ deliveredAt: new Date() })
+          .where(
+            and(
+              eq(steerMessages.orgId, run.orgId),
+              eq(steerMessages.runId, run.id),
+              // A delivery is written once. The runner re-sends an ack whose
+              // response it never saw, and that replay names rows this statement
+              // already marked: without this clause the replay would move their
+              // timestamps, with it the update matches nothing at all. Applying
+              // the same request twice therefore leaves the same rows in the same
+              // state, which is what lets the runner retry an ambiguous poll.
+              isNull(steerMessages.deliveredAt),
+              inArray(steerMessages.id, ack),
+            ),
+          );
+      }
+      // Transitional, and deletable once no sandbox launched before this change
+      // shipped can still be polling. A run keeps the runner image dispatch
+      // launched its sandbox with, so during the deploy that ships this route
+      // every run already in flight speaks the protocol this branch replaced: it
+      // polls, applies what comes back, and starts the next poll with no delay of
+      // its own, relying on the response to have retired the rows it just
+      // applied. Its cursor cannot identify it — it has none until a batch gives
+      // it one, so its first poll carries no parameter at all and looks exactly
+      // like a poll acknowledging nothing. The ack parameter can: a runner built
+      // after this change sends it on every poll, empty when it has nothing to
+      // name, and one built before this change sends it at no point in its life.
+      // So a request carrying no ack parameter gets the previous semantics for
+      // that request — rows above the cursor when one came with it, marked
+      // delivered by the select that served them — and a request carrying the
+      // parameter, empty or not, is a runner that retires its own rows by id and
+      // takes the path above, cursor beside it or not.
+      const legacyPoll = ack === undefined;
+      const cursor = legacyPoll ? afterId : undefined;
       const deadline = Date.now() + 25_000;
       while (Date.now() < deadline) {
-        const clauses = [eq(steerMessages.runId, run.id), isNull(steerMessages.deliveredAt)];
-        if (afterId) clauses.push(gt(steerMessages.id, afterId));
         const messages = await db
           .select()
           .from(steerMessages)
-          .where(and(...clauses))
-          .orderBy(asc(steerMessages.createdAt))
-          .limit(10);
+          // Served under the same org scope the ack mutates: a row this run's
+          // org cannot acknowledge is a row it must not be handed either, or the
+          // channel wedges on a message that returns on every poll. No writer
+          // makes such a row today: there are four — steer and interrupt over
+          // /v1, and the two matching agent tools — and each resolves the run
+          // inside the caller's org before stamping the row with that same org.
+          // So this predicate is defence against a mis-scoped writer rather than
+          // a hazard anything currently produces.
+          .where(
+            and(
+              eq(steerMessages.orgId, run.orgId),
+              eq(steerMessages.runId, run.id),
+              isNull(steerMessages.deliveredAt),
+              // Where the pre-ack route's id comparison lives now: on the
+              // compatibility path and nowhere else, so what an ack poll is
+              // served still depends on delivery alone.
+              ...(cursor ? [gt(steerMessages.id, cursor)] : []),
+            ),
+          )
+          // Send order, which is the order the agent must read them in. An ack
+          // poll filters on deliveredAt alone, so the ordering no longer has to
+          // double as a delivery filter. createdAt comes from now(), which rows
+          // committed by a single transaction share exactly; id breaks that tie
+          // so a batch at the limit below is deterministic.
+          .orderBy(asc(steerMessages.createdAt), asc(steerMessages.id))
+          .limit(STEER_BATCH);
         if (messages.length > 0) {
-          await db
-            .update(steerMessages)
-            .set({ deliveredAt: new Date() })
-            .where(
-              and(
-                eq(steerMessages.runId, run.id),
-                inArray(
-                  steerMessages.id,
-                  messages.map((message) => message.id),
+          if (legacyPoll) {
+            // The compatibility path's mark-on-select, scoped exactly like the
+            // ack update above, and run whether or not a cursor came with the
+            // request: the first poll of a runner that predates the ack has no
+            // cursor yet, and it needs its rows retired as much as any later one.
+            // Such a poll has no way of its own to say what it handled, so this
+            // response is the only thing that can retire these rows for it.
+            await db
+              .update(steerMessages)
+              .set({ deliveredAt: new Date() })
+              .where(
+                and(
+                  eq(steerMessages.orgId, run.orgId),
+                  eq(steerMessages.runId, run.id),
+                  isNull(steerMessages.deliveredAt),
+                  inArray(
+                    steerMessages.id,
+                    messages.map((message) => message.id),
+                  ),
                 ),
-              ),
-            );
+              );
+          }
           return messages;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
@@ -455,7 +603,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
     "/internal/runs/:runId/result",
     {
       config: { public: true },
-      preHandler: authenticate,
+      preHandler: authenticateResult,
       schema: {
         params: Params,
         body: z.object({
@@ -479,7 +627,7 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         response: { 200: z.record(z.string(), z.unknown()) },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const run = (request as RunnerRequest).runnerRun;
       if (!run) throw notFound("Run not found");
       const body = request.body as {
@@ -498,11 +646,27 @@ export async function registerInternalRoutes(app: FastifyInstance, config: AppCo
         engineSessionId?: string;
         securityReport?: unknown;
       };
-      return (await finishRun(db, run, body, {
-        config,
-        githubClientFactory: app.githubClientFactory,
-        enqueue: app.enqueue,
-      })) as unknown as Record<string, unknown>;
+      try {
+        return (await finishRun(db, run, body, {
+          config,
+          githubClientFactory: app.githubClientFactory,
+          enqueue: app.enqueue,
+        })) as unknown as Record<string, unknown>;
+      } catch (error) {
+        if (!(error instanceof FinalizationInProgressError)) throw error;
+        // A replay while another attempt holds the finalization: the runner
+        // retries a 503 on this endpoint and honors the wait, and the code is
+        // exposed so the reply says what is being waited on rather than
+        // masking it as an internal error.
+        reply.header("retry-after", String(Math.ceil(error.retryAfterMs / 1000)));
+        throw new ApiError(
+          503,
+          "finalization_in_progress",
+          "Run finalization is in progress; retry after the lease expires",
+          undefined,
+          true,
+        );
+      }
     },
   );
 

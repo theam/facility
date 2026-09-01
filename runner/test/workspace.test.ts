@@ -15,8 +15,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyControlMessages,
   buildClaudeCodeArgs,
   buildCodexArgs,
+  CONTROL_MESSAGE_MAX_ATTEMPTS,
   claudeDeliverySettings,
   composedPrompt,
   createWorkspaceCheckpoint,
@@ -50,6 +52,7 @@ import {
   resumeRecoveryPrompt,
   runnerReceiptActivity,
   runPackageInstall,
+  runTerminalDiscardLog,
   semanticDeliveryBranch,
   terminateChild,
   trustClaudeWorkspace,
@@ -1298,6 +1301,105 @@ describe("delivery phase reporting", () => {
   });
 });
 
+describe("discarded result logging", () => {
+  it("records the conflict coordinates without the pull request title or body", () => {
+    const line = runTerminalDiscardLog("succeeded", {
+      changed: true,
+      branch: "feature/task",
+      headSha: "signed_sha",
+      pullRequestTitle: "fix: rewrite the auth handler",
+      pullRequestBody:
+        "## Summary\n\n- The staging login uses sb_secret_pastedbytheagent to reach the sandbox.",
+    });
+
+    expect(line).toContain("result_discarded_run_terminal");
+    expect(line).toContain("attempted_status=succeeded");
+    expect(line).toContain("changed=true");
+    expect(line).toContain("branch=feature/task");
+    expect(line).toContain("head_sha=signed_sha");
+    expect(line).not.toContain("rewrite the auth handler");
+    expect(line).not.toContain("Summary");
+    expect(line).not.toContain("staging login");
+    expect(line).not.toContain("sb_secret_");
+  });
+
+  it("redacts an injected secret that reaches the push error", () => {
+    const line = runTerminalDiscardLog(
+      "failed",
+      { changed: true, pushError: "github request rejected ghs_pushtokenvalue" },
+      ["ghs_pushtokenvalue"],
+    );
+
+    expect(line).not.toContain("ghs_pushtokenvalue");
+    expect(line).toBe(
+      "result_discarded_run_terminal attempted_status=failed changed=true branch=- head_sha=- push_error=github request rejected «redacted»\n",
+    );
+  });
+
+  it("redacts a token-shaped repair branch", () => {
+    const line = runTerminalDiscardLog(
+      "failed",
+      { changed: true, branch: "ghs_BranchNamedAfterAToken", headSha: "signed_sha" },
+      ["ghs_BranchNamedAfterAToken"],
+    );
+
+    expect(line).not.toContain("ghs_BranchNamedAfterAToken");
+    expect(line).toContain("branch=«redacted»");
+    expect(line).toContain("head_sha=signed_sha");
+  });
+
+  it("bounds a push error instead of copying a whole Git stderr into the container log", () => {
+    // readAgentDeliveryMetadata admits 60000 characters of agent prose, and a
+    // captured Git stderr can quote the branch and path the agent named, so the
+    // claim that this record carries "one bounded field" has to be enforced here
+    // rather than assumed of Git.
+    const line = runTerminalDiscardLog(
+      "failed",
+      { changed: true, pushError: "x".repeat(60_000) },
+      [],
+    );
+
+    expect(line.length).toBeLessThan(1_000);
+    expect(line).toContain("push_error=xxx");
+    // Truncation is visible, so an operator reading the line knows the message
+    // continues rather than believing Git said only this much.
+    expect(line).toContain("...[truncated]");
+    // Still one greppable line: push_error is the last field, so nothing follows
+    // it to survive — what the bound must leave intact is the fields ahead of it
+    // and the single trailing newline.
+    expect(line.endsWith("\n")).toBe(true);
+    expect(line.trimEnd()).not.toContain("\n");
+    expect(line).toContain("branch=-");
+  });
+
+  it("redacts before bounding so a secret straddling the cut leaves no prefix behind", () => {
+    const secret = `ghs_${"s".repeat(40)}`;
+    const line = runTerminalDiscardLog(
+      "failed",
+      { changed: true, pushError: `${"x".repeat(500)}${secret} rejected` },
+      [secret],
+    );
+
+    // Truncating first would cut the token in half and publish the half the
+    // bound left behind, which no later redaction pass can match.
+    expect(line).not.toContain("ghs_");
+    expect(line).toContain("«redacted»");
+  });
+
+  it.each([
+    { name: "no git object at all", git: undefined },
+    { name: "a git object without changes", git: { changed: false } },
+  ])("renders one parseable line for $name", ({ git }) => {
+    const line = runTerminalDiscardLog("canceled", git);
+
+    expect(line).toBe(
+      "result_discarded_run_terminal attempted_status=canceled changed=false branch=- head_sha=- push_error=-\n",
+    );
+    expect(line).not.toContain("undefined");
+    expect(line).not.toContain("null");
+  });
+});
+
 async function expectProcessToExit(pid: number) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
@@ -1647,6 +1749,248 @@ describe("Claude resume controls", () => {
         { type: "steer", data: { id: "msg_2", kind: "interrupt" } },
       ]),
     );
+  });
+
+  it("interrupts before any ack, even when the event transport is down", async () => {
+    const calls: string[] = [];
+    await expect(
+      handleControlMessage(
+        { id: "msg_3", kind: "interrupt", body: "stop" },
+        {
+          appendSteer: async () => undefined,
+          emit: async () => {
+            calls.push("emit");
+            throw new Error("control plane down");
+          },
+          interrupt: async () => {
+            calls.push("interrupt");
+          },
+        },
+      ),
+    ).resolves.toBe("interrupt");
+    // The steer event is observability, not the delivery ack: the kill must
+    // land before, and regardless of, it.
+    expect(calls[0]).toBe("interrupt");
+  });
+
+  it("applies a steer even when its ack cannot be delivered", async () => {
+    const steers: string[] = [];
+    await expect(
+      handleControlMessage(
+        { id: "msg_4", kind: "steer", body: "adjust" },
+        {
+          appendSteer: async (body) => {
+            steers.push(body);
+          },
+          emit: async () => {
+            throw new Error("control plane down");
+          },
+          interrupt: async () => undefined,
+        },
+      ),
+    ).resolves.toBe("steer");
+    expect(steers).toEqual(["adjust"]);
+  });
+
+  it("acknowledges only the control messages whose durable action landed", async () => {
+    const applied: string[] = [];
+    const handlers = (failOn?: string) => ({
+      appendSteer: async (body: string) => {
+        if (body === failOn) throw new Error("steer file unwritable");
+        applied.push(body);
+      },
+      emit: async () => undefined,
+      interrupt: async () => undefined,
+    });
+    const messages = [
+      { id: "msg_5", kind: "steer", body: "first" },
+      { id: "msg_6", kind: "steer", body: "second" },
+    ];
+
+    // The acked ids are the server-side delivery record, so a message whose
+    // durable action threw must stay out of them and come back on the next poll.
+    const partial = await applyControlMessages(messages, handlers("second"));
+    expect(partial.handled).toEqual(["msg_5"]);
+    expect(partial.error).toBeInstanceOf(Error);
+    expect(applied).toEqual(["first"]);
+
+    const complete = await applyControlMessages(messages, handlers());
+    expect(complete).toEqual({ handled: ["msg_5", "msg_6"] });
+    expect(applied).toEqual(["first", "first", "second"]);
+  });
+
+  it("applies an interrupt queued behind a message it cannot handle", async () => {
+    let interrupted = false;
+    const handlers = {
+      appendSteer: async () => {
+        throw new Error("no space left on device");
+      },
+      emit: async () => undefined,
+      interrupt: async () => {
+        interrupted = true;
+      },
+    };
+
+    const applied = await applyControlMessages(
+      [
+        { id: "msg_7", kind: "steer", body: "tighten the diff" },
+        { id: "msg_8", kind: "interrupt", body: "human_interrupt" },
+      ],
+      handlers,
+    );
+
+    // A steer that can never land must not hold the line in front of a kill:
+    // the operator pressed stop and the batch it arrived in is irrelevant.
+    expect(interrupted).toBe(true);
+    expect(applied.handled).toEqual(["msg_8"]);
+    expect(applied.error).toBeInstanceOf(Error);
+  });
+
+  it("gives up on a steer that keeps failing, with one diagnostic", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const handlers = {
+      appendSteer: async () => {
+        throw new Error("no space left on device");
+      },
+      emit: async (batch: Array<{ type: string; data?: Record<string, unknown> }>) => {
+        events.push(...batch.map((event) => ({ type: event.type, ...event.data })));
+      },
+      interrupt: async () => undefined,
+    };
+    const messages = [{ id: "msg_9", kind: "steer", body: "tighten the diff" }];
+    const failures = new Map<string, number>();
+
+    // Attempts short of the bound leave the message unacked, so the server
+    // serves it again — the poll loop is what retries it.
+    const first = await applyControlMessages(messages, handlers, failures, 3);
+    const second = await applyControlMessages(messages, handlers, failures, 3);
+    expect(first.handled).toEqual([]);
+    expect(second.handled).toEqual([]);
+    expect(events).toEqual([]);
+
+    // At the bound it is acked anyway: an unappliable message may not keep the
+    // channel and the artifact_error stream looping on it forever.
+    const third = await applyControlMessages(messages, handlers, failures, 3);
+    expect(third.handled).toEqual(["msg_9"]);
+    expect(events).toEqual([
+      {
+        type: "artifact_error",
+        kind: "steer_undeliverable",
+        id: "msg_9",
+        attempts: 3,
+        error: "no space left on device",
+      },
+    ]);
+
+    // If that ack is the one lost on the wire the message comes back. It is
+    // re-acked so the server stops serving it, but the handler is not retried
+    // and the diagnostic is not emitted twice.
+    const again = await applyControlMessages(messages, handlers, failures, 3);
+    expect(again.handled).toEqual(["msg_9"]);
+    expect(again.error).toBeUndefined();
+    expect(events).toHaveLength(1);
+  });
+
+  it("records a retired steer on stderr even when the event never gets out", async () => {
+    const emitted: string[] = [];
+    const handlers = {
+      appendSteer: async () => {
+        throw new Error(`no space left on device ${"x".repeat(60_000)}`);
+      },
+      emit: async () => {
+        // What the control plane answers once the run is terminal: authenticate
+        // refuses every /internal/runs/:runId route with 409 run_terminal, and
+        // applyControlMessages drops that rejection.
+        emitted.push("refused");
+        throw new Error("run_terminal");
+      },
+      interrupt: async () => undefined,
+    };
+    const messages = [{ id: "msg_12", kind: "steer", body: "tighten the diff" }];
+    const failures = new Map<string, number>();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    let records: string[] = [];
+    let handled: string[] = [];
+    try {
+      for (let attempt = 0; attempt < CONTROL_MESSAGE_MAX_ATTEMPTS + 2; attempt += 1) {
+        handled = (await applyControlMessages(messages, handlers, failures)).handled;
+      }
+    } finally {
+      // Read before restoring: mockRestore clears the recorded calls with it.
+      records = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.startsWith("steer_undeliverable"));
+      stderr.mockRestore();
+    }
+
+    // The operator's instruction was thrown away and its id acked anyway, so the
+    // route marks the row delivered. Every attempt at the event that would have
+    // said so was refused, which leaves the container log as the only record.
+    expect(handled).toEqual(["msg_12"]);
+    expect(emitted.length).toBeGreaterThan(0);
+    expect(records).toHaveLength(1);
+    const [record = ""] = records;
+    expect(record).toContain("id=msg_12");
+    expect(record).toContain(`attempts=${CONTROL_MESSAGE_MAX_ATTEMPTS}`);
+    expect(record).toContain("error=no space left on device xxx");
+    // Bounded like the discarded-result record: the error is whatever the
+    // durable action threw, so it may not turn the container log into a wall of
+    // text, and the truncation is visible rather than silent.
+    expect(record).toContain("...[truncated]");
+    expect(record.length).toBeLessThan(1_000);
+    expect(record.endsWith("\n")).toBe(true);
+    expect(record.trimEnd()).not.toContain("\n");
+  });
+
+  it("never gives up on an interrupt, and still reports it once", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    let interruptAttempts = 0;
+    const handlers = {
+      appendSteer: async () => undefined,
+      emit: async (batch: Array<{ type: string; data?: Record<string, unknown> }>) => {
+        events.push(...batch.map((event) => ({ type: event.type, ...event.data })));
+      },
+      interrupt: async () => {
+        interruptAttempts += 1;
+        throw new Error("engine child unreachable");
+      },
+    };
+    const messages = [
+      { id: "msg_10", kind: "interrupt", body: "human_interrupt" },
+      { id: "msg_11", kind: "steer", body: "tighten the diff" },
+    ];
+    const failures = new Map<string, number>();
+
+    // An operator's stop is the message this whole channel exists to not lose,
+    // so the attempt bound that retires a steer must never retire it: past the
+    // bound it is still absent from the ack, so the server keeps serving it and
+    // every poll retries the kill.
+    const polls = CONTROL_MESSAGE_MAX_ATTEMPTS + 2;
+    for (let poll = 0; poll < polls; poll += 1) {
+      const applied = await applyControlMessages(messages, handlers, failures);
+      // The steer behind it still lands on every poll: no early return, so a
+      // message that cannot be applied never holds the line in front of the
+      // rest of the batch.
+      expect(applied.handled).toEqual(["msg_11"]);
+      expect(applied.error).toBeInstanceOf(Error);
+    }
+    expect(interruptAttempts).toBe(polls);
+
+    // The failures map is what keeps the diagnostic single: the count still
+    // climbs past the bound, so the report fires on the attempt that reaches it
+    // and never again.
+    expect(events.filter((event) => event.type === "artifact_error")).toEqual([
+      {
+        type: "artifact_error",
+        kind: "steer_undeliverable",
+        id: "msg_10",
+        attempts: CONTROL_MESSAGE_MAX_ATTEMPTS,
+        error: "engine child unreachable",
+      },
+    ]);
+    expect(events.filter((event) => event.type === "steer")).toHaveLength(polls);
+    expect(failures.get("msg_10")).toBe(polls);
   });
 
   it("signals SIGTERM before SIGKILL on interrupt termination", () => {

@@ -15,6 +15,7 @@ import {
   actionTypes,
   agentDefs,
   apiKeys,
+  auditEvents,
   conversationMessages,
   conversations,
   createDb,
@@ -40,7 +41,7 @@ import {
   virtualKeys,
 } from "@facility/db";
 import { isBuilderMode } from "@facility/run-objective";
-import { and, asc, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, or, type SQL, sql } from "drizzle-orm";
 import {
   type BuilderPlanFreshnessOptions,
   resolveBuilderPlanFreshnessForRun,
@@ -95,10 +96,13 @@ import type { LaunchSpec, SandboxDriver, SandboxDriverName } from "./driver.js";
 import { sandboxDriver } from "./driver.js";
 import {
   appendRunEvents,
+  RESULT_FINALIZATION_LEASE_MS,
+  RESULT_FINALIZATION_RENEW_MS,
   type RunBundle,
   type RunnerEngine,
   type RunSandboxState,
   readSandbox,
+  resultFinalizationPending,
   TERMINAL_RUN_STATUSES,
   terminalStatus,
 } from "./state.js";
@@ -111,7 +115,34 @@ type FinishRunDeps = {
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>;
   /** Test seam for proving terminal run + proposal commit atomicity. */
   afterArchitectPlanOutboxWrite?: () => Promise<void> | void;
+  /**
+   * Test seam for proving finalization resumes after the terminal claim: called
+   * after the claim commits and after each step that follows it, so a test can
+   * interrupt at any depth and replay the result.
+   */
+  afterFinalizationStep?: (step: FinalizationStep) => Promise<void> | void;
+  /**
+   * Test seam for the mid-step lease renewal cadence: shortened to observe a
+   * renewal without waiting a real tick, or stretched past the test to simulate
+   * an attempt whose process stalled and stopped renewing.
+   */
+  finalizationLeaseRenewMs?: number;
 };
+// The steps finishRun runs once the terminal status is committed, in order.
+// Each is guarded against its own repetition, which is what lets a replayed
+// /result resume from wherever an earlier attempt was interrupted.
+export type FinalizationStep =
+  | "claim"
+  | "sandbox"
+  | "keys"
+  | "delivery"
+  | "pull_request"
+  | "architect_plan"
+  | "security_findings"
+  | "result_event"
+  | "github_progress"
+  | "audit"
+  | "conversation";
 type DispatchRunDeps = {
   sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
   githubFactory?: GithubClientFactory;
@@ -488,6 +519,15 @@ export async function finishRun(
   deps?: FinishRunDeps,
 ) {
   if (terminalStatus(run.status)) {
+    // The terminal status is committed but the work after it never finished: the
+    // control plane went down, or a step threw, between the claim and the
+    // finalizedAt marker. The runner replays /result into that window, the route
+    // admits it, and it lands here. Everything is re-derived from the row the
+    // claim wrote — the replayed body is the same request, but the row is what
+    // was committed.
+    if (resultFinalizationPending(readSandbox(run.sandbox))) {
+      return resumeRunFinalization(db, run, input, deps);
+    }
     // Current writes commit Architect success and its Gate 1 proposal together.
     // Keep this repair path for legacy/incomplete rows and missing canonical
     // origin events; network delivery remains the cron reconciler's job.
@@ -550,7 +590,7 @@ export async function finishRun(
   // A delivery receipt names the published range. Runs without a delivery
   // still expose the prepared workspace base they actually inspected.
   const receiptBaseSha = input.git?.baseSha ?? run.workspaceBaseSha;
-  let receipt = await canonicalRunReceipt(
+  const receipt = await canonicalRunReceipt(
     db,
     run,
     input.receipt,
@@ -570,7 +610,12 @@ export async function finishRun(
           gh: persistedGh,
           engineSessionId: input.engineSessionId,
           endedAt: new Date(),
-          sandbox: { ...sandbox, finishedAt: new Date().toISOString() },
+          sandbox: {
+            ...sandbox,
+            finishedAt: new Date().toISOString(),
+            finalizingAt: new Date().toISOString(),
+            finalizingToken: crypto.randomUUID(),
+          },
           updatedAt: new Date(),
         })
         // Terminal status, durable PR delivery intent, and the Architect Gate
@@ -592,8 +637,263 @@ export async function finishRun(
     return { run: terminal, architectProposalId: architectProposal?.id };
   });
   if (!claim) return run;
-  const claimed = claim.run;
-  if (sandbox.driver && sandbox.ref) {
+  await deps?.afterFinalizationStep?.("claim");
+  return finalizeRun(
+    db,
+    claim.run,
+    {
+      status,
+      error,
+      receipt,
+      aggregate,
+      receiptBaseSha,
+      input,
+      securityReport,
+      hasDelivery: status === "succeeded" && deliveryPlan !== null,
+      architectProposalId: claim.architectProposalId,
+    },
+    deps,
+  );
+}
+
+type FinishRunInput = Parameters<typeof finishRun>[2];
+type TerminalRunStatus = FinishRunInput["status"];
+type FinalizationContext = {
+  status: TerminalRunStatus;
+  error: string | undefined;
+  receipt: FacilityReceipt;
+  aggregate: Awaited<ReturnType<typeof gatewayAggregate>>;
+  receiptBaseSha: string | null | undefined;
+  input: FinishRunInput;
+  securityReport: SecurityReport | undefined;
+  hasDelivery: boolean;
+  architectProposalId: string | undefined;
+};
+
+// Thrown to a replayed /result while another attempt still holds the run's
+// finalization lease. The route answers it with a 503 the runner retries after
+// retryAfterMs, by which time the lease has either been released by a completed
+// finalization — the next replay is then refused as run_terminal — or expired
+// under a dead attempt, which the next replay takes over.
+export class FinalizationInProgressError extends Error {
+  constructor(public readonly retryAfterMs: number) {
+    super("Run finalization is in progress");
+  }
+}
+
+// Rebuilds the context finalizeRun needs from a run whose claim is committed,
+// for a replayed /result. The row is authoritative for what the claim decided —
+// status, error, receipt, and the delivery and proposal rows it committed
+// beside them. The body supplies only what the claim never persisted: the git
+// coordinates a repair run's PR update names, and the security report.
+async function resumeRunFinalization(
+  db: ReturnType<typeof createDb>["db"],
+  pending: RunRow,
+  input: FinishRunInput,
+  deps?: FinishRunDeps,
+) {
+  // Take the lease over atomically, and only from an attempt that has stopped
+  // renewing for a whole lease — a live one renews at every step and on a
+  // timer inside long ones, so an expired lease means its holder is dead or
+  // stalled: the guards below keep sequential attempts from repeating a step,
+  // not concurrent ones. The takeover mints its own token, which is what a
+  // stalled holder's next renewal fails against, forcing it to abort. The row
+  // this returns carries whatever the earlier attempt recorded — its
+  // destroyedAt, its downgraded status — which is what the rest of this reads.
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - RESULT_FINALIZATION_LEASE_MS).toISOString();
+  const takeover = { finalizingAt: now.toISOString(), finalizingToken: crypto.randomUUID() };
+  const [run] = await db
+    .update(runs)
+    .set({
+      sandbox: sql`${runs.sandbox} || ${JSON.stringify(takeover)}::jsonb`,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(runs.orgId, pending.orgId),
+        eq(runs.id, pending.id),
+        inArray(runs.status, [...TERMINAL_RUN_STATUSES]),
+        sql`${runs.sandbox}->>'finishedAt' is not null`,
+        sql`${runs.sandbox}->>'finalizedAt' is null`,
+        sql`(${runs.sandbox}->>'finalizingAt' is null or (${runs.sandbox}->>'finalizingAt')::timestamptz <= ${staleBefore}::timestamptz)`,
+      ),
+    )
+    .returning();
+  if (!run) {
+    const [current] = await db
+      .select({ sandbox: runs.sandbox })
+      .from(runs)
+      .where(and(eq(runs.orgId, pending.orgId), eq(runs.id, pending.id)))
+      .limit(1);
+    const state = readSandbox(current?.sandbox);
+    // Finalized between the route's admission and this takeover: the run is
+    // terminal to this request like any other.
+    if (!resultFinalizationPending(state))
+      throw new ApiError(409, "run_terminal", "Run is terminal");
+    const held = Date.parse(state.finalizingAt ?? "");
+    const remainingMs = Number.isFinite(held)
+      ? Math.max(0, held + RESULT_FINALIZATION_LEASE_MS - now.getTime())
+      : RESULT_FINALIZATION_LEASE_MS;
+    throw new FinalizationInProgressError(remainingMs);
+  }
+  const status = run.status as TerminalRunStatus;
+  const error = run.error ?? undefined;
+  const aggregate = await gatewayAggregate(db, run.id);
+  const receiptBaseSha = input.git?.baseSha ?? run.workspaceBaseSha;
+  const stored = FacilityReceiptSchema.safeParse(run.receipt);
+  const receipt = stored.success
+    ? stored.data
+    : await canonicalRunReceipt(db, run, input.receipt, aggregate, status, receiptBaseSha);
+  let securityReport: SecurityReport | undefined;
+  if (status === "succeeded" && isSecurityMode(run.mode)) {
+    // The claim only records "succeeded" for a security run whose report was
+    // valid, so the runner's replay of that same body parses again. A body that
+    // does not is not that replay, and the sync it would drive has no report.
+    const parsed = SecurityReportSchema.safeParse(input.securityReport);
+    if (!parsed.success) throw new Error("security_report_invalid");
+    securityReport = sanitizeSecurityReport(parsed.data);
+  }
+  const hasDelivery =
+    status === "succeeded" &&
+    (
+      await db
+        .select({ runId: runDeliveries.runId })
+        .from(runDeliveries)
+        .where(and(eq(runDeliveries.orgId, run.orgId), eq(runDeliveries.runId, run.id)))
+        .limit(1)
+    ).length > 0;
+  const architectProposalId =
+    status === "succeeded" && isArchitectMode(run.mode)
+      ? (
+          await db
+            .select({ id: proposals.id })
+            .from(proposals)
+            .innerJoin(
+              actionTypes,
+              and(
+                eq(actionTypes.id, proposals.actionTypeId),
+                eq(actionTypes.orgId, proposals.orgId),
+              ),
+            )
+            .where(
+              and(
+                eq(proposals.orgId, run.orgId),
+                eq(proposals.projectId, run.projectId),
+                eq(proposals.runId, run.id),
+                eq(actionTypes.name, "plan_acceptance"),
+              ),
+            )
+            .orderBy(desc(proposals.createdAt))
+            .limit(1)
+        )[0]?.id
+      : undefined;
+  return finalizeRun(
+    db,
+    run,
+    {
+      status,
+      error,
+      receipt,
+      aggregate,
+      receiptBaseSha,
+      input,
+      securityReport,
+      hasDelivery,
+      architectProposalId,
+    },
+    deps,
+  );
+}
+
+// Everything finishRun does after the terminal claim. Runs to completion once
+// for a run whatever the number of attempts: each step is guarded by the durable
+// trace its own effect leaves — the sandbox's destroyedAt, a key's revokedAt, an
+// event of its type, an audit row for its action, the conversation message that
+// carries this run's id — rather than by a ledger written beside the effect,
+// which would leave a crash between the two to repeat it. A step re-entered on
+// a resumed attempt therefore finds its work done and moves on, and the marker
+// written last admits no further replay.
+//
+// Those guards are idempotency guards, not mutual exclusion: two attempts
+// running the steps at once could each observe an effect missing and create it
+// twice. Mutual exclusion is the lease's job, and this wrapper is what keeps it
+// held for the whole finalization rather than for its first sixty seconds: the
+// attempt renews its finalizingAt at every step boundary and on a timer inside
+// long steps (a security sync can spend minutes on GitHub), each renewal a
+// compare-and-set on the finalizingToken its claim or takeover minted. A live
+// attempt therefore never looks expired to a replay — the replay waits on a 503
+// instead of taking over — and an attempt that did stall past the lease finds
+// the winner's token at its next renewal and aborts before its next effect.
+async function finalizeRun(
+  db: ReturnType<typeof createDb>["db"],
+  claimed: RunRow,
+  context: FinalizationContext,
+  deps?: FinishRunDeps,
+) {
+  const leaseToken = readSandbox(claimed.sandbox).finalizingToken;
+  // A row claimed before tokens existed (a rolling restart's old process wrote
+  // it) can only be renewed, never lost — the pre-token behaviour. Every claim
+  // and takeover in this code mints one.
+  const holdsLease = leaseToken
+    ? sql`${runs.sandbox}->>'finalizingToken' = ${leaseToken}`
+    : sql`${runs.sandbox}->>'finalizingToken' is null`;
+  const renewLease = async () => {
+    const now = new Date();
+    const renewed = await db
+      .update(runs)
+      .set({
+        sandbox: sql`${runs.sandbox} || ${JSON.stringify({ finalizingAt: now.toISOString() })}::jsonb`,
+        updatedAt: now,
+      })
+      .where(and(eq(runs.orgId, claimed.orgId), eq(runs.id, claimed.id), holdsLease))
+      .returning({ id: runs.id });
+    return renewed.length > 0;
+  };
+  // A tick that fails transiently is absorbed — the step-boundary renewal is
+  // the authoritative check, and it throws on the same unreachable database. A
+  // tick that finds the token gone stops renewing; the boundary aborts the
+  // attempt.
+  const heartbeat = setInterval(() => {
+    void renewLease()
+      .then((held) => {
+        if (!held) clearInterval(heartbeat);
+      })
+      .catch(() => undefined);
+  }, deps?.finalizationLeaseRenewMs ?? RESULT_FINALIZATION_RENEW_MS);
+  heartbeat.unref?.();
+  try {
+    return await finalizeRunSteps(db, claimed, context, { renewLease, holdsLease }, deps);
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
+type FinalizationLease = {
+  renewLease: () => Promise<boolean>;
+  holdsLease: SQL;
+};
+
+async function finalizeRunSteps(
+  db: ReturnType<typeof createDb>["db"],
+  claimed: RunRow,
+  context: FinalizationContext,
+  lease: FinalizationLease,
+  deps?: FinishRunDeps,
+) {
+  const run = claimed;
+  const { input, aggregate, receiptBaseSha, securityReport } = context;
+  let { status, error, receipt } = context;
+  const step = async (name: FinalizationStep) => {
+    // The renewal doubles as the fence: an attempt another one superseded
+    // fails the compare-and-set here and stops before its next effect, and the
+    // runner's retry of its 503 lands on the winner's outcome.
+    if (!(await lease.renewLease()))
+      throw new FinalizationInProgressError(RESULT_FINALIZATION_LEASE_MS);
+    await deps?.afterFinalizationStep?.(name);
+  };
+  const sandbox = readSandbox(run.sandbox);
+  if (sandbox.driver && sandbox.ref && !sandbox.destroyedAt) {
     const driver = await sandboxDriver(sandbox.driver);
     const destroyed = await driver
       .destroy(sandbox.ref)
@@ -601,37 +901,28 @@ export async function finishRun(
       .catch(() => false);
     if (destroyed) await markSandboxDestroyed(db, run.id);
   }
+  await step("sandbox");
   await revokeRunKeys(db, sandbox);
-  if (status === "succeeded" && deliveryPlan) {
+  await step("keys");
+  if (status === "succeeded" && context.hasDelivery) {
+    // The delivery worker owns its own idempotency and is also scheduled every
+    // minute, so a second enqueue for the same run is a no-op there.
     await deps?.enqueue?.("deliveries.deliver", { runId: run.id }).catch(() => undefined);
-  } else if (deliveryPreparationError) {
-    await appendRunEvents(db, run.orgId, run.id, [
-      {
-        type: "artifact_error",
-        data: { kind: "delivery_repo_unresolvable", error: deliveryPreparationError },
-      },
-    ]);
-    await raisePlatformIssue(db, {
-      orgId: run.orgId,
-      projectId: run.projectId,
-      kind: "delivery_repo_unresolvable",
-      severity: "error",
-      fingerprint: `delivery_repo_unresolvable:${run.id}`,
-      title: "Run delivery repository is unavailable",
-      bodyMd: `Run ${run.id} pushed ${input.git?.branch}, but Facility could not bind the delivery to its tenant-scoped repository.\n\n${deliveryPreparationError}`,
-    });
   }
+  await step("delivery");
   if (
     status === "succeeded" &&
     input.git?.changed === true &&
     input.git.branch &&
-    repairPullRequestMode(run.mode)
+    repairPullRequestMode(run.mode) &&
+    !(await hasAuditEvent(db, run.orgId, "github.pr.updated", run.id))
   ) {
-    await recordRunPullRequestUpdate(db, claimed, input.git.branch, input.git.headSha);
+    await recordRunPullRequestUpdate(db, run, input.git.branch, input.git.headSha);
   }
-  if (status === "succeeded" && claim.architectProposalId) {
+  await step("pull_request");
+  if (status === "succeeded" && context.architectProposalId) {
     try {
-      await publishArchitectPlanAcceptance(db, run.orgId, claim.architectProposalId, deps);
+      await publishArchitectPlanAcceptance(db, run.orgId, context.architectProposalId, deps);
     } catch (planError) {
       // The sealed Architect work and canonical proposal are already durable.
       // A transient GitHub publication failure is an artifact-delivery error,
@@ -641,14 +932,26 @@ export async function finishRun(
         orgId: run.orgId,
         projectId: run.projectId,
         runId: run.id,
-        proposalId: claim.architectProposalId,
+        proposalId: context.architectProposalId,
         error: planError,
       });
     }
   }
-  if (status === "succeeded" && securityReport) {
+  await step("architect_plan");
+  if (
+    status === "succeeded" &&
+    securityReport &&
+    !(await hasRunEvent(db, run.orgId, run.id, "security_findings"))
+  ) {
     try {
-      const sync = await publishSecurityFindings(db, claimed, securityReport, deps);
+      // The one step whose length scales with the run's output — up to twenty
+      // findings, several GitHub calls each — so ownership is re-proved (and
+      // with it the lease renewed) before every finding, not only at the step
+      // boundaries around it.
+      const sync = await publishSecurityFindings(db, run, securityReport, deps, async () => {
+        if (!(await lease.renewLease()))
+          throw new FinalizationInProgressError(RESULT_FINALIZATION_LEASE_MS);
+      });
       await appendRunEvents(db, run.orgId, run.id, [
         {
           type: "security_findings",
@@ -665,9 +968,11 @@ export async function finishRun(
         },
       ]);
     } catch (syncError) {
-      const message = errorMessage(syncError);
+      // Losing the lease is not a sync failure: the winner owns the run's
+      // outcome now, and this attempt's job is to stop, not to downgrade it.
+      if (syncError instanceof FinalizationInProgressError) throw syncError;
       status = "failed";
-      error = `security_issue_sync_failed:${message}`;
+      error = `security_issue_sync_failed:${errorMessage(syncError)}`;
       receipt = await canonicalRunReceipt(
         db,
         run,
@@ -676,60 +981,106 @@ export async function finishRun(
         status,
         receiptBaseSha,
       );
+      // Fenced on the lease: a superseded attempt must not rewrite the status
+      // the winning one is finalizing. The boundary below aborts it anyway;
+      // this keeps the row untouched in the meantime.
       await db
         .update(runs)
         .set({ status, receipt, error, updatedAt: new Date() })
-        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id)));
-      await appendRunEvents(db, run.orgId, run.id, [
-        { type: "artifact_error", data: { kind: "security_issue_sync_failed", error: message } },
-      ]);
-      await raisePlatformIssue(db, {
-        orgId: run.orgId,
-        projectId: run.projectId,
-        kind: "security_issue_sync_failed",
-        severity: "error",
-        fingerprint: `security_issue_sync_failed:${run.id}`,
-        title: "Failed to synchronize security findings",
-        bodyMd: `Security run ${run.id} completed its audit, but Facility could not synchronize qualifying findings to GitHub.\n\n${message}`,
-      });
+        .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id), lease.holdsLease));
     }
   }
-  await appendRunEvents(db, run.orgId, run.id, [{ type: "result", data: { status, error } }]);
+  await step("security_findings");
+  // The record of a failure the claim, or the sync above, wrote into the run's
+  // error. Derived from the error rather than from which branch ran, so an
+  // attempt interrupted between the status update and this record still leaves
+  // it on the next one.
+  const failure = finalizationFailure(run, error, input);
+  if (failure) {
+    if (!(await hasRunEvent(db, run.orgId, run.id, "artifact_error", failure.kind))) {
+      await appendRunEvents(db, run.orgId, run.id, [
+        { type: "artifact_error", data: { kind: failure.kind, error: failure.detail } },
+      ]);
+    }
+    // Upserted on its fingerprint, so a repeat is a no-op.
+    await raisePlatformIssue(db, {
+      orgId: run.orgId,
+      projectId: run.projectId,
+      kind: failure.kind,
+      severity: "error",
+      fingerprint: `${failure.kind}:${run.id}`,
+      title: failure.title,
+      bodyMd: failure.bodyMd,
+    });
+  }
+  if (!(await hasRunEvent(db, run.orgId, run.id, "result"))) {
+    await appendRunEvents(db, run.orgId, run.id, [{ type: "result", data: { status, error } }]);
+  }
+  await step("result_event");
   // Architect Gate 1 publication owns the succeeded progress comment. A
   // second generic update could race a publication_closed reconciliation and
-  // resurrect an approval CTA after the proposal became terminal.
-  if (!(status === "succeeded" && claim.architectProposalId)) {
+  // resurrect an approval CTA after the proposal became terminal. The update
+  // itself rewrites one comment, so a repeat lands on the same text.
+  if (!(status === "succeeded" && context.architectProposalId)) {
     await updateGithubRunProgress(db, run.id, status, deps).catch(() => undefined);
   }
-  await insertAuditEvent(db, {
-    orgId: run.orgId,
-    projectId: run.projectId,
-    actor: { type: "agent", id: run.id },
-    action: "run.finished",
-    target: { type: "run", id: run.id },
-    payload: {
-      status,
-      error,
-      receipt_sha256: receipt.integrity?.payload_sha256 ?? receiptContentDigest(receipt),
-    },
-  });
-  await finishConversationTurn(db, claimed, input.engineSessionId).catch(
-    async (conversationError) => {
-      const message = errorMessage(conversationError);
+  await step("github_progress");
+  if (!(await hasAuditEvent(db, run.orgId, "run.finished", run.id))) {
+    await insertAuditEvent(db, {
+      orgId: run.orgId,
+      projectId: run.projectId,
+      actor: { type: "agent", id: run.id },
+      action: "run.finished",
+      target: { type: "run", id: run.id },
+      payload: {
+        status,
+        error,
+        receipt_sha256: receipt.integrity?.payload_sha256 ?? receiptContentDigest(receipt),
+      },
+    });
+  }
+  await step("audit");
+  await finishConversationTurn(db, run, input.engineSessionId).catch(async (conversationError) => {
+    const message = errorMessage(conversationError);
+    if (
+      !(await hasRunEvent(
+        db,
+        run.orgId,
+        run.id,
+        "artifact_error",
+        "conversation_finish_failed",
+      ).catch(() => false))
+    ) {
       await appendRunEvents(db, run.orgId, run.id, [
         { type: "artifact_error", data: { kind: "conversation_finish_failed", error: message } },
       ]).catch(() => undefined);
-      await raisePlatformIssue(db, {
-        orgId: run.orgId,
-        projectId: run.projectId,
-        kind: "conversation_finish_failed",
-        severity: "error",
-        fingerprint: `conversation_finish_failed:${run.id}`,
-        title: "Failed to finalize conversation turn",
-        bodyMd: `Run ${run.id} finished, but Facility could not append the conversation reply.\n\n${message}`,
-      }).catch(() => undefined);
-    },
-  );
+    }
+    await raisePlatformIssue(db, {
+      orgId: run.orgId,
+      projectId: run.projectId,
+      kind: "conversation_finish_failed",
+      severity: "error",
+      fingerprint: `conversation_finish_failed:${run.id}`,
+      title: "Failed to finalize conversation turn",
+      bodyMd: `Run ${run.id} finished, but Facility could not append the conversation reply.\n\n${message}`,
+    }).catch(() => undefined);
+  });
+  await step("conversation");
+  // Merged rather than assigned, so a destroyedAt the reconciler wrote in the
+  // meantime survives. From here a replayed /result is refused as run_terminal.
+  // Fenced on the lease: only the attempt that owns the finalization may
+  // declare it complete — one superseded mid-flight reports the 503 the
+  // runner retries into the winner's outcome, never a success over work the
+  // winner is still doing.
+  const [finalized] = await db
+    .update(runs)
+    .set({
+      sandbox: sql`${runs.sandbox} || ${JSON.stringify({ finalizedAt: new Date().toISOString() })}::jsonb`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(runs.orgId, run.orgId), eq(runs.id, run.id), lease.holdsLease))
+    .returning({ id: runs.id });
+  if (!finalized) throw new FinalizationInProgressError(RESULT_FINALIZATION_LEASE_MS);
   return { ...claimed, status, receipt, error };
 }
 
@@ -765,6 +1116,21 @@ export async function finishConversationTurn(
   const reply = await lastAssistantText(db, run);
   await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${conversationId}))`);
+    // The reply carries the run's id, so under the lock it is the record of this
+    // turn having been finalized: a resumed finalization that finds it appends
+    // nothing and leaves the thread as the first attempt left it.
+    const appended = await tx
+      .select({ id: conversationMessages.id })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.conversationId, conversationId),
+          eq(conversationMessages.runId, run.id),
+          eq(conversationMessages.role, "agent"),
+        ),
+      )
+      .limit(1);
+    if (appended.length > 0) return;
     const rows = await tx
       .select({ max: sql<number>`coalesce(max(seq), 0)` })
       .from(conversationMessages)
@@ -789,6 +1155,78 @@ export async function finishConversationTurn(
       })
       .where(and(eq(conversations.orgId, run.orgId), eq(conversations.id, conversationId)));
   });
+}
+
+// The two failures finishRun records as an artifact_error and a platform issue
+// after the claim, keyed on the error the run carries so an interrupted attempt
+// can tell what it still owes. Anything else in the error — a KB checkpoint, an
+// invalid security report, a push failure — is recorded by the result event
+// alone, as before.
+function finalizationFailure(run: RunRow, error: string | undefined, input: FinishRunInput) {
+  const detailAfter = (prefix: string) =>
+    error?.startsWith(prefix) ? error.slice(prefix.length) : null;
+  const unresolvable = detailAfter("delivery_repo_unresolvable:");
+  if (unresolvable !== null) {
+    return {
+      kind: "delivery_repo_unresolvable",
+      detail: unresolvable,
+      title: "Run delivery repository is unavailable",
+      bodyMd: `Run ${run.id} pushed ${input.git?.branch}, but Facility could not bind the delivery to its tenant-scoped repository.\n\n${unresolvable}`,
+    };
+  }
+  const sync = detailAfter("security_issue_sync_failed:");
+  if (sync !== null) {
+    return {
+      kind: "security_issue_sync_failed",
+      detail: sync,
+      title: "Failed to synchronize security findings",
+      bodyMd: `Security run ${run.id} completed its audit, but Facility could not synchronize qualifying findings to GitHub.\n\n${sync}`,
+    };
+  }
+  return null;
+}
+
+async function hasRunEvent(
+  db: ReturnType<typeof createDb>["db"],
+  orgId: string,
+  runId: string,
+  type: string,
+  kind?: string,
+) {
+  const rows = await db
+    .select({ seq: runEvents.seq })
+    .from(runEvents)
+    .where(
+      and(
+        eq(runEvents.orgId, orgId),
+        eq(runEvents.runId, runId),
+        eq(runEvents.type, type),
+        ...(kind ? [sql`${runEvents.data}->>'kind' = ${kind}`] : []),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+async function hasAuditEvent(
+  db: ReturnType<typeof createDb>["db"],
+  orgId: string,
+  action: string,
+  runId: string,
+) {
+  const rows = await db
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.orgId, orgId),
+        eq(auditEvents.action, action),
+        sql`${auditEvents.target}->>'type' = 'run'`,
+        sql`${auditEvents.target}->>'id' = ${runId}`,
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
 }
 
 async function lastAssistantText(db: ReturnType<typeof createDb>["db"], run: RunRow) {
@@ -1686,6 +2124,7 @@ async function publishSecurityFindings(
   run: RunRow,
   report: SecurityReport,
   deps?: FinishRunDeps,
+  assertOwnership?: () => Promise<void>,
 ) {
   const repo = await repoForGithubRun(db, run);
   if (!repo?.installationId) throw new Error("run_repo_missing_installation");
@@ -1713,7 +2152,7 @@ async function publishSecurityFindings(
     repo: repo.name,
     defaultBranch: repo.defaultBranch,
   });
-  const result = await syncSecurityFindings(client, report, { runId: run.id });
+  const result = await syncSecurityFindings(client, report, { runId: run.id }, assertOwnership);
   await insertAuditEvent(db, {
     orgId: run.orgId,
     projectId: run.projectId,
@@ -2403,10 +2842,49 @@ async function ensureRunAgentRole(
   return row?.id ?? id;
 }
 
+// How long an exited/lost observation must persist before reconcile declares
+// the run sandbox_lost. That verdict is irreversible: failRun takes the run
+// terminal and revokes its keys, and every later runner call then fails the
+// terminal check in the internal routes with a 409. So a single probe must not
+// decide it — a provider status misreport, a worker restart while the runner
+// rides out a control-plane outage, and a terminal result still in flight as the
+// container exits all look alike on one tick. The reconcile cron runs every two
+// minutes (worker.ts schedules "sandbox.reconcile" at */2), and a window shorter
+// than that interval confirms on the tick after the one that stamped it: a
+// genuinely dead sandbox goes terminal within two ticks, so ~4 minutes.
+// The window is paid for in key lifetime. While it is open the run is still
+// non-terminal, so no terminal path has revoked its virtual key (gateway spend)
+// or its run-scoped platform key: both authenticate on a null revokedAt, neither
+// is minted with a wall-clock expiry, and the orphaned-key sweep below only
+// reaches runs already terminal. Measured against a verdict on the first probe,
+// that leaves a genuinely dead sandbox's two keys live 120s longer at worst —
+// one reconcile interval, because confirmation is only ever evaluated on a tick
+// and the next tick lands 120s after the one that stamped — and 90s longer at
+// best, which takes offset overlapping ticks to put one right at the edge of the
+// window. A returning worker cannot fail a run it never observed lost, because a
+// first observation only starts the window.
+export const SANDBOX_LOSS_GRACE_MS = 90_000;
+
+export function sandboxLossConfirmed(
+  sandbox: RunSandboxState,
+  now: Date,
+  graceMs = SANDBOX_LOSS_GRACE_MS,
+) {
+  const observedAt = sandbox.lossObservedAt ? Date.parse(sandbox.lossObservedAt) : Number.NaN;
+  return Number.isFinite(observedAt) && now.getTime() - observedAt >= graceMs;
+}
+
+type ReconcileSandboxesDeps = {
+  sandboxDriver?: (name: SandboxDriverName) => Promise<SandboxDriver>;
+  githubClientFactory?: GithubClientFactory;
+};
+
 export async function reconcileSandboxes(
   config: AppConfig,
   enqueue?: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+  deps: ReconcileSandboxesDeps = {},
 ) {
+  const resolveDriver = deps.sandboxDriver ?? sandboxDriver;
   const { db, client } = createDb(config.databaseUrl);
   try {
     // Dispatch-loss backstop: run rows are committed BEFORE their pg-boss
@@ -2455,11 +2933,86 @@ export async function reconcileSandboxes(
           continue;
         }
         if (!sandbox.driver || !sandbox.ref) continue;
-        const driver = await sandboxDriver(sandbox.driver);
+        const driver = await resolveDriver(sandbox.driver);
+        // Every write below compare-and-sets on the stamp exactly as this tick
+        // read it. driver.status() is a provider round trip, and nothing
+        // serializes reconcile ticks — the queue carries no singleton policy and
+        // more than one worker task can be live at once (a rolling deploy
+        // overlaps them) — so an overlapping tick can clear the stamp,
+        // certifying the sandbox alive, or record a fresher loss while this one
+        // waits inside the probe. Without the predicate this tick would then act
+        // on a snapshot the row no longer holds, and failRun's own notInArray
+        // guard cannot catch that: a run the other tick just certified is still
+        // "running".
+        const stampUnchanged = sql`${runs.sandbox}->>'lossObservedAt' is not distinct from ${sandbox.lossObservedAt ?? null}`;
         const status = await driver.status(sandbox.ref);
         if (status === "exited" || status === "lost") {
-          await failRun(db, run.orgId, run.id, "sandbox_lost", "sandbox_lost");
-          await updateGithubRunProgress(db, run.id, "failed", { config }).catch(() => undefined);
+          if (sandboxLossConfirmed(sandbox, new Date())) {
+            const failed = await failRun(
+              db,
+              run.orgId,
+              run.id,
+              "sandbox_lost",
+              "sandbox_lost",
+              stampUnchanged,
+            );
+            // Only the tick that actually claimed the failure may rewrite the
+            // progress comment: the comment is the issue thread's public record
+            // of the run, so posting "Failed" on a lost claim would contradict a
+            // run that is still live.
+            if (failed) {
+              await updateGithubRunProgress(db, run.id, "failed", {
+                config,
+                githubClientFactory: deps.githubClientFactory,
+              }).catch(() => undefined);
+            }
+          } else if (!Number.isFinite(Date.parse(sandbox.lossObservedAt ?? ""))) {
+            // First (or unreadable) observation: start the grace window. The
+            // guards leave concurrent terminal transitions — a result landing
+            // right now — untouched, and the compare-and-set keeps an
+            // overlapping tick holding a stale snapshot from moving an existing
+            // stamp later, while still letting a corrupt stamp (which could
+            // never confirm) be replaced.
+            await db
+              .update(runs)
+              .set({
+                sandbox: sql`jsonb_set(coalesce(${runs.sandbox}, '{}'::jsonb), '{lossObservedAt}', to_jsonb(${new Date().toISOString()}::text))`,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(runs.id, run.id),
+                  inArray(runs.status, ["provisioning", "running"]),
+                  stampUnchanged,
+                ),
+              );
+          }
+        } else if (sandbox.lossObservedAt !== undefined) {
+          // The sandbox came back (or the probe misreported): reset the window
+          // so an unrelated later loss starts its own grace period. The
+          // compare-and-set keeps this clear from erasing a loss another tick
+          // observed after this one read the row. That takes more than any two
+          // overlapping ticks: this tick's probe has to report the sandbox alive,
+          // and the branch above writes only over an absent or unparseable stamp,
+          // so the value this tick read has to have left the row before another
+          // tick could put a fresher one there. Declining the clear then leaves
+          // that fresher stamp for the next tick, which clears it if the sandbox
+          // is still up, whereas clearing unconditionally would discard the
+          // observation the window runs on and push the verdict out by another
+          // window each time the interleaving recurs.
+          await db
+            .update(runs)
+            .set({
+              sandbox: sql`coalesce(${runs.sandbox}, '{}'::jsonb) - 'lossObservedAt'`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(runs.id, run.id),
+                inArray(runs.status, ["provisioning", "running"]),
+                stampUnchanged,
+              ),
+            );
         }
       } catch {
         // Driver unreachable for this run; leave it for the next tick.
@@ -2487,7 +3040,7 @@ export async function reconcileSandboxes(
       try {
         const sandbox = readSandbox(run.sandbox);
         if (!sandbox.driver || !sandbox.ref) continue;
-        const driver = await sandboxDriver(sandbox.driver);
+        const driver = await resolveDriver(sandbox.driver);
         await driver.destroy(sandbox.ref);
         await markSandboxDestroyed(db, run.id);
       } catch {
@@ -2923,7 +3476,12 @@ export async function failRun(
   runId: string,
   message: string,
   kind: string,
-) {
+  // Extra condition ANDed into the atomic claim, for callers whose decision to
+  // fail rests on state they read earlier: the run being non-terminal proves
+  // nothing about that state still holding. Returns whether the claim landed so
+  // the caller can skip the side effects that only the winner owns.
+  guard?: SQL,
+): Promise<boolean> {
   // Claim the failure atomically: only a non-terminal run transitions, so a
   // concurrent finish/cancel/fail cannot be clobbered and cleanup runs once.
   const [failed] = await db
@@ -2934,10 +3492,14 @@ export async function failRun(
         eq(runs.orgId, orgId),
         eq(runs.id, runId),
         notInArray(runs.status, [...TERMINAL_RUN_STATUSES]),
+        ...(guard ? [guard] : []),
       ),
     )
     .returning({ projectId: runs.projectId, sandbox: runs.sandbox, trigger: runs.trigger });
-  if (!failed) return; // already terminal — another path handled it.
+  // Already terminal, or the caller's guard no longer holds — another path owns
+  // this run, so touch nothing: revoking the keys of a run that is still live
+  // would strand the path still driving it.
+  if (!failed) return false;
   // Reclaim the run's credentials + sandbox so a failed run can't keep calling
   // the gateway or the platform API.
   await revokeRunKeys(db, readSandbox(failed.sandbox));
@@ -2963,6 +3525,7 @@ export async function failRun(
   await appendRunEvents(db, orgId, runId, [
     { type: "result", data: { status: "failed", kind, error: message } },
   ]);
+  return true;
 }
 
 /** Free a conversation's turn lock when its run failed before finishRun ran. */

@@ -11,6 +11,8 @@ import {
   resolveRepoEngineConfig,
   resumeFallbackScopeValue,
   runSafePermissions,
+  SANDBOX_LOSS_GRACE_MS,
+  sandboxLossConfirmed,
 } from "../src/sandbox/orchestrator.js";
 
 describe("platform delivery boundaries", () => {
@@ -286,5 +288,27 @@ describe("harness and resume bundle boundaries", () => {
         },
       ),
     ).toEqual(original);
+  });
+});
+
+describe("sandbox loss grace", () => {
+  const now = new Date("2026-08-15T10:00:00.000Z");
+
+  it("never confirms a loss that was not observed on a previous tick", () => {
+    expect(sandboxLossConfirmed({}, now)).toBe(false);
+  });
+
+  it("holds the verdict while the observation is inside the grace window", () => {
+    const observed = new Date(now.getTime() - SANDBOX_LOSS_GRACE_MS + 1_000).toISOString();
+    expect(sandboxLossConfirmed({ lossObservedAt: observed }, now)).toBe(false);
+  });
+
+  it("confirms a loss that persisted past the grace window", () => {
+    const observed = new Date(now.getTime() - SANDBOX_LOSS_GRACE_MS).toISOString();
+    expect(sandboxLossConfirmed({ lossObservedAt: observed }, now)).toBe(true);
+  });
+
+  it("treats an unreadable observation stamp as not yet observed", () => {
+    expect(sandboxLossConfirmed({ lossObservedAt: "not-a-date" }, now)).toBe(false);
   });
 });
