@@ -97,6 +97,7 @@ jobs:
           FACILITY_PR_NUMBER: ${{ github.event.pull_request.number }}
           FACILITY_REVIEW_STARTED_AT: ${{ steps.review-start.outputs.started_at }}
         run: node .github/facility/review/finalize.mjs
+{{RECEIPT_PLATFORM_CHECKS_STEP}}
 
       - name: Collect trusted agent run receipt
         id: receipt
@@ -110,6 +111,7 @@ jobs:
           FACILITY_RECEIPT_MODEL: "{{REVIEW_MODEL}}"
           FACILITY_RECEIPT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           FACILITY_RECEIPT_CHECKS_FILE: ${{ github.workspace }}/.agent-sdlc/checks.jsonl
+          FACILITY_RECEIPT_PLATFORM_CHECKS_FILE: ${{ runner.temp }}/facility-platform-checks.jsonl
           FACILITY_RECEIPT_OUTPUT: ${{ runner.temp }}/facility-receipt/facility-run.json
           GH_TOKEN: ${{ github.token }}
         run: |

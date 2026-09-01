@@ -133,6 +133,26 @@ function checksRun(checks) {
   ].join("\n");
 }
 
+function receiptPlatformChecksStep(checks, ifClause) {
+  const checksJson = JSON.stringify(checks).replace(/'/g, "''");
+  return [
+    "",
+    "      - name: Record platform-verified check evidence",
+    `        if: ${ifClause}`,
+    "        continue-on-error: true",
+    "        shell: bash",
+    "        env:",
+    "          FACILITY_RECEIPT_PLATFORM_CHECKS_FILE: ${{ runner.temp }}/facility-platform-checks.jsonl",
+    `          FACILITY_RECEIPT_CHECKS_COMMANDS: '${checksJson}'`,
+    "          GITHUB_WORKSPACE: ${{ github.workspace }}",
+    "        run: |",
+    '          trusted="$RUNNER_TEMP/facility-run-checks.mjs"',
+    '          git show "origin/{{DEFAULT_BRANCH}}:.github/facility/receipts/run-checks.mjs" > "$trusted" 2>/dev/null || \\',
+    '            gh api "repos/$GITHUB_REPOSITORY/contents/.github/facility/receipts/run-checks.mjs?ref={{DEFAULT_BRANCH}}" --jq .content | base64 -d > "$trusted"',
+    '          node "$trusted"',
+  ].join("\n");
+}
+
 function previewStep(preview) {
   if (!preview?.enabled) return "";
   return [
@@ -432,12 +452,60 @@ export async function init(flags, pkgRoot, version) {
 
   const template = (relPath) => readFileSync(join(pkgRoot, "templates", relPath), "utf8");
   const plan = [
-    { to: ".github/workflows/facility-crew.yml", content: render(template("workflows/facility-crew.yml"), vars) },
-    { to: ".github/workflows/facility-codex.yml", content: render(template("workflows/facility-codex.yml"), vars) },
-    { to: ".github/workflows/facility-review.yml", content: render(template("workflows/facility-review.yml"), vars) },
-    { to: ".github/workflows/facility-address-review.yml", content: render(template("workflows/facility-address-review.yml"), vars) },
-    { to: ".github/workflows/facility-doctor.yml", content: render(template("workflows/facility-doctor.yml"), vars) },
-    { to: ".github/workflows/facility-security-sweep.yml", content: render(template("workflows/facility-security-sweep.yml"), vars) },
+    {
+      to: ".github/workflows/facility-crew.yml",
+      content: render(template("workflows/facility-crew.yml"), {
+        ...vars,
+        RECEIPT_PLATFORM_CHECKS_STEP: receiptPlatformChecksStep(
+          checks,
+          "always() && steps.requested-agent.outputs.run == 'true'",
+        ),
+      }),
+    },
+    {
+      to: ".github/workflows/facility-codex.yml",
+      content: render(template("workflows/facility-codex.yml"), {
+        ...vars,
+        RECEIPT_PLATFORM_CHECKS_STEP: receiptPlatformChecksStep(
+          checks,
+          "always() && steps.resolve.outputs.run == 'true'",
+        ),
+      }),
+    },
+    {
+      to: ".github/workflows/facility-review.yml",
+      content: render(template("workflows/facility-review.yml"), {
+        ...vars,
+        RECEIPT_PLATFORM_CHECKS_STEP: receiptPlatformChecksStep(
+          checks,
+          "always() && steps.workflow-change.outputs.changed != 'true'",
+        ),
+      }),
+    },
+    {
+      to: ".github/workflows/facility-address-review.yml",
+      content: render(template("workflows/facility-address-review.yml"), {
+        ...vars,
+        RECEIPT_PLATFORM_CHECKS_STEP: receiptPlatformChecksStep(
+          checks,
+          "always() && steps.workflow-change.outputs.changed != 'true'",
+        ),
+      }),
+    },
+    {
+      to: ".github/workflows/facility-doctor.yml",
+      content: render(template("workflows/facility-doctor.yml"), {
+        ...vars,
+        RECEIPT_PLATFORM_CHECKS_STEP: receiptPlatformChecksStep(checks, "always()"),
+      }),
+    },
+    {
+      to: ".github/workflows/facility-security-sweep.yml",
+      content: render(template("workflows/facility-security-sweep.yml"), {
+        ...vars,
+        RECEIPT_PLATFORM_CHECKS_STEP: receiptPlatformChecksStep(checks, "always()"),
+      }),
+    },
     { to: ".github/workflows/facility-watchtower.yml", content: render(template("workflows/facility-watchtower.yml"), vars) },
     { to: ".github/workflows/facility-canary.yml", content: render(template("workflows/facility-canary.yml"), vars) },
     { to: ".github/facility/architect.md", content: render(template("prompts/architect.md"), vars) },
@@ -447,6 +515,7 @@ export async function init(flags, pkgRoot, version) {
     { to: ".github/facility/doctor/resolve.mjs", content: template("doctor/resolve.mjs") },
     { to: ".github/facility/delivery/verify.mjs", content: template("delivery/verify.mjs") },
     { to: ".github/facility/receipts/collect.mjs", content: template("receipts/collect.mjs") },
+    { to: ".github/facility/receipts/run-checks.mjs", content: template("receipts/run-checks.mjs") },
     { to: ".github/facility/review/finalize.mjs", content: template("review/finalize.mjs") },
     { to: ".github/facility/security/sync-findings.mjs", content: template("security/sync-findings.mjs") },
     { to: ".github/facility/watchtower/outcomes.mjs", content: template("watchtower/outcomes.mjs") },

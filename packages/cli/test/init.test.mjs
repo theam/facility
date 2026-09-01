@@ -191,6 +191,7 @@ test("init installs the method end to end", async (t) => {
     ".github/facility/doctor/resolve.mjs",
     ".github/facility/delivery/verify.mjs",
     ".github/facility/receipts/collect.mjs",
+    ".github/facility/receipts/run-checks.mjs",
     ".github/facility/review/finalize.mjs",
     ".github/facility/security/sync-findings.mjs",
     ".github/facility/watchtower/outcomes.mjs",
@@ -239,6 +240,14 @@ test("init installs the method end to end", async (t) => {
     "configured delivery must request a protected preview",
   );
   assert.ok(crew.includes("FACILITY_PREVIEW_KEY"), "preview request needs a scoped Facility key");
+  assert.ok(
+    crew.includes("Record platform-verified check evidence"),
+    "crew must record platform checks before collecting receipts",
+  );
+  assert.ok(
+    crew.includes("facility-platform-checks.jsonl"),
+    "platform check evidence must live outside the agent workspace",
+  );
 
   // Agent triggers are slash commands, never @-mentions (real GitHub users),
   // and bot-authored events can't summon the crew.
