@@ -63,6 +63,22 @@ describe("UsageTee anthropic streaming usage", () => {
 
     expect(tee.usage.inputTokens).toBe(12);
     expect(tee.usage.outputTokens).toBe(34);
+    expect(tee.usageComplete).toBe(true);
+  });
+
+  it("does not mark anthropic streams complete until the terminal message_delta arrives", async () => {
+    const tee = new UsageTee("anthropic");
+    await feed(tee, [MESSAGE_START]);
+
+    expect(tee.usage.inputTokens).toBe(1000);
+    expect(tee.usageComplete).toBe(false);
+  });
+
+  it("marks anthropic streams complete once message_delta reports output usage", async () => {
+    const tee = new UsageTee("anthropic");
+    await feed(tee, [MESSAGE_START, MESSAGE_DELTA]);
+
+    expect(tee.usageComplete).toBe(true);
   });
 });
 

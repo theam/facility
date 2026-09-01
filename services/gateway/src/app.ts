@@ -424,6 +424,7 @@ async function handleProvider(
   const tee = new UsageTee(provider);
   let responseBody: unknown = {};
   let usage: Usage = emptyUsage();
+  let usageComplete = false;
   let status: RequestRecord["status"] = upstream.ok ? "ok" : "error";
   let error: string | undefined = upstream.ok ? undefined : `upstream status ${upstream.status}`;
 
@@ -435,11 +436,13 @@ async function handleProvider(
     }
     responseBody = tee.responseBody(contentType);
     usage = mergeParsedUsage(tee.usage, usageFromJson(provider, responseBody));
+    usageComplete = tee.usageComplete;
   } catch (pipelineError) {
     status = "error";
     error = pipelineError instanceof Error ? pipelineError.message : "stream interrupted";
     responseBody = tee.responseBody(contentType);
     usage = tee.usage;
+    usageComplete = tee.usageComplete;
   } finally {
     const record = baseRecord({
       requestId,
@@ -457,6 +460,7 @@ async function handleProvider(
       reservations: reservation.reservations,
       estimatedCents,
       providerMayHaveCharged: true,
+      usageComplete,
       error,
     });
     await enqueueMetering(db, envelopeStore, request.log, record, now());

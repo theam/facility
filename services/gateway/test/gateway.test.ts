@@ -1056,6 +1056,47 @@ describe("gateway", async () => {
     expect(counter?.spentCents).toBeGreaterThan(0);
   });
 
+  it("9c. interrupted streams with incomplete usage keep hard-budget reservations conservative", async () => {
+    const setup = await setupVirtualKey({
+      provider: "anthropic",
+      baseUrl: `${stubOrigin}/anthropic/v1`,
+      budgetMode: "hard",
+      budgetLimitCents: 10_000,
+    });
+    const controller = new AbortController();
+    const response = await fetch(`${gatewayOrigin}/anthropic/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": setup.secret, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-5",
+        max_tokens: 1_000_000,
+        estimated_input_tokens: 1_000_000,
+        abortStreamPartialUsage: true,
+        stream: true,
+        messages: [],
+      }),
+      signal: controller.signal,
+    });
+    await response.body?.getReader().read();
+    controller.abort();
+    await waitFor(() => stubState.abortObserved);
+    await waitForRequestCount(1);
+    const row = (
+      await db.select().from(llmRequests).where(eq(llmRequests.virtualKeyId, setup.keyId))
+    )[0];
+    expect(row?.status).toBe("error");
+    expect(row?.inputTokens).toBe(1_000_000);
+    expect(row?.outputTokens).toBe(1);
+    const partialInputCost = 300;
+    expect(row?.costCents).toBeGreaterThanOrEqual(partialInputCost);
+    expect(row?.costCents).toBeGreaterThan(partialInputCost);
+    const counter = (
+      await db.select().from(spendCounters).where(eq(spendCounters.budgetId, setup.budgetId))
+    )[0];
+    expect(counter?.spentCents).toBe(row?.costCents);
+    expect(counter?.spentCents).toBeGreaterThan(partialInputCost);
+  });
+
   it("9b. rejects private BYO provider base URLs before upstream fetch", async () => {
     const setup = await setupVirtualKey({
       provider: "anthropic",
@@ -1292,6 +1333,7 @@ async function buildStub(state: StubState) {
       model: string;
       stream?: boolean;
       abortStream?: boolean;
+      abortStreamPartialUsage?: boolean;
       tinyUsage?: boolean;
       authFailure?: "expired" | "revoked";
     };
@@ -1303,6 +1345,17 @@ async function buildStub(state: StubState) {
     }
     if ((body as { slow?: boolean }).slow) {
       await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (body.abortStreamPartialUsage) {
+      reply.raw.on("close", () => {
+        state.abortObserved = true;
+      });
+      reply.raw.writeHead(200, { "content-type": "text/event-stream" });
+      reply.raw.write(
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_stub","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"usage":{"input_tokens":1000000,"output_tokens":1}}}\n\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      return reply;
     }
     if (body.abortStream) {
       reply.raw.on("close", () => {

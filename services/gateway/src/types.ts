@@ -55,6 +55,7 @@ export type RequestRecord = {
   reservations?: Array<{ budget: BudgetState; estimatedCents: number }>;
   estimatedCents?: number;
   providerMayHaveCharged?: boolean;
+  usageComplete?: boolean;
 };
 
 export type BudgetState = {
