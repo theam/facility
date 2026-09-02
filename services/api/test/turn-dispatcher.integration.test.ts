@@ -678,7 +678,10 @@ environment:
         expect.objectContaining({
           turnId: interrupted.id,
           type: "turn.worker_interrupted",
-          data: { processCleanup: "stale-marker" },
+          // Linux workspaces can verify the marker against /proc before stopping
+          // the orphan. Other test hosts deliberately refuse to kill a PID they
+          // cannot identify safely.
+          data: { processCleanup: process.platform === "linux" ? "stopped" : "stale-marker" },
         }),
       ]),
     );
