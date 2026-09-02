@@ -31,6 +31,9 @@ overrides:
   "webpack-dev-server@<=5.2.5": 5.2.6
   "dompurify@<=3.4.12": 3.4.13
   "nanoid@>=3.0.0 <3.3.18": 3.3.18
+  # Only reached through the Docusaurus dev server's Express stack. One floor
+  # covers both open advisories; the later one supersedes the 6.15.4 fix.
+  "qs@<6.16.0": 6.16.0
 
 # Postinstall build-script allowlist — nothing builds unless named here.
 allowBuilds:
