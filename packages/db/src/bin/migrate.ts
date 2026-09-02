@@ -4,5 +4,8 @@ try {
   await migrate();
 } catch (error) {
   console.error(error);
-  process.exitCode = 1;
+  process.exitCode =
+    typeof error === "object" && error !== null && "exitCode" in error
+      ? Number((error as { exitCode: unknown }).exitCode)
+      : 1;
 }

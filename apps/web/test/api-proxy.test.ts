@@ -15,8 +15,11 @@ afterEach(async () => {
 describe("runtime API proxy policy", () => {
   it("maps only the same-origin /api surface to a fixed HTTP(S) API origin", () => {
     expect(
-      apiTargetUrl("https://app.example/api/v1/runs?limit=10", "https://api.example").toString(),
-    ).toBe("https://api.example/v1/runs?limit=10");
+      apiTargetUrl(
+        "https://app.example/api/v1/projects?limit=10",
+        "https://api.example",
+      ).toString(),
+    ).toBe("https://api.example/v1/projects?limit=10");
     expect(() => apiTargetUrl("https://app.example/admin", "https://api.example")).toThrow(
       "facility_api_proxy_path_invalid",
     );
@@ -27,7 +30,7 @@ describe("runtime API proxy policy", () => {
       "https://api.example?target=other",
       "not a URL",
     ]) {
-      expect(() => apiTargetUrl("https://app.example/api/v1/runs", apiUrl)).toThrow(
+      expect(() => apiTargetUrl("https://app.example/api/v1/projects", apiUrl)).toThrow(
         "facility_api_proxy_url_invalid",
       );
     }
@@ -74,7 +77,7 @@ describe("runtime API proxy policy", () => {
   });
 
   it("fails closed when production runtime configuration is missing or invalid", async () => {
-    const request = new Request("https://app.example/api/v1/runs");
+    const request = new Request("https://app.example/api/v1/projects");
     const missing = await proxyApiRequest(request, { apiUrl: "", nodeEnv: "production" });
     expect(missing.status).toBe(503);
     await expect(missing.json()).resolves.toEqual({ error: "api_proxy_not_configured" });
@@ -87,7 +90,7 @@ describe("runtime API proxy policy", () => {
   });
 
   it("returns a sanitized error when the configured API is unavailable", async () => {
-    const request = new Request("https://app.example/api/v1/runs");
+    const request = new Request("https://app.example/api/v1/projects");
     const result = await proxyApiRequest(request, {
       apiUrl: "https://api.example",
       nodeEnv: "production",

@@ -57,29 +57,15 @@ test("CI defaults to Node 24 and tests the exact Node 22 floor once", async () =
   assert.match(minimumNodeJob, /pnpm --filter @theagilemonkeys\/facility test\n/);
 });
 
-test("generated workflows recommend Node 24", async () => {
-  for (const path of [
-    "packages/cli/src/init.mjs",
-    "packages/core/src/render.ts",
-    "packages/cli/templates/workflows/facility-codex.yml",
-  ]) {
-    const source = await read(path);
-    const versions = [...source.matchAll(/node-version:\s*(\d+)/g)].map((match) => match[1]);
-    assert.ok(versions.length > 0, `${path} must declare a Node version`);
-    assert.ok(versions.every((version) => version === "24"), `${path} must recommend only Node 24`);
-  }
-});
-
 test("setup documentation installs the package-manager pin", async () => {
   for (const path of [
     "README.md",
     "CONTRIBUTING.md",
     "apps/docs/docs/self-host/quickstart.md",
-    "apps/docs/docs/self-host/aws.md",
+    "apps/docs/docs/self-host/local-development.md",
   ]) {
     const documentation = await read(path);
-    assert.match(documentation, /pnpm 11\.20\.0/);
-    assert.match(documentation, /npm install --global pnpm@11\.20\.0/);
-    assert.doesNotMatch(documentation, /corepack enable/);
+    assert.match(documentation, /pnpm(?:@| )11\.20\.0/);
+    assert.match(documentation, /corepack install --global pnpm@11\.20\.0/);
   }
 });

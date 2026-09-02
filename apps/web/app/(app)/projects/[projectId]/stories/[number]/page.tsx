@@ -1,242 +1,272 @@
-import { Eyebrow, PillTag, StatusDot } from "@facility/ui";
+import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CiStatusLink } from "@/components/ci-status";
 import { Markdown } from "@/components/markdown";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
-import { PullRequestLinks } from "@/components/story/pull-request-links";
-import { StoryTimeline } from "@/components/story/timeline";
-import { StoryTriggerButtons } from "@/components/story/trigger-buttons";
-import { api } from "@/lib/api";
-import { pipelineStories } from "@/lib/pipeline";
-import {
-  detachablePullRequests,
-  linkableIssues,
-  linkablePullRequests,
-} from "@/lib/pull-request-links";
-import { deriveStoryTimeline, proposalsForStory } from "@/lib/story";
-import { createStoryReferenceLink } from "@/lib/story-reference";
+import { StoryComposer, WorkspaceControls } from "@/components/story/workspace-story-controls";
+import { api, type StoryMessage, type WorkspaceStory } from "@/lib/api";
+import { can } from "@/lib/permissions";
 
 export async function generateMetadata({ params }: { params: Promise<{ number: string }> }) {
   const { number } = await params;
-  return { title: `story #${number}` };
+  return { title: `story ${number}` };
 }
 
 export default async function StoryPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ projectId: string; number: string }>;
-  searchParams: Promise<{ repoId?: string; storyType?: string }>;
 }) {
-  const [{ projectId, number: rawNumber }, identity] = await Promise.all([params, searchParams]);
-  const number = Number.parseInt(rawNumber, 10);
-  if (!Number.isFinite(number)) notFound();
-  const storyType =
-    identity.storyType === "issue" || identity.storyType === "pull_request"
-      ? identity.storyType
-      : undefined;
-  const query: { repoId?: string; storyType?: "issue" | "pull_request" } = {
-    ...(identity.repoId ? { repoId: identity.repoId } : {}),
-    ...(storyType ? { storyType } : {}),
-  };
-
-  const [detail, inbox, outcomes, activity, pipeline, me, project] = await Promise.all([
-    api.story(projectId, number, query),
-    api.inboxAll(),
-    api.outcomes(`?state=all&projectId=${projectId}&limit=200`),
-    api.storyGithubActivity(projectId, number, query),
-    api.pipeline(projectId),
+  const { projectId, number: storyId } = await params;
+  const [detail, conversation, environment, agents, me] = await Promise.all([
+    api.workspaceStory(projectId, storyId),
+    api.workspaceStoryConversation(projectId, storyId),
+    api.workspaceStoryEnvironment(projectId, storyId),
+    api.storyAgents(projectId),
     api.me(),
-    api.project(projectId),
   ]);
 
   if (!detail.ok) {
     if (detail.offline) return <Offline />;
     if (detail.status === 404) notFound();
-    if (detail.status === 409) {
-      return (
-        <div className="mx-auto flex max-w-2xl flex-col gap-4">
-          <Eyebrow>story</Eyebrow>
-          <h1 className="text-[clamp(20px,3vw,30px)] font-semibold tracking-tight">
-            Choose the repository for story #{number}
-          </h1>
-          <p className="max-w-xl text-sm leading-relaxed text-(--dim)">
-            More than one connected repository uses this story number. Open the story from the
-            repository-qualified list so Facility can select the right one.
-          </p>
+    return <ErrorNotice message={`Couldn't load this story — ${detail.message}`} />;
+  }
+
+  const bundle = detail.data;
+  const story = bundle.story;
+  const pullRequestUrl = safeExternalUrl(story.pullRequestUrl);
+  const messages = conversation.ok ? conversation.data.messages : [];
+  const agentRows = agents.ok ? agents.data.agents : [];
+  const permissions = me.ok ? me.data.permissions : [];
+  const canExecute = can(permissions, "workspaces:execute");
+  const canWrite = can(permissions, "projects:write");
+
+  return (
+    <div className="mx-auto flex max-w-5xl flex-col gap-8">
+      <LiveRefresh seconds={8} />
+      <header className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Eyebrow>
+            {story.provider}:{story.externalId}
+          </Eyebrow>
           <Link
-            href={`/projects/${projectId}/stories`}
-            className="w-fit font-mono text-[11px] text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
+            href={`/projects/${encodeURIComponent(projectId)}/stories`}
+            className="text-[11.5px] text-(--dim) hover:text-(--ink)"
           >
             ← all stories
           </Link>
         </div>
-      );
-    }
-    return <ErrorNotice message={`Couldn't load this story — ${detail.message}`} />;
-  }
-
-  const story = detail.data;
-  const linkReference = createStoryReferenceLink({
-    projectId,
-    currentStory: story,
-    stories: pipeline.ok ? pipelineStories(pipeline.data) : [],
-  });
-  const proposals = (inbox.ok ? inbox.data : []).filter(
-    (proposal) => proposal.projectId === projectId,
-  );
-  const allowLegacyProposalNumber = story.allowLegacyProposalNumber;
-  const storyProposals = proposalsForStory(proposals, story, allowLegacyProposalNumber);
-  const comments = activity.ok ? activity.data.comments : [];
-  const activityPrs = activity.ok ? activity.data.prs : [];
-  const stageLabels = new Map(story.pipelineStages.map((stage) => [stage.key, stage.label]));
-  const timeline = deriveStoryTimeline({
-    detail: story,
-    proposals,
-    outcomes: outcomes.ok ? outcomes.data : [],
-    comments,
-    prs: activity.ok ? activityPrs : undefined,
-    ciEvents: activity.ok ? activity.data.ciEvents : undefined,
-    allowLegacyProposalNumber,
-    stageLabels,
-  });
-  const stage = story.stage;
-
-  const prLinks = new Map<number, string>();
-  for (const pr of story.prs) prLinks.set(pr.number, pr.url);
-  for (const pr of activityPrs) prLinks.set(pr.number, pr.url);
-
-  const permissions = me.ok ? me.data.permissions : [];
-  const has = (permission: string) =>
-    permissions.some(
-      (candidate) =>
-        candidate === "*" ||
-        candidate === permission ||
-        candidate === `${permission.split(":")[0]}:*`,
-    );
-  const stories = pipeline.ok ? pipelineStories(pipeline.data) : [];
-  const issueCandidates = linkableIssues(stories, story.repoId);
-  const pullCandidates = linkablePullRequests(stories, story.repoId);
-  const detachablePulls =
-    story.storyType === "issue" ? detachablePullRequests(story.number, story.prs) : [];
-
-  return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-8">
-      <LiveRefresh seconds={15} />
-
-      <div className="flex flex-col gap-3">
-        <Eyebrow>story</Eyebrow>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <h1 className="flex min-w-0 items-baseline gap-3 text-[clamp(18px,2.4vw,26px)] font-semibold tracking-tight">
-            <span className="shrink-0 font-mono text-[0.72em] font-normal text-(--dim)">
-              {story.repoOwner}/{story.repoName}#{story.number}
-            </span>
-            <span className="min-w-0">{story.title}</span>
-          </h1>
-          {has("runs:trigger") && story.storyType === "issue" && story.state === "open" ? (
-            <StoryTriggerButtons
-              projectId={projectId}
-              issueNumber={story.number}
-              repoId={story.repoId}
-              builderPlanRequired={!project.ok || project.data.builderPlanPolicy === "required"}
-            />
-          ) : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <span className="flex items-center gap-2">
-            <StatusDot
-              tone={story.state === "open" ? "human" : story.state === "merged" ? "ok" : "machine"}
-            />
-            <span className="text-[12px] font-medium text-(--mut)">{story.state}</span>
+        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">{story.title}</h1>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11.5px] text-(--mut)">
+          <span className="inline-flex items-center gap-2">
+            <StatusDot tone={storyTone(story.status)} pulse={story.status === "working"} />
+            {story.status}
           </span>
-          {stage ? <PillTag>{stage.label}</PillTag> : null}
-          {story.ciState && story.ciUrl ? (
-            <CiStatusLink
-              state={story.ciState}
-              url={story.ciUrl}
-              failureNames={story.ciFailureNames}
-            />
+          {story.activeAgentName ? (
+            <span className="font-mono text-(--accent)">{story.activeAgentName} active</span>
           ) : null}
-          {story.labels.slice(0, 4).map((label) => (
-            <span
-              key={label}
-              className="border border-(--line) px-1.5 py-0.5 font-mono text-[10px] text-(--dim)"
+          {story.branch ? <span className="font-mono">{story.branch}</span> : null}
+          {pullRequestUrl ? (
+            <a
+              href={pullRequestUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-(--info) underline-offset-4 hover:underline"
             >
-              {label}
-            </span>
-          ))}
-          <a
-            href={story.htmlUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="font-mono text-[11px] text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
-          >
-            {story.storyType === "issue" ? "issue" : "PR"} #{story.number} ↗
-          </a>
-          {[...prLinks.entries()]
-            .sort(([a], [b]) => a - b)
-            .map(([prNumber, url]) =>
-              story.storyType === "pull_request" && prNumber === story.number ? null : (
-                <a
-                  key={prNumber}
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-mono text-[11px] text-(--mut) underline-offset-4 hover:text-(--ink) hover:underline"
-                >
-                  PR #{prNumber} ↗
-                </a>
-              ),
-            )}
-          {storyProposals.some((proposal) => proposal.state === "open") ? (
-            <span className="font-mono text-[11px] text-(--human)">waiting on you</span>
+              PR #{story.pullRequestNumber} ↗
+            </a>
           ) : null}
         </div>
-      </div>
+      </header>
 
-      {has("repos:write") ? (
-        <PullRequestLinks
-          projectId={projectId}
-          repoId={story.repoId}
-          storyType={story.storyType}
-          storyNumber={story.number}
-          issueCandidates={issueCandidates}
-          pullCandidates={pullCandidates}
-          detachablePulls={detachablePulls}
-        />
+      {bundle.attention.length > 0 ? (
+        <section className="flex flex-col gap-3 border border-(--bad)/50 bg-(--bg-subtle) p-5">
+          <Eyebrow className="text-(--bad)">needs attention</Eyebrow>
+          {bundle.attention.map((item) => (
+            <div key={item.id}>
+              <p className="text-[13px] font-medium text-(--ink)">{item.title}</p>
+              {item.detail ? <p className="mt-1 text-[12px] text-(--mut)">{item.detail}</p> : null}
+            </div>
+          ))}
+        </section>
       ) : null}
 
-      {story.bodyMd?.trim() ? (
-        <details open className="border border-(--line) bg-(--bg-subtle)">
-          <summary className="cursor-pointer px-4 py-2.5 font-mono text-[11px] text-(--dim) hover:text-(--ink)">
-            {story.storyType === "issue" ? "issue" : "PR"} body
-          </summary>
-          <div className="border-t border-(--line) px-5 py-4">
-            <Markdown source={story.bodyMd} linkReference={linkReference} />
+      <section className="grid gap-6 border border-(--line) p-5 lg:grid-cols-[minmax(0,1fr)_300px] lg:p-6">
+        <div className="flex min-w-0 flex-col gap-4">
+          <Eyebrow>workspace</Eyebrow>
+          {bundle.workspace ? (
+            <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[11.5px]">
+              <dt className="text-(--dim)">state</dt>
+              <dd>{bundle.workspace.state}</dd>
+              <dt className="text-(--dim)">provider</dt>
+              <dd className="font-mono">{bundle.workspace.provider}</dd>
+              <dt className="text-(--dim)">image</dt>
+              <dd className="break-all font-mono">{bundle.workspace.environment.image ?? "—"}</dd>
+              <dt className="text-(--dim)">volume</dt>
+              <dd className="break-all font-mono text-(--mut)">{bundle.workspace.volumeRef}</dd>
+              <dt className="text-(--dim)">last active</dt>
+              <dd>{formatTime(bundle.workspace.lastActivityAt)}</dd>
+            </dl>
+          ) : (
+            <p className="text-sm text-(--dim)">Workspace has not been created.</p>
+          )}
+        </div>
+        <WorkspaceControls
+          projectId={projectId}
+          story={story}
+          workspace={bundle.workspace}
+          canExecute={canExecute}
+          canWrite={canWrite}
+        />
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <div className="flex items-baseline justify-between gap-4">
+          <Eyebrow>conversation · {messages.length}</Eyebrow>
+          <span className="text-[11px] text-(--dim)">shared by every agent on this story</span>
+        </div>
+        {!conversation.ok ? (
+          <ErrorNotice message={`Couldn't load conversation — ${conversation.message}`} />
+        ) : messages.length === 0 ? (
+          <p className="border border-(--line) p-6 text-sm text-(--dim)">No messages yet.</p>
+        ) : (
+          <div className="flex flex-col gap-px border border-(--line) bg-(--line)">
+            {messages.map((message) => (
+              <Message key={message.id} message={message} />
+            ))}
           </div>
-        </details>
+        )}
+        {canExecute && story.deletedAt === null && agentRows.length > 0 ? (
+          <StoryComposer projectId={projectId} storyId={story.id} agents={agentRows} />
+        ) : null}
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-2">
+        <div className="flex flex-col gap-3">
+          <Eyebrow>turns</Eyebrow>
+          <div className="flex flex-col border border-(--line)">
+            {bundle.turns.length === 0 ? (
+              <p className="p-5 text-[12px] text-(--dim)">No turns yet.</p>
+            ) : (
+              bundle.turns.map((turn) => (
+                <div key={turn.id} className="border-b border-(--line) p-4 last:border-b-0">
+                  <div className="flex items-center justify-between gap-3 text-[11.5px]">
+                    <span className="font-mono text-(--ink)">{turn.agentName}</span>
+                    <span className={turn.state === "failed" ? "text-(--bad)" : "text-(--mut)"}>
+                      {turn.state}
+                    </span>
+                  </div>
+                  <p className="mt-1 font-mono text-[10px] text-(--dim)">
+                    {turn.engine} · {turn.model}
+                  </p>
+                  {turn.error ? (
+                    <p className="mt-2 text-[11.5px] text-(--bad)">{turn.error}</p>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <Eyebrow>environment events</Eyebrow>
+          {!environment.ok ? (
+            <ErrorNotice message={environment.message} />
+          ) : (
+            <div className="max-h-96 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
+              {environment.data.events.length === 0 ? (
+                <p className="text-(--dim)">No environment events yet.</p>
+              ) : (
+                environment.data.events.map((event) => (
+                  <div key={event.seq} className="mb-3 last:mb-0">
+                    <p className="text-(--accent)">
+                      {event.seq} · {event.type}
+                    </p>
+                    <pre className="mt-1 whitespace-pre-wrap break-words text-(--mut)">
+                      {JSON.stringify(event.data, null, 2)}
+                    </pre>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {bundle.artifacts.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <Eyebrow>artifacts</Eyebrow>
+          <div className="flex flex-col border border-(--line)">
+            {bundle.artifacts.map((artifact) => (
+              <div
+                key={artifact.id}
+                className="flex items-center gap-3 border-b border-(--line) p-4 last:border-b-0"
+              >
+                <span className="font-mono text-[10px] text-(--dim)">{artifact.kind}</span>
+                {safeExternalUrl(artifact.uri) ? (
+                  <a
+                    href={artifact.uri}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[12px] text-(--info) hover:underline"
+                  >
+                    {artifact.label} ↗
+                  </a>
+                ) : (
+                  <span className="text-[12px] text-(--mut)">
+                    {artifact.label} · {artifact.uri}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
       ) : null}
-
-      <div className="flex flex-col gap-4">
-        <Eyebrow>timeline</Eyebrow>
-        <StoryTimeline
-          projectId={projectId}
-          items={timeline}
-          canDecide={has("hitl:decide")}
-          linkReference={linkReference}
-        />
-      </div>
-
-      <p className="text-[11.5px] text-(--dim)">
-        <Link
-          href={`/projects/${projectId}/stories`}
-          className="underline-offset-4 hover:underline"
-        >
-          ← all stories
-        </Link>
-      </p>
     </div>
   );
+}
+
+function Message({ message }: { message: StoryMessage }) {
+  const isAgent = message.role === "agent";
+  return (
+    <article className="bg-(--bg) p-5 sm:p-6">
+      <div className="mb-3 flex flex-wrap items-center gap-3 text-[10.5px]">
+        <span className={`font-mono ${isAgent ? "text-(--accent)" : "text-(--human)"}`}>
+          {isAgent ? "agent" : (message.actor?.id ?? message.role)}
+        </span>
+        {message.requestedAgentName ? (
+          <span className="font-mono text-(--dim)">→ {message.requestedAgentName}</span>
+        ) : null}
+        <time className="ml-auto text-(--dim)" dateTime={message.createdAt}>
+          {formatTime(message.createdAt)}
+        </time>
+      </div>
+      <Markdown source={message.body} />
+    </article>
+  );
+}
+
+function storyTone(status: WorkspaceStory["status"]) {
+  if (status === "working") return "agent" as const;
+  if (status === "attention") return "bad" as const;
+  if (status === "done") return "ok" as const;
+  if (status === "review") return "human" as const;
+  return "machine" as const;
+}
+
+function formatTime(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(date)
+    : value;
+}
+
+function safeExternalUrl(value: string | null) {
+  if (!value) return null;
+  try {
+    return ["https:", "http:"].includes(new URL(value).protocol) ? value : null;
+  } catch {
+    return null;
+  }
 }

@@ -43,18 +43,8 @@ const EnvSchema = z
       (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
       z.string().min(32).max(128).optional(),
     ),
-    SANDBOX_API_URL: z.string().url().optional(),
-    GATEWAY_URL: z.string().url().default("http://localhost:4410"),
-    SANDBOX_GATEWAY_URL: z.string().url().optional(),
-    // Container image that runs the Facility runner for platform-lane runs. The
-    // seeded default sandbox profile and `facility doctor` both key off this.
-    FACILITY_RUNNER_IMAGE: z.string().default("facility-runner:dev"),
-    FACILITY_REPOSITORY_WRITE_TRACKING_PROMOTION: z.enum(["0", "1"]).default("0"),
-    FACILITY_GOVERNED_BUILDER_RETRY_PROMOTION: z.enum(["0", "1"]).default("0"),
-    // Driver the seeded default sandbox profile uses. Must match the deployment:
-    // "docker" for local/self-host, "vercel" for managed Sandboxes, or "aws"
-    // for the CodeBuild development provider.
-    FACILITY_SANDBOX_DRIVER: z.enum(["docker", "aws", "vercel"]).default("docker"),
+    FACILITY_WORKSPACE_IMAGE: z.string().default("facility-runner:dev"),
+    FACILITY_WORKSPACE_DRIVER: z.enum(["docker", "vercel"]).default("docker"),
     AUTH_IDENTITY_PROVIDER: z.enum(["github", "oidc"]).default("github"),
     AUTH_CALLBACK_URL: OptionalUrl,
     GITHUB_OAUTH_CLIENT_ID: z.string().optional(),
@@ -74,25 +64,15 @@ const EnvSchema = z
     FACILITY_OAUTH_JWKS: z.string().optional(),
     MCP_PUBLIC_URL: OptionalUrl,
     FACILITY_INSECURE_DEV: z.string().optional(),
-    S3_ENDPOINT: z.string().optional(),
-    S3_ACCESS_KEY: z.string().optional(),
-    S3_SECRET_KEY: z.string().optional(),
-    S3_BUCKET: z.string().optional(),
-    AWS_REGION: z.string().optional(),
-    FACILITY_AWS_CODEBUILD_PROJECT: OptionalNonEmpty,
-    FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: OptionalNonEmpty,
     VERCEL_TOKEN: OptionalNonEmpty,
     VERCEL_OIDC_TOKEN: OptionalNonEmpty,
     VERCEL_TEAM_ID: OptionalNonEmpty,
     VERCEL_PROJECT_ID: OptionalNonEmpty,
-    PACKAGE_REGISTRY_TOKEN: OptionalNonEmpty,
     GITHUB_APP_ID: z.string().optional(),
     GITHUB_APP_PRIVATE_KEY: z.string().optional(),
     GITHUB_APP_WEBHOOK_SECRET: z.string().optional(),
     GITHUB_APP_SLUG: z.string().optional(),
-    // Fallback clone credential for private repos when a GitHub App
-    // installation token is not available (the App mints per-run tokens in
-    // production; this is the self-host / validation path).
+    // Optional local fallback. Production uses GitHub App installation tokens.
     GITHUB_CLONE_TOKEN: z.string().optional(),
     LOG_LEVEL: z.string().default("info"),
     NODE_ENV: z.string().optional(),
@@ -110,6 +90,18 @@ const EnvSchema = z
         code: "custom",
         path: ["FACILITY_INSECURE_DEV"],
         message: "FACILITY_INSECURE_DEV is refused in production",
+      });
+    }
+    if (
+      env.FACILITY_INSECURE_DEV === "1" &&
+      ![env.PUBLIC_URL, env.WEB_URL ?? env.PUBLIC_URL].every((value) =>
+        isLoopbackHostname(new URL(value).hostname),
+      )
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["FACILITY_INSECURE_DEV"],
+        message: "FACILITY_INSECURE_DEV requires loopback PUBLIC_URL and WEB_URL",
       });
     }
     if (env.FACILITY_PREVIEW_URL) {
@@ -268,14 +260,8 @@ export function readConfig(env = process.env): AppConfig {
     webUrl,
     previewUrl: parsed.FACILITY_PREVIEW_URL?.replace(/\/$/, ""),
     previewSurfaceToken: parsed.FACILITY_PREVIEW_SURFACE_TOKEN,
-    sandboxApiUrl: parsed.SANDBOX_API_URL ?? parsed.PUBLIC_URL,
-    sandboxGatewayUrl: parsed.SANDBOX_GATEWAY_URL ?? parsed.GATEWAY_URL,
-    gatewayUrl: parsed.GATEWAY_URL,
-    sandboxRunnerImage: parsed.FACILITY_RUNNER_IMAGE,
-    repositoryWriteTrackingPromotionEnabled:
-      parsed.FACILITY_REPOSITORY_WRITE_TRACKING_PROMOTION === "1",
-    governedBuilderRetryPromotionEnabled: parsed.FACILITY_GOVERNED_BUILDER_RETRY_PROMOTION === "1",
-    sandboxDriver: parsed.FACILITY_SANDBOX_DRIVER,
+    workspaceImage: parsed.FACILITY_WORKSPACE_IMAGE,
+    workspaceDriver: parsed.FACILITY_WORKSPACE_DRIVER,
     authIdentityProvider: parsed.AUTH_IDENTITY_PROVIDER,
     authCallbackUrl: parsed.AUTH_CALLBACK_URL ?? `${webUrl.replace(/\/$/, "")}/api/auth/callback`,
     githubOauthClientId: parsed.GITHUB_OAUTH_CLIENT_ID,
@@ -294,17 +280,9 @@ export function readConfig(env = process.env): AppConfig {
       ? canonicalMcpResourceUrl(parsed.MCP_PUBLIC_URL)
       : undefined,
     facilityInsecureDev: parsed.FACILITY_INSECURE_DEV === "1",
-    s3Endpoint: parsed.S3_ENDPOINT,
-    s3AccessKey: parsed.S3_ACCESS_KEY,
-    s3SecretKey: parsed.S3_SECRET_KEY,
-    s3Bucket: parsed.S3_BUCKET,
-    awsRegion: parsed.AWS_REGION,
-    awsCodeBuildProject: parsed.FACILITY_AWS_CODEBUILD_PROJECT,
-    awsCodeBuildCacheBaseLocation: parsed.FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION,
     vercelToken: parsed.VERCEL_OIDC_TOKEN ?? parsed.VERCEL_TOKEN,
     vercelTeamId: parsed.VERCEL_TEAM_ID,
     vercelProjectId: parsed.VERCEL_PROJECT_ID,
-    packageRegistryToken: parsed.PACKAGE_REGISTRY_TOKEN,
     githubAppId: parsed.GITHUB_APP_ID,
     githubAppPrivateKey: parsed.GITHUB_APP_PRIVATE_KEY?.replace(/\\n/g, "\n"),
     githubAppWebhookSecret: parsed.GITHUB_APP_WEBHOOK_SECRET,

@@ -1,10 +1,10 @@
 # Security policy
 
-Facility generates CI workflows that run AI agents with elevated permissions
-on ephemeral runners. We treat weaknesses in what we generate — prompt
-injection paths, secret exposure, privilege escalation through workflow
-configuration — as security vulnerabilities, the same as flaws in the CLI
-itself.
+Facility runs coding agents in persistent story workspaces with full access to
+the connected GitHub repositories, shell, network, Docker, and browser. We
+treat cross-organization access, credential exposure, preview-authentication
+bypass, webhook forgery, and prompt injection that escapes the configured
+project boundary as security vulnerabilities.
 
 ## Reporting
 
@@ -16,16 +16,19 @@ In scope, with examples:
 
 - A way for issue/PR/review text to escape the untrusted-data framing and
   drive agent behavior (prompt injection → action).
-- Generated workflow configuration that exposes secrets to fork-originated
-  code or over-grants tokens.
-- A path by which a crew agent can approve, merge, or push to a protected
-  branch despite the contracts and hooks.
-- Guard or hook bypasses that defeat their stated invariant.
+- A workspace or API request that can read or modify another organization's
+  projects, stories, conversations, sessions, or previews.
+- A path that exposes GitHub installation tokens, engine credentials, preview
+  gateway secrets, or persisted native session data.
+- A forged or replayed GitHub webhook that starts work more than once.
+- A path by which an agent can merge or push directly to a protected branch.
 
 ## Expectations for adopters
 
-The generated setup assumes: secrets live in GitHub Environments with
-TEST-tier credentials, the default branch is protected, and runners are
-GitHub-hosted (ephemeral). If you weaken any of those, you own the resulting
-surface. `apps/docs/docs/reference/hardening.md` documents the threat model behind each generated
-decision.
+Facility intentionally gives every agent the same maintainer-level GitHub and
+workspace capability. Operators must restrict the GitHub App to the intended
+repositories, protect default branches, isolate the workspace runtime from the
+control plane, terminate TLS at the public edge, and keep the preview surface
+token private. Archive and suspend retain worktree and native session data;
+only explicit workspace deletion removes it. The complete deployment boundary
+is documented in `apps/docs/docs/reference/security.md`.

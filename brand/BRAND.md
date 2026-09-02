@@ -8,22 +8,21 @@ principles and documentation in this repository.
 ## Name
 
 **facility** — always lowercase in the wordmark, sentence case ("Facility") in
-prose. A facility is where units of work enter as signals and leave as shipped,
-inspected, signed-off software. The vocabulary is product-wide:
+prose. A facility is the durable place where one story is understood, built,
+run, inspected, and handed to a maintainer. The vocabulary is product-wide:
 
 | the facility | in the product |
 |---|---|
-| the loop | issue → `/architect` → gate → `/builder` → review → gate → merge |
-| the two gates | the human decisions: accept the plan, sign the merge |
-| every change gets its own world | the provisioned, ephemeral environment |
-| the gauntlet | STANDARD.md + guards + reviewer subagents + security sweep |
-| the watchtower | outcomes, health monitor, the canary — the SDLC watching itself |
-| the doctor | bounded CI repair, stopped cold at security surfaces |
+| a story workspace | durable worktree, development environment, and native agent sessions |
+| the conversation | shared context continued by people and repository-defined agents |
+| the agent catalog | prompts, engines, models, and triggers under `.agents/` |
+| the preview | authenticated access to a service running in the story workspace |
+| the maintainer boundary | branch protection, pull-request review, and the final merge |
 
-Tagline: **"The AI software factory for your repo."**
-Method line: **"Agents build. People decide twice. Everything gets measured."**
-Product promise: *"We taught AI to ship like our engineers. Then we made it
-prove it."*
+Tagline: **"A persistent workspace for every story."**
+Method line: **"Start a story. Continue the work. Review the pull request."**
+Product promise: *"The worktree, environment, and agent context stay together
+until the maintainer is done with them."*
 
 ## Palette (roles, per TAM-50)
 
@@ -41,10 +40,10 @@ agent behind it is off-brand.
 
 ## Mark
 
-A unit of work traveling the pipeline between **two human gates** — the method
-in one glyph ("people decide twice"). Geometry only (`assets/mark.svg`), 4px
-radius per TAM imagery treatment, no strokes around it, no shadows. The
-wordmark sets the name in IBM Plex Mono with a yellow full stop.
+A unit of work moving through a stable workspace. Geometry only
+(`assets/mark.svg`), 4px radius per TAM imagery treatment, no strokes around
+it, no shadows. The wordmark sets the name in IBM Plex Mono with a yellow full
+stop.
 
 ## Typography
 
@@ -60,8 +59,8 @@ Sensei, not startup (TAM `foundations/voice.md`): open with the failure mode,
 be calmly opinionated, zero hype, no contrarian one-liner templates, end with
 implication. Two site-inherited habits: **numbers must be live, not curated**
 ("these update nightly, straight from the pipeline"), and claims about agents
-come with the receipt — measurement language (acceptance, one-shot, fixups,
-time-to-merge) over adjectives.
+come with direct evidence — checks, environment state, pull requests, and
+reproducible commands over adjectives.
 
 ## Signature (non-negotiable for tier membership)
 

@@ -98,7 +98,7 @@ test("repository and tag inputs reject cross-owner and injection-shaped values",
   assert.throws(() => parseTagsJson('["same","same"]'), /duplicate tag/);
 });
 
-test("digest manifests require the complete, expected five-image set", (t) => {
+test("digest manifests require the complete, expected three-image set", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "facility-image-digests-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
 
@@ -136,7 +136,7 @@ test("one Bake result records an exact, internally consistent digest set", (t) =
   );
   assert.throws(
     () => recordBakeDigests({ metadata: { ...metadata, unexpected: {} }, directory }),
-    /expected api,gateway,mcp,runner,web plus optional service-packages/,
+    /expected api,runner,web plus optional service-packages/,
   );
   assert.throws(
     () =>
@@ -201,7 +201,7 @@ test("CI gates release images and the reusable publisher stages digests before p
   assert.match(scanJob, /GRYPE_DB_AUTO_UPDATE: "false"/);
   assert.match(scanJob, /GRYPE_CHECK_FOR_APP_UPDATE: "false"/);
   assert.match(scanJob, /actions\/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5/);
-  assert.match(scanJob, /for image in api gateway mcp web runner/);
+  assert.match(scanJob, /for image in api web runner/);
   assert.match(scanJob, /registry:\$IMAGE_PREFIX\/\$image@\$digest/);
   assert.match(scanJob, /--fail-on high --only-fixed/);
   assert.match(scanJob, /\[\[ "\$image" == "runner" \]\]/);
@@ -219,21 +219,16 @@ test("CI gates release images and the reusable publisher stages digests before p
   assert.match(imagesWorkflow, /id: promotion\n {8}run: echo 'promoted=true' >> "\$GITHUB_OUTPUT"/);
   assert.match(
     ciWorkflow,
-    /publish-images:[\s\S]*needs: \[decide-release, verify, package-release, self-host-build, sandbox-e2e, allocate-release\]/,
+    /publish-images:[\s\S]*needs: \[decide-release, verify, package-release, self-host-build, workspace-e2e, allocate-release\]/,
   );
   assert.match(ciWorkflow, /publish-images:[\s\S]*uses: \.\/\.github\/workflows\/images\.yml/);
 });
 
-test("sandbox CI explicitly admits RootlessKit user namespaces on Ubuntu 24.04", () => {
-  const sandboxJob = ciWorkflow.split("\n  publish-npm:")[0].split("\n  sandbox-e2e:")[1];
-  assert.ok(sandboxJob, "CI must contain the sandbox E2E job");
-  assert.match(sandboxJob, /- name: Permit nested rootless user namespaces/);
-  assert.match(sandboxJob, /key=kernel\.apparmor_restrict_unprivileged_userns/);
-  assert.match(sandboxJob, /if sudo sysctl "\$key" >\/dev\/null 2>&1; then/);
-  assert.match(sandboxJob, /sudo sysctl -w "\$key=0"/);
-  assert.ok(
-    sandboxJob.indexOf("Permit nested rootless user namespaces") <
-      sandboxJob.indexOf("Exercise the privileged CodeBuild boundary"),
-    "the host must admit unprivileged user namespaces before RootlessKit starts",
-  );
+test("workspace CI runs the persistent Docker acceptance path", () => {
+  const workspaceJob = ciWorkflow.split("\n  publish-npm:")[0].split("\n  workspace-e2e:")[1];
+  assert.ok(workspaceJob, "CI must contain the workspace E2E job");
+  assert.match(workspaceJob, /FACILITY_E2E_DOCKER: "1"/);
+  assert.match(workspaceJob, /FACILITY_WORKSPACE_TEST_IMAGE: facility-runner:dev/);
+  assert.match(workspaceJob, /run: pnpm test:e2e-workspace/);
+  assert.doesNotMatch(workspaceJob, /CodeBuild|run-objective|sandbox\.e2e/);
 });

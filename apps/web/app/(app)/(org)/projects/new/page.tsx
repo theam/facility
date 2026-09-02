@@ -47,6 +47,10 @@ type KickstartPreview = {
     checks?: string[];
     provision?: string;
     suggestedModules?: string[];
+    setup?: string;
+    start?: string;
+    ready?: string;
+    servicePort?: number;
   };
   files: Array<{ path: string; size: number; sha256: string; action?: string }>;
   skipped?: string[];
@@ -117,6 +121,10 @@ export default function KickstartPage() {
   const [source, setSource] = useState<Source | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [setupCommand, setSetupCommand] = useState("");
+  const [startCommand, setStartCommand] = useState("");
+  const [readyCommand, setReadyCommand] = useState("");
+  const [servicePort, setServicePort] = useState("3000");
   const [newRepoName, setNewRepoName] = useState("");
   const [manualRepo, setManualRepo] = useState("");
 
@@ -241,6 +249,14 @@ export default function KickstartPage() {
       const nextPreview = await apiJson<KickstartPreview>(
         `/v1/projects/${created.id}/kickstart/preview?repoId=${encodeURIComponent(connected.id)}`,
       );
+      setSetupCommand((value) => value || nextPreview.detection?.setup || "");
+      setStartCommand((value) => value || nextPreview.detection?.start || "");
+      setReadyCommand((value) => value || nextPreview.detection?.ready || "");
+      setServicePort((value) =>
+        value === "3000" && nextPreview.detection?.servicePort
+          ? String(nextPreview.detection.servicePort)
+          : value,
+      );
       setPreview(nextPreview);
       setPhase("preview");
     } catch (err) {
@@ -256,13 +272,10 @@ export default function KickstartPage() {
     try {
       const answers = {
         defaultBranch: preview.detection?.defaultBranch ?? repoRow.defaultBranch,
-        provisionCmd: preview.detection?.provision || undefined,
-        checkCmds: preview.detection?.checks?.length ? preview.detection.checks : undefined,
-        modules: preview.detection?.suggestedModules?.length
-          ? preview.detection.suggestedModules
-          : undefined,
-        modelTier: "tam-50",
-        execution_lane: { architect: "platform", builder: "platform" },
+        provisionCmd: setupCommand.trim() || undefined,
+        startCmd: startCommand.trim(),
+        readyCmd: readyCommand.trim() || undefined,
+        servicePort: Number(servicePort),
       };
       const kickstart = await apiJson<KickstartResult>(`/v1/projects/${project.id}/kickstart`, {
         method: "POST",
@@ -279,6 +292,12 @@ export default function KickstartPage() {
 
   const prUrl = result?.pr?.url ?? result?.pr?.html_url;
   const busy = phase === "previewing" || phase === "opening";
+  const numericServicePort = Number(servicePort);
+  const environmentValid =
+    startCommand.trim().length > 0 &&
+    Number.isInteger(numericServicePort) &&
+    numericServicePort >= 1 &&
+    numericServicePort <= 65_535;
 
   // Preview needs real project/repo rows, so they exist before the final
   // confirm — discarding deletes the draft project instead of orphaning it.
@@ -505,9 +524,9 @@ export default function KickstartPage() {
           <aside className="flex h-fit flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-5">
             <Eyebrow>what kickstart does</Eyebrow>
             <p className="text-sm leading-relaxed text-(--mut)">
-              Facility reads the repository, detects its shape (package manager, checks, workflows),
-              and opens one PR adding the factory assets: workflows, agent prompts, guards, skills,
-              and the standard. Nothing lands on the default branch without your merge.
+              Facility reads the repository and opens one PR with the persistent environment
+              contract plus the shared agent catalog. Nothing lands on the default branch without
+              your merge.
             </p>
             <Divider />
             <p className="font-mono text-[11px] leading-relaxed text-(--dim)">
@@ -544,7 +563,7 @@ export default function KickstartPage() {
                   type="button"
                   variant="primary"
                   tone="agent"
-                  disabled={busy || !preview?.files.length}
+                  disabled={busy || !preview?.files.length || !environmentValid}
                   onClick={() => void openPr()}
                 >
                   {phase === "opening" ? "opening PR…" : "open kickstart PR"}
@@ -575,6 +594,51 @@ export default function KickstartPage() {
                   </Cell>
                 </HairlineGrid>
 
+                <div className="grid gap-4 border border-(--line) bg-(--bg-subtle) p-5 sm:grid-cols-2">
+                  <Field
+                    label="setup command"
+                    hint="Optional. Runs when the environment definition changes."
+                  >
+                    <TextInput
+                      value={setupCommand}
+                      onChange={(event) => setSetupCommand(event.target.value)}
+                      placeholder="pnpm install --frozen-lockfile"
+                    />
+                  </Field>
+                  <Field
+                    label="start command"
+                    hint="Required. Starts the complete development environment."
+                  >
+                    <TextInput
+                      value={startCommand}
+                      onChange={(event) => setStartCommand(event.target.value)}
+                      placeholder="docker compose up -d"
+                    />
+                  </Field>
+                  <Field
+                    label="readiness command"
+                    hint="Optional. Must exit successfully when the app is ready."
+                  >
+                    <TextInput
+                      value={readyCommand}
+                      onChange={(event) => setReadyCommand(event.target.value)}
+                      placeholder="curl --fail http://localhost:3000/health"
+                    />
+                  </Field>
+                  <Field label="app port" hint="The service exposed by the authenticated preview.">
+                    <TextInput
+                      value={servicePort}
+                      onChange={(event) => setServicePort(event.target.value)}
+                      inputMode="numeric"
+                    />
+                  </Field>
+                  {!environmentValid ? (
+                    <p className="text-[12px] text-(--bad) sm:col-span-2">
+                      Enter a start command and a port between 1 and 65535 before opening the PR.
+                    </p>
+                  ) : null}
+                </div>
+
                 <div className="flex max-h-[420px] flex-col overflow-y-auto border border-(--line)">
                   {preview.files.map((file) => (
                     <div
@@ -604,13 +668,10 @@ export default function KickstartPage() {
 
           <aside className="flex h-fit flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-5">
             <Eyebrow>detected</Eyebrow>
-            <KeyValue label="provision" value={preview?.detection?.provision || "none"} />
-            <KeyValue label="checks" value={preview?.detection?.checks?.join(" / ") || "none"} />
-            <KeyValue
-              label="modules"
-              value={preview?.detection?.suggestedModules?.join(", ") || "base"}
-            />
-            <KeyValue label="lane" value="platform — sessions run in Facility sandboxes" />
+            <KeyValue label="workspace" value="persistent until explicitly deleted" />
+            <KeyValue label="access" value="full workspace + GitHub maintainer" />
+            <KeyValue label="catalog" value=".agents/*.md is the source of truth" />
+            <KeyValue label="preview" value="authenticated port from the live workspace" />
           </aside>
         </div>
       ) : null}
@@ -638,7 +699,7 @@ export default function KickstartPage() {
           <div className="flex flex-col gap-3 border border-(--line) p-6">
             <Eyebrow>next</Eyebrow>
             <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm leading-relaxed text-(--mut)">
-              <li>Review and merge the kickstart PR — that installs the factory.</li>
+              <li>Review and merge the kickstart PR to enable persistent story workspaces.</li>
               <li>
                 Check the{" "}
                 {project ? (
@@ -651,7 +712,7 @@ export default function KickstartPage() {
                 ) : (
                   "project overview"
                 )}{" "}
-                — health and fingerprints verify after the merge lands.
+                to inspect stories and the `.agents/` catalog after the merge lands.
               </li>
               <li>
                 Trigger the first session from{" "}
@@ -660,7 +721,7 @@ export default function KickstartPage() {
                     href={`/projects/${project.id}/stories`}
                     className="text-(--ink) underline underline-offset-4"
                   >
-                    issues
+                    stories
                   </Link>
                 ) : (
                   "issues"

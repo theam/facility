@@ -48,11 +48,8 @@ const base: AppConfig = {
   port: 4400,
   publicUrl: "https://api.facility.test",
   webUrl: issuer,
-  sandboxApiUrl: "http://localhost:4400",
-  sandboxGatewayUrl: "http://localhost:4410",
-  gatewayUrl: "http://localhost:4410",
-  sandboxRunnerImage: "facility-runner:dev",
-  sandboxDriver: "docker",
+  workspaceImage: "facility-runner:dev",
+  workspaceDriver: "docker",
   authCallbackUrl: `${issuer}/api/auth/callback`,
   facilityInsecureDev: true,
   logLevel: "silent",
@@ -239,6 +236,7 @@ describe("Facility OAuth resource-server integration", async () => {
       url: "/__test/session",
       payload: { email: `oauth-${Date.now()}@example.com` },
     });
+    expect(login.statusCode, login.body).toBe(200);
     orgId = login.json().orgId;
     await db.insert(users).values({
       id: userId,

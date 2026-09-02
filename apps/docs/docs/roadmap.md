@@ -4,28 +4,18 @@ title: Roadmap
 
 # Roadmap
 
-This page separates capabilities that exist from direction that is planned.
-Roadmap items have no committed date until they move into a release plan.
+Facility 0.12 replaces short-lived governed runs with persistent story workspaces. The proposal is
+in progress and assigned to the maintainer leading the release.
 
-## Native preview environments
+The release includes:
 
-**Status: available with rough edges.** Facility provisions an isolated Docker
-or AWS sandbox from a project-defined immutable image, waits for an optional
-readiness path, and exposes the private origin only through its SSO-authenticated
-proxy. Production creation fails closed until interactive GitHub/OIDC login is configured.
+- persistent story conversations, worktrees, volumes, and native engine sessions;
+- Claude Code and Codex adapters with model selection in `.agents/`;
+- manual, GitHub, and scheduled agents on one dispatcher;
+- full development environments with Docker, Compose, browser testing, and authenticated previews;
+- direct Git and GitHub maintainer workflows;
+- a thirteen-tool MCP server embedded in the control plane; and
+- a retained web UI over the same domain operations.
 
-The native preview system now:
-
-- creates an isolated live environment for every implementation pull request;
-- supports provider adapters rather than binding the control plane to one cloud;
-- attaches the URL, deployment status, and expiry to the Facility run and PR;
-- runs a project-defined command, which can seed non-production data before
-  starting the service;
-- makes preview readiness part of Gate 2 evidence; and
-- destroys the environment when the PR closes or its retention window expires.
-
-Current rough edges are explicit: the project must publish the review image
-before requesting a preview; the proxy supports browser-safe `GET` and `HEAD`
-traffic; and Facility does not inject project secrets. External provider
-previews remain a supported adapter path. GitHub review and branch protection
-remain the Gate 2 merge boundary in either mode.
+The 0.12 database is a clean boundary. Existing 0.11 databases are rejected without modification.
+There is no in-place history migration in this release.

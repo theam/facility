@@ -4,6 +4,7 @@ import {
   databaseDeployExitCode,
   databaseDeployIncludesDemoData,
   databaseDeployLockTimeout,
+  LegacyDatabaseError,
   MigrationChecksumError,
   MigrationExecutionError,
   MigrationLockTimeoutError,
@@ -32,6 +33,7 @@ describe("database deploy configuration", () => {
     expect(databaseDeployExitCode(new MigrationExecutionError("0001.sql", new Error("bad")))).toBe(
       12,
     );
+    expect(databaseDeployExitCode(new LegacyDatabaseError())).toBe(13);
     expect(databaseDeployExitCode(new Error("unknown"))).toBe(1);
   });
 });

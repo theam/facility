@@ -1,6 +1,6 @@
 {
   "name": "@facility/web",
-  "version": "0.3.0",
+  "version": "0.12.0",
   "private": true,
   "description": "Facility platform web app.",
   "license": "Apache-2.0",
@@ -13,7 +13,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@facility/run-objective": "workspace:*",
     "@facility/sdk": "workspace:*",
     "@facility/ui": "workspace:*",
     "@milkdown/crepe": "^7.21.3",

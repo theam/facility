@@ -1,6 +1,5 @@
 import { newId } from "@facility/core";
 import {
-  auditEvents,
   createDb,
   githubInstallations,
   migrate,
@@ -75,11 +74,8 @@ describe("direct GitHub browser login", async () => {
     port: 4400,
     publicUrl: "http://localhost:4400",
     webUrl: "http://localhost:3400",
-    sandboxApiUrl: "http://localhost:4400",
-    sandboxGatewayUrl: "http://localhost:4410",
-    gatewayUrl: "http://localhost:4410",
-    sandboxRunnerImage: "facility-runner:dev",
-    sandboxDriver: "docker",
+    workspaceImage: "facility-runner:dev",
+    workspaceDriver: "docker",
     facilityInsecureDev: true,
     logLevel: "silent",
     authIdentityProvider: "github",
@@ -132,10 +128,6 @@ describe("direct GitHub browser login", async () => {
   });
 
   it("admits an invitation matching a verified secondary GitHub email", async () => {
-    const auditBefore = await db
-      .select({ id: auditEvents.id })
-      .from(auditEvents)
-      .where(eq(auditEvents.action, "auth.login"));
     const start = await app.inject({
       method: "GET",
       url: "/auth/login?returnTo=https://evil.example/steal",
@@ -177,11 +169,6 @@ describe("direct GitHub browser login", async () => {
       .where(eq(userIdentities.providerSubject, String(githubUserId)));
     expect(persistedIdentity).toHaveLength(1);
     expect(JSON.stringify(persistedIdentity)).not.toContain("ghu_must_not_persist");
-    const loginAudit = await db
-      .select({ id: auditEvents.id })
-      .from(auditEvents)
-      .where(eq(auditEvents.action, "auth.login"));
-    expect(loginAudit).toHaveLength(auditBefore.length + 1);
   });
 
   it("rejects an invited installation user outside the configured organization", async () => {

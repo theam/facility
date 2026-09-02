@@ -17,28 +17,15 @@ export function orgNav(): NavItem[] {
 
 /** Cross-project operator surfaces — secondary by design. */
 export function orgPlatformNav(): NavItem[] {
-  return [
-    { href: "/sessions", icon: "activity", label: "Activity" },
-    { href: "/harness", icon: "skills", label: "Skills & Rules" },
-    { href: "/audit", icon: "audit", label: "Audit log" },
-    { href: "/settings", icon: "settings", label: "Settings" },
-  ];
+  return [{ href: "/settings", icon: "settings", label: "Settings" }];
 }
 
 /** The project world: everything scoped to the project in focus. */
-export function projectNav(projectId: string, inboxCount?: number): NavItem[] {
+export function projectNav(projectId: string, _inboxCount?: number): NavItem[] {
   const base = `/projects/${projectId}`;
   return [
     { href: base, icon: "overview", label: "Overview" },
-    { href: `${base}/product`, icon: "product", label: "Product Owner" },
     { href: `${base}/stories`, icon: "stories", label: "Stories" },
-    { href: `${base}/sessions`, icon: "runs", label: "Runs" },
-    {
-      href: `${base}/approvals`,
-      icon: "approvals",
-      label: "Approvals",
-      badge: inboxCount,
-    },
     { href: `${base}/agents`, icon: "agents", label: "Agents" },
     { href: `${base}/settings`, icon: "settings", label: "Settings" },
   ];

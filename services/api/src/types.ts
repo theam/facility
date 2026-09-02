@@ -1,9 +1,6 @@
-import type { AuditInsert, FacilityDb } from "@facility/db";
-import type {
-  GithubAppMetadataReader,
-  GithubClientFactory,
-  GithubInstallationTokenFactory,
-} from "./github/client.js";
+import type { FacilityDb } from "@facility/db";
+import type { GithubClientFactory } from "./github/client.js";
+import type { StoryDomain } from "./story-domain.js";
 
 export type Principal = {
   type: "user" | "key";
@@ -15,8 +12,6 @@ export type Principal = {
   githubLogin?: string;
   avatarUrl?: string;
   projectId?: string | null;
-  /** Present only for short-lived platform keys minted for one run. */
-  runId?: string | null;
   permissions: string[];
 };
 
@@ -34,30 +29,8 @@ export type AppConfig = {
   // classify preview-surface requests even when that proxy replaces Host with
   // its origin hostname.
   previewSurfaceToken?: string;
-  // URLs a sandbox uses to reach back — distinct from publicUrl because a
-  // container cannot resolve the host's "localhost". Default to the public
-  // URLs; override (e.g. host.docker.internal) for the local docker driver.
-  sandboxApiUrl: string;
-  sandboxGatewayUrl: string;
-  // Gateway URL reachable from the API process itself (in-process assistant
-  // loop) — sandboxGatewayUrl may be a container-network address instead.
-  gatewayUrl: string;
-  // Image the seeded default sandbox profile uses to run the platform runner.
-  sandboxRunnerImage: string;
-  /**
-   * Phase-two rollout gate. Keep false until every API replica understands
-   * durable repository-write leases; otherwise a tracked run could reach an
-   * old /push-token handler and create unrecorded write authority.
-   */
-  repositoryWriteTrackingPromotionEnabled?: boolean;
-  /**
-   * Phase-two rollout gate for creating governed Builder successor rows. Keep
-   * false until every worker understands and revalidates immutable retry
-   * lineage. Existing successor rows remain enforceable when this is false.
-   */
-  governedBuilderRetryPromotionEnabled?: boolean;
-  // Driver the seeded default sandbox profile uses.
-  sandboxDriver: "docker" | "aws" | "vercel";
+  workspaceImage: string;
+  workspaceDriver: "docker" | "vercel";
   authIdentityProvider?: "github" | "oidc";
   authCallbackUrl?: string;
   githubOauthClientId?: string;
@@ -74,17 +47,9 @@ export type AppConfig = {
   oauthJwks?: { keys: Record<string, unknown>[] };
   mcpPublicUrl?: string;
   facilityInsecureDev: boolean;
-  s3Endpoint?: string;
-  s3AccessKey?: string;
-  s3SecretKey?: string;
-  s3Bucket?: string;
-  awsRegion?: string;
-  awsCodeBuildProject?: string;
-  awsCodeBuildCacheBaseLocation?: string;
   vercelToken?: string;
   vercelTeamId?: string;
   vercelProjectId?: string;
-  packageRegistryToken?: string;
   githubAppId?: string;
   githubAppPrivateKey?: string;
   githubAppWebhookSecret?: string;
@@ -110,30 +75,15 @@ declare module "fastify" {
     facilityDb: FacilityDb;
     enqueue: (queue: string, data: Record<string, unknown>) => Promise<string | null>;
     githubClientFactory?: GithubClientFactory;
-    githubInstallationTokenFactory?: GithubInstallationTokenFactory;
-    githubAppMetadataReader?: GithubAppMetadataReader;
-    /** Dedicated low-cardinality DB pool for terminal/retry transactions. */
-    runTransitionDb: FacilityDb;
-    acquireRunTransitionLease: (runId: string) => Promise<() => Promise<void>>;
-    acquireRunRequestLease: (runId: string) => Promise<() => Promise<void>>;
-    beginRunRequestOperation: (request: FastifyRequest) => () => Promise<void>;
+    storyDomain: StoryDomain;
   }
   interface FastifyRequest {
     principal?: Principal;
     idempotencyId?: string;
     idempotencyReplayed?: boolean;
-    releasePlatformRunRequestLease?: () => Promise<void>;
-    releaseRunnerRunRequestLease?: () => Promise<void>;
-    releaseRunTransitionLease?: () => Promise<void>;
-    runRequestOperationCount?: number;
-    runRequestAborted?: boolean;
-    runRequestAbortReleaseDeferred?: boolean;
-    runRequestAbortCleanupPromise?: Promise<void>;
-    runRequestHandlerStarted?: boolean;
-    runRequestHandlerSettled?: boolean;
     audit: (
       action: string,
-      target: AuditInsert["target"],
+      target: { type: string; id?: string },
       payload?: Record<string, unknown>,
     ) => Promise<void>;
   }
@@ -143,7 +93,5 @@ declare module "fastify" {
     public?: boolean;
     orgAdmin?: boolean;
     idempotent?: boolean;
-    /** Terminal/retry run control is never callable by a run-scoped platform key. */
-    runLifecycle?: boolean;
   }
 }

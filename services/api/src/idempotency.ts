@@ -12,11 +12,15 @@ export async function beginIdempotentRequest(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
-  // Every authenticated POST may opt into replay safety simply by sending the
-  // header. Route authors cannot accidentally accept and silently ignore it on
-  // a new creator/transition endpoint. Public webhook/internal routes have no
-  // permission declaration and retain their own delivery-specific replay rules.
-  if (request.method !== "POST" || !request.routeOptions.config?.permission) return;
+  // Every authenticated mutation may opt into replay safety simply by sending
+  // the header. Public webhook/internal routes have no permission declaration
+  // and retain their own delivery-specific replay rules.
+  if (
+    !["POST", "PATCH", "PUT", "DELETE"].includes(request.method) ||
+    !request.routeOptions.config?.permission
+  ) {
+    return;
+  }
   const rawKey = request.headers["idempotency-key"];
   const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
   if (key === undefined) return;
@@ -77,17 +81,6 @@ export async function beginIdempotentRequest(
     );
   }
   if (existing.state !== "completed" || existing.statusCode === null) {
-    // A run-scoped credential can commit domain work while its transport is
-    // disappearing. Never time-reclaim that pending outcome: the matching run
-    // key must remain fail closed until the key/record itself expires.
-    if (principal.runId) {
-      reply.header("retry-after", "1");
-      throw new ApiError(
-        409,
-        "idempotency_in_progress",
-        "A request with this Idempotency-Key is still in progress",
-      );
-    }
     const staleBefore = new Date(Date.now() - IDEMPOTENCY_PENDING_TIMEOUT_MS);
     const reclaimed = await db
       .delete(idempotencyRecords)
@@ -122,19 +115,13 @@ export async function completeIdempotentRequest(
   request: FastifyRequest,
   reply: FastifyReply,
   payload: unknown,
-  options: { completeServerError?: boolean } = {},
 ) {
   const id = request.idempotencyId;
   if (!id) return;
   if (reply.statusCode >= 500) {
-    // A run-scoped handler may have committed before producing its error.
-    // Persist that known response so the sandbox cannot repeat the mutation;
-    // retain the ordinary-user retry behavior outside this trust boundary.
-    if (!options.completeServerError && !request.principal?.runId) {
-      await db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, id));
-      request.idempotencyId = undefined;
-      return;
-    }
+    await db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, id));
+    request.idempotencyId = undefined;
+    return;
   }
   const responseBody = parsePayload(payload);
   const completed = await db

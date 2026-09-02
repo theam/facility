@@ -28,13 +28,13 @@ technical problem on its own terms and the private tracker links to it.
 
 The monorepo recommends Node.js 24 LTS and uses pnpm 11.20.0. Node.js 22 is
 also supported from 22.13.0. Docker is required for the local platform stack
-and sandbox end-to-end tests. For nvm users, the repository's `.nvmrc` selects
+and workspace end-to-end tests. For nvm users, the repository's `.nvmrc` selects
 the recommended Node.js 24 line with `nvm use`.
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-npm install --global pnpm@11.20.0
+corepack install --global pnpm@11.20.0
 pnpm dev
 ```
 
@@ -57,13 +57,13 @@ To delegate setup to Claude Code or Codex:
   when committing; maintainers squash and merge pull requests.
 - Add or update tests for behavior changes. Never relax, skip, or delete a test,
   guard, or check to make a change pass.
-- Keep the CLI and everything it vendors into user repositories free of runtime
-  dependencies. A new dependency becomes part of every adopter's supply chain.
-- Treat files under `packages/cli/templates/` and `packages/cli/modules/` as
-  product surfaces. Comments should explain why a constraint exists, not
-  narrate the code.
-- Add entries to `apps/docs/docs/reference/hardening.md` only for observed failures and the
-  countermeasure that worked.
+- Keep the repository contract small. The CLI may write only `.facility.yml`
+  and `.agents/*.md` during kickstart.
+- Treat files under `packages/cli/templates/agents/` and the shared agent
+  parser as product surfaces. Comments should explain why a constraint exists,
+  not narrate the code.
+- Security-sensitive changes need unit and integration coverage for both the
+  allowed and denied paths.
 
 ## Verify the change
 
@@ -76,7 +76,7 @@ pnpm verify
 It runs lint and type checks, a clean cache-disabled build, critical integration
 tests against isolated databases, the remaining uncached tests, repository
 guards, and the high-severity dependency audit. CI separately builds the
-self-host images and applies the Docker-backed sandbox E2E policy documented in
+self-host images and applies the Docker-backed workspace E2E policy documented in
 [docs/testing.md](docs/testing.md).
 
 Useful narrower commands include:
@@ -84,7 +84,7 @@ Useful narrower commands include:
 ```bash
 pnpm --filter @theagilemonkeys/facility test
 pnpm --filter @facility/api test
-pnpm --filter @facility/gateway test
+pnpm --filter @facility/mcp test
 pnpm --filter @facility/docs build
 pnpm --filter @facility/web build
 node guards/run.mjs

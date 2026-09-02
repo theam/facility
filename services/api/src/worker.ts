@@ -1,29 +1,10 @@
-import { createDb } from "@facility/db";
+import { createDb, type FacilityDb, turns } from "@facility/db";
+import { asc, eq } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
-import {
-  enqueueFingerprintVerify,
-  enqueueGithubIssuesSync,
-  processGithubWebhookBatch,
-} from "./github/processor.js";
-import { expireIdempotencyRecords } from "./idempotency.js";
-import { deliverPendingWebhooks } from "./integrations/outbound.js";
-import { runLearningNightly } from "./learning.js";
-import { destroyPreviewById, provisionPreview, reconcilePreviews } from "./previews.js";
-import { deliverPendingRunDeliveries } from "./sandbox/delivery.js";
-import {
-  dispatchRun,
-  reconcileArchitectPlanPublications,
-  reconcileSandboxes,
-} from "./sandbox/orchestrator.js";
-import { runAgentSchedules } from "./schedules.js";
-import { runAnalyticsRollup } from "./watchtower/analytics.js";
-import { runWatchtowerCanary } from "./watchtower/canary.js";
-import { runWatchtowerHealth } from "./watchtower/health.js";
-import { runHitlExpire } from "./watchtower/hitl.js";
-import { runWatchtowerOutcomes } from "./watchtower/outcomes.js";
+import { createStoryDomain } from "./story-domain.js";
 
 export async function startWorker() {
   const config = readConfig();
@@ -36,29 +17,19 @@ export async function startWorker() {
     config.githubAppId && config.githubAppPrivateKey
       ? createGithubClientFactory(config)
       : undefined;
-  const queues = [
-    "runs.dispatch",
-    "deliveries.deliver",
-    "architect-plans.publish",
-    "watchtower.outcomes",
-    "watchtower.health",
-    "watchtower.canary",
-    "analytics.rollup",
-    "learning.nightly",
-    "github.webhook",
-    "github.issues-sync",
-    "fingerprints.verify",
-    "hitl.expire",
-    "sandbox.reconcile",
-    "agent.schedules",
-    "webhooks.deliver",
-    "idempotency.expire",
-    "previews.provision",
-    "previews.destroy",
-    "previews.reconcile",
-  ];
+  const storyDomain = createStoryDomain({
+    db,
+    config,
+    githubFactory,
+    enqueue: (queue, data) => boss.send(queue, data),
+  });
+  const queues = ["turns.dispatch", "github.webhook", "agent.schedules"];
   for (const queue of queues) {
     await boss.createQueue(queue);
+  }
+  const recoveredAtStartup = await recoverQueuedTurns(db, (queue, data) => boss.send(queue, data));
+  if (recoveredAtStartup > 0) {
+    logger.info({ recoveredTurns: recoveredAtStartup }, "re-enqueued durable turns at startup");
   }
   for (const queue of queues) {
     if (queue === "github.webhook") {
@@ -67,16 +38,11 @@ export async function startWorker() {
         { batchSize: 1_000, includeMetadata: true, pollingIntervalSeconds: 0.5 },
         async (jobs) => {
           const startedAt = Date.now();
-          const result = await processGithubWebhookBatch(
-            db,
-            config,
-            jobs.map((job) => job.data),
-            githubFactory,
-            (name, payload) => boss.send(name, payload),
-            {
-              warn: (context, message) => logger.warn(context, message),
-            },
-          );
+          for (const job of jobs) {
+            if (job.data.inboundEventId) {
+              await storyDomain.githubTriggers.handleInbound(job.data.inboundEventId);
+            }
+          }
           const oldestCreatedAt = Math.min(...jobs.map((job) => job.createdOn.getTime()));
           logger.info(
             {
@@ -84,7 +50,6 @@ export async function startWorker() {
               batchSize: jobs.length,
               queueWaitMs: Math.max(0, startedAt - oldestCreatedAt),
               handlerMs: Date.now() - startedAt,
-              ...result,
             },
             "worker completed GitHub webhook batch",
           );
@@ -97,100 +62,44 @@ export async function startWorker() {
       const jobId = job?.id;
       const data = job?.data;
       let result: Record<string, unknown> | undefined;
-      if (queue === "runs.dispatch") {
-        await dispatchRun(config, data as { runId?: string; orgId?: string });
-      } else if (queue === "deliveries.deliver") {
-        const deliveries = await deliverPendingRunDeliveries(db, config, {
-          runId: String((data as { runId?: string }).runId ?? "") || undefined,
-          enqueue: (name, payload) => boss.send(name, payload),
-        });
-        result = {
-          claimed: deliveries.length,
-          delivered: deliveries.filter((delivery) => delivery.status === "delivered").length,
-          pending: deliveries.filter((delivery) => delivery.status === "pending").length,
-          blocked: deliveries.filter((delivery) => delivery.status === "blocked").length,
-        };
-      } else if (queue === "architect-plans.publish") {
-        const publications = await reconcileArchitectPlanPublications(
-          db,
-          config,
-          data as { proposalId?: string; orgId?: string },
-          githubFactory,
+      if (queue === "turns.dispatch") {
+        result = await storyDomain.dispatcher.dispatch(
+          data as { orgId: string; projectId: string; turnId: string },
         );
-        result = {
-          selected: publications.length,
-          published: publications.filter((publication) => publication.status === "published")
-            .length,
-          closed: publications.filter((publication) => publication.status === "closed").length,
-          suppressed: publications.filter((publication) => publication.status === "suppressed")
-            .length,
-          pending: publications.filter((publication) => publication.status === "pending").length,
-        };
-      } else if (queue === "sandbox.reconcile") {
-        await reconcileSandboxes(config, (name, payload) => boss.send(name, payload));
       } else if (queue === "agent.schedules") {
-        result = await runAgentSchedules(config, (targetQueue, targetData, options) =>
-          options
-            ? boss.send(targetQueue, targetData, options)
-            : boss.send(targetQueue, targetData),
+        const recoveredTurns = await recoverQueuedTurns(db, (name, payload) =>
+          boss.send(name, payload),
         );
-      } else if (queue === "webhooks.deliver") {
-        await deliverPendingWebhooks(config);
-      } else if (queue === "idempotency.expire") {
-        await expireIdempotencyRecords(db);
-      } else if (queue === "previews.provision") {
-        await provisionPreview(config, String((data as { previewId?: string }).previewId ?? ""));
-      } else if (queue === "previews.destroy") {
-        await destroyPreviewById(config, String((data as { previewId?: string }).previewId ?? ""));
-      } else if (queue === "previews.reconcile") {
-        result = await reconcilePreviews(config, undefined, (previewId) =>
-          boss.send("previews.provision", { previewId }),
-        );
-      } else if (queue === "watchtower.outcomes") {
-        await runWatchtowerOutcomes(config);
-      } else if (queue === "watchtower.health") {
-        await runWatchtowerHealth(config);
-      } else if (queue === "watchtower.canary") {
-        await runWatchtowerCanary(config, (name, payload) => boss.send(name, payload));
-      } else if (queue === "analytics.rollup") {
-        await runAnalyticsRollup(config);
-      } else if (queue === "hitl.expire") {
-        await runHitlExpire(config);
-      } else if (queue === "learning.nightly") {
-        await runLearningNightly(config, (targetQueue, targetData) =>
-          boss.send(targetQueue, targetData),
-        );
-      } else if (queue === "fingerprints.verify") {
-        await enqueueFingerprintVerify(db, config, data as { repoId?: string }, githubFactory);
-      } else if (queue === "github.issues-sync") {
-        result = await enqueueGithubIssuesSync(
-          db,
-          config,
-          data as { repoId?: string; orgId?: string },
-          githubFactory,
-          (targetQueue, targetData) => boss.send(targetQueue, targetData),
-        );
+        result = { ...(await storyDomain.scheduler.tick()), recoveredTurns };
       }
       logger.info({ queue, jobId, ...result }, "worker completed job");
     });
   }
-  await boss.schedule("sandbox.reconcile", "*/2 * * * *", {});
-  await boss.schedule("deliveries.deliver", "* * * * *", {});
-  await boss.schedule("architect-plans.publish", "* * * * *", {});
   await boss.schedule("agent.schedules", "* * * * *", {});
-  await boss.schedule("webhooks.deliver", "* * * * *", {});
-  await boss.schedule("idempotency.expire", "15 2 * * *", {});
-  await boss.schedule("previews.reconcile", "*/2 * * * *", {});
-  await boss.schedule("hitl.expire", "0 * * * *", {});
-  await boss.schedule("watchtower.outcomes", "0 2 * * *", {});
-  await boss.schedule("watchtower.health", "0 3 * * *", {});
-  await boss.schedule("watchtower.canary", "0 4 * * 2", {});
-  await boss.schedule("analytics.rollup", "5 * * * *", {});
-  await boss.schedule("learning.nightly", "0 3 * * *", {});
-  await boss.schedule("github.issues-sync", "23 */6 * * *", {});
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());
   return boss;
+}
+
+export async function recoverQueuedTurns(
+  db: FacilityDb,
+  enqueue: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+  limit = 1_000,
+) {
+  const queued = await db
+    .select({ id: turns.id, orgId: turns.orgId, projectId: turns.projectId })
+    .from(turns)
+    .where(eq(turns.state, "queued"))
+    .orderBy(asc(turns.createdAt))
+    .limit(limit);
+  for (const turn of queued) {
+    await enqueue("turns.dispatch", {
+      orgId: turn.orgId,
+      projectId: turn.projectId,
+      turnId: turn.id,
+    });
+  }
+  return queued.length;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
