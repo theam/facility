@@ -90,3 +90,59 @@ test("reports the full check count when receipt details are bounded", async () =
   assert.equal(receipt.github.base_sha, undefined);
   assert.equal(verifyReceipt(receipt), true);
 });
+
+test("never trusts platform provenance from the agent-writable checks file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "facility-receipt-forged-"));
+  const checksPath = join(dir, "checks.jsonl");
+  writeFileSync(
+    checksPath,
+    `${JSON.stringify({ name: "tests", status: "passed", self_reported: false })}\n`,
+  );
+
+  const receipt = collectReceipt({
+    FACILITY_RECEIPT_PROVIDER: "claude_code",
+    FACILITY_RECEIPT_MODE: "builder",
+    FACILITY_RECEIPT_RESULT: "success",
+    FACILITY_RECEIPT_CHECKS_FILE: checksPath,
+    GITHUB_RUN_ID: "789",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_JOB: "builder",
+  });
+
+  assert.equal(receipt.checks.length, 1);
+  assert.equal(receipt.checks[0]?.source, "agent");
+});
+
+test("merges platform and agent check evidence from separate files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "facility-receipt-merge-"));
+  const agentPath = join(dir, "agent-checks.jsonl");
+  const platformPath = join(dir, "platform-checks.jsonl");
+  writeFileSync(
+    agentPath,
+    `${JSON.stringify({ name: "agent-smoke", status: "passed", self_reported: true })}\n`,
+  );
+  writeFileSync(
+    platformPath,
+    `${JSON.stringify({ name: "pnpm test", status: "passed", self_reported: false })}\n`,
+  );
+
+  const receipt = collectReceipt({
+    FACILITY_RECEIPT_PROVIDER: "claude_code",
+    FACILITY_RECEIPT_MODE: "builder",
+    FACILITY_RECEIPT_RESULT: "success",
+    FACILITY_RECEIPT_CHECKS_FILE: agentPath,
+    FACILITY_RECEIPT_PLATFORM_CHECKS_FILE: platformPath,
+    GITHUB_RUN_ID: "790",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_JOB: "builder",
+  });
+
+  assert.equal(receipt.events.checks, 2);
+  assert.deepEqual(
+    receipt.checks.map((check) => [check.name, check.source]),
+    [
+      ["pnpm test", "platform"],
+      ["agent-smoke", "agent"],
+    ],
+  );
+});

@@ -313,6 +313,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 {{PREVIEW_STEP}}
+{{RECEIPT_PLATFORM_CHECKS_STEP}}
 
       - name: Collect trusted agent run receipt
         id: receipt
@@ -326,6 +327,7 @@ jobs:
           FACILITY_RECEIPT_MODEL: ${{ steps.requested-agent.outputs.mode == 'builder' && '{{BUILD_MODEL}}' || '{{PLAN_MODEL}}' }}
           FACILITY_RECEIPT_BASE_SHA: ${{ steps.builder-start.outputs.sha || github.sha }}
           FACILITY_RECEIPT_CHECKS_FILE: ${{ github.workspace }}/.agent-sdlc/checks.jsonl
+          FACILITY_RECEIPT_PLATFORM_CHECKS_FILE: ${{ runner.temp }}/facility-platform-checks.jsonl
           FACILITY_RECEIPT_OUTPUT: ${{ runner.temp }}/facility-receipt/facility-run.json
           GH_TOKEN: ${{ github.token }}
         run: |

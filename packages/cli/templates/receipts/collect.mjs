@@ -26,7 +26,10 @@ export function collectReceipt(env = process.env, now = new Date()) {
   const result = normalizeResult(env.FACILITY_RECEIPT_RESULT);
   const startedAt = validDate(env.FACILITY_RECEIPT_STARTED_AT) ?? now;
   const engine = parseEngineEvidence(env.FACILITY_RECEIPT_ENGINE_JSONL);
-  const checkEvidence = parseChecks(env.FACILITY_RECEIPT_CHECKS_FILE);
+  const checkEvidence = mergeCheckEvidence(
+    parseChecks(env.FACILITY_RECEIPT_PLATFORM_CHECKS_FILE, "platform"),
+    parseChecks(env.FACILITY_RECEIPT_CHECKS_FILE, "agent"),
+  );
   const target = githubTarget(env.GITHUB_EVENT_PATH);
   const baseSha = gitCommitSha(env.FACILITY_RECEIPT_BASE_SHA);
   const git = gitActivity(baseSha, env.GITHUB_WORKSPACE);
@@ -199,7 +202,7 @@ function mergeUsage(usage, value) {
   }
 }
 
-function parseChecks(path) {
+function parseChecks(path, source) {
   if (!path || !existsSync(path)) return { items: [], total: 0 };
   const checks = [];
   for (const line of readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean)) {
@@ -211,12 +214,18 @@ function parseChecks(path) {
       checks.push({
         name: String(value.name ?? value.command ?? "unnamed check"),
         status,
-        source: value.self_reported === false ? "platform" : "agent",
+        source,
         ...(Number.isInteger(value.exit_code) ? { exit_code: value.exit_code } : {}),
       });
     } catch {}
   }
-  return { items: checks.slice(0, MAX_RECEIPT_CHECKS), total: checks.length };
+  return { items: checks, total: checks.length };
+}
+
+function mergeCheckEvidence(...sources) {
+  const items = sources.flatMap((source) => source.items);
+  const total = sources.reduce((sum, source) => sum + source.total, 0);
+  return { items: items.slice(0, MAX_RECEIPT_CHECKS), total };
 }
 
 function gitActivity(baseSha, worktree) {
