@@ -89,6 +89,8 @@ console.log(JSON.stringify({ keys: [{ ...jwk, kid: randomUUID(), alg: "ES256", u
 ```
 
 A key exported through WebCrypto (`crypto.subtle.exportKey("jwk", ...)`) also works. It carries
-`key_ops` and `ext` members describing how it was exported; Facility drops those on load, because a
-set marked `"key_ops": ["sign"]` describes the private half and would otherwise be rejected as a
-verification key by this instance and by anyone else reading `/oauth/jwks`.
+`key_ops` and `ext` members; Facility drops those on load, because a set marked
+`"key_ops": ["sign"]` describes the private half and would otherwise be rejected as a verification
+key by this instance and by anyone else reading `/oauth/jwks`. A `key_ops` that does not permit
+`sign` is refused at startup: this variable holds the keys the instance signs with, so a set that
+forbids signing is a contradiction rather than a restriction to honour.

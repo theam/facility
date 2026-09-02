@@ -278,20 +278,14 @@ describe("API configuration", () => {
     });
   });
 
-  it("keeps a WebCrypto export usable by dropping its provenance members", () => {
-    // What `crypto.subtle.exportKey("jwk", signingKey)` hands an operator. The
-    // annotations must not survive into the loaded set: the verification keys are
-    // derived from these objects, and a "sign"-only key cannot verify anything.
-    const exported = {
-      kty: "EC",
-      crv: "P-256",
-      x: "x",
-      y: "y",
-      d: "d",
-      kid: "key-1",
-      key_ops: ["sign"],
-      ext: true,
-    };
+  it.each([
+    ["a WebCrypto signing export", ["sign"], true],
+    ["a set that also permits verification", ["sign", "verify"], undefined],
+  ])("loads %s without its key_ops or ext members", (_label, key_ops, ext) => {
+    // `["sign"]` plus `ext` is what `crypto.subtle.exportKey("jwk", signingKey)`
+    // hands an operator. Neither member may survive into the loaded set: the
+    // verification keys are derived from these objects, and jose skips a
+    // candidate whose key_ops omits "verify".
     const loaded = readConfig({
       ...validEnv,
       PUBLIC_URL: "https://api.example.com",
@@ -299,12 +293,38 @@ describe("API configuration", () => {
       AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
       FACILITY_OAUTH_ISSUER: "https://app.example.com",
       MCP_PUBLIC_URL: "https://mcp.example.com/mcp",
-      FACILITY_OAUTH_JWKS: JSON.stringify({ keys: [exported] }),
+      FACILITY_OAUTH_JWKS: JSON.stringify({
+        keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1", key_ops, ext }],
+      }),
     }).oauthJwks;
 
     expect(loaded?.keys).toEqual([
       { kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1" },
     ]);
+  });
+
+  it.each([
+    ["verification only", ["verify"]],
+    ["an empty operation list", []],
+    ["a non-array value", "sign"],
+    ["a non-string entry", [1]],
+  ])("refuses a signing key whose key_ops declares %s", (_label, key_ops) => {
+    // Dropping key_ops must never widen what the operator permitted: a signing
+    // key set that forbids signing is a contradiction, and startup is where it
+    // gets a name instead of an unexplained "no signing key" at issuance.
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        PUBLIC_URL: "https://api.example.com",
+        WEB_URL: "https://app.example.com",
+        AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
+        FACILITY_OAUTH_ISSUER: "https://app.example.com",
+        MCP_PUBLIC_URL: "https://mcp.example.com/mcp",
+        FACILITY_OAUTH_JWKS: JSON.stringify({
+          keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1", key_ops }],
+        }),
+      }),
+    ).toThrow('FACILITY_OAUTH_JWKS keys with key_ops must permit "sign"');
   });
 
   it("canonicalizes the MCP resource and rejects an unrelated path", () => {
