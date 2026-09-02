@@ -341,7 +341,15 @@ function parseJwks(value: string | undefined): { keys: Record<string, unknown>[]
   if (new Set((keys as Record<string, unknown>[]).map((key) => key.kid)).size !== keys.length) {
     throw new Error("FACILITY_OAUTH_JWKS key ids must be unique");
   }
-  return { keys: keys as Record<string, unknown>[] };
+  // `crypto.subtle.exportKey("jwk", ...)` — the most direct way to produce this
+  // value — annotates a signing key with `key_ops: ["sign"]` and `ext`. Those
+  // record how the key was exported, not what it is, and both the published JWKS
+  // and the derived verification set read these objects, so normalize them away
+  // once here instead of leaving every consumer to reason about provenance.
+  // Accepting the export verbatim is what operators actually paste in.
+  return {
+    keys: (keys as Record<string, unknown>[]).map(({ key_ops: _keyOps, ext: _ext, ...key }) => key),
+  };
 }
 
 function canonicalMcpResourceUrl(value: string) {

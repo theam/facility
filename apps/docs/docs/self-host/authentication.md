@@ -76,3 +76,19 @@ audience-bound and revocable within that instance. Supply a persistent private E
 `FACILITY_OAUTH_JWKS`; put a new signing key first and retain old signing keys through the maximum
 token lifetime when rotating them. The configured set contains private keys; Facility publishes only
 their public parameters from `/oauth/jwks`.
+
+Generate a key set with Node alone:
+
+```bash
+node -e '
+const { generateKeyPairSync, randomUUID } = require("node:crypto");
+const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+const jwk = privateKey.export({ format: "jwk" });
+console.log(JSON.stringify({ keys: [{ ...jwk, kid: randomUUID(), alg: "ES256", use: "sig" }] }));
+'
+```
+
+A key exported through WebCrypto (`crypto.subtle.exportKey("jwk", ...)`) also works. It carries
+`key_ops` and `ext` members describing how it was exported; Facility drops those on load, because a
+set marked `"key_ops": ["sign"]` describes the private half and would otherwise be rejected as a
+verification key by this instance and by anyone else reading `/oauth/jwks`.

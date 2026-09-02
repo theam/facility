@@ -278,6 +278,35 @@ describe("API configuration", () => {
     });
   });
 
+  it("keeps a WebCrypto export usable by dropping its provenance members", () => {
+    // What `crypto.subtle.exportKey("jwk", signingKey)` hands an operator. The
+    // annotations must not survive into the loaded set: the verification keys are
+    // derived from these objects, and a "sign"-only key cannot verify anything.
+    const exported = {
+      kty: "EC",
+      crv: "P-256",
+      x: "x",
+      y: "y",
+      d: "d",
+      kid: "key-1",
+      key_ops: ["sign"],
+      ext: true,
+    };
+    const loaded = readConfig({
+      ...validEnv,
+      PUBLIC_URL: "https://api.example.com",
+      WEB_URL: "https://app.example.com",
+      AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
+      FACILITY_OAUTH_ISSUER: "https://app.example.com",
+      MCP_PUBLIC_URL: "https://mcp.example.com/mcp",
+      FACILITY_OAUTH_JWKS: JSON.stringify({ keys: [exported] }),
+    }).oauthJwks;
+
+    expect(loaded?.keys).toEqual([
+      { kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1" },
+    ]);
+  });
+
   it("canonicalizes the MCP resource and rejects an unrelated path", () => {
     expect(readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com" })).toMatchObject({
       mcpPublicUrl: "https://mcp.example.com/mcp",

@@ -9,7 +9,7 @@ import {
   userIdentities,
   users,
 } from "@facility/db";
-import { createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
@@ -22,6 +22,7 @@ import { pkceChallenge } from "../src/auth/identity-provider.js";
 import {
   AccessTokenError,
   looksLikeJwt,
+  type OauthConfig,
   oauthConfigFromApp,
   verifyAccessToken,
 } from "../src/oauth.js";
@@ -35,6 +36,10 @@ const audience = "https://mcp.facility.test/mcp";
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
 const privateJwk = { ...(await exportJWK(privateKey)), kid: "test-key", alg: "ES256", use: "sig" };
 const publicJwk = { ...(await exportJWK(publicKey)), kid: "test-key", alg: "ES256", use: "sig" };
+// `exportJWK` emits no `key_ops`, so it cannot reproduce what an operator gets
+// out of `crypto.subtle.exportKey`. The integration below configures this shape
+// instead, so the flow runs on the key derivation production actually uses.
+const webCryptoPrivateJwk = { ...privateJwk, key_ops: ["sign"], ext: true };
 const foreign = await generateKeyPair("ES256");
 type SignKey = Awaited<ReturnType<typeof generateKeyPair>>["privateKey"];
 const base: AppConfig = {
@@ -96,6 +101,25 @@ describe("Facility OAuth access-token verification", () => {
       userId: "user_test",
       orgId: "org_test",
       scope: "facility:mcp",
+    });
+  });
+
+  it("verifies its own tokens against keys derived from a WebCrypto signing key", async () => {
+    const derived = oauthConfigFromApp({
+      ...base,
+      oauthIssuer: issuer,
+      mcpPublicUrl: audience,
+      oauthJwks: { keys: [webCryptoPrivateJwk] },
+    });
+
+    // Carrying `key_ops: ["sign"]` into the verification set makes jose reject the
+    // key as a candidate, and the instance stops trusting anything it signs.
+    expect(derived?.jwks.keys[0]).not.toHaveProperty("key_ops");
+    expect(derived?.jwks.keys[0]).not.toHaveProperty("ext");
+    expect(derived?.jwks.keys[0]).not.toHaveProperty("d");
+    await expect(verifyAccessToken(await token(), derived as OauthConfig)).resolves.toMatchObject({
+      userId: "user_test",
+      orgId: "org_test",
     });
   });
 
@@ -196,9 +220,12 @@ describe("Facility OAuth resource-server integration", async () => {
     ...base,
     oauthIssuer: issuer,
     mcpPublicUrl: audience,
-    oauthJwks: { keys: [privateJwk] },
+    oauthJwks: { keys: [webCryptoPrivateJwk] },
   };
-  const app = await buildApp(config, { oauthJwks: createLocalJWKSet({ keys: [publicJwk] }) });
+  // Deliberately no `oauthJwks` override: injecting a hand-built verification set
+  // here is what hid this bug, because it skips the derivation that turns the
+  // configured signing keys into the keys the running instance verifies with.
+  const app = await buildApp(config);
   const { db, client } = createDb(databaseUrl);
   const userId = newId("user");
   let orgId = "";
