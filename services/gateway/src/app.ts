@@ -457,6 +457,7 @@ async function handleProvider(
       reservations: reservation.reservations,
       estimatedCents,
       providerMayHaveCharged: true,
+      usageComplete: status === "ok" ? true : tee.usageComplete,
       error,
     });
     await enqueueMetering(db, envelopeStore, request.log, record, now());

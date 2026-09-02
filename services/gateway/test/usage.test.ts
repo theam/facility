@@ -57,12 +57,41 @@ describe("UsageTee anthropic streaming usage", () => {
     expect(tee.usage.outputTokens).toBe(700);
   });
 
-  it("still meters a non-streamed body reporting a top-level usage", async () => {
+  it("marks usage complete after the terminal Anthropic message_delta frame", async () => {
+    const tee = new UsageTee("anthropic");
+    await feed(tee, [MESSAGE_START, CONTENT_DELTA, MESSAGE_DELTA]);
+
+    expect(tee.usageComplete).toBe(true);
+  });
+
+  it("leaves usage incomplete when message_start arrives without message_delta", async () => {
+    const tee = new UsageTee("anthropic");
+    await feed(tee, [MESSAGE_START, CONTENT_DELTA]);
+
+    expect(tee.usage.inputTokens).toBe(1000);
+    expect(tee.usage.outputTokens).toBe(0);
+    expect(tee.usageComplete).toBe(false);
+  });
+
+  it("marks usage complete for a non-streamed Anthropic body", async () => {
     const tee = new UsageTee("anthropic");
     await feed(tee, [JSON.stringify({ usage: { input_tokens: 12, output_tokens: 34 } })]);
 
     expect(tee.usage.inputTokens).toBe(12);
     expect(tee.usage.outputTokens).toBe(34);
+    expect(tee.usageComplete).toBe(false);
+  });
+
+  it("marks usage complete for a non-streamed Anthropic message body", async () => {
+    const tee = new UsageTee("anthropic");
+    await feed(tee, [
+      JSON.stringify({
+        type: "message",
+        usage: { input_tokens: 12, output_tokens: 34 },
+      }),
+    ]);
+
+    expect(tee.usageComplete).toBe(true);
   });
 });
 
