@@ -1,4 +1,10 @@
-import { type AgentManifest, type AgentManifestSource, parseAgentCatalog } from "@facility/agents";
+import {
+  type AgentManifest,
+  type AgentManifestSource,
+  AgentNameSchema,
+  parseAgentCatalog,
+  parseAgentManifest,
+} from "@facility/agents";
 import { newId } from "@facility/core";
 import {
   agentManifests,
@@ -17,7 +23,26 @@ export type AgentCatalogSnapshot = {
 
 export interface AgentCatalogSource {
   load(orgId: string, projectId: string): Promise<AgentCatalogSnapshot>;
+  proposeUpdate?(
+    orgId: string,
+    projectId: string,
+    input: AgentCatalogUpdate,
+  ): Promise<AgentCatalogUpdateResult>;
 }
+
+export type AgentCatalogUpdate = {
+  name: string;
+  source: string;
+  expectedCommitSha: string;
+};
+
+export type AgentCatalogUpdateResult = {
+  agent: AgentManifest;
+  baseCommitSha: string;
+  branch: string;
+  commitSha: string;
+  pullRequest: { number: number; url: string };
+};
 
 export class AgentCatalogError extends Error {
   constructor(
@@ -38,19 +63,7 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
   ) {}
 
   async load(orgId: string, projectId: string): Promise<AgentCatalogSnapshot> {
-    const repository = (
-      await this.db
-        .select()
-        .from(projectRepositories)
-        .where(
-          and(
-            eq(projectRepositories.orgId, orgId),
-            eq(projectRepositories.projectId, projectId),
-            eq(projectRepositories.role, "primary"),
-          ),
-        )
-        .limit(1)
-    )[0];
+    const repository = await this.primaryRepository(orgId, projectId);
     if (!repository) {
       throw new AgentCatalogError(
         "primary_repository_not_found",
@@ -104,6 +117,146 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
         503,
       );
     }
+  }
+
+  async proposeUpdate(
+    orgId: string,
+    projectId: string,
+    input: AgentCatalogUpdate,
+  ): Promise<AgentCatalogUpdateResult> {
+    const parsedName = AgentNameSchema.safeParse(input.name);
+    if (!parsedName.success) {
+      throw new AgentCatalogError(
+        "agent_name_invalid",
+        "Agent names must use lowercase kebab-case characters only",
+        400,
+      );
+    }
+    const repository = await this.primaryRepository(orgId, projectId);
+    if (!repository?.installationId) {
+      throw new AgentCatalogError(
+        "primary_repository_not_found",
+        "primary repository or GitHub installation not found",
+        404,
+      );
+    }
+    const installation = (
+      await this.db
+        .select()
+        .from(githubInstallations)
+        .where(
+          and(
+            eq(githubInstallations.orgId, orgId),
+            eq(githubInstallations.id, repository.installationId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!installation || installation.suspendedAt) {
+      throw new AgentCatalogError(
+        "github_installation_unavailable",
+        "GitHub installation is unavailable",
+      );
+    }
+
+    const path = `.agents/${parsedName.data}.md`;
+    const agent = parseAgentManifest(input.source, path);
+    const client = new FacilityGithubClient(await this.factory(installation.installationId), {
+      owner: repository.owner,
+      repo: repository.name,
+      defaultBranch: repository.defaultBranch,
+    });
+    const baseCommitSha = await client.getDefaultBranchSha();
+    if (baseCommitSha !== input.expectedCommitSha) {
+      throw new AgentCatalogError(
+        "agent_catalog_changed",
+        "The agent catalog changed in Git. Refresh the page and apply the edit again.",
+      );
+    }
+    const current = (await readRepoFiles(client, baseCommitSha, [path])).get(path);
+    if (!current) throw new AgentCatalogError("agent_not_found", "agent not found", 404);
+    const branch = `facility/agent-${parsedName.data}`;
+    const existing = (
+      await client.listOpenPullRequestsForHead(branch, repository.defaultBranch)
+    )[0];
+    if (!existing && parseAgentManifest(current, path).hash === agent.hash) {
+      throw new AgentCatalogError("agent_manifest_unchanged", "The agent manifest is unchanged");
+    }
+
+    if (existing) {
+      const proposed = (await readRepoFiles(client, existing.headSha, [path])).get(path);
+      if (proposed && parseAgentManifest(proposed, path).hash === agent.hash) {
+        return {
+          agent,
+          baseCommitSha,
+          branch,
+          commitSha: existing.headSha,
+          pullRequest: { number: existing.number, url: existing.url },
+        };
+      }
+    }
+
+    const parentSha = existing?.headSha ?? baseCommitSha;
+    const parentCommit = await client.getCommit(parentSha);
+    const blobSha = await client.createBlob(input.source);
+    const treeSha = await client.createTree(parentCommit.treeSha, [
+      { path, mode: "100644", type: "blob", sha: blobSha },
+    ]);
+    const commitSha = await client.createCommit(
+      `feat: update ${parsedName.data} Facility agent`,
+      treeSha,
+      [parentSha],
+    );
+    if (existing) {
+      await client.updateBranch(branch, commitSha);
+    } else {
+      try {
+        await client.createBranch(branch, commitSha);
+      } catch (error) {
+        if ((error as { status?: number }).status !== 422) throw error;
+        throw new AgentCatalogError(
+          "agent_proposal_branch_exists",
+          `Branch ${branch} already exists without an open pull request; resolve it in GitHub before retrying`,
+        );
+      }
+    }
+    const pullRequest =
+      existing ??
+      (await client.createPullRequest({
+        title: `feat: update ${parsedName.data} Facility agent`,
+        body: [
+          `Updates \`${path}\` through Facility's shared manifest validator.`,
+          "",
+          `Base catalog commit: \`${baseCommitSha}\``,
+          `Manifest hash: \`${agent.hash}\``,
+          "",
+          "Facility does not merge this pull request automatically.",
+        ].join("\n"),
+        head: branch,
+      }));
+    return {
+      agent,
+      baseCommitSha,
+      branch,
+      commitSha,
+      pullRequest: { number: pullRequest.number, url: pullRequest.url },
+    };
+  }
+
+  private async primaryRepository(orgId: string, projectId: string) {
+    return (
+      await this.db
+        .select()
+        .from(projectRepositories)
+        .where(
+          and(
+            eq(projectRepositories.orgId, orgId),
+            eq(projectRepositories.projectId, projectId),
+            eq(projectRepositories.role, "primary"),
+          ),
+        )
+        .limit(1)
+    )[0];
   }
 }
 
@@ -217,6 +370,17 @@ export class AgentCatalogService {
         .limit(1)
     )[0];
     return row;
+  }
+
+  async proposeUpdate(orgId: string, projectId: string, input: AgentCatalogUpdate) {
+    if (!this.source.proposeUpdate) {
+      throw new AgentCatalogError(
+        "agent_catalog_read_only",
+        "This agent catalog source does not support Git proposals",
+        501,
+      );
+    }
+    return this.source.proposeUpdate(orgId, projectId, input);
   }
 }
 

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { newId } from "@facility/core";
 import type { FacilityDb } from "@facility/db";
-import { githubInstallations, projectRepositories, workspaces } from "@facility/db";
+import { githubInstallations, projectRepositories, storyArtifacts, workspaces } from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import { parseDocument } from "yaml";
 import { z } from "zod";
@@ -40,6 +41,8 @@ const ServiceSchema = z
   })
   .strict();
 
+const EnvironmentName = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/);
+
 export const ProjectManifestSchema = z
   .object({
     version: z.literal(1).default(1),
@@ -56,6 +59,10 @@ export const ProjectManifestSchema = z
         start: z.string().min(1).max(4_000),
         ready: z.string().min(1).max(4_000).optional(),
         stop: z.string().min(1).max(4_000).optional(),
+        seed: z.string().min(1).max(4_000).optional(),
+        browser_test: z.string().min(1).max(4_000).optional(),
+        secrets: z.array(EnvironmentName).default([]),
+        variables: z.array(EnvironmentName).default([]),
         services: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,62}$/), ServiceSchema).default({}),
       })
       .strict(),
@@ -171,6 +178,10 @@ export class ProjectEnvironmentService {
     private readonly db: FacilityDb,
     private readonly runtime: WorkspaceRuntime,
     private readonly gitBaseUrl = "https://github.com",
+    private readonly environmentValue: (projectId: string, name: string) => string | undefined = (
+      projectId,
+      name,
+    ) => process.env[projectEnvironmentVariableName(projectId, name)],
   ) {}
 
   async prepare(input: {
@@ -181,71 +192,91 @@ export class ProjectEnvironmentService {
     credentials: GithubWorkspaceCredentials;
     branch: string;
     previousSetupChecksum?: string | null;
+    cleanSetup?: boolean;
     readinessTimeoutMs?: number;
   }) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
-    await this.run(input, "mkdir -p repos", ".", "environment.repositories");
-    for (const repository of input.credentials.repositories) {
+    const preparedInput = this.withDeclaredEnvironment(input);
+    await this.run(preparedInput, "mkdir -p repos", ".", "environment.repositories");
+    for (const repository of preparedInput.credentials.repositories) {
       await this.runCommand(
-        input,
+        preparedInput,
         "mkdir",
         ["-p", `repos/${repository.owner}`],
         ".",
         "repository directory",
       );
       const cwd = repositoryPath(repository);
-      const present = await this.runtime.exec(input.workspace, {
+      const present = await this.runtime.exec(preparedInput.workspace, {
         command: "git",
         args: ["-C", cwd, "rev-parse", "--git-dir"],
-        env: input.credentials.environment,
+        env: preparedInput.credentials.environment,
       });
       if (present.exitCode !== 0) {
         await this.runCommand(
-          input,
+          preparedInput,
           "git",
           ["clone", `${this.gitBaseUrl}/${repository.owner}/${repository.name}.git`, cwd],
           ".",
           `clone ${repository.owner}/${repository.name}`,
         );
       }
-      await this.runCommand(input, "git", ["fetch", "--all", "--prune"], cwd, "git fetch");
+      await this.runCommand(preparedInput, "git", ["fetch", "--all", "--prune"], cwd, "git fetch");
       await this.runCommand(
-        input,
+        preparedInput,
         "git",
         ["config", "user.name", "Facility Agent"],
         cwd,
         "git identity",
       );
       await this.runCommand(
-        input,
+        preparedInput,
         "git",
         ["config", "user.email", "facility-agent@users.noreply.github.com"],
         cwd,
         "git identity",
       );
-      if (repository.role === "primary") await this.ensureBranch(input, repository, cwd);
+      if (repository.role === "primary") await this.ensureBranch(preparedInput, repository, cwd);
     }
 
-    if (input.manifest.environment.setup && input.previousSetupChecksum !== input.manifest.hash) {
+    const setupChecksum = await this.setupChecksum(preparedInput);
+    const setupRequired = input.cleanSetup || input.previousSetupChecksum !== setupChecksum;
+    if (preparedInput.manifest.environment.setup && setupRequired) {
       await this.run(
-        input,
-        input.manifest.environment.setup,
-        primaryPath(input.credentials),
+        preparedInput,
+        preparedInput.manifest.environment.setup,
+        primaryPath(preparedInput.credentials),
         "environment.setup",
       );
+      if (preparedInput.manifest.environment.seed) {
+        await this.run(
+          preparedInput,
+          preparedInput.manifest.environment.seed,
+          primaryPath(preparedInput.credentials),
+          "environment.seed",
+        );
+      }
       await this.db
         .update(workspaces)
-        .set({ setupChecksum: input.manifest.hash, updatedAt: new Date() })
-        .where(and(eq(workspaces.orgId, input.orgId), eq(workspaces.id, input.workspace.id)));
+        .set({ setupChecksum, updatedAt: new Date() })
+        .where(
+          and(
+            eq(workspaces.orgId, preparedInput.orgId),
+            eq(workspaces.id, preparedInput.workspace.id),
+          ),
+        );
     }
     await this.run(
-      input,
-      input.manifest.environment.start,
-      primaryPath(input.credentials),
+      preparedInput,
+      preparedInput.manifest.environment.start,
+      primaryPath(preparedInput.credentials),
       "environment.start",
     );
-    if (input.manifest.environment.ready) await this.waitUntilReady(input);
-    const endpoints = await this.runtime.expose(input.workspace, services(input.manifest));
+    if (preparedInput.manifest.environment.ready) await this.waitUntilReady(preparedInput);
+    const endpoints = await this.runtime.expose(
+      preparedInput.workspace,
+      services(preparedInput.manifest),
+    );
     await this.db
       .update(workspaces)
       .set({
@@ -255,12 +286,158 @@ export class ProjectEnvironmentService {
         lastActivityAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(and(eq(workspaces.orgId, input.orgId), eq(workspaces.id, input.workspace.id)));
-    await appendWorkspaceEvent(this.db, input.workspace.id, input.orgId, "environment.ready", {
-      services: endpoints.map((endpoint) => ({ service: endpoint.service, port: endpoint.port })),
-      setupChecksum: input.manifest.hash,
+      .where(
+        and(
+          eq(workspaces.orgId, preparedInput.orgId),
+          eq(workspaces.id, preparedInput.workspace.id),
+        ),
+      );
+    await appendWorkspaceEvent(
+      this.db,
+      preparedInput.workspace.id,
+      preparedInput.orgId,
+      "environment.ready",
+      {
+        services: endpoints.map((endpoint) => ({ service: endpoint.service, port: endpoint.port })),
+        setupChecksum,
+      },
+    );
+    return {
+      endpoints,
+      primaryCwd: primaryPath(preparedInput.credentials),
+      setupChecksum,
+      processEnvironment: preparedInput.credentials.environment,
+    };
+  }
+
+  async runBrowserTest(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId?: string;
+    workspace: WorkspaceLocator;
+    manifest: ProjectManifest;
+    credentials: GithubWorkspaceCredentials;
+  }) {
+    const script = input.manifest.environment.browser_test;
+    if (!script) {
+      throw new ProjectEnvironmentError(
+        "browser_test_not_configured",
+        ".facility.yml does not define environment.browser_test",
+      );
+    }
+    const preparedInput = this.withDeclaredEnvironment({ ...input, branch: "browser-test" });
+    const artifactDirectory = `.facility/artifacts/browser-${Date.now()}`;
+    await this.runCommand(
+      preparedInput,
+      "mkdir",
+      ["-p", artifactDirectory],
+      primaryPath(preparedInput.credentials),
+      "browser artifact directory",
+    );
+    const result = await this.runtime.exec(input.workspace, {
+      command: "sh",
+      args: ["-lc", script],
+      cwd: primaryPath(preparedInput.credentials),
+      env: {
+        ...preparedInput.credentials.environment,
+        FACILITY_ARTIFACT_DIR: artifactDirectory,
+      },
+      timeoutMs: 30 * 60 * 1_000,
     });
-    return { endpoints, primaryCwd: primaryPath(input.credentials) };
+    const safeResult = redactResult(
+      result,
+      preparedInput.credentials.environment,
+      preparedInput.manifest.environment.secrets,
+    );
+    if (result.exitCode !== 0) throw commandFailure("environment.browser_test", script, safeResult);
+    const files = await this.runtime.exec(input.workspace, {
+      command: "find",
+      args: [artifactDirectory, "-type", "f", "-maxdepth", "2", "-print"],
+      cwd: primaryPath(preparedInput.credentials),
+      env: preparedInput.credentials.environment,
+    });
+    const artifacts = files.stdout
+      .split("\n")
+      .map((path) => path.trim())
+      .filter(Boolean)
+      .map((path) => ({
+        id: newId("art"),
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        turnId: input.turnId,
+        kind: path.endsWith(".png") ? "screenshot" : path.includes("trace") ? "trace" : "report",
+        label: path.split("/").at(-1) ?? "browser artifact",
+        uri: `workspace://${input.workspace.id}/${primaryPath(preparedInput.credentials)}/${path}`,
+        metadata: { path },
+      }));
+    if (artifacts.length > 0) await this.db.insert(storyArtifacts).values(artifacts);
+    await appendWorkspaceEvent(
+      this.db,
+      input.workspace.id,
+      input.orgId,
+      "environment.browser_test",
+      {
+        exitCode: result.exitCode,
+        stdout: tail(safeResult.stdout),
+        stderr: tail(safeResult.stderr),
+        durationMs: result.durationMs,
+        artifacts: artifacts.map((artifact) => artifact.uri),
+      },
+    );
+    return { result: safeResult, artifacts };
+  }
+
+  private withDeclaredEnvironment<
+    T extends {
+      projectId: string;
+      manifest: ProjectManifest;
+      credentials: GithubWorkspaceCredentials;
+    },
+  >(input: T): T {
+    const names = [...input.manifest.environment.variables, ...input.manifest.environment.secrets];
+    const values: Record<string, string> = {};
+    const missing: Array<{ name: string; operatorName: string }> = [];
+    for (const name of names) {
+      const operatorName = projectEnvironmentVariableName(input.projectId, name);
+      const value = this.environmentValue(input.projectId, name);
+      if (value === undefined) missing.push({ name, operatorName });
+      else values[name] = value;
+    }
+    if (missing.length > 0) {
+      throw new ProjectEnvironmentError(
+        "project_environment_missing",
+        `Required project environment is missing: ${missing.map(({ name }) => name).join(", ")}`,
+        { missing },
+      );
+    }
+    return {
+      ...input,
+      credentials: {
+        ...input.credentials,
+        environment: { ...input.credentials.environment, ...values },
+      },
+    };
+  }
+
+  private async setupChecksum(input: Parameters<ProjectEnvironmentService["prepare"]>[0]) {
+    const head = await this.runtime.exec(input.workspace, {
+      command: "git",
+      args: ["rev-parse", "HEAD"],
+      cwd: primaryPath(input.credentials),
+      env: input.credentials.environment,
+    });
+    if (head.exitCode !== 0) {
+      throw commandFailure(
+        "environment.setup_checksum",
+        "git rev-parse HEAD",
+        redactResult(head, input.credentials.environment, input.manifest.environment.secrets),
+      );
+    }
+    return createHash("sha256")
+      .update(`${input.manifest.hash}:${head.stdout.trim()}`)
+      .digest("hex");
   }
 
   private async ensureBranch(
@@ -309,7 +486,13 @@ export class ProjectEnvironmentService {
     throw new ProjectEnvironmentError("environment_not_ready", "environment readiness timed out", {
       command: input.manifest.environment.ready,
       exitCode: last?.exitCode,
-      stderr: tail(redactCredentials(last?.stderr ?? "", input.credentials.environment)),
+      stderr: tail(
+        redactCredentials(
+          last?.stderr ?? "",
+          input.credentials.environment,
+          input.manifest.environment.secrets,
+        ),
+      ),
     });
   }
 
@@ -320,7 +503,11 @@ export class ProjectEnvironmentService {
     phase: string,
   ) {
     const result = await this.command(input, script, cwd);
-    const safeResult = redactResult(result, input.credentials.environment);
+    const safeResult = redactResult(
+      result,
+      input.credentials.environment,
+      input.manifest.environment.secrets,
+    );
     if (result.exitCode !== 0) throw commandFailure(phase, script, safeResult);
     await appendWorkspaceEvent(this.db, input.workspace.id, input.orgId, phase, {
       command: script,
@@ -364,11 +551,18 @@ export class ProjectEnvironmentService {
       throw commandFailure(
         phase,
         [command, ...args].join(" "),
-        redactResult(result, input.credentials.environment),
+        redactResult(result, input.credentials.environment, input.manifest.environment.secrets),
       );
     }
     return result;
   }
+}
+
+export function projectEnvironmentVariableName(projectId: string, name: string) {
+  if (!/^[a-z0-9_]{1,100}$/.test(projectId)) {
+    throw new ProjectEnvironmentError("project_id_invalid", "project id is invalid");
+  }
+  return `FACILITY_PROJECT_${projectId.toUpperCase()}_${EnvironmentName.parse(name)}`;
 }
 
 function isSafeGitBranch(branch: string) {
@@ -448,18 +642,29 @@ function tail(value: string) {
   return value.length <= 8_000 ? value : value.slice(-8_000);
 }
 
-function redactResult(result: WorkspaceCommandResult, environment: Record<string, string>) {
+function redactResult(
+  result: WorkspaceCommandResult,
+  environment: Record<string, string>,
+  sensitiveNames: string[] = [],
+) {
   return {
     ...result,
-    stdout: redactCredentials(result.stdout, environment),
-    stderr: redactCredentials(result.stderr, environment),
+    stdout: redactCredentials(result.stdout, environment, sensitiveNames),
+    stderr: redactCredentials(result.stderr, environment, sensitiveNames),
   };
 }
 
-function redactCredentials(value: string, environment: Record<string, string>) {
+function redactCredentials(
+  value: string,
+  environment: Record<string, string>,
+  sensitiveNames: string[] = [],
+) {
   const secrets = new Set<string>();
   for (const [name, candidate] of Object.entries(environment)) {
-    if ((name.includes("TOKEN") || name.includes("CREDENTIAL")) && candidate.length >= 8) {
+    if (
+      (sensitiveNames.includes(name) || name.includes("TOKEN") || name.includes("CREDENTIAL")) &&
+      candidate.length >= 4
+    ) {
       secrets.add(candidate);
     }
   }

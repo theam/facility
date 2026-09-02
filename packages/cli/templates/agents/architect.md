@@ -6,6 +6,8 @@ model: {{PLAN_MODEL}}
 enabled: true
 triggers:
   - type: manual
+  - type: mcp
+  - type: ui
 ---
 
 # Architect

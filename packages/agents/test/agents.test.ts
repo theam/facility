@@ -8,6 +8,7 @@ import {
   loadAgentCatalog,
   parseAgentCatalog,
   parseAgentManifest,
+  renderAgentManifest,
   triggerIdentity,
 } from "../src/index.js";
 
@@ -27,6 +28,8 @@ options:
   reasoning_effort: high
 triggers:
   - type: manual
+  - type: mcp
+  - type: ui
   - type: github
     name: assigned-issue
     event: issues
@@ -50,7 +53,8 @@ describe("agent manifests", () => {
       prompt: "Implement the requested story in the persistent workspace.",
     });
     expect(first.hash).toBe(second.hash);
-    const githubTrigger = first.triggers[1];
+    expect(first.triggers.slice(0, 3).map(triggerIdentity)).toEqual(["manual", "mcp", "ui"]);
+    const githubTrigger = first.triggers[3];
     expect(githubTrigger).toBeDefined();
     if (!githubTrigger) throw new Error("expected GitHub trigger");
     expect(triggerIdentity(githubTrigger)).toBe("github:assigned-issue");
@@ -60,6 +64,33 @@ describe("agent manifests", () => {
     expect(() =>
       parseAgentManifest(manifest("permissions: [contents:read]\n"), "builder.md"),
     ).toThrow(/Unrecognized key.*permissions/);
+  });
+
+  it("allows reasoning effort as the only execution option and renders canonical source", () => {
+    const unsupported = manifest().replace(
+      "  reasoning_effort: high",
+      "  reasoning_effort: high\n  max_turns: 12",
+    );
+    expect(() => parseAgentManifest(unsupported, "builder.md")).toThrow(
+      /Unrecognized key.*max_turns/,
+    );
+
+    const rendered = renderAgentManifest({
+      name: "builder",
+      description: "Builds and verifies stories.",
+      engine: "codex",
+      model: "gpt-5.6-sol",
+      enabled: true,
+      options: { reasoning_effort: "xhigh" },
+      triggers: [{ type: "manual" }],
+      prompt: "Implement the story and verify it.",
+    });
+    expect(rendered.source).toContain("reasoning_effort: xhigh");
+    expect(rendered.manifest).toMatchObject({
+      name: "builder",
+      prompt: "Implement the story and verify it.",
+    });
+    expect(rendered.manifest.hash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("rejects invalid schedules before dispatch", () => {

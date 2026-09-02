@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import type { CreateWorkspace, WorkspaceLocator } from "../src/workspaces/runtime.js";
 import {
+  exportWorkspaceBackup,
   previewGatewayPorts,
+  restoreWorkspaceBackup,
   validateWorkspacePorts,
   WorkspaceRuntimeError,
 } from "../src/workspaces/runtime.js";
@@ -79,6 +81,53 @@ describe("WorkspaceRuntime", () => {
     await expect(runtime.wake(workspace)).rejects.toMatchObject({ code: "workspace_destroyed" });
   });
 
+  it("restores untracked work and native sessions into a fresh workspace", async () => {
+    const { runtime, workspace } = await fixture();
+    await runtime.exec(workspace, {
+      command: "sh",
+      args: [
+        "-lc",
+        "mkdir -p repo .facility/claude .facility/codex && printf untracked > repo/local.txt && printf claude > .facility/claude/session && printf codex > .facility/codex/session",
+      ],
+    });
+    const backup = await exportWorkspaceBackup(runtime, workspace);
+    const restored = await restoreWorkspaceBackup(
+      runtime,
+      { id: "ws_fedcba9876543210", image: workspace.image },
+      backup,
+    );
+
+    expect(await runtime.read(restored, "repo/local.txt")).toBe("untracked");
+    expect(await runtime.read(restored, ".facility/claude/session")).toBe("claude");
+    expect(await runtime.read(restored, ".facility/codex/session")).toBe("codex");
+    await runtime.destroy(workspace);
+    await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "destroyed" });
+    expect(await runtime.read(restored, "repo/local.txt")).toBe("untracked");
+    await runtime.destroy(restored);
+  });
+
+  it("cancels only the command and preserves workspace state", async () => {
+    const { runtime, workspace } = await fixture();
+    const controller = new AbortController();
+    const running = runtime.exec(workspace, {
+      command: "sh",
+      args: ["-lc", "printf before > cancellation-marker && sleep 30"],
+      signal: controller.signal,
+    });
+    await waitFor(async () => {
+      try {
+        return (await runtime.read(workspace, "cancellation-marker")) === "before";
+      } catch {
+        return false;
+      }
+    });
+    controller.abort();
+
+    await expect(running).rejects.toMatchObject({ code: "workspace_command_canceled" });
+    await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "running" });
+    expect(await runtime.read(workspace, "cancellation-marker")).toBe("before");
+  });
+
   it("rejects path escapes and malformed or ambiguous exposed ports", async () => {
     const { runtime, workspace } = await fixture();
     await expect(
@@ -104,3 +153,12 @@ describe("WorkspaceRuntime", () => {
     ]);
   });
 });
+
+async function waitFor(predicate: () => Promise<boolean>) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("condition was not met before timeout");
+}

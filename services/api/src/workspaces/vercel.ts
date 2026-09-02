@@ -42,7 +42,6 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       env: { ...persistentWorkspaceEnvironment(), ...(input.environment ?? {}) },
       tags: { facility: "workspace" },
       resume: true,
-      onCreate: (created) => initializeSandbox(created, input),
     });
     await initializeSandbox(sandbox, input);
     return this.handle(input, sandbox);
@@ -77,15 +76,42 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       stderr.push(chunk);
       command.onOutput?.({ stream: "stderr", data: chunk.toString("utf8") });
     });
-    const result = await sandbox.asUser("node").runCommand({
+    const running = await sandbox.asUser("node").runCommand({
       cmd: command.command,
       args: command.args,
       cwd: command.cwd ?? "/workspace",
       env: { ...persistentWorkspaceEnvironment(), ...(command.env ?? {}) },
       timeoutMs: command.timeoutMs,
-      stdout: stdoutStream,
-      stderr: stderrStream,
+      detached: true,
     });
+    let canceled = command.signal?.aborted ?? false;
+    const cancel = () => {
+      canceled = true;
+      void running.kill("SIGTERM").catch(() => undefined);
+    };
+    command.signal?.addEventListener("abort", cancel, { once: true });
+    if (canceled) cancel();
+    const logs = (async () => {
+      for await (const log of running.logs()) {
+        if (log.stream === "stdout") stdoutStream.write(log.data);
+        else stderrStream.write(log.data);
+      }
+    })();
+    const result = await (async () => {
+      const finished = await running.wait();
+      await logs;
+      return finished;
+    })().finally(() => {
+      command.signal?.removeEventListener("abort", cancel);
+      stdoutStream.end();
+      stderrStream.end();
+    });
+    if (canceled) {
+      throw new WorkspaceRuntimeError(
+        "workspace_command_canceled",
+        "workspace command was canceled",
+      );
+    }
     return {
       exitCode: result.exitCode,
       stdout: Buffer.concat(stdout).toString("utf8"),

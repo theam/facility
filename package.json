@@ -25,6 +25,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "guards": "node guards/run.mjs",
+    "check:unused": "node scripts/check-unused.mjs",
     "migrations:check": "node scripts/migrations.mjs check",
     "verify": "node scripts/verify.mjs"
   },

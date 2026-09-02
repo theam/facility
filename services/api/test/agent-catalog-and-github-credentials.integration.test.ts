@@ -259,6 +259,196 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
     });
   });
 
+  it("validates an agent edit and writes it to a reviewable Git branch", async () => {
+    const baseCommitSha = "a".repeat(40);
+    const calls: Array<{ operation: string; args: Record<string, unknown> }> = [];
+    const record = (operation: string, data: unknown) => async (args: Record<string, unknown>) => {
+      calls.push({ operation, args });
+      return { data };
+    };
+    const factory = (async () => ({
+      rest: {
+        repos: {
+          getBranch: record("getBranch", { commit: { sha: baseCommitSha } }),
+          getContent: record("getContent", {
+            type: "file",
+            path: ".agents/builder.md",
+            encoding: "base64",
+            content: Buffer.from(source("builder")).toString("base64"),
+          }),
+        },
+        git: {
+          getCommit: record("getCommit", { sha: baseCommitSha, tree: { sha: "b".repeat(40) } }),
+          createBlob: record("createBlob", { sha: "c".repeat(40) }),
+          createTree: record("createTree", { sha: "d".repeat(40) }),
+          createCommit: record("createCommit", { sha: "e".repeat(40) }),
+          createRef: record("createRef", {}),
+          updateRef: record("updateRef", {}),
+        },
+        pulls: {
+          list: record("listPullRequests", []),
+          create: record("createPullRequest", {
+            number: 41,
+            html_url: "https://github.com/acme/app/pull/41",
+          }),
+        },
+      },
+    })) as unknown as GithubClientFactory;
+    const catalog = new AgentCatalogService(db, new GithubAgentCatalogSource(db, factory));
+    const edited = source("builder").replace("model: gpt-5.5", "model: gpt-5.6-sol");
+
+    await expect(
+      catalog.proposeUpdate(orgId, projectId, {
+        name: "builder",
+        source: edited,
+        expectedCommitSha: baseCommitSha,
+      }),
+    ).resolves.toMatchObject({
+      branch: "facility/agent-builder",
+      baseCommitSha,
+      commitSha: "e".repeat(40),
+      agent: { name: "builder", model: "gpt-5.6-sol" },
+      pullRequest: { number: 41, url: "https://github.com/acme/app/pull/41" },
+    });
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: "createRef",
+          args: expect.objectContaining({ ref: "refs/heads/facility/agent-builder" }),
+        }),
+        expect.objectContaining({
+          operation: "createPullRequest",
+          args: expect.objectContaining({ head: "facility/agent-builder", base: "main" }),
+        }),
+      ]),
+    );
+
+    await expect(
+      catalog.proposeUpdate(orgId, projectId, {
+        name: "builder",
+        source: edited,
+        expectedCommitSha: "f".repeat(40),
+      }),
+    ).rejects.toMatchObject({ code: "agent_catalog_changed" });
+  });
+
+  it("reuses an identical proposal and appends later edits without force-pushing", async () => {
+    const baseCommitSha = "1".repeat(40);
+    const pullHeadSha = "2".repeat(40);
+    const nextCommitSha = "6".repeat(40);
+    const firstEdit = source("builder").replace("model: gpt-5.5", "model: gpt-5.6-sol");
+    const secondEdit = firstEdit.replace("model: gpt-5.6-sol", "model: gpt-5.6-terra");
+    const calls: Array<{ operation: string; args: Record<string, unknown> }> = [];
+    const record = (operation: string, data: unknown) => async (args: Record<string, unknown>) => {
+      calls.push({ operation, args });
+      return { data };
+    };
+    const factory = (async () => ({
+      rest: {
+        repos: {
+          getBranch: record("getBranch", { commit: { sha: baseCommitSha } }),
+          getContent: async (args: Record<string, unknown>) => {
+            calls.push({ operation: "getContent", args });
+            const content = args.ref === pullHeadSha ? firstEdit : source("builder");
+            return {
+              data: {
+                type: "file",
+                path: ".agents/builder.md",
+                encoding: "base64",
+                content: Buffer.from(content).toString("base64"),
+              },
+            };
+          },
+        },
+        git: {
+          getCommit: record("getCommit", { sha: pullHeadSha, tree: { sha: "3".repeat(40) } }),
+          createBlob: record("createBlob", { sha: "4".repeat(40) }),
+          createTree: record("createTree", { sha: "5".repeat(40) }),
+          createCommit: record("createCommit", { sha: nextCommitSha }),
+          createRef: record("createRef", {}),
+          updateRef: record("updateRef", {}),
+        },
+        pulls: {
+          list: record("listPullRequests", [
+            {
+              number: 42,
+              html_url: "https://github.com/acme/app/pull/42",
+              head: { ref: "facility/agent-builder", sha: pullHeadSha },
+              base: { ref: "main" },
+            },
+          ]),
+          create: record("createPullRequest", {
+            number: 43,
+            html_url: "https://github.com/acme/app/pull/43",
+          }),
+        },
+      },
+    })) as unknown as GithubClientFactory;
+    const catalog = new AgentCatalogService(db, new GithubAgentCatalogSource(db, factory));
+
+    await expect(
+      catalog.proposeUpdate(orgId, projectId, {
+        name: "builder",
+        source: firstEdit,
+        expectedCommitSha: baseCommitSha,
+      }),
+    ).resolves.toMatchObject({
+      branch: "facility/agent-builder",
+      commitSha: pullHeadSha,
+      pullRequest: { number: 42 },
+    });
+    expect(calls.some(({ operation }) => operation === "createCommit")).toBe(false);
+
+    calls.length = 0;
+    await expect(
+      catalog.proposeUpdate(orgId, projectId, {
+        name: "builder",
+        source: secondEdit,
+        expectedCommitSha: baseCommitSha,
+      }),
+    ).resolves.toMatchObject({
+      branch: "facility/agent-builder",
+      commitSha: nextCommitSha,
+      pullRequest: { number: 42 },
+    });
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: "getCommit",
+          args: expect.objectContaining({ commit_sha: pullHeadSha }),
+        }),
+        expect.objectContaining({
+          operation: "createCommit",
+          args: expect.objectContaining({ parents: [pullHeadSha] }),
+        }),
+        expect.objectContaining({
+          operation: "updateRef",
+          args: expect.objectContaining({
+            ref: "heads/facility/agent-builder",
+            sha: nextCommitSha,
+            force: false,
+          }),
+        }),
+      ]),
+    );
+    expect(calls.some(({ operation }) => operation === "createPullRequest")).toBe(false);
+  });
+
+  it("rejects unsafe agent names before constructing a Git path", async () => {
+    const factory = (() => {
+      throw new Error("GitHub must not be called");
+    }) as unknown as GithubClientFactory;
+    const catalog = new AgentCatalogService(db, new GithubAgentCatalogSource(db, factory));
+
+    await expect(
+      catalog.proposeUpdate(orgId, projectId, {
+        name: "../builder",
+        source: source("builder"),
+        expectedCommitSha: "a".repeat(40),
+      }),
+    ).rejects.toMatchObject({ code: "agent_name_invalid", statusCode: 400 });
+  });
+
   it("issues one un-narrowed installation token to every configured repository", async () => {
     const calls: number[] = [];
     const broker = new GithubWorkspaceCredentialBroker(db, async ({ installationId: githubId }) => {

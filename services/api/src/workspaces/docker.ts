@@ -137,6 +137,13 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     }
 
     let timedOut = false;
+    let canceled = command.signal?.aborted ?? false;
+    const cancel = () => {
+      canceled = true;
+      void this.terminateExecution(container, execution);
+    };
+    command.signal?.addEventListener("abort", cancel, { once: true });
+    if (canceled) cancel();
     const timeout = command.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
@@ -152,6 +159,12 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
         stderrPromise,
         execution.inspect(),
       ]);
+      if (canceled) {
+        throw new WorkspaceRuntimeError(
+          "workspace_command_canceled",
+          "workspace command was canceled",
+        );
+      }
       if (timedOut) {
         throw new WorkspaceRuntimeError(
           "workspace_command_timeout",
@@ -166,6 +179,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       };
     } finally {
       if (timeout) clearTimeout(timeout);
+      command.signal?.removeEventListener("abort", cancel);
     }
   }
 

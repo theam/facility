@@ -66,11 +66,13 @@ describe("runtime API proxy policy", () => {
         host: "evil.example",
         "content-length": "99",
         "x-forwarded-for": "127.0.0.1",
+        "x-facility-surface": "mcp",
       }),
     );
     expect(headers.get("authorization")).toBe("Bearer token");
     expect(headers.get("cookie")).toBe("facility_session=signed");
     expect(headers.get("accept-encoding")).toBe("identity");
+    expect(headers.get("x-facility-surface")).toBe("ui");
     for (const name of ["connection", "x-remove-me", "host", "content-length", "x-forwarded-for"]) {
       expect(headers.has(name)).toBe(false);
     }

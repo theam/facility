@@ -168,10 +168,16 @@ export const toolDefinitions: ToolDefinition[] = [
     permission: "projects:read",
     description:
       "Inspect the story workspace, service endpoints, readiness, and recent environment events. Needs projects:read.",
-    inputSchema: { projectId, storyId },
+    inputSchema: {
+      projectId,
+      storyId,
+      after: z.number().int().min(0).optional(),
+      limit: z.number().int().min(1).max(200).default(100),
+    },
     method: "GET",
     path: (args) =>
       `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/environment`,
+    query: (args) => ({ after: numberValue(args.after), limit: Number(args.limit ?? 100) }),
   },
   {
     name: "facility_open_preview",
@@ -227,6 +233,7 @@ export function createFacilityMcpServer(options: FacilityMcpOptions): McpServer 
     (new FacilityClient({
       baseUrl: options.apiUrl,
       apiKey: options.apiKey,
+      headers: { "x-facility-surface": "mcp" },
       fetch: options.fetch,
     }) as unknown as ApiClientLike);
 
@@ -403,6 +410,10 @@ function part(value: unknown) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value ? value : undefined;
+}
+
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function humanize(name: string) {

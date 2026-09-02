@@ -45,6 +45,7 @@ export function StoryComposer({
 
   return (
     <form
+      id="story-composer"
       onSubmit={submit}
       className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
     >
@@ -94,11 +95,24 @@ export function WorkspaceControls({
   const [previewUrl, setPreviewUrl] = useState("");
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const services = workspace?.environment.ports ?? [];
+  const workspaceDeleted = isWorkspaceDeleted(story, workspace);
 
   async function lifecycle(action: "suspend" | "archive" | "restore") {
     setPending(action);
     setError("");
     const result = await clientApi("POST", storyPath(projectId, story.id, `/${action}`));
+    setPending("");
+    if (!result.ok) setError(result.message);
+    else router.refresh();
+  }
+
+  async function environmentAction(action: "clean-setup" | "browser-test") {
+    setPending(action);
+    setError("");
+    const result = await clientApi(
+      "POST",
+      storyPath(projectId, story.id, `/environment/${action}`),
+    );
     setPending("");
     if (!result.ok) setError(result.message);
     else router.refresh();
@@ -139,7 +153,7 @@ export function WorkspaceControls({
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap gap-2">
-        {story.status === "archived" && canWrite ? (
+        {story.status === "archived" && canWrite && !workspaceDeleted ? (
           <Button size="sm" onClick={() => lifecycle("restore")} disabled={Boolean(pending)}>
             {pending === "restore" ? "restoring…" : "restore"}
           </Button>
@@ -165,7 +179,7 @@ export function WorkspaceControls({
                 variant="primary"
                 tone="agent"
                 onClick={() => openPreview(service.service)}
-                disabled={Boolean(pending) || workspace?.state === "destroyed"}
+                disabled={Boolean(pending) || workspaceDeleted}
               >
                 {pending === `preview:${service.service}`
                   ? "opening…"
@@ -173,7 +187,30 @@ export function WorkspaceControls({
               </Button>
             ))
           : null}
+        {canExecute && !workspaceDeleted ? (
+          <Button
+            size="sm"
+            onClick={() => environmentAction("browser-test")}
+            disabled={Boolean(pending)}
+          >
+            {pending === "browser-test" ? "testing…" : "run browser test"}
+          </Button>
+        ) : null}
+        {canWrite && !workspaceDeleted ? (
+          <Button
+            size="sm"
+            onClick={() => environmentAction("clean-setup")}
+            disabled={Boolean(pending)}
+          >
+            {pending === "clean-setup" ? "setting up…" : "clean setup"}
+          </Button>
+        ) : null}
       </div>
+      {workspaceDeleted ? (
+        <p className="text-[12px] leading-relaxed text-(--dim)">
+          This workspace was permanently deleted. Its conversation and metadata remain as history.
+        </p>
+      ) : null}
       {previewUrl ? (
         <a
           href={previewUrl}
@@ -190,7 +227,7 @@ export function WorkspaceControls({
         </p>
       ) : null}
 
-      {canWrite && workspace && workspace.state !== "destroyed" ? (
+      {canWrite && workspace && !workspaceDeleted ? (
         <details className="border border-(--bad)/40 p-4">
           <summary className="cursor-pointer text-[12px] font-medium text-(--bad)">
             Permanently delete workspace
@@ -227,6 +264,48 @@ export function WorkspaceControls({
           </div>
         </details>
       ) : null}
+    </div>
+  );
+}
+
+export function isWorkspaceDeleted(
+  story: Pick<WorkspaceStory, "deletedAt">,
+  workspace: Pick<StoryWorkspace, "state"> | null,
+) {
+  return story.deletedAt !== null || workspace?.state === "destroyed";
+}
+
+export function CancelTurnButton({
+  projectId,
+  storyId,
+  turnId,
+}: {
+  projectId: string;
+  storyId: string;
+  turnId: string;
+}) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  async function cancel() {
+    setPending(true);
+    setError("");
+    const result = await clientApi(
+      "POST",
+      storyPath(projectId, storyId, `/turns/${encodeURIComponent(turnId)}/cancel`),
+    );
+    setPending(false);
+    if (!result.ok) setError(result.message);
+    else router.refresh();
+  }
+
+  return (
+    <div className="mt-3 flex flex-col items-end gap-1">
+      <Button size="sm" variant="danger" disabled={pending} onClick={cancel}>
+        {pending ? "canceling…" : "cancel turn"}
+      </Button>
+      {error ? <p className="text-[10px] text-(--bad)">{error}</p> : null}
     </div>
   );
 }

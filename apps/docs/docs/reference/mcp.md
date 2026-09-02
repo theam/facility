@@ -26,5 +26,89 @@ The server exposes exactly thirteen task-oriented tools:
 | `facility_restore_story` | Restore the archived story and its existing state. |
 | `facility_delete_workspace` | Explicitly destroy compute, volume, worktree, and engine sessions. |
 
+## Connect Claude Code or Codex
+
+Register the same Streamable HTTP endpoint in either client. Replace the example origin with the
+Facility deployment:
+
+```bash
+claude mcp add --transport http facility https://facility.example.com/mcp
+
+codex mcp add facility --url https://facility.example.com/mcp
+codex mcp login facility
+```
+
+Claude Code starts its OAuth flow when the server is first used. Codex can also read a service API
+key from an environment variable:
+
+```bash
+codex mcp add facility \
+  --url https://facility.example.com/mcp \
+  --bearer-token-env-var FACILITY_API_KEY
+```
+
+## Complete story flow
+
+Claude Code, Codex, and any other MCP client send the same tool calls. Start or resume an issue-backed
+story:
+
+```json
+{
+  "name": "facility_start_story",
+  "arguments": {
+    "projectId": "proj_example",
+    "provider": "github",
+    "externalId": "issue:272",
+    "title": "Persistent story workspaces",
+    "agent": "builder",
+    "message": "Implement the accepted story and verify it in its development environment.",
+    "idempotencyKey": "issue-272-initial"
+  }
+}
+```
+
+Continue the same conversation, optionally choosing another repository-defined agent:
+
+```json
+{
+  "name": "facility_send_message",
+  "arguments": {
+    "projectId": "proj_example",
+    "storyId": "story_example",
+    "agent": "pr-reviewer",
+    "message": "Review the current branch and run the relevant checks.",
+    "idempotencyKey": "issue-272-review-1"
+  }
+}
+```
+
+Open the running application, suspend compute, and later restore the same workspace:
+
+```json
+{"name":"facility_open_preview","arguments":{"projectId":"proj_example","storyId":"story_example","service":"app"}}
+{"name":"facility_suspend_story","arguments":{"projectId":"proj_example","storyId":"story_example"}}
+{"name":"facility_restore_story","arguments":{"projectId":"proj_example","storyId":"story_example"}}
+```
+
+Deletion is deliberately separate and permanent:
+
+```json
+{
+  "name": "facility_delete_workspace",
+  "arguments": {
+    "projectId": "proj_example",
+    "storyId": "story_example",
+    "confirm": true,
+    "idempotencyKey": "issue-272-delete-after-export"
+  }
+}
+```
+
+`facility_get_conversation` uses `after` and `limit` as a stable message-sequence cursor.
+`facility_get_environment` uses the same fields for ordered workspace events and returns
+`next_cursor` and `has_more`. Story and environment responses include typed attention, available
+next operations, active-compute status, retained-storage status, provider usage, and an explicit
+marker when monetary cost is unavailable.
+
 Mutations execute directly after normal authentication and project authorization. They do not
 create an internal approval object. Delete requires `confirm: true` and a matching idempotency key.

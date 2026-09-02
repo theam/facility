@@ -8,6 +8,8 @@ options:
 enabled: true
 triggers:
   - type: manual
+  - type: mcp
+  - type: ui
   - type: github
     name: assigned-issue
     event: issues

@@ -39,6 +39,7 @@ const sidebars: SidebarsConfig = {
         "reference/mcp",
         "reference/webhooks",
         "reference/security",
+        "reference/reference-fixture",
         "reference/upgrade-012",
         {
           type: "category",
@@ -51,6 +52,7 @@ const sidebars: SidebarsConfig = {
             "reference/decisions/authenticated-preview",
             "reference/decisions/multi-repository-stories",
             "reference/decisions/storage-and-deletion",
+            "reference/decisions/agent-edits-use-pull-requests",
           ],
         },
       ],

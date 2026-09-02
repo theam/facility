@@ -1,7 +1,9 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
+import { AgentEditor } from "@/components/agents/agent-editor";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api, type StoryAgent } from "@/lib/api";
+import { can } from "@/lib/permissions";
 
 export const metadata = { title: "agents" };
 
@@ -11,8 +13,9 @@ export default async function ProjectAgentsPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const result = await api.storyAgents(projectId);
+  const [result, me] = await Promise.all([api.storyAgents(projectId), api.me()]);
   if (!result.ok) return result.offline ? <Offline /> : <ErrorNotice message={result.message} />;
+  const canWrite = me.ok && can(me.data.permissions, "projects:write");
 
   return (
     <div className="flex flex-col gap-8">
@@ -23,14 +26,14 @@ export default async function ProjectAgentsPage({
         <p className="max-w-2xl text-[13px] leading-relaxed text-(--dim)">
           This catalog is read directly from{" "}
           <code className="font-mono text-(--ink)">.agents/</code> in the primary repository. Change
-          prompts, engine, model, or triggers in Git and commit them like any other project
-          configuration.
+          prompts, engine, model, or triggers here. Facility validates the manifest, commits the
+          repository file on a dedicated branch, and opens a pull request for review.
         </p>
       </header>
 
       <div className="grid gap-px border border-(--line) bg-(--line) lg:grid-cols-2">
         {result.data.agents.map((agent) => (
-          <AgentCard key={agent.name} agent={agent} />
+          <AgentCard key={agent.name} agent={agent} projectId={projectId} canWrite={canWrite} />
         ))}
       </div>
 
@@ -43,7 +46,15 @@ export default async function ProjectAgentsPage({
   );
 }
 
-function AgentCard({ agent }: { agent: StoryAgent }) {
+function AgentCard({
+  agent,
+  projectId,
+  canWrite,
+}: {
+  agent: StoryAgent;
+  projectId: string;
+  canWrite: boolean;
+}) {
   return (
     <article className="flex flex-col gap-5 bg-(--bg) p-5 sm:p-6">
       <div className="flex items-start justify-between gap-4">
@@ -80,18 +91,39 @@ function AgentCard({ agent }: { agent: StoryAgent }) {
           </span>
         ))}
       </div>
+      {agent.schedule_status.schedules.map((schedule) => (
+        <p key={schedule.name} className="text-[11px] text-(--mut)">
+          Next {schedule.name}: {schedule.enabled ? formatTime(schedule.next_run_at) : "disabled"}
+        </p>
+      ))}
+      {agent.schedule_status.last_result ? (
+        <p className="text-[11px] text-(--mut)">
+          Last scheduled result: {agent.schedule_status.last_result.state} ·{" "}
+          {formatTime(agent.schedule_status.last_result.at)}
+        </p>
+      ) : null}
       <p className="font-mono text-[9.5px] text-(--dim)">
         {agent.commit_sha.slice(0, 10)} · {agent.hash.slice(0, 10)}
       </p>
+      {canWrite ? <AgentEditor projectId={projectId} agent={agent} /> : null}
     </article>
   );
 }
 
 function triggerLabel(trigger: StoryAgent["triggers"][number]) {
-  if (trigger.type === "manual") return "manual";
+  if (trigger.type === "manual" || trigger.type === "mcp" || trigger.type === "ui") {
+    return trigger.type;
+  }
   if (trigger.type === "schedule") {
     return `schedule · ${String(trigger.cron ?? "")} · ${String(trigger.timezone ?? "UTC")}`;
   }
   const action = Array.isArray(trigger.actions) ? ` · ${trigger.actions.join(",")}` : "";
   return `github · ${String(trigger.event ?? "event")}${action}`;
+}
+
+function formatTime(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(date)
+    : value;
 }

@@ -2,12 +2,14 @@ import type { AgentManifest } from "@facility/agents";
 import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
 
 export type AgentTurnRequest = {
+  turnId: string;
   manifest: AgentManifest;
   workspace: WorkspaceLocator;
   prompt: string;
   cwd: string;
   nativeSessionId?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   environment?: Record<string, string>;
 };
 
@@ -55,11 +57,12 @@ abstract class CliAgentEngine implements AgentEngine {
     parser: EngineEventParser,
   ): Promise<AgentTurnResult> {
     const result = await this.runtime.exec(request.workspace, {
-      command,
-      args,
+      command: "sh",
+      args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
       cwd: request.cwd,
-      env: request.environment,
+      env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
       timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
+      signal: request.signal,
       onOutput: ({ stream, data }) => {
         if (stream === "stdout") parser.push(data);
       },
@@ -67,9 +70,15 @@ abstract class CliAgentEngine implements AgentEngine {
     parser.finish(result.stdout);
     const parsed = parser.result();
     if (result.exitCode !== 0) {
+      const message = result.stderr.trim() || `${this.name} exited with status ${result.exitCode}`;
+      const corruptSession =
+        request.nativeSessionId &&
+        /(?:session|thread).*(?:corrupt|invalid|not found|missing|unreadable|cannot resume)/i.test(
+          message,
+        );
       throw new AgentEngineError(
-        "agent_engine_failed",
-        result.stderr.trim() || `${this.name} exited with status ${result.exitCode}`,
+        corruptSession ? "agent_session_corrupt" : "agent_engine_failed",
+        message,
         { engine: this.name, exitCode: result.exitCode, events: parsed.events },
       );
     }
@@ -93,6 +102,24 @@ abstract class CliAgentEngine implements AgentEngine {
   }
 }
 
+const ENGINE_PROCESS_WRAPPER = `set -eu
+case "$FACILITY_TURN_ID" in *[!A-Za-z0-9_-]*|'') exit 64 ;; esac
+marker_dir="$(dirname "$HOME")/engine-processes"
+marker="$marker_dir/$FACILITY_TURN_ID.pid"
+mkdir -p "$marker_dir"
+"$@" &
+child=$!
+printf '%s' "$child" > "$marker"
+forward() { kill -TERM "$child" 2>/dev/null || true; }
+cleanup() { rm -f "$marker"; }
+trap forward TERM INT HUP
+trap cleanup EXIT
+set +e
+wait "$child"
+status=$?
+set -e
+exit "$status"`;
+
 export class ClaudeCodeEngine extends CliAgentEngine {
   readonly name = "claude_code" as const;
 
@@ -109,9 +136,6 @@ export class ClaudeCodeEngine extends CliAgentEngine {
       request.manifest.model,
     ];
     if (request.nativeSessionId) args.push("--resume", request.nativeSessionId);
-    if (request.manifest.options.max_turns) {
-      args.push("--max-turns", String(request.manifest.options.max_turns));
-    }
     return this.execute(request, "claude", args, new ClaudeEventParser());
   }
 }
@@ -149,6 +173,42 @@ export class AgentEngineRegistry {
     return engine;
   }
 }
+
+export async function stopInterruptedEngineProcess(
+  runtime: WorkspaceRuntime,
+  workspace: WorkspaceLocator,
+  turnId: string,
+) {
+  if (!/^turn_[A-Za-z0-9_-]+$/.test(turnId)) {
+    throw new AgentEngineError("turn_id_invalid", "interrupted engine turn id is invalid");
+  }
+  const result = await runtime.exec(workspace, {
+    command: "sh",
+    args: ["-lc", INTERRUPTED_PROCESS_CLEANUP],
+    env: { FACILITY_INTERRUPTED_TURN_ID: turnId },
+    timeoutMs: 15_000,
+  });
+  return result.exitCode === 0 ? result.stdout.trim() || "absent" : "cleanup failed";
+}
+
+const INTERRUPTED_PROCESS_CLEANUP = [
+  "set -eu",
+  'marker_dir="$(dirname "$HOME")/engine-processes"',
+  'marker="$marker_dir/$FACILITY_INTERRUPTED_TURN_ID.pid"',
+  'if ! test -f "$marker"; then printf absent; exit 0; fi',
+  'pid="$(cat "$marker")"',
+  'case "$pid" in *[!0-9]*|\'\') rm -f "$marker"; printf stale-marker; exit 0 ;; esac',
+  'if test -r "/proc/$pid/environ" && tr \'\\0\' \'\\n\' < "/proc/$pid/environ" | grep -Fqx "FACILITY_TURN_ID=$FACILITY_INTERRUPTED_TURN_ID"; then',
+  '  kill -TERM "$pid" 2>/dev/null || true',
+  "  attempt=0",
+  '  while kill -0 "$pid" 2>/dev/null && test "$attempt" -lt 50; do attempt=$((attempt + 1)); sleep 0.1; done',
+  '  if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi',
+  "  printf stopped",
+  "else",
+  "  printf stale-marker",
+  "fi",
+  'rm -f "$marker"',
+].join("\n");
 
 type ParsedEngineEvents = {
   sessionId?: string;

@@ -225,6 +225,34 @@ describe("persistent story workspace lifecycle", async () => {
     });
   });
 
+  it("keeps a story in attention when canceling a turn leaves an open item", async () => {
+    const result = await service.start(startInput(`issue-${randomUUID()}`));
+    const turn = result.queued.turn;
+    if (!turn) throw new Error("expected an active turn");
+    await service.flagAttention({
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      turnId: turn.id,
+      kind: "environment_failure",
+      title: "Environment needs repair",
+      detail: "Fix the service before retrying.",
+    });
+
+    await expect(
+      service.cancelTurn({
+        orgId,
+        projectId,
+        storyId: result.story.id,
+        turnId: turn.id,
+        actor: { type: "user", id: "user_test" },
+      }),
+    ).resolves.toMatchObject({
+      story: { status: "attention", activeAgentName: null },
+      attention: [expect.objectContaining({ kind: "environment_failure", status: "open" })],
+    });
+  });
+
   it("fails closed across tenants and the database rejects a cross-tenant workspace", async () => {
     const result = await service.start(startInput(`issue-${randomUUID()}`));
     await expect(service.get(otherOrgId, otherProjectId, result.story.id)).rejects.toMatchObject({
@@ -315,5 +343,77 @@ describe("persistent story workspace lifecycle", async () => {
     expect(
       await db.select().from(attentionItems).where(eq(attentionItems.storyId, story.id)),
     ).toHaveLength(1);
+  });
+
+  it("keeps typed attention history across retry and dismissal", async () => {
+    const started = await service.start(startInput(`issue-${randomUUID()}`));
+    const failedTurnId = started.queued.turn?.id;
+    if (!failedTurnId) throw new Error("expected initial turn");
+    await service.failTurn({
+      orgId,
+      projectId,
+      turnId: failedTurnId,
+      error: "recoverable engine failure",
+    });
+    const failed = await service.get(orgId, projectId, started.story.id);
+    const failure = failed.attention.find((item) => item.kind === "turn_error");
+    if (!failure) throw new Error("expected turn attention");
+
+    const retry = await service.retryAttention({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      attentionId: failure.id,
+      actor: { type: "user", id: "user_test" },
+    });
+    expect(retry.queued.turn).toMatchObject({ triggerKey: `attention-retry:${failure.id}` });
+    await service.resolveAttentionItem({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      attentionId: failure.id,
+      resolution: "successful_retry",
+      actor: { type: "system", id: "turn-dispatcher" },
+    });
+
+    const waiting = await service.flagAttention({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      kind: "agent_waiting",
+      title: "Builder needs a reply",
+      detail: "Which migration policy should be used?",
+    });
+    await service.dismissAttention({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      attentionId: waiting.id,
+      actor: { type: "user", id: "user_test" },
+    });
+    const history = (await service.get(orgId, projectId, started.story.id)).attention;
+    expect(history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: failure.id,
+          status: "resolved",
+          resolution: "successful_retry",
+        }),
+        expect.objectContaining({
+          id: waiting.id,
+          status: "resolved",
+          resolution: "dismissed",
+        }),
+      ]),
+    );
+    await expect(
+      service.dismissAttention({
+        orgId: otherOrgId,
+        projectId: otherProjectId,
+        storyId: started.story.id,
+        attentionId: waiting.id,
+        actor: { type: "user", id: "other" },
+      }),
+    ).rejects.toMatchObject({ code: "story_not_found", statusCode: 404 });
   });
 });

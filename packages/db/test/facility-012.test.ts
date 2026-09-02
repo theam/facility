@@ -75,6 +75,10 @@ describe("Facility 0.12 database", () => {
       await sql.unsafe(`CREATE SCHEMA "${schemaName}"`);
       await sql.unsafe(`SET search_path TO "${schemaName}"`);
       await sql`CREATE TABLE runs (id text PRIMARY KEY)`;
+      await sql`INSERT INTO runs (id) VALUES ('legacy-run')`;
+      const before = await sql<{ tablename: string }[]>`
+        SELECT tablename FROM pg_tables WHERE schemaname = ${schemaName} ORDER BY tablename
+      `;
       await expect(
         applyMigrations(sql, { migrationsDir: join(tmpdir(), "unused") }),
       ).rejects.toBeInstanceOf(LegacyDatabaseError);
@@ -82,6 +86,11 @@ describe("Facility 0.12 database", () => {
         SELECT to_regclass('_facility_migrations')::text AS value
       `;
       expect(metadata[0]?.value).toBeNull();
+      const after = await sql<{ tablename: string }[]>`
+        SELECT tablename FROM pg_tables WHERE schemaname = ${schemaName} ORDER BY tablename
+      `;
+      expect(after).toEqual(before);
+      await expect(sql`SELECT id FROM runs`).resolves.toEqual([{ id: "legacy-run" }]);
     } finally {
       await sql.unsafe(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
       await sql.end();

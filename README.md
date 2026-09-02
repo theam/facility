@@ -52,6 +52,8 @@ model: claude-opus-4-8
 enabled: true
 triggers:
   - type: manual
+  - type: mcp
+  - type: ui
   - type: schedule
     name: weekly-security-audit
     cron: "0 5 * * 1"
@@ -93,6 +95,9 @@ environment:
   setup: pnpm install --frozen-lockfile
   start: docker compose up -d
   ready: curl --fail http://localhost:3000/health
+  secrets:
+    - ANTHROPIC_API_KEY
+    - OPENAI_API_KEY
   services:
     app:
       port: 3000
@@ -101,6 +106,9 @@ environment:
 ```
 
 The workspace can run Docker and Docker Compose and includes browser tooling for end-to-end tests.
+Secret names are committed in `.facility.yml`; their values come from the operator's secret
+environment and are injected only while setup, services, or agents run. Use the provider variable
+names supported by the selected Claude Code and Codex authentication method.
 Declared services are available through short-lived, authenticated preview sessions routed to the
 live workspace. Facility does not build a second preview deployment.
 

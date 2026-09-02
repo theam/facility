@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type WorkspaceProvider = "docker" | "vercel" | "fake";
 export type WorkspaceState = "creating" | "running" | "sleeping" | "error" | "destroyed";
 
@@ -34,6 +36,7 @@ export type WorkspaceCommand = {
   env?: Record<string, string>;
   stdin?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onOutput?: (output: WorkspaceCommandOutput) => void;
 };
 
@@ -63,6 +66,13 @@ export type WorkspaceInspection = {
   };
 };
 
+export type WorkspaceBackup = {
+  format: "tar-gzip-base64";
+  payload: string;
+  sha256: string;
+  createdAt: string;
+};
+
 export interface WorkspaceRuntime {
   readonly provider: WorkspaceProvider;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
@@ -72,6 +82,104 @@ export interface WorkspaceRuntime {
   inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection>;
   suspend(workspace: WorkspaceLocator): Promise<void>;
   destroy(workspace: WorkspaceLocator): Promise<void>;
+}
+
+/** Provider-independent, operator-controlled backup of the complete durable workspace volume. */
+export async function exportWorkspaceBackup(
+  runtime: WorkspaceRuntime,
+  workspace: WorkspaceLocator,
+): Promise<WorkspaceBackup> {
+  const result = await runtime.exec(workspace, {
+    command: "sh",
+    args: [
+      "-lc",
+      "tar -C . --exclude='./.facility/docker' --exclude='./.facility/workspace.json' --exclude='./.facility/runtime-ready' -czf - . | base64 | tr -d '\\n'",
+    ],
+    timeoutMs: 30 * 60 * 1_000,
+  });
+  if (result.exitCode !== 0 || !result.stdout.trim()) {
+    throw new WorkspaceRuntimeError(
+      "workspace_backup_failed",
+      result.stderr.trim() || "workspace backup command returned no data",
+    );
+  }
+  const payload = result.stdout.trim();
+  return {
+    format: "tar-gzip-base64",
+    payload,
+    sha256: createHash("sha256").update(payload).digest("hex"),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/** Restores a validated Facility backup into a newly created workspace identity. */
+export async function restoreWorkspaceBackup(
+  runtime: WorkspaceRuntime,
+  input: CreateWorkspace,
+  backup: WorkspaceBackup,
+): Promise<WorkspaceHandle> {
+  if (
+    backup.format !== "tar-gzip-base64" ||
+    createHash("sha256").update(backup.payload).digest("hex") !== backup.sha256
+  ) {
+    throw new WorkspaceRuntimeError(
+      "workspace_backup_invalid",
+      "workspace backup format or checksum is invalid",
+    );
+  }
+  const workspace = await runtime.create(input);
+  try {
+    const stagingPath = ".facility/restore/workspace.tar.gz.b64";
+    const initialized = await runtime.exec(workspace, {
+      command: "sh",
+      args: ["-lc", `mkdir -p .facility/restore && : > ${stagingPath}`],
+    });
+    if (initialized.exitCode !== 0) {
+      throw new WorkspaceRuntimeError(
+        "workspace_restore_failed",
+        initialized.stderr.trim() || "workspace restore staging could not be initialized",
+      );
+    }
+    for (let offset = 0; offset < backup.payload.length; offset += 48_000) {
+      const chunk = backup.payload.slice(offset, offset + 48_000);
+      const appended = await runtime.exec(workspace, {
+        command: "sh",
+        args: ["-lc", `printf '%s' "$FACILITY_WORKSPACE_BACKUP_CHUNK" >> ${stagingPath}`],
+        env: { FACILITY_WORKSPACE_BACKUP_CHUNK: chunk },
+      });
+      if (appended.exitCode !== 0) {
+        throw new WorkspaceRuntimeError(
+          "workspace_restore_failed",
+          appended.stderr.trim() || "workspace restore staging write failed",
+        );
+      }
+    }
+    const result = await runtime.exec(workspace, {
+      command: "sh",
+      args: [
+        "-lc",
+        [
+          "set -eu",
+          "archive=$(mktemp)",
+          `trap 'rm -f "$archive"; rm -rf .facility/restore' EXIT`,
+          `base64 -d < ${stagingPath} > "$archive"`,
+          "tar -tzf \"$archive\" | awk 'BEGIN { ok=1 } /(^|\\/)\\.\\.(\\/|$)/ || /^\\// { ok=0 } END { exit ok ? 0 : 1 }'",
+          'tar -C . -xzf "$archive"',
+        ].join("\n"),
+      ],
+      timeoutMs: 30 * 60 * 1_000,
+    });
+    if (result.exitCode !== 0) {
+      throw new WorkspaceRuntimeError(
+        "workspace_restore_failed",
+        result.stderr.trim() || "workspace restore command failed",
+      );
+    }
+    return runtime.wake(workspace);
+  } catch (error) {
+    await runtime.destroy(workspace).catch(() => undefined);
+    throw error;
+  }
 }
 
 export class WorkspaceRuntimeError extends Error {

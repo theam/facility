@@ -28,6 +28,7 @@ type RequestOptions<Method extends FacilityRouteMethod, Path extends FacilityRou
 export type FacilityClientOptions = {
   baseUrl: string;
   apiKey?: string;
+  headers?: Record<string, string>;
   fetch?: typeof fetch;
   timeoutMs?: number;
   maxRetries?: number;
@@ -52,6 +53,7 @@ export class FacilityApiError extends Error {
 export class FacilityClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
+  private readonly headers: Headers;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
@@ -60,6 +62,7 @@ export class FacilityClient {
   constructor(options: FacilityClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
+    this.headers = new Headers(options.headers);
     this.fetchImpl = options.fetch ?? fetch;
     this.timeoutMs = positiveInteger(options.timeoutMs, 30_000, "timeoutMs");
     this.maxRetries = nonNegativeInteger(options.maxRetries, 2, "maxRetries");
@@ -124,9 +127,8 @@ export class FacilityClient {
     options: RequestOptions<Method, Path>,
   ): Promise<FacilityRouteResponse<Method, Path>> {
     const hasBody = options.body !== undefined;
-    const headers = new Headers({
-      accept: options.responseType === "text" ? "text/plain" : "application/json",
-    });
+    const headers = new Headers(this.headers);
+    headers.set("accept", options.responseType === "text" ? "text/plain" : "application/json");
     if (this.apiKey) headers.set("authorization", `Bearer ${this.apiKey}`);
     if (hasBody) headers.set("content-type", "application/json");
     if (options.idempotencyKey) headers.set("idempotency-key", options.idempotencyKey);

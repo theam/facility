@@ -215,6 +215,7 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     build-essential \
     busybox-static \
     ca-certificates \
+    chromium \
     curl \
     fonts-noto-color-emoji \
     fonts-freefont-ttf \

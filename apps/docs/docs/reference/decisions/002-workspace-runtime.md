@@ -28,12 +28,12 @@ The control plane depends on these operations only:
 ```ts
 interface WorkspaceRuntime {
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
-  wake(id: string): Promise<WorkspaceHandle>;
-  exec(id: string, command: Command): Promise<CommandResult>;
-  expose(id: string, ports: PortSpec[]): Promise<PreviewEndpoint[]>;
-  inspect(id: string): Promise<WorkspaceInspection>;
-  suspend(id: string): Promise<void>;
-  destroy(id: string): Promise<void>;
+  wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle>;
+  exec(workspace: WorkspaceLocator, command: WorkspaceCommand): Promise<WorkspaceCommandResult>;
+  expose(workspace: WorkspaceLocator, ports: WorkspacePort[]): Promise<PreviewEndpoint[]>;
+  inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection>;
+  suspend(workspace: WorkspaceLocator): Promise<void>;
+  destroy(workspace: WorkspaceLocator): Promise<void>;
 }
 ```
 
@@ -47,3 +47,32 @@ Running Compose requires more capability than the old single-run container. This
 The compensating boundaries are microVM or container isolation, no host Docker socket, a dedicated
 network and volume, resource limits, tenant-scoped control-plane calls, and short-lived credentials.
 The agent is trusted as a repository maintainer inside that boundary.
+
+## Evidence
+
+The Docker test starts an unprivileged agent command, a workspace-scoped Docker daemon, three
+Compose services, and Chromium. It cancels a long-running command without stopping the services,
+removes and replaces the compute container, reattaches the named volume, and reads the prior Git and
+session bytes. The fake runtime covers retries, invalid paths, cancellation, recovery after process
+restart, and idempotent deletion.
+
+## Alternatives tested
+
+- Binding commands directly to the host filesystem was used by the fake and rejected as a runtime
+  because it has no isolation.
+- Keeping data in the compute container was rejected by the replacement test. A separately named
+  volume is required for the test to pass.
+- Mounting the host Docker socket was rejected in favor of a workspace-scoped daemon because the
+  socket would allow the agent to control unrelated host containers and volumes.
+
+## Ownership boundary
+
+The application layer owns state transitions and calls only this interface. Runtime adapters own
+provider references, command execution, port discovery, and compute/storage operations. Project
+commands own the processes they start inside the workspace.
+
+## Revisit when
+
+Change the primitive only if the selected provider cannot preserve volume identity across compute
+replacement, cannot safely support Compose and Chromium, or exposes a narrower isolation mechanism
+that passes the same fixture.

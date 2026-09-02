@@ -16,5 +16,14 @@ Required secrets include `SECRET_MASTER_KEY`, GitHub App credentials, OAuth cred
 engine credentials made available to workspaces. Installation and engine tokens should be
 short-lived where the provider supports it.
 
+Repositories list required engine and project secret names under `environment.secrets` in
+`.facility.yml`. Put each value in the API and worker secret environment as
+`FACILITY_PROJECT_<PROJECT_ID>_<NAME>`. For example, project `proj_abc` can declare
+`ANTHROPIC_API_KEY` and receive it from `FACILITY_PROJECT_PROJ_ABC_ANTHROPIC_API_KEY`. Facility
+never resolves a repository declaration directly against the control process environment, so a
+project cannot request `DATABASE_URL`, `SECRET_MASTER_KEY`, or another project's credential.
+Rotating or removing a value affects the next turn and does not delete the stored worktree or native
+session files.
+
 Apply migrations before starting API or worker replicas. Do not point 0.12 at a 0.11 database; see
 [the upgrade boundary](../reference/upgrade-012.md).

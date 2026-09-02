@@ -6,6 +6,8 @@ model: {{REVIEW_MODEL}}
 enabled: true
 triggers:
   - type: manual
+  - type: mcp
+  - type: ui
   - type: github
     name: pull-request-updated
     event: pull_request

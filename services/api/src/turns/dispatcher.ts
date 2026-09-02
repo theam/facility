@@ -18,7 +18,8 @@ import type {
   ProjectManifestSource,
 } from "../workspaces/project-environment.js";
 import type { WorkspaceLocator } from "../workspaces/runtime.js";
-import type { AgentEngineRegistry } from "./engines.js";
+import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
+import { AgentEngineError } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
 
 export class TurnDispatcher {
@@ -47,7 +48,32 @@ export class TurnDispatcher {
         )
         .returning()
     )[0];
-    if (!turn) return { claimed: false as const };
+    if (!turn) {
+      const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
+      if (unclaimed?.state === "canceled") {
+        await this.activateQueuedSuccessor({
+          ...input,
+          storyId: unclaimed.storyId,
+        });
+      }
+      return { claimed: false as const };
+    }
+
+    const cancellation = new AbortController();
+    let leaseCheckPending = false;
+    const leaseHeartbeat = setInterval(() => {
+      if (leaseCheckPending) return;
+      leaseCheckPending = true;
+      void this.heartbeat(input.orgId, input.projectId, input.turnId)
+        .then((alive) => {
+          if (!alive) cancellation.abort();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          leaseCheckPending = false;
+        });
+    }, 2_000);
+    leaseHeartbeat.unref();
 
     const eventBase = {
       orgId: input.orgId,
@@ -55,6 +81,7 @@ export class TurnDispatcher {
       storyId: turn.storyId,
       turnId: turn.id,
     };
+    let secrets: string[] = [];
     try {
       await this.storiesService.resolveAttention({
         orgId: input.orgId,
@@ -62,6 +89,16 @@ export class TurnDispatcher {
         storyId: turn.storyId,
         kind: "queued_turn_dispatch_error",
       });
+      if (["manual", "mcp", "ui"].includes(turn.triggerType)) {
+        await this.storiesService.resolveAttention({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: turn.storyId,
+          kind: "agent_waiting",
+          resolution: "replied",
+          actor: turn.createdBy as { type: "user" | "service" | "system"; id: string },
+        });
+      }
       await appendTurnEvent(this.db, { ...eventBase, type: "turn.started", data: {} });
       const [story, workspace, conversation, messages] = await Promise.all([
         this.scopedStory(input.orgId, input.projectId, turn.storyId),
@@ -116,6 +153,7 @@ export class TurnDispatcher {
         branch,
         previousSetupChecksum: workspace.setupChecksum,
       });
+      secrets = credentialSecrets(prepared.processEnvironment, projectManifest.environment.secrets);
       const session = (
         await this.db
           .select()
@@ -134,15 +172,44 @@ export class TurnDispatcher {
           )
           .limit(1)
       )[0];
-      const result = await this.engines.get(manifest.engine).run({
+      const engine = this.engines.get(manifest.engine);
+      const engineRequest = {
+        turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
         prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
-        environment: credential.environment,
-      });
-      const secrets = credentialSecrets(credential.environment);
+        environment: prepared.processEnvironment,
+        signal: cancellation.signal,
+      };
+      let result: AgentTurnResult;
+      try {
+        result = await engine.run(engineRequest);
+      } catch (error) {
+        if (
+          !(error instanceof AgentEngineError) ||
+          error.code !== "agent_session_corrupt" ||
+          !session
+        ) {
+          throw error;
+        }
+        await this.persistFailedEngineEvents(error, eventBase, secrets);
+        await this.db
+          .update(engineSessions)
+          .set({ status: "corrupt", updatedAt: new Date() })
+          .where(and(eq(engineSessions.orgId, input.orgId), eq(engineSessions.id, session.id)));
+        await appendTurnEvent(this.db, {
+          ...eventBase,
+          type: "engine.session_corrupt",
+          data: { engine: manifest.engine, sessionId: session.nativeSessionId },
+        });
+        throw new AgentEngineError(
+          "agent_session_corrupt",
+          "The native session could not be resumed. Its files were retained; retry the attention item to start a replacement session in the same worktree.",
+          error.details,
+        );
+      }
       for (const event of result.events) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -150,6 +217,7 @@ export class TurnDispatcher {
           data: boundedEvent(redact(event.data, secrets)),
         });
       }
+      const outcome = agentOutcome(result.output);
       await this.persistSession({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -165,62 +233,147 @@ export class TurnDispatcher {
         projectId: input.projectId,
         turnId: turn.id,
         output: redactString(
-          result.output || `${manifest.name} completed without a text response.`,
+          outcome.output || `${manifest.name} completed without a text response.`,
           secrets,
         ),
         actor: { type: "system", id: `${manifest.engine}:${result.nativeSessionId}` },
       });
+      if (outcome.attention) {
+        await this.storiesService.flagAttention({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: story.id,
+          turnId: turn.id,
+          kind: "agent_waiting",
+          title: `${manifest.name} needs a reply`,
+          detail: redactString(outcome.attention, secrets),
+        });
+      } else {
+        const retriedAttentionId = turn.triggerKey?.match(
+          /^attention-retry:(attn_[a-z0-9]+)$/,
+        )?.[1];
+        if (retriedAttentionId) {
+          await this.storiesService.resolveAttentionItem({
+            orgId: input.orgId,
+            projectId: input.projectId,
+            storyId: story.id,
+            attentionId: retriedAttentionId,
+            resolution: "successful_retry",
+            actor: { type: "system", id: "turn-dispatcher" },
+          });
+        }
+      }
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.succeeded",
         data: { durationMs: result.durationMs },
       });
-      const next = await this.nextQueuedMessage(input.orgId, input.projectId, story.id);
-      if (next?.requestedAgentName) {
-        try {
-          const projected = await this.catalog.get(
-            input.orgId,
-            input.projectId,
-            next.requestedAgentName,
-          );
-          await this.storiesService.activateNextMessage({
-            orgId: input.orgId,
-            projectId: input.projectId,
-            storyId: story.id,
-            agent: manifestFromProjection(projected),
-            actor: (next.actor ?? { type: "system", id: "queued-message" }) as {
-              type: "user" | "service" | "system";
-              id: string;
-            },
-          });
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          await this.storiesService.flagAttention({
-            orgId: input.orgId,
-            projectId: input.projectId,
-            storyId: story.id,
-            turnId: turn.id,
-            kind: "queued_turn_dispatch_error",
-            title: `Could not dispatch queued ${next.requestedAgentName} turn`,
-            detail,
-          });
-          await appendTurnEvent(this.db, {
-            ...eventBase,
-            type: "queue.activation_failed",
-            data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
-          });
-        }
-      }
+      await this.activateQueuedSuccessor({ ...input, storyId: story.id });
       return { claimed: true as const, state: "succeeded" as const, result };
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      if (await this.isCanceled(input.orgId, input.projectId, input.turnId)) {
+        await appendTurnEvent(this.db, {
+          ...eventBase,
+          type: "turn.canceled",
+          data: {},
+        });
+        await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
+        return { claimed: true as const, state: "canceled" as const };
+      }
+      const detail = redactString(error instanceof Error ? error.message : String(error), secrets);
       await this.storiesService.failTurn({ ...input, error: detail });
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.failed",
         data: { error: detail.slice(0, 8_000) },
       });
+      await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
       return { claimed: true as const, state: "failed" as const, error: detail };
+    } finally {
+      clearInterval(leaseHeartbeat);
+    }
+  }
+
+  private async isCanceled(orgId: string, projectId: string, turnId: string) {
+    const current = (
+      await this.db
+        .select({ state: turns.state })
+        .from(turns)
+        .where(and(eq(turns.orgId, orgId), eq(turns.projectId, projectId), eq(turns.id, turnId)))
+        .limit(1)
+    )[0];
+    return current?.state === "canceled";
+  }
+
+  private async heartbeat(orgId: string, projectId: string, turnId: string) {
+    const alive = await this.db
+      .update(turns)
+      .set({ updatedAt: new Date() })
+      .where(
+        and(
+          eq(turns.orgId, orgId),
+          eq(turns.projectId, projectId),
+          eq(turns.id, turnId),
+          eq(turns.state, "running"),
+        ),
+      )
+      .returning({ id: turns.id });
+    return alive.length > 0;
+  }
+
+  private async turn(orgId: string, projectId: string, turnId: string) {
+    return (
+      await this.db
+        .select()
+        .from(turns)
+        .where(and(eq(turns.orgId, orgId), eq(turns.projectId, projectId), eq(turns.id, turnId)))
+        .limit(1)
+    )[0];
+  }
+
+  async activateQueuedSuccessor(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+  }) {
+    const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
+    if (!next?.requestedAgentName) return;
+    try {
+      const projected = await this.catalog.get(
+        input.orgId,
+        input.projectId,
+        next.requestedAgentName,
+      );
+      await this.storiesService.activateNextMessage({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        agent: manifestFromProjection(projected),
+        actor: (next.actor ?? { type: "system", id: "queued-message" }) as {
+          type: "user" | "service" | "system";
+          id: string;
+        },
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await this.storiesService.flagAttention({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        turnId: input.turnId,
+        kind: "queued_turn_dispatch_error",
+        title: `Could not dispatch queued ${next.requestedAgentName} turn`,
+        detail,
+      });
+      await appendTurnEvent(this.db, {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        turnId: input.turnId,
+        type: "queue.activation_failed",
+        data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
+      });
     }
   }
 
@@ -312,6 +465,24 @@ export class TurnDispatcher {
       lastTurnId: input.turnId,
     });
   }
+
+  private async persistFailedEngineEvents(
+    error: AgentEngineError,
+    eventBase: { orgId: string; projectId: string; storyId: string; turnId: string },
+    secrets: string[],
+  ) {
+    const events = Array.isArray(error.details.events) ? error.details.events : [];
+    for (const candidate of events) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      const event = candidate as Partial<AgentTurnResult["events"][number]>;
+      if (typeof event.type !== "string" || !event.data || typeof event.data !== "object") continue;
+      await appendTurnEvent(this.db, {
+        ...eventBase,
+        type: `engine.${event.type}`,
+        data: boundedEvent(redact(event.data as Record<string, unknown>, secrets)),
+      });
+    }
+  }
 }
 
 function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator {
@@ -362,6 +533,7 @@ function buildPrompt(
     summary ? `# Conversation summary\n${summary}` : "",
     `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
     "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
+    "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -385,9 +557,13 @@ function storyBranch(title: string, storyId: string) {
   return `facility/${slug}-${storyId.slice(-8)}`;
 }
 
-function credentialSecrets(environment: Record<string, string>) {
+function credentialSecrets(environment: Record<string, string>, sensitiveNames: string[] = []) {
   const secrets = new Set<string>();
   if (environment.GH_TOKEN) secrets.add(environment.GH_TOKEN);
+  for (const name of sensitiveNames) {
+    const value = environment[name];
+    if (value) secrets.add(value);
+  }
   try {
     for (const value of Object.values(
       JSON.parse(environment.FACILITY_GITHUB_CREDENTIALS ?? "{}"),
@@ -417,4 +593,12 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
 
 function truncateStart(value: string, limit: number) {
   return value.length <= limit ? value : `[Earlier transcript omitted]\n${value.slice(-limit)}`;
+}
+
+function agentOutcome(output: string): { output: string; attention?: string } {
+  const match = /<facility-needs-attention>([\s\S]*?)<\/facility-needs-attention>\s*$/.exec(output);
+  if (!match) return { output };
+  const attention = match[1]?.trim();
+  if (!attention) return { output };
+  return { output: output.slice(0, match.index).trim(), attention };
 }

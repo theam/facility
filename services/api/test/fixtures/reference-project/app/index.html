@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Facility reference project</title>
+  </head>
+  <body>
+    <main>
+      <h1>Facility reference project</h1>
+      <p id="status">Loading seeded data…</p>
+      <ul id="people"></ul>
+    </main>
+    <script>
+      fetch("/cgi-bin/items")
+        .then((response) => {
+          if (!response.ok) throw new Error(`API returned ${response.status}`);
+          return response.json();
+        })
+        .then((payload) => {
+          document.querySelector("#status").textContent = "Application, API, and database are ready.";
+          document.querySelector("#people").innerHTML = payload.people
+            .map((person) => `<li>${person.name}</li>`)
+            .join("");
+          document.body.dataset.ready = "true";
+        })
+        .catch((error) => {
+          document.querySelector("#status").textContent = error.message;
+          document.body.dataset.ready = "error";
+        });
+    </script>
+  </body>
+</html>

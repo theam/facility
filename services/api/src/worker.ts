@@ -1,10 +1,13 @@
 import { createDb, type FacilityDb, turns } from "@facility/db";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, lte } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
+import type { StoryWorkspaceService } from "./stories/service.js";
 import { createStoryDomain } from "./story-domain.js";
+
+const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
 
 export async function startWorker() {
   const config = readConfig();
@@ -27,9 +30,19 @@ export async function startWorker() {
   for (const queue of queues) {
     await boss.createQueue(queue);
   }
-  const recoveredAtStartup = await recoverQueuedTurns(db, (queue, data) => boss.send(queue, data));
-  if (recoveredAtStartup > 0) {
-    logger.info({ recoveredTurns: recoveredAtStartup }, "re-enqueued durable turns at startup");
+  const interruptedAtStartup = await recoverInterruptedTurns(
+    db,
+    storyDomain.stories,
+    new Date(),
+    TURN_LEASE_TIMEOUT_MS,
+    (turn) => storyDomain.dispatcher.activateQueuedSuccessor(turn),
+  );
+  const queuedAtStartup = await recoverQueuedTurns(db, (queue, data) => boss.send(queue, data));
+  if (interruptedAtStartup > 0 || queuedAtStartup > 0) {
+    logger.info(
+      { interruptedTurns: interruptedAtStartup, queuedTurns: queuedAtStartup },
+      "recovered durable turns at startup",
+    );
   }
   for (const queue of queues) {
     if (queue === "github.webhook") {
@@ -67,10 +80,17 @@ export async function startWorker() {
           data as { orgId: string; projectId: string; turnId: string },
         );
       } else if (queue === "agent.schedules") {
+        const interruptedTurns = await recoverInterruptedTurns(
+          db,
+          storyDomain.stories,
+          new Date(),
+          TURN_LEASE_TIMEOUT_MS,
+          (turn) => storyDomain.dispatcher.activateQueuedSuccessor(turn),
+        );
         const recoveredTurns = await recoverQueuedTurns(db, (name, payload) =>
           boss.send(name, payload),
         );
-        result = { ...(await storyDomain.scheduler.tick()), recoveredTurns };
+        result = { ...(await storyDomain.scheduler.tick()), interruptedTurns, recoveredTurns };
       }
       logger.info({ queue, jobId, ...result }, "worker completed job");
     });
@@ -100,6 +120,52 @@ export async function recoverQueuedTurns(
     });
   }
   return queued.length;
+}
+
+export async function recoverInterruptedTurns(
+  db: FacilityDb,
+  stories: StoryWorkspaceService,
+  now = new Date(),
+  leaseTimeoutMs = TURN_LEASE_TIMEOUT_MS,
+  onRecovered?: (turn: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+  }) => Promise<unknown>,
+) {
+  const staleBefore = new Date(now.getTime() - leaseTimeoutMs);
+  const running = await db
+    .select({
+      id: turns.id,
+      orgId: turns.orgId,
+      projectId: turns.projectId,
+      storyId: turns.storyId,
+    })
+    .from(turns)
+    .where(and(eq(turns.state, "running"), lte(turns.updatedAt, staleBefore)))
+    .orderBy(asc(turns.updatedAt))
+    .limit(1_000);
+  let recovered = 0;
+  for (const turn of running) {
+    if (
+      await stories.recoverInterruptedTurn({
+        orgId: turn.orgId,
+        projectId: turn.projectId,
+        turnId: turn.id,
+        staleBefore,
+      })
+    ) {
+      recovered += 1;
+      await onRecovered?.({
+        orgId: turn.orgId,
+        projectId: turn.projectId,
+        storyId: turn.storyId,
+        turnId: turn.id,
+      });
+    }
+  }
+  return recovered;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

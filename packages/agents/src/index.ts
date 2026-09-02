@@ -2,23 +2,23 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import cronParser from "cron-parser";
-import { parseDocument } from "yaml";
+import { parseDocument, stringify } from "yaml";
 import { z } from "zod";
 
 export const AGENT_DIRECTORY = ".agents";
 
-const AgentName = z
+export const AgentNameSchema = z
   .string()
   .min(1)
   .max(64)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must be a lowercase kebab-case name");
 
-const ManualTrigger = z.object({ type: z.literal("manual") }).strict();
+const InteractiveTrigger = z.object({ type: z.enum(["manual", "mcp", "ui"]) }).strict();
 
 const ScheduleTrigger = z
   .object({
     type: z.literal("schedule"),
-    name: AgentName,
+    name: AgentNameSchema,
     cron: z.string().min(1).max(128),
     timezone: z.string().min(1).max(128).default("UTC"),
   })
@@ -38,7 +38,7 @@ const ScheduleTrigger = z
 const GithubTrigger = z
   .object({
     type: z.literal("github"),
-    name: AgentName,
+    name: AgentNameSchema,
     event: z.enum([
       "issues",
       "issue_comment",
@@ -52,11 +52,11 @@ const GithubTrigger = z
   })
   .strict();
 
-export const AgentTriggerSchema = z.union([ManualTrigger, ScheduleTrigger, GithubTrigger]);
+export const AgentTriggerSchema = z.union([InteractiveTrigger, ScheduleTrigger, GithubTrigger]);
 
 export const AgentManifestFrontmatterSchema = z
   .object({
-    name: AgentName,
+    name: AgentNameSchema,
     description: z.string().min(1).max(240),
     engine: z.enum(["claude_code", "codex"]),
     model: z.string().min(1).max(160),
@@ -66,7 +66,6 @@ export const AgentManifestFrontmatterSchema = z
         reasoning_effort: z
           .enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
           .optional(),
-        max_turns: z.number().int().min(1).max(1_000).optional(),
       })
       .strict()
       .default({}),
@@ -96,6 +95,7 @@ export type AgentManifestSource = {
 
 export class AgentManifestError extends Error {
   readonly code = "agent_manifest_invalid";
+  readonly statusCode = 400;
 
   constructor(
     readonly file: string,
@@ -151,6 +151,25 @@ export function parseAgentManifest(source: string, file = "agent.md"): AgentMani
   };
 }
 
+export function renderAgentManifest(
+  input: AgentManifestFrontmatter & { prompt: string },
+  file = `${input.name}.md`,
+): { source: string; manifest: AgentManifest } {
+  const frontmatter = AgentManifestFrontmatterSchema.parse({
+    name: input.name,
+    description: input.description,
+    engine: input.engine,
+    model: input.model,
+    enabled: input.enabled,
+    options: input.options,
+    triggers: input.triggers,
+  });
+  const prompt = input.prompt.trim();
+  if (!prompt) throw new AgentManifestError(file, "prompt body must not be empty");
+  const source = `---\n${stringify(frontmatter, { lineWidth: 0 }).trimEnd()}\n---\n\n${prompt}\n`;
+  return { source, manifest: parseAgentManifest(source, file) };
+}
+
 export function parseAgentCatalog(sources: AgentManifestSource[]): AgentManifest[] {
   const manifests = sources
     .map(({ file, source }) => parseAgentManifest(source, file))
@@ -184,6 +203,5 @@ export function findAgent(manifests: AgentManifest[], name: string): AgentManife
 }
 
 export function triggerIdentity(trigger: AgentTrigger): string {
-  if (trigger.type === "manual") return "manual";
-  return `${trigger.type}:${trigger.name}`;
+  return "name" in trigger ? `${trigger.type}:${trigger.name}` : trigger.type;
 }

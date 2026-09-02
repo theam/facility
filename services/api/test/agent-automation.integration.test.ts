@@ -93,6 +93,14 @@ describe("agent automations use persistent story workspaces", async () => {
       "claude_code",
     ),
     manifest(
+      "address-review",
+      "  - type: github\n    name: review-submitted\n    event: pull_request_review\n    actions: [submitted]",
+    ),
+    manifest(
+      "ci-doctor",
+      "  - type: github\n    name: workflow-completed\n    event: workflow_run\n    actions: [completed]",
+    ),
+    manifest(
       "security-audit",
       "  - type: schedule\n    name: nightly\n    cron: '0 2 * * *'\n    timezone: UTC",
     ),
@@ -120,6 +128,8 @@ describe("agent automations use persistent story workspaces", async () => {
     repositories: { primary: `acme/app-${suffix}`, related: [] },
     environment: {
       start: "true",
+      secrets: [],
+      variables: [],
       services: { web: { port: 3000, protocol: "http", websocket: true } },
     },
     hash: "project-manifest",
@@ -304,6 +314,87 @@ describe("agent automations use persistent story workspaces", async () => {
     ).resolves.toMatchObject({ state: "sleeping", volumeRef: workspace.volumeRef });
   });
 
+  it("routes review and workflow payloads to the matching standard agents", async () => {
+    const reviewDelivery = `delivery-${randomUUID()}`;
+    await expect(
+      github.handle({
+        id: reviewDelivery,
+        orgId,
+        eventType: "pull_request_review",
+        payload: {
+          action: "submitted",
+          repository: { owner: { login: "acme" }, name: `app-${suffix}` },
+          pull_request: {
+            number: 141,
+            title: "Address this review",
+            html_url: "https://github.test/acme/app/pull/141",
+            head: { ref: "feature/address-review" },
+          },
+          review: {
+            id: 901,
+            state: "changes_requested",
+            body: "Please cover the empty input path.",
+            html_url: "https://github.test/acme/app/pull/141#review-901",
+          },
+          sender: { login: "reviewer" },
+        },
+      }),
+    ).resolves.toEqual({ matched: 1, queued: 1, merged: 0 });
+
+    const workflowDelivery = `delivery-${randomUUID()}`;
+    await expect(
+      github.handle({
+        id: workflowDelivery,
+        orgId,
+        eventType: "workflow_run",
+        payload: {
+          action: "completed",
+          repository: { owner: { login: "acme" }, name: `app-${suffix}` },
+          workflow_run: {
+            id: 902,
+            name: "CI",
+            status: "completed",
+            conclusion: "failure",
+            html_url: "https://github.test/acme/app/actions/runs/902",
+            head_branch: "feature/repair-ci",
+            head_sha: "f".repeat(40),
+            pull_requests: [{ number: 142 }],
+          },
+          sender: { login: "github-actions" },
+        },
+      }),
+    ).resolves.toEqual({ matched: 1, queued: 1, merged: 0 });
+
+    const routedTurns = await db
+      .select()
+      .from(turns)
+      .where(and(eq(turns.projectId, projectId), eq(turns.triggerType, "github")));
+    expect(routedTurns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentName: "address-review",
+          triggerKey: "pull_request_review:review-submitted",
+        }),
+        expect.objectContaining({
+          agentName: "ci-doctor",
+          triggerKey: "workflow_run:workflow-completed",
+        }),
+      ]),
+    );
+    const routedMessages = await db
+      .select()
+      .from(storyMessages)
+      .where(eq(storyMessages.projectId, projectId));
+    const reviewPrompt = routedMessages.find((message) => message.body.includes(reviewDelivery));
+    const workflowPrompt = routedMessages.find((message) =>
+      message.body.includes(workflowDelivery),
+    );
+    expect(reviewPrompt?.body).toContain('"state":"changes_requested"');
+    expect(reviewPrompt?.body).toContain('"body":"Please cover the empty input path."');
+    expect(workflowPrompt?.body).toContain('"conclusion":"failure"');
+    expect(workflowPrompt?.body).toContain('"head_branch":"feature/repair-ci"');
+  });
+
   it("claims each due schedule once while preserving one long-lived scheduled story", async () => {
     const initial = new Date("2026-01-01T00:00:00.000Z");
     await scheduler.tick(initial);
@@ -346,7 +437,9 @@ describe("agent automations use persistent story workspaces", async () => {
 function render(agent: ReturnType<typeof manifest>) {
   const triggers = agent.triggers
     .map((trigger) => {
-      if (trigger.type === "manual") return "  - type: manual";
+      if (!("name" in trigger)) {
+        return `  - type: ${trigger.type}`;
+      }
       if (trigger.type === "schedule") {
         return `  - type: schedule\n    name: ${trigger.name}\n    cron: '${trigger.cron}'\n    timezone: ${trigger.timezone}`;
       }

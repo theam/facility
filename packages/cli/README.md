@@ -14,8 +14,8 @@ npx @theagilemonkeys/facility doctor
 
 - `.facility.yml` describes the repositories, setup command, development
   command, readiness check, and exposed services for a persistent workspace.
-- `.agents/*.md` describes each agent's prompt, engine, model, and manual,
-  scheduled, or GitHub triggers.
+- `.agents/*.md` describes each agent's prompt, engine, model, and manual, MCP,
+  UI, scheduled, or GitHub triggers.
 
 Existing files are preserved unless `--force` is explicit. Agent manifests do
 not contain permission profiles: every enabled agent receives the same full

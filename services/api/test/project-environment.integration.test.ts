@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newId } from "@facility/core";
@@ -9,6 +9,7 @@ import {
   orgs,
   projects,
   stories,
+  storyArtifacts,
   workspaceEvents,
   workspaces,
 } from "@facility/db";
@@ -68,6 +69,11 @@ environment:
     printf '%s' "$((count + 1))" > .setup-count
   start: mkdir -p .facility-test && printf started > .facility-test/status
   ready: test -f .facility-test/status
+  seed: mkdir -p .facility-test && printf seeded > .facility-test/seed
+  browser_test: |
+    test "$(cat .facility-test/seed)" = seeded
+    printf screenshot > "$FACILITY_ARTIFACT_DIR/home.png"
+    printf trace > "$FACILITY_ARTIFACT_DIR/browser-trace.zip"
   services:
     app:
       port: 3000
@@ -163,6 +169,25 @@ environment:
       cwd: "repos/acme/app",
     });
     expect(branch.stdout.trim()).toBe("facility/story-environment");
+    expect(
+      await readFile(join(workspace.volumeRef, "repos/acme/app/.facility-test/seed"), "utf8"),
+    ).toBe("seeded");
+
+    const browser = await environment.runBrowserTest({
+      orgId,
+      projectId,
+      storyId,
+      workspace: locator,
+      manifest,
+      credentials,
+    });
+    expect(browser.artifacts.map((artifact) => artifact.kind).sort()).toEqual([
+      "screenshot",
+      "trace",
+    ]);
+    expect(
+      await db.select().from(storyArtifacts).where(eq(storyArtifacts.storyId, storyId)),
+    ).toHaveLength(2);
 
     await runtime.replaceCompute(locator);
     await environment.prepare({
@@ -172,7 +197,7 @@ environment:
       manifest,
       credentials,
       branch: "facility/story-environment",
-      previousSetupChecksum: manifest.hash,
+      previousSetupChecksum: first.setupChecksum,
       readinessTimeoutMs: 2_000,
     });
     expect(await readFile(join(workspace.volumeRef, "repos/acme/app/.setup-count"), "utf8")).toBe(
@@ -181,6 +206,220 @@ environment:
     expect(
       await readFile(join(workspace.volumeRef, "repos/acme/shared/README.md"), "utf8"),
     ).toContain("shared");
+  });
+
+  it("validates declared environment before running setup and injects it ephemerally", async () => {
+    const configured = parseProjectManifest(`
+version: 1
+repositories:
+  primary: github.com/acme/app
+  related:
+    - github.com/acme/shared
+environment:
+  setup: test -n "$FACILITY_FIXTURE_SECRET" && printf '%s' "$FACILITY_FIXTURE_SECRET"
+  start: test "$FACILITY_FIXTURE_MODE" = test
+  secrets: [FACILITY_FIXTURE_SECRET]
+  variables: [FACILITY_FIXTURE_MODE]
+`);
+    const values = new Map([
+      ["FACILITY_FIXTURE_SECRET", "fixture-secret-value"],
+      ["FACILITY_FIXTURE_MODE", "test"],
+    ]);
+    const environment = new ProjectEnvironmentService(
+      db,
+      runtime,
+      `file://${remotes}`,
+      (_projectId, name) => values.get(name),
+    );
+    const prepared = await environment.prepare({
+      orgId,
+      projectId,
+      workspace,
+      manifest: configured,
+      credentials,
+      branch: "facility/story-environment",
+      cleanSetup: true,
+    });
+    expect(prepared).toMatchObject({
+      endpoints: [],
+      processEnvironment: {
+        FACILITY_FIXTURE_SECRET: "fixture-secret-value",
+        FACILITY_FIXTURE_MODE: "test",
+      },
+    });
+    const persisted = JSON.stringify(
+      await db.select().from(workspaceEvents).where(eq(workspaceEvents.workspaceId, workspaceId)),
+    );
+    expect(persisted).not.toContain("fixture-secret-value");
+
+    const missing = new ProjectEnvironmentService(
+      db,
+      runtime,
+      `file://${remotes}`,
+      () => undefined,
+    );
+    await expect(
+      missing.prepare({
+        orgId,
+        projectId,
+        workspace,
+        manifest: configured,
+        credentials,
+        branch: "facility/story-environment",
+      }),
+    ).rejects.toMatchObject({ code: "project_environment_missing" });
+  });
+
+  it("cannot inject an unscoped control-plane environment variable", async () => {
+    const configured = parseProjectManifest(`
+version: 1
+repositories:
+  primary: github.com/acme/app
+  related:
+    - github.com/acme/shared
+environment:
+  start: test -n "$DATABASE_URL"
+  secrets: [DATABASE_URL]
+`);
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+
+    await expect(
+      environment.prepare({
+        orgId,
+        projectId,
+        workspace,
+        manifest: configured,
+        credentials,
+        branch: "facility/story-environment",
+      }),
+    ).rejects.toMatchObject({
+      code: "project_environment_missing",
+      details: {
+        missing: [
+          {
+            name: "DATABASE_URL",
+            operatorName: `FACILITY_PROJECT_${projectId.toUpperCase()}_DATABASE_URL`,
+          },
+        ],
+      },
+    });
+  });
+
+  it("supports ordinary maintainer Git and GitHub operations with deterministic fakes", async () => {
+    const token = "fixture-full-maintainer-token";
+    const maintainerCredentials: GithubWorkspaceCredentials = {
+      ...credentials,
+      environment: {
+        GH_TOKEN: token,
+        GITHUB_TOKEN: token,
+      },
+    };
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    const prepared = await environment.prepare({
+      orgId,
+      projectId,
+      workspace,
+      manifest,
+      credentials: maintainerCredentials,
+      branch: "facility/story-environment",
+    });
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const shimDirectory = join(root, "github-cli");
+    const callsFile = join(root, "github-cli-calls");
+    await mkdir(shimDirectory, { recursive: true });
+    await writeFile(
+      join(shimDirectory, "gh"),
+      `#!/bin/sh
+test -n "$GH_TOKEN" || exit 64
+printf '%s\\n' "$*" >> "$GH_CALLS"
+case "$1 $2" in
+  "issue create") printf 'https://github.test/acme/app/issues/101\\n' ;;
+  "issue comment") printf 'https://github.test/acme/app/issues/72#issuecomment-1\\n' ;;
+  "run rerun") printf 'rerun requested\\n' ;;
+  "pr create") printf 'https://github.test/acme/app/pull/77\\n' ;;
+  "pr checks") printf 'test pass 1m\\n' ;;
+  *) exit 65 ;;
+esac
+`,
+    );
+    await chmod(join(shimDirectory, "gh"), 0o755);
+    await mkdir(join(repository, ".github", "workflows"), { recursive: true });
+    await writeFile(join(repository, "maintainer-change.txt"), "maintainer change\n");
+    await writeFile(
+      join(repository, ".github", "workflows", "agent-check.yml"),
+      "name: agent-check\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+    );
+
+    const git = async (args: string[]) => {
+      const result = await runtime.exec(workspace, {
+        command: "git",
+        args,
+        cwd: "repos/acme/app",
+        env: prepared.processEnvironment,
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      return result;
+    };
+    await git(["switch", "-c", "facility/maintainer-commands"]);
+    await git(["add", "maintainer-change.txt", ".github/workflows/agent-check.yml"]);
+    await git([
+      "-c",
+      "user.name=Facility Agent",
+      "-c",
+      "user.email=agent@facility.test",
+      "commit",
+      "-m",
+      "feat: prove maintainer operations",
+    ]);
+    await git(["push", "--set-upstream", "origin", "facility/maintainer-commands"]);
+
+    const gh = async (args: string[]) => {
+      const result = await runtime.exec(workspace, {
+        command: "gh",
+        args,
+        cwd: "repos/acme/app",
+        env: {
+          ...prepared.processEnvironment,
+          GH_CALLS: callsFile,
+          PATH: `${shimDirectory}:${process.env.PATH ?? ""}`,
+        },
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+    };
+    await gh(["issue", "create", "--repo", "acme/app", "--title", "Agent-created issue"]);
+    await gh(["issue", "comment", "72", "--repo", "acme/app", "--body", "Progress update"]);
+    await gh(["run", "rerun", "9001", "--repo", "acme/app", "--failed"]);
+    await gh([
+      "pr",
+      "create",
+      "--repo",
+      "acme/app",
+      "--head",
+      "facility/maintainer-commands",
+      "--title",
+      "Maintainer operations",
+      "--body",
+      "Validated by the deterministic fake",
+    ]);
+    await gh(["pr", "checks", "77", "--repo", "acme/app"]);
+
+    const calls = await readFile(callsFile, "utf8");
+    expect(calls).toContain("issue create --repo acme/app --title Agent-created issue");
+    expect(calls).toContain("issue comment 72 --repo acme/app --body Progress update");
+    expect(calls).toContain("run rerun 9001 --repo acme/app --failed");
+    expect(calls).toContain("pr create --repo acme/app --head facility/maintainer-commands");
+    expect(calls).toContain("pr checks 77 --repo acme/app");
+    expect(calls).not.toContain(token);
+    const branchContents = await git([
+      "show",
+      "origin/facility/maintainer-commands:maintainer-change.txt",
+    ]);
+    expect(branchContents.stdout).toBe("maintainer change\n");
+    const workflowContents = await git([
+      "show",
+      "origin/facility/maintainer-commands:.github/workflows/agent-check.yml",
+    ]);
+    expect(workflowContents.stdout).toContain("name: agent-check");
   });
 
   it("rejects a manifest that asks for a repository outside the project", async () => {

@@ -1,0 +1,25 @@
+version: 1
+repositories:
+  primary: github.com/facility-e2e/reference-project
+  related: []
+environment:
+  setup: cp /bin/busybox ./busybox
+  seed: mkdir -p state && printf '{"people":[{"name":"Ada Lovelace"}]}' > state/seed.json
+  start: docker compose up -d --build
+  stop: docker compose down
+  ready: test "$(curl -fsS http://127.0.0.1:3210/cgi-bin/items | jq -r '.people[0].name')" = "Ada Lovelace"
+  browser_test: >-
+    chromium --headless --no-sandbox --disable-gpu
+    --screenshot="$FACILITY_ARTIFACT_DIR/reference.png"
+    --trace-startup --trace-startup-duration=1
+    --trace-startup-file="$FACILITY_ARTIFACT_DIR/browser-trace.json"
+    --virtual-time-budget=10000 --dump-dom http://127.0.0.1:3210
+    > "$FACILITY_ARTIFACT_DIR/dom.html" &&
+    grep -q "Ada Lovelace" "$FACILITY_ARTIFACT_DIR/dom.html"
+  secrets: []
+  variables: []
+  services:
+    app:
+      port: 3210
+      protocol: http
+      websocket: true

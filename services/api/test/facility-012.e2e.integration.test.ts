@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseAgentManifest } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
@@ -13,6 +14,7 @@ import {
   migrate,
   projectRepositories,
   seed,
+  turns,
 } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -78,7 +80,7 @@ describe("Facility 0.12 reference journey", async () => {
   const installationId = newId("ghi");
   const queuedTurns: string[] = [];
   const engineRequests: AgentTurnRequest[] = [];
-  const agentSources = await loadKickstartAgentSources();
+  const agentSources = await loadKickstartAgentSources(root);
   const builderSource = agentSources.find((source) => source.file === ".agents/builder.md");
   if (!builderSource) throw new Error("kickstart builder manifest is missing");
   const canonicalBuilder = parseAgentManifest(builderSource.source, ".agents/builder.md");
@@ -100,6 +102,7 @@ describe("Facility 0.12 reference journey", async () => {
   let origin = "";
   let projectId = "";
   let storyId = "";
+  let browserCookie = "";
 
   class RecordingEngine implements AgentEngine {
     constructor(readonly name: "claude_code" | "codex") {}
@@ -161,9 +164,17 @@ repositories:
   primary: github.com/${owner}/${repository}
   related: []
 environment:
-  setup: printf setup-complete > .setup-complete
+  setup: |
+    count=$(cat .setup-complete 2>/dev/null || printf 0)
+    printf '%s' "$((count + 1))" > .setup-complete
+  seed: mkdir -p .dev && printf seeded > .dev/seed
   start: mkdir -p .dev && printf ready >> .dev/start-count
   ready: test -s .dev/start-count
+  browser_test: |
+    test "$(cat .dev/seed)" = seeded
+    mkdir -p "$FACILITY_ARTIFACT_DIR"
+    printf screenshot > "$FACILITY_ARTIFACT_DIR/story.png"
+    printf trace > "$FACILITY_ARTIFACT_DIR/browser-trace.json"
   services:
     web:
       port: ${backendPort}
@@ -241,11 +252,11 @@ environment:
     await app.listen({ port, host: "127.0.0.1" });
 
     const login = await app.inject({ method: "GET", url: "/auth/dev-login" });
-    const cookie = login.cookies.map((item) => `${item.name}=${item.value}`).join("; ");
+    browserCookie = login.cookies.map((item) => `${item.name}=${item.value}`).join("; ");
     const created = await app.inject({
       method: "POST",
       url: "/v1/projects",
-      headers: { cookie, "idempotency-key": `project-${suffix}` },
+      headers: { cookie: browserCookie, "idempotency-key": `project-${suffix}` },
       payload: { name: "Facility 0.12 E2E", slug: `facility-012-e2e-${suffix}` },
     });
     expect(created.statusCode, created.body).toBe(200);
@@ -369,24 +380,55 @@ environment:
     expect(engineRequests[1]?.nativeSessionId).toBe("codex-persistent-session");
     expect(engineRequests[1]?.workspace.id).toBe(workspaceId);
 
+    const switchEngine = mcpData(
+      await mcp.callTool({
+        name: "facility_send_message",
+        arguments: {
+          projectId,
+          storyId,
+          agent: "architect",
+          message: "Inspect the same worktree using the Claude Code engine.",
+          idempotencyKey: `story-switch-engine-${suffix}`,
+        },
+      }),
+    ) as { queued: { turn: { id: string } } };
+    await expect(
+      app.storyDomain.dispatcher.dispatch({
+        orgId: "org_local",
+        projectId,
+        turnId: switchEngine.queued.turn.id,
+      }),
+    ).resolves.toMatchObject({ claimed: true, state: "succeeded" });
+    expect(engineRequests[2]).toMatchObject({ nativeSessionId: undefined });
+    expect(engineRequests[2]?.manifest).toMatchObject({ name: "architect", engine: "claude_code" });
+    expect(engineRequests[2]?.workspace.id).toBe(workspaceId);
+
     const firstRequest = engineRequests[0];
     if (!firstRequest) throw new Error("expected first engine request");
     const workspace = firstRequest.workspace;
     expect(await runtime.read(workspace, `repos/${owner}/${repository}/agent-work`)).toBe(
-      "turn-1\nturn-2\n",
+      "turn-1\nturn-2\nturn-3\n",
     );
     expect(await runtime.read(workspace, ".facility/codex/native-session")).toBe(
       "codex-persistent-session",
     );
-    expect(await runtime.read(workspace, `repos/${owner}/${repository}/.setup-complete`)).toBe(
-      "setup-complete",
-    );
+    expect(await runtime.read(workspace, `repos/${owner}/${repository}/.setup-complete`)).toBe("1");
     const sessionRows = await db
       .select()
       .from(engineSessions)
       .where(eq(engineSessions.storyId, storyId));
-    expect(sessionRows).toHaveLength(1);
-    expect(sessionRows[0]).toMatchObject({ nativeSessionId: "codex-persistent-session" });
+    expect(sessionRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          engine: "codex",
+          nativeSessionId: "codex-persistent-session",
+        }),
+        expect.objectContaining({
+          engine: "claude_code",
+          nativeSessionId: "claude_code-persistent-session",
+        }),
+      ]),
+    );
 
     const conversation = mcpData(
       await mcp.callTool({
@@ -399,8 +441,43 @@ environment:
       "agent",
       "user",
       "agent",
+      "user",
+      "agent",
     ]);
     expect(JSON.stringify(conversation)).not.toContain("e2e-maintainer-installation-token");
+
+    const mcpStory = mcpData(
+      await mcp.callTool({ name: "facility_get_story", arguments: { projectId, storyId } }),
+    ) as StoryToolBundle;
+    const uiStory = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/workspace-stories/${storyId}`,
+      headers: { cookie: browserCookie },
+    });
+    expect(uiStory.statusCode, uiStory.body).toBe(200);
+    expect(uiStory.json()).toMatchObject({
+      story: { id: mcpStory.story.id, status: mcpStory.story.status },
+      workspace: { id: mcpStory.workspace.id, state: mcpStory.workspace.state },
+      next_operations: mcpStory.next_operations,
+    });
+
+    const browserTest = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/workspace-stories/${storyId}/environment/browser-test`,
+      headers: { cookie: browserCookie },
+    });
+    expect(browserTest.statusCode, browserTest.body).toBe(200);
+    expect(browserTest.json().browser_test.artifacts).toHaveLength(2);
+    const cleanSetup = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/workspace-stories/${storyId}/environment/clean-setup`,
+      headers: { cookie: browserCookie },
+    });
+    expect(cleanSetup.statusCode, cleanSetup.body).toBe(200);
+    expect(await runtime.read(workspace, `repos/${owner}/${repository}/.setup-complete`)).toBe("2");
+    expect(await runtime.read(workspace, ".facility/codex/native-session")).toBe(
+      "codex-persistent-session",
+    );
 
     const preview = mcpData(
       await mcp.callTool({
@@ -440,7 +517,7 @@ environment:
     ) as StoryToolBundle;
     expect(restored.workspace.state).toBe("running");
     expect(await runtime.read(workspace, `repos/${owner}/${repository}/agent-work`)).toBe(
-      "turn-1\nturn-2\n",
+      "turn-1\nturn-2\nturn-3\n",
     );
     expect(await runtime.read(workspace, ".facility/codex/native-session")).toBe(
       "codex-persistent-session",
@@ -477,6 +554,116 @@ environment:
       headers: { cookie: previewCookie },
     });
     expect(revokedPreview.status).toBe(401);
+    const replayedDelete = mcpData(
+      await mcp.callTool({
+        name: "facility_delete_workspace",
+        arguments: {
+          projectId,
+          storyId,
+          confirm: true,
+          idempotencyKey: `delete-workspace-${suffix}`,
+        },
+      }),
+    ) as StoryToolBundle;
+    expect(replayedDelete.workspace.id).toBe(workspaceId);
+    expect(replayedDelete.workspace.state).toBe("destroyed");
+  });
+
+  it("dispatches every kickstart agent with its own model, prompt, and MCP trigger", async () => {
+    const listed = mcpData(
+      await mcp.callTool({ name: "facility_list_agents", arguments: { projectId } }),
+    ) as {
+      agents: Array<{ name: string; engine: string; model: string; prompt: string }>;
+    };
+    const expectedNames = [
+      "address-review",
+      "architect",
+      "builder",
+      "ci-doctor",
+      "pr-reviewer",
+      "security-audit",
+    ];
+    expect(listed.agents.map((agent) => agent.name)).toEqual(expectedNames);
+
+    for (const agent of listed.agents) {
+      const message = `Smoke test the ${agent.name} role with its canonical configuration.`;
+      const started = mcpData(
+        await mcp.callTool({
+          name: "facility_start_story",
+          arguments: {
+            projectId,
+            provider: "manual",
+            title: `Agent smoke: ${agent.name}`,
+            agent: agent.name,
+            message,
+            idempotencyKey: `agent-smoke-${agent.name}-${suffix}`,
+          },
+        }),
+      ) as StoryToolBundle;
+      const turnId = started.queued.turn.id;
+      await expect(
+        app.storyDomain.dispatcher.dispatch({ orgId: "org_local", projectId, turnId }),
+      ).resolves.toMatchObject({ claimed: true, state: "succeeded" });
+      const request = engineRequests.at(-1);
+      expect(request?.manifest).toMatchObject({
+        name: agent.name,
+        engine: agent.engine,
+        model: agent.model,
+      });
+      expect(request?.manifest.prompt).toBe(agent.prompt);
+      expect(request?.prompt).toContain(message);
+      expect(request?.prompt).toContain(agent.prompt);
+      await expect(
+        db.select().from(turns).where(eq(turns.id, turnId)).limit(1),
+      ).resolves.toMatchObject([
+        {
+          triggerType: "mcp",
+          agentName: agent.name,
+          engine: agent.engine,
+          model: agent.model,
+        },
+      ]);
+      const deleted = mcpData(
+        await mcp.callTool({
+          name: "facility_delete_workspace",
+          arguments: {
+            projectId,
+            storyId: started.story.id,
+            confirm: true,
+            idempotencyKey: `agent-smoke-delete-${agent.name}-${suffix}`,
+          },
+        }),
+      ) as StoryToolBundle;
+      expect(deleted.workspace.state).toBe("destroyed");
+    }
+
+    const uiStarted = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/workspace-stories`,
+      headers: { cookie: browserCookie, "x-facility-surface": "ui" },
+      payload: {
+        provider: "manual",
+        title: "UI dispatcher smoke",
+        agent: "builder",
+        message: "Dispatch this turn through the UI surface.",
+        idempotency_key: `ui-dispatch-${suffix}`,
+      },
+    });
+    expect(uiStarted.statusCode, uiStarted.body).toBe(202);
+    const uiBundle = uiStarted.json() as StoryToolBundle;
+    await expect(
+      db.select().from(turns).where(eq(turns.id, uiBundle.queued.turn.id)).limit(1),
+    ).resolves.toMatchObject([{ triggerType: "ui", agentName: "builder" }]);
+    const uiDeleted = await app.inject({
+      method: "DELETE",
+      url: `/v1/projects/${projectId}/workspace-stories/${uiBundle.story.id}/workspace`,
+      headers: {
+        cookie: browserCookie,
+        "idempotency-key": `ui-delete-${suffix}`,
+      },
+      payload: { confirm: true, idempotency_key: `ui-delete-${suffix}` },
+    });
+    expect(uiDeleted.statusCode, uiDeleted.body).toBe(200);
   });
 });
 
@@ -485,6 +672,7 @@ type StoryToolBundle = {
   workspace: { id: string; state: string };
   queued: { turn: { id: string } };
   status: string;
+  next_operations: string[];
 };
 
 function mcpData(result: Awaited<ReturnType<Client["callTool"]>>) {
@@ -497,7 +685,7 @@ function mcpData(result: Awaited<ReturnType<Client["callTool"]>>) {
   return text ? JSON.parse(text) : undefined;
 }
 
-async function loadKickstartAgentSources() {
+async function loadKickstartAgentSources(root: string) {
   const names = [
     "architect",
     "builder",
@@ -506,19 +694,30 @@ async function loadKickstartAgentSources() {
     "ci-doctor",
     "security-audit",
   ];
+  const target = join(root, "kickstart");
+  await mkdir(target, { recursive: true });
+  await command("git", ["init", "--initial-branch=main"], target);
+  await writeFile(join(target, "package.json"), '{"name":"fixture","private":true}\n');
+  await command(
+    process.execPath,
+    [
+      fileURLToPath(new URL("../../../packages/cli/bin/facility.mjs", import.meta.url)),
+      "init",
+      "--yes",
+      `--dir=${target}`,
+      "--repo=facility-e2e/app",
+      "--start=true",
+      "--plan-model=claude-opus-4-8",
+      "--review-model=claude-opus-4-8",
+      "--codex-plan-model=gpt-5.5",
+      "--codex-build-model=gpt-5.5",
+    ],
+    target,
+  );
   return Promise.all(
     names.map(async (name) => ({
       file: `.agents/${name}.md`,
-      source: (
-        await readFile(
-          new URL(`../../../packages/cli/templates/agents/${name}.md`, import.meta.url),
-          "utf8",
-        )
-      )
-        .replaceAll("{{PLAN_MODEL}}", "claude-opus-4-8")
-        .replaceAll("{{REVIEW_MODEL}}", "claude-opus-4-8")
-        .replaceAll("{{CODEX_PLAN_MODEL}}", "gpt-5.5")
-        .replaceAll("{{CODEX_BUILD_MODEL}}", "gpt-5.5"),
+      source: await readFile(join(target, ".agents", `${name}.md`), "utf8"),
     })),
   );
 }

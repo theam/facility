@@ -68,6 +68,13 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
     const cwd = this.commandDirectory(handle.volumeRef, command.cwd);
     const startedAt = performance.now();
     const controller = new AbortController();
+    let canceled = command.signal?.aborted ?? false;
+    const cancel = () => {
+      canceled = true;
+      controller.abort();
+    };
+    command.signal?.addEventListener("abort", cancel, { once: true });
+    if (canceled) controller.abort();
     const timeout = command.timeoutMs
       ? setTimeout(() => controller.abort(), command.timeoutMs)
       : undefined;
@@ -111,14 +118,17 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
     } catch (error) {
       if (controller.signal.aborted) {
         throw new WorkspaceRuntimeError(
-          "workspace_command_timeout",
-          `workspace command timed out after ${command.timeoutMs}ms`,
+          canceled ? "workspace_command_canceled" : "workspace_command_timeout",
+          canceled
+            ? "workspace command was canceled"
+            : `workspace command timed out after ${command.timeoutMs}ms`,
           { cause: error },
         );
       }
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      command.signal?.removeEventListener("abort", cancel);
     }
   }
 

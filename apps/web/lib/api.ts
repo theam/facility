@@ -58,6 +58,7 @@ async function apiFetch<Method extends FacilityRouteMethod, Path extends Facilit
   const session = jar.get(SESSION_COOKIE);
   const client = new FacilityClient({
     baseUrl: facilityApiUrl(),
+    headers: { "x-facility-surface": "ui" },
     fetch: (input, init) => {
       const headers = new Headers(init?.headers);
       if (session) headers.set("cookie", `${SESSION_COOKIE}=${session.value}`);

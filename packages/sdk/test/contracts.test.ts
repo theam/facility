@@ -60,6 +60,7 @@ describe("FacilityClient", () => {
     const client = new FacilityClient({
       baseUrl: "https://api.facility.test/",
       apiKey: "fak_test",
+      headers: { "x-facility-surface": "mcp" },
       fetch: async (input, init) => {
         requests.push({
           url: String(input),
@@ -79,6 +80,7 @@ describe("FacilityClient", () => {
       credentials: "include",
     });
     expect(requests[0]?.headers.get("authorization")).toBe("Bearer fak_test");
+    expect(requests[0]?.headers.get("x-facility-surface")).toBe("mcp");
     expect(requests[0]?.headers.get("content-type")).toBeNull();
   });
 

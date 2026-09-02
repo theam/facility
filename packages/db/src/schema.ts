@@ -658,6 +658,8 @@ export const attentionItems = pgTable(
     title: text("title").notNull(),
     detail: text("detail"),
     status: text("status").notNull().default("open"),
+    resolution: text("resolution"),
+    resolvedBy: jsonb("resolved_by"),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     ...timestamps,
   },

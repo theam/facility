@@ -152,6 +152,8 @@ describe("workspace preview session security", async () => {
         repositories: { primary: "theam/example", related: [] },
         environment: {
           start: "true",
+          secrets: [],
+          variables: [],
           services: { web: { port: 3000, protocol: "http", websocket: true } },
         },
         hash: "manifest-hash",

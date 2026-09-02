@@ -151,12 +151,28 @@ export type StoryAgent = {
   engine: "claude_code" | "codex";
   model: string;
   enabled: boolean;
-  options: Record<string, unknown>;
-  triggers: Array<Record<string, unknown> & { type: "manual" | "github" | "schedule" }>;
+  options: {
+    reasoning_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  };
+  triggers: Array<
+    Record<string, unknown> & { type: "manual" | "mcp" | "ui" | "github" | "schedule" }
+  >;
   file: string;
+  prompt: string;
   hash: string;
   commit_sha: string;
   synced_at: string;
+  schedule_status: {
+    schedules: Array<{
+      name: string;
+      cron: string;
+      timezone: string;
+      enabled: boolean;
+      next_run_at: string;
+      last_scheduled_at: string | null;
+    }>;
+    last_result: { state: string; at: string; error: string | null } | null;
+  };
 };
 export type WorkspaceStory = {
   id: string;
@@ -207,9 +223,28 @@ export type WorkspaceStoryBundle = {
     createdAt: string;
   }>;
   artifacts: Array<{ id: string; kind: string; label: string; uri: string }>;
-  attention: Array<{ id: string; kind: string; title: string; detail: string | null }>;
+  attention: Array<{
+    id: string;
+    turnId: string | null;
+    kind: string;
+    title: string;
+    detail: string | null;
+    status: "open" | "resolved";
+    resolution: string | null;
+    resolvedBy: { type?: string; id?: string } | null;
+    resolvedAt: string | null;
+    createdAt: string;
+  }>;
+  events: Array<{
+    turn_id: string;
+    seq: number;
+    type: string;
+    data: Record<string, unknown>;
+    created_at: string;
+  }>;
   status: WorkspaceStory["status"];
   needs_attention: boolean;
+  next_operations: string[];
 };
 export type StoryMessage = {
   id: string;
@@ -229,5 +264,21 @@ export type StoryEnvironment = {
     volumeRef: string;
     endpoints: StoryWorkspace["endpoints"];
   };
+  metrics: {
+    create_time_ms: number | null;
+    wake_time_ms: number | null;
+    active_compute: boolean;
+    retained_storage: boolean;
+    provider_errors: number;
+    usage: Record<string, unknown>;
+    cost: {
+      currency: string;
+      active_compute_cents: number | null;
+      retained_storage_cents: number | null;
+      status: string;
+    };
+  };
   events: Array<{ seq: number; type: string; data: Record<string, unknown>; createdAt: string }>;
+  next_cursor: number;
+  has_more: boolean;
 };

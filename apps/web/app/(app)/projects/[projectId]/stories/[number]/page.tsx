@@ -4,8 +4,13 @@ import { notFound } from "next/navigation";
 import { Markdown } from "@/components/markdown";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
-import { StoryComposer, WorkspaceControls } from "@/components/story/workspace-story-controls";
-import { api, type StoryMessage, type WorkspaceStory } from "@/lib/api";
+import { AttentionActions } from "@/components/story/attention-actions";
+import {
+  CancelTurnButton,
+  StoryComposer,
+  WorkspaceControls,
+} from "@/components/story/workspace-story-controls";
+import { api, type StoryEnvironment, type StoryMessage, type WorkspaceStory } from "@/lib/api";
 import { can } from "@/lib/permissions";
 
 export async function generateMetadata({ params }: { params: Promise<{ number: string }> }) {
@@ -81,12 +86,38 @@ export default async function StoryPage({
       </header>
 
       {bundle.attention.length > 0 ? (
-        <section className="flex flex-col gap-3 border border-(--bad)/50 bg-(--bg-subtle) p-5">
-          <Eyebrow className="text-(--bad)">needs attention</Eyebrow>
+        <section
+          className={`flex flex-col gap-3 border bg-(--bg-subtle) p-5 ${
+            bundle.needs_attention ? "border-(--bad)/50" : "border-(--line)"
+          }`}
+        >
+          <Eyebrow className={bundle.needs_attention ? "text-(--bad)" : undefined}>
+            attention history
+          </Eyebrow>
           {bundle.attention.map((item) => (
-            <div key={item.id}>
-              <p className="text-[13px] font-medium text-(--ink)">{item.title}</p>
+            <div
+              key={item.id}
+              className="border-t border-(--line) pt-3 first:border-t-0 first:pt-0"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[9.5px] uppercase text-(--dim)">{item.kind}</span>
+                <span
+                  className={
+                    item.status === "open" ? "text-[10px] text-(--bad)" : "text-[10px] text-(--ok)"
+                  }
+                >
+                  {item.status === "open" ? "open" : (item.resolution ?? "resolved")}
+                </span>
+              </div>
+              <p className="mt-1 text-[13px] font-medium text-(--ink)">{item.title}</p>
               {item.detail ? <p className="mt-1 text-[12px] text-(--mut)">{item.detail}</p> : null}
+              <p className="mt-1 text-[10px] text-(--dim)">
+                {formatTime(item.createdAt)}
+                {item.resolvedAt ? ` · resolved ${formatTime(item.resolvedAt)}` : ""}
+              </p>
+              {canExecute ? (
+                <AttentionActions projectId={projectId} storyId={story.id} item={item} />
+              ) : null}
             </div>
           ))}
         </section>
@@ -107,6 +138,21 @@ export default async function StoryPage({
               <dd className="break-all font-mono text-(--mut)">{bundle.workspace.volumeRef}</dd>
               <dt className="text-(--dim)">last active</dt>
               <dd>{formatTime(bundle.workspace.lastActivityAt)}</dd>
+              {environment.ok ? (
+                <>
+                  <dt className="text-(--dim)">compute</dt>
+                  <dd>{environment.data.metrics.active_compute ? "active" : "not active"}</dd>
+                  <dt className="text-(--dim)">storage</dt>
+                  <dd>{environment.data.metrics.retained_storage ? "retained" : "deleted"}</dd>
+                  <dt className="text-(--dim)">create / wake</dt>
+                  <dd>
+                    {formatDuration(environment.data.metrics.create_time_ms)} /{" "}
+                    {formatDuration(environment.data.metrics.wake_time_ms)}
+                  </dd>
+                  <dt className="text-(--dim)">cost</dt>
+                  <dd>{formatCost(environment.data.metrics.cost)}</dd>
+                </>
+              ) : null}
             </dl>
           ) : (
             <p className="text-sm text-(--dim)">Workspace has not been created.</p>
@@ -163,6 +209,9 @@ export default async function StoryPage({
                   {turn.error ? (
                     <p className="mt-2 text-[11.5px] text-(--bad)">{turn.error}</p>
                   ) : null}
+                  {canExecute && ["queued", "running"].includes(turn.state) ? (
+                    <CancelTurnButton projectId={projectId} storyId={story.id} turnId={turn.id} />
+                  ) : null}
                 </div>
               ))
             )}
@@ -170,29 +219,59 @@ export default async function StoryPage({
         </div>
 
         <div className="flex flex-col gap-3">
-          <Eyebrow>environment events</Eyebrow>
+          <Eyebrow>services and recent logs</Eyebrow>
           {!environment.ok ? (
             <ErrorNotice message={environment.message} />
           ) : (
-            <div className="max-h-96 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
-              {environment.data.events.length === 0 ? (
-                <p className="text-(--dim)">No environment events yet.</p>
-              ) : (
-                environment.data.events.map((event) => (
-                  <div key={event.seq} className="mb-3 last:mb-0">
-                    <p className="text-(--accent)">
-                      {event.seq} · {event.type}
-                    </p>
-                    <pre className="mt-1 whitespace-pre-wrap break-words text-(--mut)">
-                      {JSON.stringify(event.data, null, 2)}
-                    </pre>
-                  </div>
-                ))
-              )}
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap gap-2">
+                {(environment.data.workspace.environment.ports ?? []).map((service) => (
+                  <span
+                    key={service.service}
+                    className="border border-(--line) px-2 py-1 font-mono text-[10px] text-(--mut)"
+                  >
+                    {service.service}:{service.port} · {environment.data.inspection.state}
+                  </span>
+                ))}
+              </div>
+              <div className="max-h-96 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
+                {environment.data.events.length === 0 ? (
+                  <p className="text-(--dim)">No environment events yet.</p>
+                ) : (
+                  environment.data.events.map((event) => (
+                    <div key={event.seq} className="mb-3 last:mb-0">
+                      <p className="text-(--accent)">
+                        {event.seq} · {event.type}
+                      </p>
+                      <pre className="mt-1 whitespace-pre-wrap break-words text-(--mut)">
+                        {JSON.stringify(event.data, null, 2)}
+                      </pre>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           )}
         </div>
       </section>
+
+      {bundle.events.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <Eyebrow>live agent progress</Eyebrow>
+          <div className="max-h-80 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
+            {bundle.events.map((event) => (
+              <div key={`${event.turn_id}:${event.seq}`} className="mb-3 last:mb-0">
+                <p className="text-(--accent)">
+                  {event.type} · {event.turn_id}
+                </p>
+                <pre className="mt-1 whitespace-pre-wrap break-words text-(--mut)">
+                  {JSON.stringify(event.data, null, 2)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {bundle.artifacts.length > 0 ? (
         <section className="flex flex-col gap-3">
@@ -260,6 +339,17 @@ function formatTime(value: string) {
   return Number.isFinite(date.getTime())
     ? new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(date)
     : value;
+}
+
+function formatDuration(value: number | null) {
+  return value === null ? "—" : `${value} ms`;
+}
+
+function formatCost(cost: StoryEnvironment["metrics"]["cost"]) {
+  if (cost.active_compute_cents === null && cost.retained_storage_cents === null) {
+    return "not reported by provider";
+  }
+  return `${cost.active_compute_cents ?? 0}¢ compute · ${cost.retained_storage_cents ?? 0}¢ storage`;
 }
 
 function safeExternalUrl(value: string | null) {

@@ -415,6 +415,8 @@ CREATE TABLE attention_items (
   title text NOT NULL,
   detail text,
   status text NOT NULL DEFAULT 'open',
+  resolution text,
+  resolved_by jsonb,
   resolved_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { AgentManifest } from "@facility/agents";
+import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
   attentionItems,
@@ -9,10 +9,13 @@ import {
   storyArtifacts,
   storyConversations,
   storyMessages,
+  turnEvents,
   turns,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { stopInterruptedEngineProcess } from "../turns/engines.js";
+import { appendTurnEvent } from "../turns/events.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import type {
   CreateWorkspace,
@@ -36,7 +39,7 @@ export type StartStoryInput = {
   actor: StoryActor;
   workspace: Omit<CreateWorkspace, "id">;
   trigger?: {
-    type: "manual" | "github" | "schedule";
+    type: "manual" | "mcp" | "ui" | "github" | "schedule";
     key?: string;
     scheduledFor?: Date;
   };
@@ -183,9 +186,14 @@ export class StoryWorkspaceService {
     });
 
     let handle: WorkspaceHandle;
+    const runtimeOperation =
+      aggregate.workspace.state === "creating" || !aggregate.workspace.externalRef
+        ? "create"
+        : "wake";
+    const runtimeStartedAt = performance.now();
     try {
       handle =
-        aggregate.workspace.state === "creating" || !aggregate.workspace.externalRef
+        runtimeOperation === "create"
           ? await this.runtime.create({
               id: aggregate.workspace.id,
               ...workspaceInput(aggregate.workspace),
@@ -211,6 +219,8 @@ export class StoryWorkspaceService {
       await appendWorkspaceEvent(this.db, aggregate.workspace.id, input.orgId, "workspace.ready", {
         provider: this.runtime.provider,
         computeRef: handle.computeRef,
+        operation: runtimeOperation,
+        durationMs: Math.round(performance.now() - runtimeStartedAt),
       });
     } catch (error) {
       await this.markRuntimeFailure(aggregate.story.id, aggregate.workspace.id, input, error);
@@ -243,7 +253,11 @@ export class StoryWorkspaceService {
     dedupeKey: string;
     agent: AgentManifest;
     actor: StoryActor;
-    trigger: { type: "manual" | "github" | "schedule"; key?: string; scheduledFor?: Date };
+    trigger: {
+      type: "manual" | "mcp" | "ui" | "github" | "schedule";
+      key?: string;
+      scheduledFor?: Date;
+    };
   }) {
     if (!input.body.trim()) {
       throw new StoryServiceError("message_invalid", "message must not be empty", 400);
@@ -454,6 +468,179 @@ export class StoryWorkspaceService {
     });
   }
 
+  async cancelTurn(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+    actor: StoryActor;
+  }) {
+    const result = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
+      if (turn.storyId !== input.storyId) {
+        throw new StoryServiceError("turn_not_found", "turn not found", 404);
+      }
+      await lockStory(tx, input.orgId, input.projectId, input.storyId);
+      if (["succeeded", "failed", "canceled"].includes(turn.state)) {
+        return { turn, changed: false };
+      }
+      const now = new Date();
+      const updated = (
+        await tx
+          .update(turns)
+          .set({ state: "canceled", endedAt: now, error: null, updatedAt: now })
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.id, input.turnId),
+              inArray(turns.state, ["queued", "running"]),
+            ),
+          )
+          .returning()
+      )[0];
+      if (!updated) {
+        return {
+          turn: await scopedTurn(tx, input.orgId, input.projectId, input.turnId),
+          changed: false,
+        };
+      }
+      const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
+      const remainingAttention = (
+        await tx
+          .select({ id: attentionItems.id })
+          .from(attentionItems)
+          .where(
+            and(
+              eq(attentionItems.orgId, input.orgId),
+              eq(attentionItems.projectId, input.projectId),
+              eq(attentionItems.storyId, input.storyId),
+              eq(attentionItems.status, "open"),
+            ),
+          )
+          .limit(1)
+      )[0];
+      await tx
+        .update(stories)
+        .set({
+          status: lifecycleStatusAfterTurn(
+            story.status,
+            remainingAttention ? "attention" : "ready",
+          ),
+          activeAgentName: null,
+          updatedAt: now,
+        })
+        .where(and(eq(stories.orgId, input.orgId), eq(stories.id, input.storyId)));
+      return { turn: updated, changed: true };
+    });
+    if (result.changed) {
+      await appendTurnEvent(this.db, {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        turnId: input.turnId,
+        type: result.turn.startedAt ? "turn.cancel_requested" : "turn.canceled",
+        data: { actor: input.actor },
+      });
+    }
+    return this.get(input.orgId, input.projectId, input.storyId);
+  }
+
+  async recoverInterruptedTurn(input: {
+    orgId: string;
+    projectId: string;
+    turnId: string;
+    staleBefore: Date;
+  }) {
+    const recovered = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
+      await lockStory(tx, input.orgId, input.projectId, turn.storyId);
+      const story = await scopedStory(tx, input.orgId, input.projectId, turn.storyId);
+      const now = new Date();
+      const updated = (
+        await tx
+          .update(turns)
+          .set({
+            state: "failed",
+            error: "Worker heartbeat expired before the agent turn completed.",
+            endedAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.id, input.turnId),
+              eq(turns.state, "running"),
+              lte(turns.updatedAt, input.staleBefore),
+            ),
+          )
+          .returning()
+      )[0];
+      if (!updated) return undefined;
+      await tx
+        .update(stories)
+        .set({
+          status: lifecycleStatusAfterTurn(story.status, "attention"),
+          activeAgentName: null,
+          updatedAt: now,
+        })
+        .where(and(eq(stories.orgId, input.orgId), eq(stories.id, turn.storyId)));
+      await tx.insert(attentionItems).values({
+        id: newId("attn"),
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: turn.storyId,
+        turnId: turn.id,
+        kind: "worker_interrupted",
+        title: `${turn.agentName} was interrupted`,
+        detail:
+          "The worker heartbeat expired. The message, worktree, and native session files were retained; retry this attention item after inspecting any partial changes.",
+      });
+      return updated;
+    });
+    if (!recovered) return false;
+
+    let processCleanup = "workspace unavailable";
+    try {
+      const workspace = (
+        await this.db
+          .select()
+          .from(workspaces)
+          .where(
+            and(
+              eq(workspaces.orgId, input.orgId),
+              eq(workspaces.projectId, input.projectId),
+              eq(workspaces.storyId, recovered.storyId),
+            ),
+          )
+          .orderBy(desc(workspaces.createdAt))
+          .limit(1)
+      )[0];
+      if (workspace?.externalRef) {
+        processCleanup = await stopInterruptedEngineProcess(
+          this.runtime,
+          locatorFromRow(workspace),
+          recovered.id,
+        );
+      }
+    } catch (error) {
+      processCleanup =
+        error instanceof Error ? `cleanup failed: ${error.message}` : "cleanup failed";
+    }
+    await appendTurnEvent(this.db, {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: recovered.storyId,
+      turnId: recovered.id,
+      type: "turn.worker_interrupted",
+      data: { processCleanup: processCleanup.slice(0, 1_000) },
+    });
+    return true;
+  }
+
   async flagAttention(input: {
     orgId: string;
     projectId: string;
@@ -512,11 +699,19 @@ export class StoryWorkspaceService {
     projectId: string;
     storyId: string;
     kind: string;
+    resolution?: string;
+    actor?: StoryActor;
   }) {
     const now = new Date();
     const resolved = await this.db
       .update(attentionItems)
-      .set({ status: "resolved", resolvedAt: now, updatedAt: now })
+      .set({
+        status: "resolved",
+        resolution: input.resolution ?? "recovered",
+        resolvedBy: input.actor,
+        resolvedAt: now,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(attentionItems.orgId, input.orgId),
@@ -528,6 +723,167 @@ export class StoryWorkspaceService {
       )
       .returning({ id: attentionItems.id });
     return resolved.length;
+  }
+
+  async resolveAttentionItem(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    attentionId: string;
+    resolution: string;
+    actor: StoryActor;
+  }) {
+    const now = new Date();
+    const resolved = await this.db
+      .update(attentionItems)
+      .set({
+        status: "resolved",
+        resolution: input.resolution,
+        resolvedBy: input.actor,
+        resolvedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(attentionItems.orgId, input.orgId),
+          eq(attentionItems.projectId, input.projectId),
+          eq(attentionItems.storyId, input.storyId),
+          eq(attentionItems.id, input.attentionId),
+          eq(attentionItems.status, "open"),
+        ),
+      )
+      .returning({ id: attentionItems.id });
+    return resolved.length;
+  }
+
+  async dismissAttention(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    attentionId: string;
+    actor: StoryActor;
+  }) {
+    await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockStory(tx, input.orgId, input.projectId, input.storyId);
+      const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
+      const resolved = (
+        await tx
+          .update(attentionItems)
+          .set({
+            status: "resolved",
+            resolution: "dismissed",
+            resolvedBy: input.actor,
+            resolvedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(attentionItems.orgId, input.orgId),
+              eq(attentionItems.projectId, input.projectId),
+              eq(attentionItems.storyId, input.storyId),
+              eq(attentionItems.id, input.attentionId),
+              eq(attentionItems.status, "open"),
+            ),
+          )
+          .returning({ id: attentionItems.id })
+      )[0];
+      if (!resolved) {
+        const existing = (
+          await tx
+            .select({ status: attentionItems.status })
+            .from(attentionItems)
+            .where(
+              and(
+                eq(attentionItems.orgId, input.orgId),
+                eq(attentionItems.projectId, input.projectId),
+                eq(attentionItems.storyId, input.storyId),
+                eq(attentionItems.id, input.attentionId),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (!existing)
+          throw new StoryServiceError("attention_not_found", "attention item not found", 404);
+        return;
+      }
+      const remaining = (
+        await tx
+          .select({ id: attentionItems.id })
+          .from(attentionItems)
+          .where(
+            and(
+              eq(attentionItems.orgId, input.orgId),
+              eq(attentionItems.projectId, input.projectId),
+              eq(attentionItems.storyId, input.storyId),
+              eq(attentionItems.status, "open"),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!remaining && story.status === "attention") {
+        const active = (
+          await tx
+            .select({ id: turns.id })
+            .from(turns)
+            .where(
+              and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])),
+            )
+            .limit(1)
+        )[0];
+        await tx
+          .update(stories)
+          .set({ status: active ? "working" : "ready", updatedAt: new Date() })
+          .where(and(eq(stories.orgId, input.orgId), eq(stories.id, input.storyId)));
+      }
+    });
+    return this.get(input.orgId, input.projectId, input.storyId);
+  }
+
+  async retryAttention(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    attentionId: string;
+    actor: StoryActor;
+  }) {
+    const attention = (
+      await this.db
+        .select()
+        .from(attentionItems)
+        .where(
+          and(
+            eq(attentionItems.orgId, input.orgId),
+            eq(attentionItems.projectId, input.projectId),
+            eq(attentionItems.storyId, input.storyId),
+            eq(attentionItems.id, input.attentionId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!attention)
+      throw new StoryServiceError("attention_not_found", "attention item not found", 404);
+    if (!attention.turnId || attention.kind === "agent_waiting") {
+      throw new StoryServiceError(
+        "attention_not_retryable",
+        "This attention item needs a reply or dismissal rather than a retry",
+      );
+    }
+    if (attention.status === "resolved" && attention.resolution !== "successful_retry") {
+      throw new StoryServiceError("attention_resolved", "attention item is already resolved");
+    }
+    const failedTurn = await scopedTurn(this.db, input.orgId, input.projectId, attention.turnId);
+    const queued = await this.queueMessage({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: input.storyId,
+      body: `Retry requested for ${attention.title}.`,
+      dedupeKey: `attention-retry:${attention.id}`,
+      agent: AgentManifestSchema.parse(failedTurn.manifest),
+      actor: input.actor,
+      trigger: { type: "manual", key: `attention-retry:${attention.id}` },
+    });
+    return { ...(await this.get(input.orgId, input.projectId, input.storyId)), queued };
   }
 
   async activateNextMessage(input: {
@@ -609,44 +965,54 @@ export class StoryWorkspaceService {
 
   async get(orgId: string, projectId: string, storyId: string) {
     const story = await scopedStory(this.db, orgId, projectId, storyId);
-    const [workspace, conversation, recentTurns, artifacts, attention] = await Promise.all([
-      this.db
-        .select()
-        .from(workspaces)
-        .where(and(eq(workspaces.orgId, orgId), eq(workspaces.storyId, storyId)))
-        .orderBy(desc(workspaces.createdAt))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-      this.db
-        .select()
-        .from(storyConversations)
-        .where(and(eq(storyConversations.orgId, orgId), eq(storyConversations.storyId, storyId)))
-        .limit(1)
-        .then((rows) => rows[0] ?? null),
-      this.db
-        .select()
-        .from(turns)
-        .where(and(eq(turns.orgId, orgId), eq(turns.storyId, storyId)))
-        .orderBy(desc(turns.createdAt))
-        .limit(20),
-      this.db
-        .select()
-        .from(storyArtifacts)
-        .where(and(eq(storyArtifacts.orgId, orgId), eq(storyArtifacts.storyId, storyId)))
-        .orderBy(desc(storyArtifacts.createdAt)),
-      this.db
-        .select()
-        .from(attentionItems)
-        .where(
-          and(
-            eq(attentionItems.orgId, orgId),
-            eq(attentionItems.storyId, storyId),
-            eq(attentionItems.status, "open"),
-          ),
-        )
-        .orderBy(desc(attentionItems.createdAt)),
-    ]);
-    return { story, workspace, conversation, turns: recentTurns, artifacts, attention };
+    const [workspace, conversation, recentTurns, artifacts, attention, recentEvents] =
+      await Promise.all([
+        this.db
+          .select()
+          .from(workspaces)
+          .where(and(eq(workspaces.orgId, orgId), eq(workspaces.storyId, storyId)))
+          .orderBy(desc(workspaces.createdAt))
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
+        this.db
+          .select()
+          .from(storyConversations)
+          .where(and(eq(storyConversations.orgId, orgId), eq(storyConversations.storyId, storyId)))
+          .limit(1)
+          .then((rows) => rows[0] ?? null),
+        this.db
+          .select()
+          .from(turns)
+          .where(and(eq(turns.orgId, orgId), eq(turns.storyId, storyId)))
+          .orderBy(desc(turns.createdAt))
+          .limit(20),
+        this.db
+          .select()
+          .from(storyArtifacts)
+          .where(and(eq(storyArtifacts.orgId, orgId), eq(storyArtifacts.storyId, storyId)))
+          .orderBy(desc(storyArtifacts.createdAt)),
+        this.db
+          .select()
+          .from(attentionItems)
+          .where(and(eq(attentionItems.orgId, orgId), eq(attentionItems.storyId, storyId)))
+          .orderBy(desc(attentionItems.createdAt))
+          .limit(50),
+        this.db
+          .select()
+          .from(turnEvents)
+          .where(and(eq(turnEvents.orgId, orgId), eq(turnEvents.storyId, storyId)))
+          .orderBy(desc(turnEvents.createdAt))
+          .limit(100),
+      ]);
+    return {
+      story,
+      workspace,
+      conversation,
+      turns: recentTurns,
+      artifacts,
+      attention,
+      events: recentEvents.reverse(),
+    };
   }
 
   async conversation(
@@ -737,6 +1103,7 @@ export class StoryWorkspaceService {
     }
     const workspace = await this.activeWorkspace(orgId, projectId, storyId);
     if (workspace && workspace.state !== "destroyed") {
+      const startedAt = performance.now();
       const handle = await this.runtime.wake(locatorFromRow(workspace));
       await this.db
         .update(workspaces)
@@ -747,6 +1114,12 @@ export class StoryWorkspaceService {
           updatedAt: new Date(),
         })
         .where(eq(workspaces.id, workspace.id));
+      await appendWorkspaceEvent(this.db, workspace.id, orgId, "workspace.ready", {
+        provider: this.runtime.provider,
+        computeRef: handle.computeRef,
+        operation: "wake",
+        durationMs: Math.round(performance.now() - startedAt),
+      });
     }
     return this.get(orgId, projectId, storyId);
   }
@@ -944,6 +1317,10 @@ export class StoryWorkspaceService {
         detail,
       });
     });
+    await appendWorkspaceEvent(this.db, workspaceId, input.orgId, "workspace.provider_error", {
+      operation: "create",
+      error: detail.slice(0, 8_000),
+    });
   }
 }
 
@@ -958,7 +1335,7 @@ function validateStartInput(input: StartStoryInput) {
 
 function lifecycleStatusAfterTurn(
   current: typeof stories.$inferSelect.status,
-  fallback: "working" | "attention",
+  fallback: "ready" | "working" | "attention",
 ) {
   return current === "done" || current === "archived" ? current : fallback;
 }
@@ -1082,14 +1459,14 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 }
 
 function queuedTrigger(value: unknown): {
-  type: "manual" | "github" | "schedule";
+  type: "manual" | "mcp" | "ui" | "github" | "schedule";
   key?: string;
   scheduledFor?: Date;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { type: "manual" };
   const trigger = value as { type?: unknown; key?: unknown; scheduledFor?: unknown };
-  const type = ["manual", "github", "schedule"].includes(String(trigger.type))
-    ? (trigger.type as "manual" | "github" | "schedule")
+  const type = ["manual", "mcp", "ui", "github", "schedule"].includes(String(trigger.type))
+    ? (trigger.type as "manual" | "mcp" | "ui" | "github" | "schedule")
     : "manual";
   const scheduledFor = trigger.scheduledFor ? new Date(String(trigger.scheduledFor)) : undefined;
   return {

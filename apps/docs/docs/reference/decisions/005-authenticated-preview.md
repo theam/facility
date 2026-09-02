@@ -25,3 +25,29 @@ undeclared-port, and cross-tenant requests fail closed.
 The public preview origin is on a registered site separate from the control plane. Local development
 uses loopback. Upstream endpoints come only from `WorkspaceRuntime.expose`; callers cannot supply
 an arbitrary origin or port.
+
+## Evidence
+
+Local integration tests require a one-time handoff, reject malformed and expired credentials,
+re-check active membership, and deny direct provider access. HTTP and WebSocket requests reach a
+local backend only with the preview cookie and internal gateway token. The Docker fixture opens the
+live Compose application through the host proxy and receives its seeded data.
+
+## Alternatives tested
+
+- Direct provider URLs were tested and rejected because they bypass Facility membership checks.
+- A second preview process was rejected because it duplicated the environment and lost the live
+  worktree and local database state the user needs to inspect.
+- Exposing arbitrary caller-supplied ports was rejected; only named ports in `.facility.yml` reach
+  the proxy.
+
+## Ownership boundary
+
+The runtime discovers a provider endpoint. Facility owns handoff, cookie, expiry, revocation,
+membership, and project/story/service routing. The project owns service readiness and protocol
+declarations.
+
+## Revisit when
+
+Revisit routing if the provider cannot keep endpoints private, if long-lived WebSockets cannot pass
+through the proxy, or if a shared deployment needs a different registered preview-domain model.

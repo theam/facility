@@ -54,6 +54,42 @@ separately managed volume product is production-ready.
 - Facility displays storage and active-compute usage but never deletes for cost control.
 - A provider that cannot pass the conformance suite cannot be enabled.
 
+## Evidence
+
+The Docker conformance test uses the disposable reference project under
+`services/api/test/fixtures/reference-project`. On 2 September 2026 it created a workspace in 542
+ms, built and started the Compose project in 1,401 ms, completed its Chromium flow in 1,023 ms, and
+woke replacement compute in 1,315 ms. The same run restored an untracked file, seed data, and a
+native session marker from backup before deleting both test volumes.
+
+The fake runtime passes the same persistence and explicit-deletion tests without Docker. It is kept
+for deterministic application tests, not as a deployment option. The Vercel adapter uses the same
+contract, but the hosted pilot and 14-day retention run remain release gates; local Docker evidence
+does not stand in for those checks.
+
+## Alternatives tested
+
+- The in-process fake was tested and rejected for deployment because it provides no process or
+  tenant isolation.
+- A Docker container with storage tied to compute was exercised during runtime development and
+  rejected because container replacement also made recovery depend on the container filesystem.
+  The selected Docker design gives the named volume its own identity.
+
+No other hosted provider has been run through this repository's conformance suite. The decision
+does not claim comparative evidence that was not collected.
+
+## Ownership boundary
+
+Facility owns workspace identity, lifecycle intent, conformance tests, and the provider adapter.
+Docker or Vercel owns compute isolation and durable-storage implementation. Operators own provider
+credentials, storage policy, backups, capacity, and the decision to enable a provider.
+
+## Revisit when
+
+Revisit the hosted provider if its pilot cannot run nested Docker and Chromium, if non-expiring
+snapshots fail the retention run, or if a production-grade independently attachable volume becomes
+available and materially improves recovery or cost.
+
 ## References
 
 - [Sandbox persistence is GA](https://vercel.com/changelog/sandbox-persistence-is-now-ga)

@@ -1,6 +1,6 @@
-import { agentSchedules, type FacilityDb, projects } from "@facility/db";
+import { agentSchedules, type FacilityDb, projects, turns } from "@facility/db";
 import cronParser from "cron-parser";
-import { and, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type { ProjectManifest, ProjectManifestSource } from "../workspaces/project-environment.js";
 import { type AgentCatalogService, manifestFromProjection } from "./catalog.js";
@@ -73,6 +73,47 @@ export class AgentScheduler {
       }
     }
     return { projects: activeProjects.length, due: due.length, scheduled, failures };
+  }
+
+  async status(orgId: string, projectId: string) {
+    const [schedules, scheduledTurns] = await Promise.all([
+      this.db
+        .select()
+        .from(agentSchedules)
+        .where(and(eq(agentSchedules.orgId, orgId), eq(agentSchedules.projectId, projectId))),
+      this.db
+        .selectDistinctOn([turns.agentName], {
+          agentName: turns.agentName,
+          state: turns.state,
+          endedAt: turns.endedAt,
+          createdAt: turns.createdAt,
+          error: turns.error,
+        })
+        .from(turns)
+        .where(
+          and(
+            eq(turns.orgId, orgId),
+            eq(turns.projectId, projectId),
+            eq(turns.triggerType, "schedule"),
+          ),
+        )
+        .orderBy(turns.agentName, desc(turns.createdAt)),
+    ]);
+    const latest = new Map<string, (typeof scheduledTurns)[number]>();
+    for (const turn of scheduledTurns) {
+      if (!latest.has(turn.agentName)) latest.set(turn.agentName, turn);
+    }
+    const byAgent = new Map<
+      string,
+      { schedules: typeof schedules; lastResult?: (typeof scheduledTurns)[number] }
+    >();
+    for (const schedule of schedules) {
+      const current = byAgent.get(schedule.agentName) ?? { schedules: [] };
+      current.schedules.push(schedule);
+      current.lastResult = latest.get(schedule.agentName);
+      byAgent.set(schedule.agentName, current);
+    }
+    return byAgent;
   }
 
   private async syncProject(orgId: string, projectId: string, now: Date) {
@@ -179,7 +220,7 @@ export class AgentScheduler {
   }
 }
 
-function nextOccurrence(cron: string, timezone: string, from: Date) {
+export function nextOccurrence(cron: string, timezone: string, from: Date) {
   return cronParser.parseExpression(cron, { currentDate: from, tz: timezone }).next().toDate();
 }
 

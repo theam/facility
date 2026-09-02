@@ -24,3 +24,29 @@ A collision is resolved deterministically without rewriting an existing unrelate
 One primary pull request gives merge webhooks and story completion an unambiguous source while
 preserving full access for work that crosses repository boundaries. Facility can add an explicit
 multi-PR completion policy later without changing workspace permissions or agent manifests.
+
+## Evidence
+
+The project-environment integration test clones a primary and related local bare repository into
+one workspace and checks that both survive compute replacement. Credential tests issue one
+installation token for every configured repository and deny credential-helper requests for any
+other host or repository. The maintainer workflow test creates and pushes a real branch while a
+deterministic `gh` fake records issue, comment, workflow, pull-request, and check operations.
+
+## Alternatives tested
+
+- Treating every repository as primary was rejected because merge events could not identify the
+  story's canonical completion signal.
+- Per-repository agent permission calculation was removed and guarded by regression tests. It
+  conflicts with the one-capability model and still leaves cross-repository stories half-operable.
+
+## Ownership boundary
+
+The repository contract names the primary and related repositories. Facility owns checkout layout,
+credential routing, the canonical PR link, and story completion from that PR. Agents own ordinary
+Git operations on related repositories; GitHub owns branch protection and merge policy.
+
+## Revisit when
+
+Add coordinated multi-PR completion only when a real project needs atomic status across
+repositories. Do not change access semantics as part of that work.
