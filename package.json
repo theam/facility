@@ -11,6 +11,7 @@
   },
   "packageManager": "pnpm@11.20.0",
   "scripts": {
+    "preinstall": "node scripts/check-node-version.mjs",
     "build": "turbo run build",
     "clean:outputs": "node scripts/clean-outputs.mjs",
     "build:clean": "pnpm clean:outputs && turbo run build --force",

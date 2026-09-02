@@ -463,6 +463,26 @@ test("init installs the method end to end", async (t) => {
   assert.ok(again.stdout.includes("left untouched"), "second init should skip existing files");
 });
 
+test("init renders a custom canary bot login from --canary-bot", async (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const result = runCli(
+    [
+      "init",
+      "--yes",
+      "--canary-bot=acme-canary[bot]",
+      `--dir=${dir}`,
+      "--provision=echo ok",
+      "--checks=echo ok",
+    ],
+    dir,
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const crew = readFileSync(join(dir, ".github/workflows/facility-crew.yml"), "utf8");
+  assert.ok(crew.includes("acme-canary[bot]"), "canary bot login must render into the crew workflow");
+  assert.ok(!crew.includes("facility-canary[bot]"), "default canary bot must be replaced");
+});
+
 test("init renders every supported Anthropic authentication mode consistently", async (t) => {
   const expectations = {
     "api-key": "anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}",
