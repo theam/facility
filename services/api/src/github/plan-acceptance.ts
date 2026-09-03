@@ -1,13 +1,7 @@
-import {
-  actionTypes,
-  type FacilityDb,
-  proposalEvents,
-  proposals,
-  runs,
-} from "@facility/db";
+import { actionTypes, type FacilityDb, proposalEvents, proposals, runs } from "@facility/db";
 import { and, desc, eq, gt, ne, sql } from "drizzle-orm";
 
-export const PLAN_ACCEPTANCE_PROPOSAL_ID_RE = /^prop_[0-9a-f]+$/i;
+export const PLAN_ACCEPTANCE_PROPOSAL_ID_RE = /^prop_[0-9a-z_]+$/i;
 
 export type GithubPlanAcceptanceIssueScope = {
   orgId: string;
@@ -196,10 +190,7 @@ export async function supersedeOpenGithubPlanAcceptances(
         .select({ seq: proposalEvents.seq })
         .from(proposalEvents)
         .where(
-          and(
-            eq(proposalEvents.orgId, updated.orgId),
-            eq(proposalEvents.proposalId, updated.id),
-          ),
+          and(eq(proposalEvents.orgId, updated.orgId), eq(proposalEvents.proposalId, updated.id)),
         )
         .orderBy(desc(proposalEvents.seq))
         .limit(1)

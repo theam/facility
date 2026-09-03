@@ -55,10 +55,6 @@ import {
 } from "../builder-plan-policy.js";
 import { ApiError } from "../errors.js";
 import {
-  insertGithubPlanAcceptanceReplacingSiblings,
-  supersedeOpenGithubPlanAcceptances,
-} from "../github/plan-acceptance.js";
-import {
   architectPlanPublicationKey,
   architectPlanPublicationMarker,
   effectiveArchitectPlanProposalState,
@@ -74,6 +70,11 @@ import {
 } from "../github/client.js";
 import { pullRequestBodyForIssue } from "../github/closing-issues.js";
 import { githubIssueRevisionSha256 } from "../github/issue-revision.js";
+import {
+  githubPlanAcceptanceIssueLockKey,
+  insertGithubPlanAcceptanceReplacingSiblings,
+  supersedeOpenGithubPlanAcceptances,
+} from "../github/plan-acceptance.js";
 import {
   type GithubRunProgressPhase,
   progressCommentId,
@@ -1094,7 +1095,11 @@ async function ensureArchitectPlanAcceptance(
     ...(issueRevisionSha256 ? { issueRevisionSha256 } : {}),
   };
   await db.execute(
-    sql`select pg_advisory_xact_lock(hashtextextended(${`architect-plan-issue:${run.orgId}:${repo.id}:${issueNumber}`}, 0))`,
+    sql`select pg_advisory_xact_lock(hashtextextended(${githubPlanAcceptanceIssueLockKey({
+      orgId: run.orgId,
+      repoId: repo.id,
+      issueNumber,
+    })}, 0))`,
   );
   const candidates = await db
     .select()

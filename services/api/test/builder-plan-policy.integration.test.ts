@@ -494,6 +494,14 @@ describe("builder plan policy integration", async () => {
       .update(projects)
       .set({ builderPlanPolicy: "required" })
       .where(eq(projects.id, fixture.projectId));
+    await db
+      .update(repos)
+      .set({
+        fingerprint: { files: [] },
+        fingerprintStatus: "ok",
+        fingerprintVerifiedAt: new Date(),
+      })
+      .where(eq(repos.projectId, fixture.projectId));
     await insertSiblingOpenPlanAcceptance(fixture);
     const before = await projectRuns(fixture.orgId, fixture.projectId);
     const result = await routeTrigger(db, fixture.orgId, fixture.client, fixture.payload);
@@ -508,6 +516,14 @@ describe("builder plan policy integration", async () => {
       .update(projects)
       .set({ builderPlanPolicy: "required" })
       .where(eq(projects.id, fixture.projectId));
+    await db
+      .update(repos)
+      .set({
+        fingerprint: { files: [] },
+        fingerprintStatus: "ok",
+        fingerprintVerifiedAt: new Date(),
+      })
+      .where(eq(repos.projectId, fixture.projectId));
     const sibling = await insertSiblingOpenPlanAcceptance(fixture);
     const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
     const result = await routeTrigger(
@@ -526,7 +542,11 @@ describe("builder plan policy integration", async () => {
     );
     expect(result.routed).toBe(true);
     const run = (
-      await db.select().from(runs).where(eq(runs.id, result.runId ?? "")).limit(1)
+      await db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, result.runId ?? ""))
+        .limit(1)
     )[0];
     expect(run?.trigger).toMatchObject({
       source: "plan_acceptance",
@@ -579,7 +599,11 @@ describe("builder plan policy integration", async () => {
     expect(result.routed).toBe(true);
     expect(enqueued).toHaveLength(1);
     const run = (
-      await db.select().from(runs).where(eq(runs.id, result.runId ?? "")).limit(1)
+      await db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, result.runId ?? ""))
+        .limit(1)
     )[0];
     expect(run?.trigger).toMatchObject({
       source: "plan_acceptance",
@@ -714,7 +738,11 @@ describe("builder plan policy integration", async () => {
     });
     expect(result).toMatchObject({ routed: true });
     const run = (
-      await db.select().from(runs).where(eq(runs.id, result.runId ?? "")).limit(1)
+      await db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, result.runId ?? ""))
+        .limit(1)
     )[0];
     expect(run?.trigger).toMatchObject({
       source: "plan_acceptance",
@@ -2462,7 +2490,9 @@ describe("builder plan policy integration", async () => {
     };
   }
 
-  async function insertSiblingOpenPlanAcceptance(fixture: Awaited<ReturnType<typeof githubRouteFixture>>) {
+  async function insertSiblingOpenPlanAcceptance(
+    fixture: Awaited<ReturnType<typeof githubRouteFixture>>,
+  ) {
     const original = (
       await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
     )[0];
@@ -2488,7 +2518,9 @@ describe("builder plan policy integration", async () => {
       payload: {
         ...(original.payload as Record<string, unknown>),
         architectRunId,
-        planSha256: createHash("sha256").update("Second architect plan with a different scope.").digest("hex"),
+        planSha256: createHash("sha256")
+          .update("Second architect plan with a different scope.")
+          .digest("hex"),
       },
       state: "open",
       decidedBy: null,

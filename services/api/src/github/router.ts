@@ -58,7 +58,7 @@ export type GithubIssueCommentContext = {
 export const ISSUE_CONTEXT_MAX_CHARS = 512 * 1024;
 
 const COMMAND_RE =
-  /(?:^|\n)\s*\/(builder|architect|codex-builder|codex-architect)(?:\s+(prop_[0-9a-f]+))?(?=$|[\s,.:;!?)])/gi;
+  /(?:^|\n)\s*\/(builder|architect|codex-builder|codex-architect)(?:\s+(prop_[0-9a-z_]+))?(?=$|[\s,.:;!?)])/gi;
 
 export function resolveSlashCommand(body: string): {
   command?: string;
@@ -66,7 +66,8 @@ export function resolveSlashCommand(body: string): {
   proposalId?: string;
   ambiguous: boolean;
 } {
-  const matches = [...body.matchAll(COMMAND_RE)];
+  const pattern = new RegExp(COMMAND_RE.source, COMMAND_RE.flags);
+  const matches = [...body.matchAll(pattern)];
   const commands = matches.map((match) => match[1]).filter(Boolean);
   const unique = [...new Set(commands)];
   if (unique.length !== 1) return { ambiguous: unique.length > 1 };
