@@ -4,7 +4,7 @@
 #
 #   docker build --target api     -t facility/api .
 #   docker build --target gateway -t facility/gateway .
-FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS base
+FROM node:26-trixie-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 # Keep a digest-pinned base while still making a reviewed Debian security
