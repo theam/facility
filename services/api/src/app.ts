@@ -1,6 +1,7 @@
 import { can, keyLookup, newId, open, seal, verifyKey } from "@facility/core";
 import {
   apiKeys,
+  auditEvents,
   createDb,
   githubInstallations,
   orgMembers,
@@ -207,6 +208,17 @@ export async function buildApp(
         { action, target, payload, actor: { type: principal.type, id: principal.id } },
         "facility access event",
       );
+      const projectId = (this.params as Record<string, string | undefined>)?.projectId;
+      await db.insert(auditEvents).values({
+        id: newId("evt"),
+        orgId: principal.orgId,
+        projectId,
+        actor: { type: principal.type, id: principal.id },
+        action,
+        target,
+        payload,
+        requestId: this.id,
+      });
     },
   );
 

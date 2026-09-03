@@ -82,13 +82,18 @@ export class GithubWorkspaceCredentialBroker {
 
     const tokens = new Map(
       await Promise.all(
-        installations.map(
-          async (installation) =>
-            [
-              installation.id,
-              await this.tokenFactory({ installationId: installation.installationId }),
-            ] as const,
-        ),
+        installations.map(async (installation) => {
+          const names = repositories
+            .filter((repository) => repository.installationId === installation.id)
+            .map((repository) => repository.name);
+          return [
+            installation.id,
+            await this.tokenFactory({
+              installationId: installation.installationId,
+              repositories: names,
+            }),
+          ] as const;
+        }),
       ),
     );
     const credentialMap = Object.fromEntries(

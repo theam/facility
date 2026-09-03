@@ -19,6 +19,7 @@ const sidebars: SidebarsConfig = {
         "self-host/quickstart",
         "self-host/local-development",
         "self-host/production",
+        "self-host/aws",
         "self-host/authentication",
         "self-host/github-app",
       ],

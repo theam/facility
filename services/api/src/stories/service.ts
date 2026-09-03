@@ -29,6 +29,7 @@ export type StoryActor = { type: "user" | "service" | "system"; id: string };
 export type StartStoryInput = {
   orgId: string;
   projectId: string;
+  repositoryId?: string;
   provider: "github" | "manual" | "schedule";
   externalId: string;
   title: string;
@@ -73,7 +74,7 @@ export class StoryWorkspaceService {
       const tx = rawTx as unknown as FacilityDb;
       await lockIdentity(
         tx,
-        `${input.orgId}:${input.projectId}:${input.provider}:${input.externalId}`,
+        `${input.orgId}:${input.projectId}:${input.repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
       );
       let story = (
         await tx
@@ -83,6 +84,9 @@ export class StoryWorkspaceService {
             and(
               eq(stories.orgId, input.orgId),
               eq(stories.projectId, input.projectId),
+              input.repositoryId
+                ? eq(stories.repositoryId, input.repositoryId)
+                : isNull(stories.repositoryId),
               eq(stories.provider, input.provider),
               eq(stories.externalId, input.externalId),
             ),
@@ -97,6 +101,7 @@ export class StoryWorkspaceService {
               id: newId("story"),
               orgId: input.orgId,
               projectId: input.projectId,
+              repositoryId: input.repositoryId,
               provider: input.provider,
               externalId: input.externalId,
               title: input.title,

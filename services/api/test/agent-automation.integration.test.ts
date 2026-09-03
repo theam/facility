@@ -76,6 +76,7 @@ describe("agent automations use persistent story workspaces", async () => {
   const suffix = randomUUID().slice(0, 8);
   const orgId = newId("org");
   const projectId = newId("proj");
+  const repositoryId = newId("repo");
   const dispatched: string[] = [];
   const agents = [
     manifest(
@@ -173,7 +174,7 @@ describe("agent automations use persistent story workspaces", async () => {
       settings: {},
     });
     await db.insert(projectRepositories).values({
-      id: newId("repo"),
+      id: repositoryId,
       orgId,
       projectId,
       owner: "acme",
@@ -239,6 +240,7 @@ describe("agent automations use persistent story workspaces", async () => {
     const issueStory = await storiesService.start({
       orgId,
       projectId,
+      repositoryId,
       provider: "github",
       externalId: "issue:91",
       title: "Build this change",

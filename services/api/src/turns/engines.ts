@@ -26,6 +26,15 @@ export type AgentTurnResult = {
   exitCode: number;
   stderr: string;
   durationMs: number;
+  usage?: AgentTurnUsage;
+};
+
+export type AgentTurnUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reportedCostCents?: number;
 };
 
 export interface AgentEngine {
@@ -79,7 +88,13 @@ abstract class CliAgentEngine implements AgentEngine {
       throw new AgentEngineError(
         corruptSession ? "agent_session_corrupt" : "agent_engine_failed",
         message,
-        { engine: this.name, exitCode: result.exitCode, events: parsed.events },
+        {
+          engine: this.name,
+          exitCode: result.exitCode,
+          events: parsed.events,
+          usage: parsed.usage,
+          durationMs: result.durationMs,
+        },
       );
     }
     if (!parsed.sessionId) {
@@ -98,6 +113,7 @@ abstract class CliAgentEngine implements AgentEngine {
       exitCode: result.exitCode,
       stderr: result.stderr,
       durationMs: result.durationMs,
+      usage: parsed.usage,
     };
   }
 }
@@ -214,6 +230,7 @@ type ParsedEngineEvents = {
   sessionId?: string;
   output: string;
   events: AgentTurnEvent[];
+  usage?: AgentTurnUsage;
 };
 
 abstract class EngineEventParser {
@@ -258,12 +275,16 @@ export class ClaudeEventParser extends EngineEventParser {
   private sessionId?: string;
   private resultText?: string;
   private readonly assistantText: string[] = [];
+  private usage?: AgentTurnUsage;
 
   protected accept(value: Record<string, unknown>) {
     const type = stringValue(value.type) ?? "unknown";
     this.events.push({ engine: "claude_code", type, data: value });
     this.sessionId ??= stringValue(value.session_id);
-    if (type === "result") this.resultText = stringValue(value.result) ?? this.resultText;
+    if (type === "result") {
+      this.resultText = stringValue(value.result) ?? this.resultText;
+      this.usage = usageValue(value.usage, value.total_cost_usd) ?? this.usage;
+    }
     if (type === "assistant") {
       const message = objectValue(value.message);
       const content = Array.isArray(message?.content) ? message.content : [];
@@ -280,6 +301,7 @@ export class ClaudeEventParser extends EngineEventParser {
       sessionId: this.sessionId,
       output: this.resultText ?? this.assistantText.join("\n\n"),
       events: this.events,
+      usage: this.usage,
     };
   }
 }
@@ -287,11 +309,13 @@ export class ClaudeEventParser extends EngineEventParser {
 export class CodexEventParser extends EngineEventParser {
   private sessionId?: string;
   private readonly messages: string[] = [];
+  private usage?: AgentTurnUsage;
 
   protected accept(value: Record<string, unknown>) {
     const type = stringValue(value.type) ?? "unknown";
     this.events.push({ engine: "codex", type, data: value });
     if (type === "thread.started") this.sessionId ??= stringValue(value.thread_id);
+    if (type === "turn.completed") this.usage = usageValue(value.usage) ?? this.usage;
     if (type === "item.completed") {
       const item = objectValue(value.item);
       if (item?.type === "agent_message" && typeof item.text === "string") {
@@ -301,7 +325,12 @@ export class CodexEventParser extends EngineEventParser {
   }
 
   result(): ParsedEngineEvents {
-    return { sessionId: this.sessionId, output: this.messages.join("\n\n"), events: this.events };
+    return {
+      sessionId: this.sessionId,
+      output: this.messages.join("\n\n"),
+      events: this.events,
+      usage: this.usage,
+    };
   }
 }
 
@@ -313,4 +342,41 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function usageValue(value: unknown, reportedCostUsd?: unknown): AgentTurnUsage | undefined {
+  const usage = objectValue(value);
+  if (!usage) return undefined;
+  const inputTokens = nonNegativeInteger(usage.input_tokens);
+  const outputTokens = nonNegativeInteger(usage.output_tokens);
+  const cacheReadTokens = nonNegativeInteger(
+    usage.cache_read_input_tokens ?? usage.cached_input_tokens ?? usage.cache_read_tokens,
+  );
+  const cacheWriteTokens = nonNegativeInteger(
+    usage.cache_creation_input_tokens ?? usage.cache_write_tokens,
+  );
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    cacheReadTokens === undefined &&
+    cacheWriteTokens === undefined
+  ) {
+    return undefined;
+  }
+  const costUsd = nonNegativeNumber(reportedCostUsd);
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cacheReadTokens: cacheReadTokens ?? 0,
+    cacheWriteTokens: cacheWriteTokens ?? 0,
+    reportedCostCents: costUsd === undefined ? undefined : costUsd * 100,
+  };
+}
+
+function nonNegativeInteger(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function nonNegativeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

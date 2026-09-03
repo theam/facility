@@ -8,7 +8,7 @@ Facility serves Streamable HTTP MCP at `POST /mcp` from the control API. OAuth c
 resource metadata at `/.well-known/oauth-protected-resource/mcp`. API keys use the same endpoint
 with `Authorization: Bearer <key>`.
 
-The server exposes exactly thirteen task-oriented tools:
+The server exposes nineteen task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -25,6 +25,12 @@ The server exposes exactly thirteen task-oriented tools:
 | `facility_archive_story` | Archive and suspend without deleting. |
 | `facility_restore_story` | Restore the archived story and its existing state. |
 | `facility_delete_workspace` | Explicitly destroy compute, volume, worktree, and engine sessions. |
+| `facility_get_costs` | Read measured token use and cost by turn for a selected period. |
+| `facility_get_budget` | Read the current monthly budget and amount spent. |
+| `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
+| `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
+| `facility_get_pipeline` | Read mirrored issues, pull requests, CI state, and story stage. |
+| `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
 
 ## Connect Claude Code or Codex
 
@@ -112,3 +118,8 @@ marker when monetary cost is unavailable.
 
 Mutations execute directly after normal authentication and project authorization. They do not
 create an internal approval object. Delete requires `confirm: true` and a matching idempotency key.
+
+When a budget is enabled, Facility checks it before starting a provider call. Usage and cost are
+recorded after the call from provider-reported values when available, otherwise from the built-in
+model price book. A call already running may cross the limit; subsequent turns are blocked. Models
+without a known price are rejected while budget enforcement is enabled.

@@ -1,0 +1,25 @@
+aws_region  = "us-east-1"
+environment = "production"
+
+app_hostname            = "facility.example.com"
+preview_hostname        = "facility-preview.example.net"
+route53_zone_id         = "Z0000000000000000000"
+preview_route53_zone_id = "Z1111111111111111111"
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+
+image_tag             = "git-commit-sha"
+workspace_image       = "registry.example.com/facility/runner:0.12.0"
+vercel_team_id        = "team_example"
+vercel_project_id     = "prj_example"
+facility_instance_id  = "facility-production"
+
+# Keep these at zero for the first apply. Push image_tag to the ECR repository
+# outputs, populate the runtime secret, run migrations, then raise the counts.
+api_desired_count    = 0
+worker_desired_count = 0
+web_desired_count    = 0
+
+project_secret_arns = {
+  FACILITY_PROJECT_PROJ_EXAMPLE_ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-east-1:123456789012:secret:facility/anthropic-example"
+  FACILITY_PROJECT_PROJ_EXAMPLE_OPENAI_API_KEY    = "arn:aws:secretsmanager:us-east-1:123456789012:secret:facility/openai-example"
+}

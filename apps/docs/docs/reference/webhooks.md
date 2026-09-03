@@ -16,3 +16,8 @@ Supported agent events are Issues, Issue comment, Pull request, Pull request rev
 and completed Workflow run. Matching happens against triggers in the primary repository's
 `.agents/` catalog. A merged pull request marks the linked story done and suspends compute without
 destroying durable state.
+
+Issue and pull request deliveries also update the project mirror. Workflow run and check suite
+deliveries attach CI state to the matching pull request only when the event's head SHA is current.
+The worker reconciles every connected repository every ten minutes, and maintainers can request an
+immediate sync through MCP, API, or the Pipeline page.

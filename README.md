@@ -35,8 +35,9 @@ archiving a story only suspends compute.
 Agents use ordinary `git` and `gh` commands. Every configured agent receives the same full access
 to the workspace and the same GitHub App installation capability for the project's repositories.
 Facility does not implement per-agent permission profiles, internal write approvals, receipts,
-delivery brokers, or budget gates. GitHub branch protection, reviews, and CI remain the merge
-boundary.
+or delivery brokers. Project budgets use a simple preflight check: a running provider call may
+finish and is accounted afterwards, while later turns are blocked once the monthly limit has been
+reached. GitHub branch protection, reviews, and CI remain the merge boundary.
 
 ## Agents as code
 
@@ -114,7 +115,7 @@ live workspace. Facility does not build a second preview deployment.
 
 ## MCP surface
 
-The embedded Streamable HTTP server is available at `POST /mcp`. It exposes thirteen tools:
+The embedded Streamable HTTP server is available at `POST /mcp`. It exposes nineteen tools:
 
 ```text
 facility_list_projects       facility_list_agents
@@ -124,6 +125,9 @@ facility_get_conversation    facility_get_environment
 facility_open_preview        facility_suspend_story
 facility_archive_story       facility_restore_story
 facility_delete_workspace
+facility_get_costs           facility_get_budget
+facility_set_budget          facility_get_observability
+facility_get_pipeline        facility_sync_github
 ```
 
 `facility_delete_workspace` is the only operation that destroys durable state. It requires an
@@ -208,8 +212,9 @@ only repositories that should be available to Facility.
 
 Installation tokens are minted shortly before use and delivered through a credential helper; they
 are not written to the persistent volume. Facility does not narrow a token according to the active
-agent. Repository and tenant checks still prevent one project from receiving another project's
-credentials.
+agent. The token keeps the GitHub App's complete configured permission set and is restricted to the
+repositories connected to that project. Repository and tenant checks prevent one project from
+receiving another project's credentials.
 
 Do not enable signed webhook ingestion without `GITHUB_APP_WEBHOOK_SECRET`. Preview sessions are
 authenticated, expire, can be revoked, and re-check project membership on every proxied request.
@@ -221,8 +226,9 @@ pnpm verify
 ```
 
 The acceptance suite covers manifest validation, idempotent story creation, serialized turns,
-session and worktree persistence, Docker runtime replacement, GitHub credential scoping, webhook
-replay, schedules, authenticated HTTP and WebSocket previews, embedded MCP, and the UI build.
+session and worktree persistence, Docker runtime replacement, cost and budget enforcement, GitHub
+credential scoping and delivery mirroring, webhook replay, schedules, authenticated HTTP and
+WebSocket previews, embedded MCP, AWS control-plane planning, and the UI build.
 
 Facility is early software. The 0.x schema and API can change incompatibly. Review the
 [security model](apps/docs/docs/reference/security.md),

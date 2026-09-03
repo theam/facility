@@ -26,7 +26,7 @@ export async function startWorker() {
     githubFactory,
     enqueue: (queue, data) => boss.send(queue, data),
   });
-  const queues = ["turns.dispatch", "github.webhook", "agent.schedules"];
+  const queues = ["turns.dispatch", "github.webhook", "github.mirror", "agent.schedules"];
   for (const queue of queues) {
     await boss.createQueue(queue);
   }
@@ -79,6 +79,8 @@ export async function startWorker() {
         result = await storyDomain.dispatcher.dispatch(
           data as { orgId: string; projectId: string; turnId: string },
         );
+      } else if (queue === "github.mirror") {
+        result = await storyDomain.mirror.syncAll();
       } else if (queue === "agent.schedules") {
         const interruptedTurns = await recoverInterruptedTurns(
           db,
@@ -96,6 +98,7 @@ export async function startWorker() {
     });
   }
   await boss.schedule("agent.schedules", "* * * * *", {});
+  await boss.schedule("github.mirror", "*/10 * * * *", {});
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());
   return boss;

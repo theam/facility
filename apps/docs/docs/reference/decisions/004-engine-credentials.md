@@ -22,8 +22,10 @@ stores its rollouts under a workspace-persistent `CODEX_HOME`. Facility records 
 and resumes a compatible session on later turns. Changing engine, model, or agent may create a new
 session, but never deletes an earlier one.
 
-The current model gateway, virtual run keys, and budget enforcement are removed after both native
-adapters pass the continuation suite.
+The model gateway and virtual run keys are removed after both native adapters pass the continuation
+suite. Budget enforcement remains in the turn dispatcher: it performs a database-backed preflight,
+lets an admitted provider call finish, records usage and cost, and blocks later turns after the
+monthly limit is reached.
 
 ## Trust boundary
 
@@ -51,8 +53,8 @@ unscoped control-plane value is never injected.
 - Persisting a CLI login inside the workspace was rejected as the primary credential mechanism
   because deleting or rotating the control-plane secret would not revoke that copy.
 - The former gateway and virtual-key path was tested by earlier releases and rejected for 0.12
-  because a full-access agent could call around a proxy while the extra budget and receipt model
-  complicated native-session use.
+  because a full-access agent could call around a proxy. The useful budget outcome is preserved in
+  the dispatcher and database without retaining proxy credentials or receipts.
 
 ## Ownership boundary
 

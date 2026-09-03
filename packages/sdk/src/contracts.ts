@@ -282,3 +282,13 @@ export type StoryEnvironment = {
   next_cursor: number;
   has_more: boolean;
 };
+
+export type ProjectBudget = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/budget">;
+export type ProjectObservability = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/observability"
+>;
+export type UsageSummary = ProjectObservability["usage"];
+export type ProjectPipeline = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/pipeline">;
+export type PipelineItem = ArrayItem<ProjectPipeline["stages"]["backlog"]>;
+export type PipelinePullRequest = ArrayItem<PipelineItem["pullRequests"]>;

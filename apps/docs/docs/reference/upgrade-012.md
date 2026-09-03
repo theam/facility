@@ -5,8 +5,11 @@ title: 0.12 database boundary
 # Moving from 0.11 to 0.12
 
 0.12 is a clean product and schema boundary. It does not migrate governed runs, internal approval
-objects, receipts, request envelopes, budget ledgers, registry definitions, disposable sandboxes,
+objects, receipts, request envelopes, legacy gateway ledgers, registry definitions, disposable sandboxes,
 or independent preview deployments.
+
+Configure 0.12 budgets again after connecting each project. Cost and budget data starts with the
+new story-turn model; the release does not import historical gateway usage.
 
 ## Back up 0.11
 

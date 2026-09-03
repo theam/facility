@@ -449,17 +449,22 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
     ).rejects.toMatchObject({ code: "agent_name_invalid", statusCode: 400 });
   });
 
-  it("issues one un-narrowed installation token to every configured repository", async () => {
-    const calls: number[] = [];
-    const broker = new GithubWorkspaceCredentialBroker(db, async ({ installationId: githubId }) => {
-      calls.push(githubId);
+  it("keeps maintainer permissions while narrowing installation tokens to project repositories", async () => {
+    const calls: Array<{ installationId: number; repositories: string[] }> = [];
+    const broker = new GithubWorkspaceCredentialBroker(db, async (request) => {
+      calls.push(request);
       return {
         token: "full-installation-token",
         expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       };
     });
     const issued = await broker.issue(orgId, projectId);
-    expect(calls).toHaveLength(1);
+    expect(calls).toEqual([
+      {
+        installationId: expect.any(Number),
+        repositories: [`app-${suffix}`, `shared-${suffix}`],
+      },
+    ]);
     expect(issued.repositories).toHaveLength(2);
     const serializedCredentials = issued.environment.FACILITY_GITHUB_CREDENTIALS;
     if (!serializedCredentials) throw new Error("expected serialized GitHub credentials");

@@ -7,6 +7,7 @@ import {
   stories,
 } from "@facility/db";
 import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import type { GithubMirrorService } from "../github/mirror.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type { ProjectManifest, ProjectManifestSource } from "../workspaces/project-environment.js";
 import { type AgentCatalogService, manifestFromProjection } from "./catalog.js";
@@ -36,6 +37,7 @@ export class GithubAgentTriggerService {
     private readonly storiesService: StoryWorkspaceService,
     private readonly projectManifests: ProjectManifestSource,
     private readonly defaultImage: string,
+    private readonly mirror?: GithubMirrorService,
   ) {}
 
   async handleInbound(inboundEventId: string) {
@@ -47,6 +49,12 @@ export class GithubAgentTriggerService {
         .limit(1)
     )[0];
     if (!event?.verified) return { matched: 0, queued: 0, merged: 0 };
+    await this.mirror?.handleWebhook({
+      id: event.id,
+      orgId: event.orgId,
+      eventType: event.eventType,
+      payload: event.payload as Record<string, unknown>,
+    });
     const result = await this.handle({
       id: event.id,
       orgId: event.orgId,
@@ -70,7 +78,11 @@ export class GithubAgentTriggerService {
 
     const project = (
       await this.db
-        .select({ id: projects.id, orgId: projects.orgId })
+        .select({
+          id: projects.id,
+          orgId: projects.orgId,
+          repositoryId: projectRepositories.id,
+        })
         .from(projectRepositories)
         .innerJoin(
           projects,
@@ -92,7 +104,7 @@ export class GithubAgentTriggerService {
     if (!project) return { matched: 0, queued: 0, merged: 0 };
 
     if (isMergedPullRequest(event)) {
-      const merged = await this.markMerged(project.id, event);
+      const merged = await this.markMerged(project.id, project.repositoryId, event);
       return { matched: 0, queued: 0, merged };
     }
 
@@ -102,6 +114,7 @@ export class GithubAgentTriggerService {
     const linkedStory = await this.findLinkedStory(
       event.orgId,
       project.id,
+      project.repositoryId,
       eventIdentity.pullRequestNumber,
       safeEventBranch,
     );
@@ -148,6 +161,7 @@ export class GithubAgentTriggerService {
       const result = await this.storiesService.start({
         orgId: event.orgId,
         projectId: project.id,
+        repositoryId: project.repositoryId,
         provider: identity.provider,
         externalId: identity.externalId,
         title: identity.title,
@@ -174,12 +188,18 @@ export class GithubAgentTriggerService {
     return { matched: matches.length, queued, merged: 0 };
   }
 
-  private async markMerged(projectId: string, event: GithubEvent) {
+  private async markMerged(projectId: string, repositoryId: string, event: GithubEvent) {
     const pullRequest = object(event.payload.pull_request);
     const number = numberValue(pullRequest.number);
     const branch = string(object(pullRequest.head).ref);
     if (!number || !branch) return 0;
-    const story = await this.findLinkedStory(event.orgId, projectId, number, safeBranch(branch));
+    const story = await this.findLinkedStory(
+      event.orgId,
+      projectId,
+      repositoryId,
+      number,
+      safeBranch(branch),
+    );
     if (!story || story.deletedAt) return 0;
     await this.storiesService.markMerged({
       orgId: event.orgId,
@@ -195,6 +215,7 @@ export class GithubAgentTriggerService {
   private async findLinkedStory(
     orgId: string,
     projectId: string,
+    repositoryId: string,
     pullRequestNumber?: number,
     branch?: string,
   ) {
@@ -207,6 +228,7 @@ export class GithubAgentTriggerService {
             and(
               eq(stories.orgId, orgId),
               eq(stories.projectId, projectId),
+              eq(stories.repositoryId, repositoryId),
               eq(stories.pullRequestNumber, pullRequestNumber),
               isNull(stories.deletedAt),
             ),
@@ -225,6 +247,7 @@ export class GithubAgentTriggerService {
           and(
             eq(stories.orgId, orgId),
             eq(stories.projectId, projectId),
+            eq(stories.repositoryId, repositoryId),
             eq(stories.branch, branch),
             isNull(stories.pullRequestNumber),
             isNull(stories.deletedAt),

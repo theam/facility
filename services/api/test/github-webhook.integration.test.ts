@@ -1,6 +1,14 @@
 import { createHmac } from "node:crypto";
 import { newId } from "@facility/core";
-import { createDb, githubInstallations, githubWebhookEvents, migrate, orgs } from "@facility/db";
+import {
+  createDb,
+  githubInstallations,
+  githubWebhookEvents,
+  migrate,
+  orgs,
+  projectRepositories,
+  projects,
+} from "@facility/db";
 import { eq } from "drizzle-orm";
 import Fastify from "fastify";
 import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod";
@@ -42,6 +50,8 @@ describe("GitHub webhook authentication and tenant binding", async () => {
   const otherOrgId = newId("org");
   const installationRowId = newId("ghi");
   const otherInstallationRowId = newId("ghi");
+  const projectId = newId("proj");
+  const repositoryId = newId("repo");
   const installationNumber = 4_000_000 + Math.floor(Math.random() * 100_000);
   const otherInstallationNumber = installationNumber + 100_000;
   const queued: Array<{ queue: string; data: Record<string, unknown> }> = [];
@@ -86,6 +96,23 @@ describe("GitHub webhook authentication and tenant binding", async () => {
         targetType: "Organization",
       },
     ]);
+    await db.insert(projects).values({
+      id: projectId,
+      orgId,
+      name: "Webhook project",
+      slug: `webhook-project-${suffix}`,
+      settings: {},
+    });
+    await db.insert(projectRepositories).values({
+      id: repositoryId,
+      orgId,
+      projectId,
+      installationId: installationRowId,
+      owner: "facility-webhook",
+      name: "example",
+      defaultBranch: "main",
+      role: "primary",
+    });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     app.decorate("facilityDb", db);
@@ -120,6 +147,8 @@ describe("GitHub webhook authentication and tenant binding", async () => {
           id: `${installationEventPrefix(installationRowId)}${delivery}`,
           orgId,
           installationId: installationRowId,
+          projectId,
+          repositoryId,
           verified: true,
         }),
       ]),

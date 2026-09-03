@@ -7,6 +7,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -222,6 +223,11 @@ export const projectRepositories = pgTable(
   },
   (table) => [
     unique("project_repositories_org_owner_name_uidx").on(table.orgId, table.owner, table.name),
+    uniqueIndex("project_repositories_org_project_id_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.id,
+    ),
     index("project_repositories_org_project_idx").on(table.orgId, table.projectId),
     uniqueIndex("project_repositories_primary_uidx")
       .on(table.projectId)
@@ -250,6 +256,8 @@ export const githubWebhookEvents = pgTable(
     installationId: text("installation_id")
       .notNull()
       .references(() => githubInstallations.id),
+    projectId: text("project_id").references(() => projects.id),
+    repositoryId: text("repository_id").references(() => projectRepositories.id),
     eventType: text("event_type").notNull(),
     payload: jsonb("payload").notNull(),
     verified: boolean("verified").notNull().default(true),
@@ -259,10 +267,185 @@ export const githubWebhookEvents = pgTable(
   },
   (table) => [
     index("github_webhook_events_org_received_idx").on(table.orgId, table.receivedAt.desc()),
+    index("github_webhook_events_project_received_idx").on(
+      table.orgId,
+      table.projectId,
+      table.receivedAt.desc(),
+    ),
     foreignKey({
       name: "github_webhook_events_installation_scope_fk",
       columns: [table.orgId, table.installationId],
       foreignColumns: [githubInstallations.orgId, githubInstallations.id],
+    }),
+    foreignKey({
+      name: "github_webhook_events_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "github_webhook_events_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const githubIssues = pgTable(
+  "github_issues",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    number: integer("number").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    state: text("state").notNull(),
+    labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
+    assignees: text("assignees").array().notNull().default(sql`'{}'::text[]`),
+    author: text("author"),
+    htmlUrl: text("html_url").notNull(),
+    commentsCount: integer("comments_count").notNull().default(0),
+    githubCreatedAt: timestamp("github_created_at", { withTimezone: true }),
+    githubUpdatedAt: timestamp("github_updated_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("github_issues_repository_number_uidx").on(table.repositoryId, table.number),
+    index("github_issues_project_state_idx").on(table.orgId, table.projectId, table.state),
+    check("github_issues_state_check", sql`${table.state} in ('open', 'closed')`),
+    foreignKey({
+      name: "github_issues_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "github_issues_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const githubPullRequests = pgTable(
+  "github_pull_requests",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    number: integer("number").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    state: text("state").notNull(),
+    draft: boolean("draft").notNull().default(false),
+    author: text("author"),
+    headRef: text("head_ref").notNull(),
+    headSha: text("head_sha").notNull(),
+    baseRef: text("base_ref").notNull(),
+    htmlUrl: text("html_url").notNull(),
+    closingIssues: integer("closing_issues").array().notNull().default(sql`'{}'::integer[]`),
+    ciState: text("ci_state"),
+    ciHeadSha: text("ci_head_sha"),
+    ciFailureNames: text("ci_failure_names").array().notNull().default(sql`'{}'::text[]`),
+    ciUpdatedAt: timestamp("ci_updated_at", { withTimezone: true }),
+    githubCreatedAt: timestamp("github_created_at", { withTimezone: true }),
+    githubUpdatedAt: timestamp("github_updated_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    mergedAt: timestamp("merged_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("github_pull_requests_repository_number_uidx").on(table.repositoryId, table.number),
+    index("github_pull_requests_project_state_idx").on(table.orgId, table.projectId, table.state),
+    check("github_pull_requests_state_check", sql`${table.state} in ('open', 'closed', 'merged')`),
+    check(
+      "github_pull_requests_ci_state_check",
+      sql`${table.ciState} is null or ${table.ciState} in ('pending', 'success', 'failure')`,
+    ),
+    foreignKey({
+      name: "github_pull_requests_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "github_pull_requests_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const githubCiEvents = pgTable(
+  "github_ci_events",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    pullNumber: integer("pull_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    state: text("state").notNull(),
+    failureNames: text("failure_names").array().notNull().default(sql`'{}'::text[]`),
+    sourceEventId: text("source_event_id"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("github_ci_events_project_observed_idx").on(
+      table.orgId,
+      table.projectId,
+      table.observedAt.desc(),
+    ),
+    uniqueIndex("github_ci_events_source_uidx")
+      .on(table.sourceEventId)
+      .where(sql`${table.sourceEventId} is not null`),
+    check("github_ci_events_state_check", sql`${table.state} in ('pending', 'success', 'failure')`),
+    foreignKey({
+      name: "github_ci_events_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "github_ci_events_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
     }),
   ],
 );
@@ -277,6 +460,7 @@ export const stories = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
+    repositoryId: text("repository_id").references(() => projectRepositories.id),
     provider: text("provider").notNull(),
     externalId: text("external_id").notNull(),
     title: text("title").notNull(),
@@ -293,7 +477,12 @@ export const stories = pgTable(
     ...timestamps,
   },
   (table) => [
-    unique("stories_project_external_uidx").on(table.projectId, table.provider, table.externalId),
+    uniqueIndex("stories_project_repository_external_uidx").on(
+      table.projectId,
+      table.provider,
+      sql`coalesce(${table.repositoryId}, '__none__')`,
+      table.externalId,
+    ),
     uniqueIndex("stories_org_project_id_uidx").on(table.orgId, table.projectId, table.id),
     index("stories_org_project_status_idx").on(table.orgId, table.projectId, table.status),
     check(
@@ -305,6 +494,15 @@ export const stories = pgTable(
       name: "stories_project_scope_fk",
       columns: [table.orgId, table.projectId],
       foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "stories_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
     }),
   ],
 );
@@ -514,6 +712,119 @@ export const turns = pgTable(
         storyConversations.projectId,
         storyConversations.id,
       ],
+    }),
+  ],
+);
+
+export const projectBudgets = pgTable(
+  "project_budgets",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    monthlyLimitCents: integer("monthly_limit_cents").notNull(),
+    warningPercent: integer("warning_percent").notNull().default(80),
+    enabled: boolean("enabled").notNull().default(true),
+    updatedBy: text("updated_by"),
+    ...timestamps,
+  },
+  (table) => [
+    unique("project_budgets_project_uidx").on(table.projectId),
+    index("project_budgets_org_idx").on(table.orgId),
+    check("project_budgets_limit_check", sql`${table.monthlyLimitCents} >= 0`),
+    check("project_budgets_warning_check", sql`${table.warningPercent} between 1 and 100`),
+    foreignKey({
+      name: "project_budgets_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+  ],
+);
+
+export const turnUsage = pgTable(
+  "turn_usage",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    turnId: text("turn_id")
+      .notNull()
+      .references(() => turns.id),
+    agentName: text("agent_name").notNull(),
+    engine: text("engine").notNull(),
+    model: text("model").notNull(),
+    inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
+    outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
+    cacheReadTokens: bigint("cache_read_tokens", { mode: "number" }).notNull().default(0),
+    cacheWriteTokens: bigint("cache_write_tokens", { mode: "number" }).notNull().default(0),
+    costCents: numeric("cost_cents", { mode: "number" }),
+    priced: boolean("priced").notNull(),
+    source: text("source").notNull(),
+    durationMs: integer("duration_ms").notNull().default(0),
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("turn_usage_turn_uidx").on(table.turnId),
+    index("turn_usage_project_created_idx").on(
+      table.orgId,
+      table.projectId,
+      table.createdAt.desc(),
+    ),
+    check(
+      "turn_usage_source_check",
+      sql`${table.source} in ('provider', 'price_book', 'unpriced')`,
+    ),
+    check("turn_usage_status_check", sql`${table.status} in ('succeeded', 'failed')`),
+    check(
+      "turn_usage_tokens_check",
+      sql`${table.inputTokens} >= 0 and ${table.outputTokens} >= 0 and ${table.cacheReadTokens} >= 0 and ${table.cacheWriteTokens} >= 0`,
+    ),
+    foreignKey({
+      name: "turn_usage_turn_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.turnId],
+      foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+  ],
+);
+
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id").references(() => projects.id),
+    actor: jsonb("actor").notNull(),
+    action: text("action").notNull(),
+    target: jsonb("target").notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    requestId: text("request_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("audit_events_org_created_idx").on(table.orgId, table.createdAt.desc()),
+    index("audit_events_project_created_idx").on(
+      table.orgId,
+      table.projectId,
+      table.createdAt.desc(),
+    ),
+    foreignKey({
+      name: "audit_events_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
     }),
   ],
 );

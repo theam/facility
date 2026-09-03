@@ -12,6 +12,11 @@ export const PERMISSION_RESOURCES = [
   "previews",
   "keys",
   "settings",
+  "costs",
+  "budgets",
+  "analytics",
+  "audit",
+  "github",
 ] as const;
 
 const basePermissions = PERMISSION_RESOURCES.flatMap(

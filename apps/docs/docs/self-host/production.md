@@ -5,8 +5,12 @@ title: Production
 # Production deployment
 
 The permanent 0.12 services are the control API with embedded MCP and webhooks, one worker with the
-generic scheduler, PostgreSQL, the web UI, and a workspace provider. The single-host Compose file
-uses Docker named volumes. A Vercel Sandbox adapter is also available for managed compute.
+generic scheduler and GitHub reconciliation, PostgreSQL, the web UI, and a workspace provider. Cost
+accounting, budgets, observability, audit events, analytics summaries, and pipeline state live in
+those services. They do not require sidecars or separate control-plane applications.
+
+The single-host Compose file uses Docker named volumes. The [AWS reference deployment](aws.md)
+runs the control plane on ECS and RDS while Vercel Sandbox runs and retains story workspaces.
 
 Use managed PostgreSQL, HTTPS, encrypted backups, and distinct web, API/MCP, and preview hostnames.
 Give the worker Docker access only on a host dedicated to trusted project workspaces. Monitor disk

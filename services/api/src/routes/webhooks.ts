@@ -1,5 +1,5 @@
-import { githubInstallations, githubWebhookEvents } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { githubInstallations, githubWebhookEvents, projectRepositories } from "@facility/db";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { parseGithubJson, verifyGithubSignature } from "../github/webhook.js";
@@ -66,6 +66,27 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
           return reply.status(202).send({ ok: true });
         }
 
+        const repositoryIdentity = githubRepositoryIdentity(payload);
+        const repository = repositoryIdentity
+          ? (
+              await app.facilityDb
+                .select({
+                  id: projectRepositories.id,
+                  projectId: projectRepositories.projectId,
+                })
+                .from(projectRepositories)
+                .where(
+                  and(
+                    eq(projectRepositories.orgId, installation.orgId),
+                    eq(projectRepositories.installationId, installation.id),
+                    eq(projectRepositories.owner, repositoryIdentity.owner),
+                    eq(projectRepositories.name, repositoryIdentity.name),
+                  ),
+                )
+                .limit(1)
+            )[0]
+          : undefined;
+
         const id = `gh_${installation.id}_${delivery}`;
         const inserted = await app.facilityDb
           .insert(githubWebhookEvents)
@@ -73,6 +94,8 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
             id,
             orgId: installation.orgId,
             installationId: installation.id,
+            projectId: repository?.projectId,
+            repositoryId: repository?.id,
             eventType,
             payload,
             verified: true,
@@ -108,6 +131,22 @@ function githubInstallationNumber(payload: Record<string, unknown>) {
   }
   const id = (installation as Record<string, unknown>).id;
   return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
+function githubRepositoryIdentity(payload: Record<string, unknown>) {
+  const repository = payload.repository;
+  if (!repository || typeof repository !== "object" || Array.isArray(repository)) return undefined;
+  const value = repository as Record<string, unknown>;
+  const fullName = typeof value.full_name === "string" ? value.full_name.split("/") : [];
+  const ownerObject = value.owner;
+  const owner =
+    ownerObject && typeof ownerObject === "object" && !Array.isArray(ownerObject)
+      ? (ownerObject as Record<string, unknown>).login
+      : fullName[0];
+  const name = typeof value.name === "string" ? value.name : fullName[1];
+  return typeof owner === "string" && owner && typeof name === "string" && name
+    ? { owner, name }
+    : undefined;
 }
 
 function header(value: string | string[] | undefined) {

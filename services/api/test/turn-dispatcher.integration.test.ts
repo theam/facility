@@ -12,10 +12,12 @@ import {
   githubInstallations,
   migrate,
   orgs,
+  projectBudgets,
   projectRepositories,
   projects,
   turnEvents,
   turns,
+  turnUsage,
 } from "@facility/db";
 import { and, asc, eq } from "drizzle-orm";
 import postgres from "postgres";
@@ -163,6 +165,12 @@ environment:
         exitCode: 0,
         stderr: "",
         durationMs: result.durationMs,
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
       };
     }
   }
@@ -257,7 +265,18 @@ environment:
     expect(
       await db.select().from(engineSessions).where(eq(engineSessions.storyId, started.story.id)),
     ).toHaveLength(1);
-
+    expect(await db.select().from(turnUsage).where(eq(turnUsage.turnId, initialTurn.id))).toEqual([
+      expect.objectContaining({
+        agentName: "builder",
+        engine: "codex",
+        model: "gpt-5.5",
+        inputTokens: 100,
+        outputTokens: 20,
+        priced: true,
+        source: "price_book",
+        status: "succeeded",
+      }),
+    ]);
     const messages = await storiesService.conversation(orgId, projectId, started.story.id);
     expect(messages.at(-1)).toMatchObject({
       role: "agent",
@@ -291,6 +310,63 @@ environment:
     expect(
       await runtime.read(firstRequest.workspace, `repos/${owner}/${repository}/agent-work`),
     ).toBe("turn-1turn-2");
+  });
+
+  it("blocks an exhausted project budget before invoking the agent engine", async () => {
+    await db
+      .insert(projectBudgets)
+      .values({
+        id: newId("bud"),
+        orgId,
+        projectId,
+        monthlyLimitCents: 0,
+        warningPercent: 80,
+        enabled: true,
+      })
+      .onConflictDoUpdate({
+        target: projectBudgets.projectId,
+        set: { monthlyLimitCents: 0, enabled: true },
+      });
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `budget-${suffix}`,
+      title: "Respect the project budget",
+      agent: builder,
+      message: "This must not reach the provider",
+      messageDedupeKey: `budget-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected budget turn");
+    const requestsBefore = engine.requests.length;
+
+    const dispatch = await dispatcher.dispatch({
+      orgId,
+      projectId,
+      turnId: started.queued.turn.id,
+    });
+    await db
+      .update(projectBudgets)
+      .set({ enabled: false })
+      .where(eq(projectBudgets.projectId, projectId));
+
+    expect(dispatch).toMatchObject({ claimed: true, state: "failed" });
+    expect(engine.requests).toHaveLength(requestsBefore);
+    expect(
+      await db.select().from(turnUsage).where(eq(turnUsage.turnId, started.queued.turn.id)),
+    ).toEqual([]);
+    await expect(storiesService.get(orgId, projectId, started.story.id)).resolves.toMatchObject({
+      story: { status: "attention" },
+      attention: [
+        expect.objectContaining({
+          kind: "turn_error",
+          status: "open",
+          detail: expect.stringContaining("monthly budget is exhausted"),
+        }),
+      ],
+    });
   });
 
   it("turns an agent wait into typed attention and resolves it when a reply starts", async () => {

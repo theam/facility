@@ -37,4 +37,6 @@ do not create duplicate turns. A merged pull request marks its story done and su
 does not delete the workspace.
 
 All agents receive the same installation token capability. Facility does not request a smaller
-permission set for reviewers, scheduled agents, or planning agents.
+permission set for reviewers, scheduled agents, or planning agents. Each token is limited to the
+repositories connected to the active Facility project, while retaining the App's complete
+maintainer permission set for those repositories.

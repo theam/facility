@@ -13,8 +13,8 @@
   },
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsup src/index.ts src/crypto.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/render-workspace-kickstart.ts src/roles.ts --format esm --dts && node scripts/copy-render-assets.mjs",
-    "build:runtime": "tsup src/index.ts src/crypto.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/render-workspace-kickstart.ts src/roles.ts --format esm && node scripts/copy-render-assets.mjs",
+    "build": "tsup src/index.ts src/crypto.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/pricing.ts src/render-workspace-kickstart.ts src/roles.ts --format esm --dts && node scripts/copy-render-assets.mjs",
+    "build:runtime": "tsup src/index.ts src/crypto.ts src/fingerprints.ts src/ids.ts src/permissions.ts src/pricing.ts src/render-workspace-kickstart.ts src/roles.ts --format esm && node scripts/copy-render-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

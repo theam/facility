@@ -3,7 +3,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 
-type Method = "GET" | "POST" | "DELETE";
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
 type Args = Record<string, unknown>;
 type Shape = Record<string, z.ZodType>;
 type ApiClientLike = {
@@ -178,6 +178,90 @@ export const toolDefinitions: ToolDefinition[] = [
     path: (args) =>
       `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/environment`,
     query: (args) => ({ after: numberValue(args.after), limit: Number(args.limit ?? 100) }),
+  },
+  {
+    name: "facility_get_costs",
+    permission: "costs:read",
+    description:
+      "Read token usage, attributed model cost, pricing status, and recent turn-level records for a project. Needs costs:read.",
+    inputSchema: {
+      projectId,
+      from: z.string().datetime().optional(),
+      to: z.string().datetime().optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+    },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/costs`,
+    query: (args) => ({
+      from: stringValue(args.from),
+      to: stringValue(args.to),
+      limit: Number(args.limit ?? 100),
+    }),
+  },
+  {
+    name: "facility_get_budget",
+    permission: "budgets:read",
+    description:
+      "Read the project's monthly budget, current spend, remaining amount, and enforcement state. Needs budgets:read.",
+    inputSchema: { projectId },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/budget`,
+  },
+  {
+    name: "facility_set_budget",
+    permission: "budgets:write",
+    description:
+      "Set the project monthly budget. Exhausted budgets block new turns; active provider calls finish and are accounted afterwards. Needs budgets:write.",
+    inputSchema: {
+      projectId,
+      monthlyLimitCents: z.number().int().min(0),
+      warningPercent: z.number().int().min(1).max(100).default(80),
+      enabled: z.boolean().default(true),
+      idempotencyKey,
+    },
+    method: "PATCH",
+    path: (args) => `/v1/projects/${part(args.projectId)}/budget`,
+    body: (args) => ({
+      monthly_limit_cents: args.monthlyLimitCents,
+      warning_percent: args.warningPercent,
+      enabled: args.enabled,
+    }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+  },
+  {
+    name: "facility_get_observability",
+    permission: "analytics:read",
+    description:
+      "Read project health, turn outcomes, usage trends, budget state, workspace state, GitHub delivery health, and recent audit events. Needs analytics:read.",
+    inputSchema: {
+      projectId,
+      days: z.number().int().min(1).max(365).default(30),
+    },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/observability`,
+    query: (args) => ({ days: Number(args.days ?? 30) }),
+  },
+  {
+    name: "facility_get_pipeline",
+    permission: "github:read",
+    description:
+      "Read the mirrored GitHub issue and pull-request pipeline with story and CI state. Needs github:read.",
+    inputSchema: { projectId },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/pipeline`,
+  },
+  {
+    name: "facility_sync_github",
+    permission: "github:write",
+    description:
+      "Reconcile the project's issue, pull-request, and CI mirror from GitHub after missed webhooks. Needs github:write.",
+    inputSchema: { projectId, idempotencyKey },
+    method: "POST",
+    path: (args) => `/v1/projects/${part(args.projectId)}/github/sync`,
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+    openWorld: true,
   },
   {
     name: "facility_open_preview",

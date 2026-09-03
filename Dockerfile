@@ -78,6 +78,7 @@ RUN pnpm --config.inject-workspace-packages=true \
 # Fail the image build if the clean database baseline or repository-defined
 # agent templates are absent from the portable production deployment.
 RUN test -f /prod/api/node_modules/@facility/db/migrations/v0.12/0001_facility_012.sql \
+  && test -f /prod/api/node_modules/@facility/db/migrations/v0.12/0002_insights_and_github_mirror.sql \
   && test -f /prod/api/node_modules/@facility/core/dist/render-assets/packages/cli/templates/agents/builder.md
 
 # --- api (also serves the worker via `node dist/worker.js`) ---

@@ -4,7 +4,7 @@ import {
   AgentTriggerSchema,
   renderAgentManifest,
 } from "@facility/agents";
-import { workspaceEvents } from "@facility/db";
+import { projectRepositories, workspaceEvents } from "@facility/db";
 import { and, asc, desc, eq, gt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -231,12 +231,29 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         ]),
       );
       const manifest = manifestFromProjection(projection);
+      const repositoryId =
+        body.provider === "github"
+          ? (
+              await app.facilityDb
+                .select({ id: projectRepositories.id })
+                .from(projectRepositories)
+                .where(
+                  and(
+                    eq(projectRepositories.orgId, orgId),
+                    eq(projectRepositories.projectId, projectId),
+                    eq(projectRepositories.role, "primary"),
+                  ),
+                )
+                .limit(1)
+            )[0]?.id
+          : undefined;
       const surface = requestSurface(request.headers["x-facility-surface"]);
       requireAgentSurface(manifest, surface);
       const result = await translate(() =>
         domain.stories.start({
           orgId,
           projectId,
+          repositoryId,
           provider: body.provider,
           externalId: body.external_id ?? `manual:${body.idempotency_key}`,
           title: body.title,

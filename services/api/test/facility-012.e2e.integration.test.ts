@@ -26,7 +26,9 @@ import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/cata
 import { GithubAgentTriggerService } from "../src/agents/github-triggers.js";
 import { AgentScheduler } from "../src/agents/scheduler.js";
 import { buildApp } from "../src/app.js";
+import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
+import { CostBudgetService } from "../src/insights/costs.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import type { StoryDomain } from "../src/story-domain.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
@@ -243,6 +245,10 @@ environment:
         projectManifests,
         config.workspaceImage,
       ),
+      mirror: new GithubMirrorService(db, async () => {
+        throw new Error("GitHub mirror is not used by this fixture");
+      }),
+      costs: new CostBudgetService(db),
     };
     app = await buildApp(config, {
       storyDomain: domain,

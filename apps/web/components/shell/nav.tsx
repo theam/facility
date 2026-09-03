@@ -26,6 +26,8 @@ export function projectNav(projectId: string, _inboxCount?: number): NavItem[] {
   return [
     { href: base, icon: "overview", label: "Overview" },
     { href: `${base}/stories`, icon: "stories", label: "Stories" },
+    { href: `${base}/pipeline`, icon: "activity", label: "Pipeline" },
+    { href: `${base}/insights`, icon: "audit", label: "Insights" },
     { href: `${base}/agents`, icon: "agents", label: "Agents" },
     { href: `${base}/settings`, icon: "settings", label: "Settings" },
   ];

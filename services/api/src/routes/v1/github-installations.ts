@@ -104,8 +104,9 @@ export async function registerGithubInstallationRoutes(
           per_page: 100,
           page,
         });
-        const pageRepositories = Array.isArray(response.data.repositories)
-          ? (response.data.repositories as InstallationRepo[])
+        const data = response.data as { repositories?: unknown };
+        const pageRepositories = Array.isArray(data.repositories)
+          ? (data.repositories as InstallationRepo[])
           : [];
         repositories.push(...pageRepositories);
         if (pageRepositories.length < 100) break;

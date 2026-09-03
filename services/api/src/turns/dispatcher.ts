@@ -12,6 +12,7 @@ import {
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
+import { CostBudgetService } from "../insights/costs.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type {
   ProjectEnvironmentService,
@@ -31,6 +32,7 @@ export class TurnDispatcher {
     private readonly projectManifests: ProjectManifestSource,
     private readonly environment: ProjectEnvironmentService,
     private readonly engines: AgentEngineRegistry,
+    private readonly costs = new CostBudgetService(db),
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -133,6 +135,7 @@ export class TurnDispatcher {
       if (manifest.hash !== turn.manifestHash || manifest.name !== turn.agentName) {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
       }
+      await this.costs.assertTurnAllowed(input.orgId, input.projectId, manifest.model);
       const [credential, projectManifest] = await Promise.all([
         this.credentials.issue(input.orgId, input.projectId),
         this.projectManifests.load(input.orgId, input.projectId),
@@ -218,6 +221,18 @@ export class TurnDispatcher {
         });
       }
       const outcome = agentOutcome(result.output);
+      await this.costs.record({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: story.id,
+        turnId: turn.id,
+        agentName: manifest.name,
+        engine: manifest.engine,
+        model: manifest.model,
+        usage: result.usage,
+        durationMs: result.durationMs,
+        status: "succeeded",
+      });
       await this.persistSession({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -279,6 +294,22 @@ export class TurnDispatcher {
         });
         await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
         return { claimed: true as const, state: "canceled" as const };
+      }
+      if (error instanceof AgentEngineError) {
+        await this.costs
+          .record({
+            orgId: input.orgId,
+            projectId: input.projectId,
+            storyId: turn.storyId,
+            turnId: turn.id,
+            agentName: turn.agentName,
+            engine: turn.engine,
+            model: turn.model,
+            usage: asUsage(error.details.usage),
+            durationMs: numberValue(error.details.durationMs) ?? 0,
+            status: "failed",
+          })
+          .catch(() => undefined);
       }
       const detail = redactString(error instanceof Error ? error.message : String(error), secrets);
       await this.storiesService.failTurn({ ...input, error: detail });
@@ -483,6 +514,24 @@ export class TurnDispatcher {
       });
     }
   }
+}
+
+function asUsage(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const fields = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"];
+  if (fields.some((field) => numberValue(usage[field]) === undefined)) return undefined;
+  return {
+    inputTokens: numberValue(usage.inputTokens) ?? 0,
+    outputTokens: numberValue(usage.outputTokens) ?? 0,
+    cacheReadTokens: numberValue(usage.cacheReadTokens) ?? 0,
+    cacheWriteTokens: numberValue(usage.cacheWriteTokens) ?? 0,
+    reportedCostCents: numberValue(usage.reportedCostCents),
+  };
+}
+
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator {

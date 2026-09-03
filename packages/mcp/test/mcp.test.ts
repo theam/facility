@@ -90,6 +90,12 @@ describe("@facility/mcp 0.12", () => {
       "facility_send_message",
       "facility_get_conversation",
       "facility_get_environment",
+      "facility_get_costs",
+      "facility_get_budget",
+      "facility_set_budget",
+      "facility_get_observability",
+      "facility_get_pipeline",
+      "facility_sync_github",
       "facility_open_preview",
       "facility_suspend_story",
       "facility_archive_story",
@@ -120,7 +126,7 @@ describe("@facility/mcp 0.12", () => {
       idempotentHint: true,
     });
     expect(result.tools.map((tool) => tool.name).join(" ")).not.toMatch(
-      /proposal|receipt|budget|registry|run|hitl/,
+      /proposal|receipt|registry|run|hitl/,
     );
     await client.close();
     await server.close();

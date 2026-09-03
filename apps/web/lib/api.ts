@@ -26,6 +26,9 @@ export type {
   Member,
   MemberRow,
   Project,
+  ProjectBudget,
+  ProjectObservability,
+  ProjectPipeline,
   ProjectRepo,
   Role,
   StoryAgent,
@@ -126,6 +129,14 @@ export const api = {
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/environment`,
       ),
     ),
+  projectBudget: (projectId: string) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/budget`),
+  projectObservability: (projectId: string, days = 30) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/observability`, {
+      query: { days },
+    }),
+  projectPipeline: (projectId: string) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/pipeline`),
   members: () => apiFetch("GET", "/v1/members"),
   roles: () => apiFetch("GET", "/v1/roles"),
   keys: () => apiFetch("GET", "/v1/keys"),

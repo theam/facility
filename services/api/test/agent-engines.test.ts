@@ -93,7 +93,18 @@ describe("native agent engines", () => {
         type: "assistant",
         message: { content: [{ type: "text", text: "working" }] },
       }),
-      JSON.stringify({ type: "result", session_id: "claude-session", result: "done" }),
+      JSON.stringify({
+        type: "result",
+        session_id: "claude-session",
+        result: "done",
+        total_cost_usd: 0.0123,
+        usage: {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_read_input_tokens: 7,
+          cache_creation_input_tokens: 3,
+        },
+      }),
     ].join("\n")}\n`;
     const runtime = new EngineRuntime({ exitCode: 0, stdout, stderr: "", durationMs: 12 });
     const result = await new ClaudeCodeEngine(runtime).run({
@@ -104,7 +115,17 @@ describe("native agent engines", () => {
       cwd: "repos/app",
       nativeSessionId: "claude-session",
     });
-    expect(result).toMatchObject({ nativeSessionId: "claude-session", output: "done" });
+    expect(result).toMatchObject({
+      nativeSessionId: "claude-session",
+      output: "done",
+      usage: {
+        inputTokens: 20,
+        outputTokens: 5,
+        cacheReadTokens: 7,
+        cacheWriteTokens: 3,
+        reportedCostCents: 1.23,
+      },
+    });
     expect(runtime.command).toMatchObject({
       command: "sh",
       cwd: "repos/app",
@@ -139,7 +160,16 @@ describe("native agent engines", () => {
       cwd: "repos/app",
       nativeSessionId: "codex-thread",
     });
-    expect(result).toMatchObject({ nativeSessionId: "codex-thread", output: "implemented" });
+    expect(result).toMatchObject({
+      nativeSessionId: "codex-thread",
+      output: "implemented",
+      usage: {
+        inputTokens: 2,
+        outputTokens: 3,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+    });
     const codexIndex = runtime.command?.args?.indexOf("codex") ?? -1;
     expect(runtime.command?.args?.slice(codexIndex + 1, codexIndex + 4)).toEqual([
       "exec",

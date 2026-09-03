@@ -8,7 +8,9 @@ import {
   type GithubClientFactory,
   type GithubMaintainerTokenFactory,
 } from "./github/client.js";
+import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
+import { CostBudgetService } from "./insights/costs.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
 import { AgentEngineRegistry, ClaudeCodeEngine, CodexEngine } from "./turns/engines.js";
@@ -34,6 +36,8 @@ export type StoryDomain = {
   previews: WorkspacePreviewService;
   scheduler: AgentScheduler;
   githubTriggers: GithubAgentTriggerService;
+  mirror: GithubMirrorService;
+  costs: CostBudgetService;
 };
 
 export function createStoryDomain(input: {
@@ -60,6 +64,8 @@ export function createStoryDomain(input: {
     new GithubAgentCatalogSource(input.db, githubFactory),
   );
   const credentials = new GithubWorkspaceCredentialBroker(input.db, tokenFactory);
+  const mirror = new GithubMirrorService(input.db, githubFactory);
+  const costs = new CostBudgetService(input.db);
   const projectManifests = new GithubProjectManifestSource(input.db, githubFactory);
   const environment = new ProjectEnvironmentService(input.db, runtime);
   const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
@@ -81,6 +87,7 @@ export function createStoryDomain(input: {
     projectManifests,
     environment,
     engines,
+    costs,
   );
   const previews = new WorkspacePreviewService(
     input.db,
@@ -103,6 +110,7 @@ export function createStoryDomain(input: {
     stories,
     projectManifests,
     input.config.workspaceImage,
+    mirror,
   );
   return {
     runtime,
@@ -116,6 +124,8 @@ export function createStoryDomain(input: {
     previews,
     scheduler,
     githubTriggers,
+    mirror,
+    costs,
   };
 }
 

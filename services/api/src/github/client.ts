@@ -3,10 +3,7 @@ import { Octokit as RestOctokit } from "@octokit/rest";
 import type { AppConfig } from "../types.js";
 
 export type Octokit = {
-  request?: (
-    route: string,
-    args?: Record<string, unknown>,
-  ) => Promise<{ data: Record<string, unknown> }>;
+  request?: (route: string, args?: Record<string, unknown>) => Promise<{ data: unknown }>;
   rest: {
     git: {
       getCommit: (
@@ -45,7 +42,10 @@ export type Octokit = {
 };
 
 export type GithubClientFactory = (installationId: number) => Promise<Octokit>;
-export type GithubMaintainerTokenFactory = (input: { installationId: number }) => Promise<{
+export type GithubMaintainerTokenFactory = (input: {
+  installationId: number;
+  repositories: string[];
+}) => Promise<{
   token: string;
   expiresAt: string;
 }>;
@@ -64,8 +64,9 @@ export function createGithubClientFactory(config: AppConfig): GithubClientFactor
 }
 
 /**
- * Mints the installation's complete configured capability for every repository
- * selected in that installation. No repository or permission override is sent.
+ * Mints the installation's complete configured capability, narrowed only to
+ * the repositories connected to this Facility project. Permissions remain
+ * uniform and maintainer-grade for every agent.
  */
 export function createGithubMaintainerTokenFactory(
   config: AppConfig,
@@ -74,10 +75,10 @@ export function createGithubMaintainerTokenFactory(
     throw new Error("GitHub App credentials are not configured");
   }
   const app = new App({ appId: config.githubAppId, privateKey: config.githubAppPrivateKey });
-  return async ({ installationId }) => {
+  return async ({ installationId, repositories }) => {
     const response = await app.octokit.request(
       "POST /app/installations/{installation_id}/access_tokens",
-      { installation_id: installationId },
+      { installation_id: installationId, repositories },
     );
     const token = response.data.token;
     const expiresAt = response.data.expires_at;
@@ -112,6 +113,16 @@ export class FacilityGithubClient {
     private readonly octokit: Octokit,
     private readonly repo: RepoRef,
   ) {}
+
+  async request(route: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    if (!this.octokit.request) throw new Error("GitHub REST requests are unavailable");
+    const response = await this.octokit.request(route, {
+      owner: this.repo.owner,
+      repo: this.repo.repo,
+      ...args,
+    });
+    return response.data;
+  }
 
   async getDefaultBranchSha(): Promise<string> {
     const response = await this.octokit.rest.repos.getBranch({

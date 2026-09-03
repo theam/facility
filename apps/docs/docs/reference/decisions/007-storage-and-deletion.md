@@ -38,8 +38,9 @@ Workspace storage additionally follows the selected provider's snapshot policy; 
 have no automatic expiry, and Docker operators include named workspace volumes in host backups when
 filesystem disaster recovery is required.
 
-Facility reports approximate active compute and retained storage. Cost is information, not a
-budget gate or automatic cleanup policy.
+Facility reports approximate active compute and retained storage. Project budgets can block new
+agent turns after their monthly limit is reached, but never delete, archive, or suspend a workspace
+automatically.
 
 ## Evidence
 
