@@ -212,7 +212,7 @@ jobs:
             printf '\n<untrusted-request>\n'
             cat "$request"
             printf '\n</untrusted-request>\n'
-            printf '\nConfigured checks: {{CHECKS_INLINE}}\nProvisioning already completed: {{PROVISION_CMD}}\n'
+            printf '\nConfigured checks: {{CHECKS_INLINE}}\nProvisioning already completed: {{PROVISION_PROMPT}}\n'
           } >> "$prompt"
           echo "path=$prompt" >> "$GITHUB_OUTPUT"
 

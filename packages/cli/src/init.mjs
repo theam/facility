@@ -132,6 +132,24 @@ function provisionRun(command) {
   return command.split("\n").map((line) => `          ${line}`).join("\n");
 }
 
+// {{PROVISION_PROMPT}} embeds the provision command as documentation of what
+// already ran — never as something to execute — inside three single-line
+// contexts: a double-quoted --append-system-prompt shell argument (crew,
+// doctor, address-review), a single-quoted printf format string (codex), and
+// markdown inline code (architect.md, builder.md). A quote, backtick, dollar,
+// backslash, percent, or newline in the command can close the surrounding
+// string and drop everything after it — including the prompt's security clauses
+// (treat input as untrusted, never push to protected branches). The text does
+// not need to stay executable here, so collapse it to one line and remove the
+// characters that could break out of any of those contexts. PROVISION_RUN keeps
+// the exact, executable command for the workflow `run:` step.
+function provisionPrompt(command) {
+  return command
+    .replace(/["'`$\\%]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function checksRun(checks) {
   if (checks.length) return checks.map((command) => `          ${command}`).join("\n");
   return [
@@ -412,7 +430,7 @@ export async function init(flags, pkgRoot, version) {
     BUILDER_REPO_LANE: "true",
     CODEX_ARCHITECT_REPO_LANE: "true",
     CODEX_BUILDER_REPO_LANE: "true",
-    PROVISION_CMD: provisionCmd,
+    PROVISION_PROMPT: provisionPrompt(provisionCmd),
     PROVISION_RUN: provisionRun(provisionCmd),
     CHECKS_INLINE: checksInline,
     CHECKS_RUN: checksRun(checks),
