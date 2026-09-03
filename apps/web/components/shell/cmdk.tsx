@@ -3,7 +3,7 @@
 import { cx } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Project } from "@/lib/api";
+import type { PipelineStory, Project } from "@/lib/api";
 
 type PaletteProject = Pick<Project, "id" | "slug" | "name">;
 
@@ -16,9 +16,11 @@ type Entry = { id: string; label: string; hint: string; href: string };
 export function CommandPalette({
   projects,
   currentProject,
+  stories,
 }: {
   projects: PaletteProject[];
   currentProject?: PaletteProject;
+  stories?: PipelineStory[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -76,8 +78,21 @@ export function CommandPalette({
         hint: "switch project",
         href: `/projects/${p.id}`,
       }));
-    return [...scoped, ...org, ...projectEntries];
-  }, [projects, currentProject]);
+
+    // Add story entries for the current project
+    const storyEntries: Entry[] = stories
+      ? stories
+          .slice(0, 20) // Limit to 20 most recent/relevant stories
+          .map((story) => ({
+            id: `story-${story.key}`,
+            label: `#${story.number} ${story.title}`,
+            hint: `${story.repoOwner}/${story.repoName}`,
+            href: `/projects/${currentProject?.id}/stories/${story.number}?repoId=${story.repoId}`,
+          }))
+      : [];
+
+    return [...scoped, ...org, ...projectEntries, ...storyEntries];
+  }, [projects, currentProject, stories]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -109,7 +124,7 @@ export function CommandPalette({
 
   useEffect(() => {
     setCursor(0);
-  }, []);
+  }, [filtered]);
 
   if (!open) return null;
 
