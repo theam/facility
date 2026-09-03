@@ -35,9 +35,9 @@ export default async function ProjectStoriesPage({
   searchParams,
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ stage?: string; status?: string }>;
+  searchParams: Promise<{ stage?: string; status?: string; assignee?: string }>;
 }) {
-  const [{ projectId }, { stage, status }] = await Promise.all([params, searchParams]);
+  const [{ projectId }, { stage, status, assignee }] = await Promise.all([params, searchParams]);
   const [pipelineResult, me, project] = await Promise.all([
     api.pipeline(projectId),
     api.me(),
@@ -49,6 +49,7 @@ export default async function ProjectStoriesPage({
   const permissions = me.ok ? me.data.permissions : [];
   const canTrigger = hasPermission(permissions, "runs:trigger");
   const canSync = hasPermission(permissions, "repos:write");
+  const myGithubLogin = me.ok ? me.data.principal.githubLogin : null;
   const stages = pipelineResult.ok ? pipelineResult.data.stages : [];
   const stageKeys = new Set(stages.map((candidate) => candidate.key));
   const activeStage =
@@ -62,15 +63,25 @@ export default async function ProjectStoriesPage({
   const counts = [...stages].reverse();
   const activeOpenStoryCount = items.filter((story) => story.state === "open").length;
 
+  // Filter by assignee if specified
+  const assigneeFilteredItems = assignee && myGithubLogin
+    ? items.filter((story) => story.assignees.includes(assignee))
+    : items;
+
   const stageFiltered = activeStage
     ? counts.filter((candidate) => candidate.key === activeStage)
     : counts;
   const visibleStages = activeStatus
     ? stageFiltered.map((candidate) => ({
         ...candidate,
-        stories: candidate.stories.filter((story) => story.stageState === activeStatus),
+        stories: candidate.stories.filter(
+          (story) => story.stageState === activeStatus && (!assignee || story.assignees.includes(assignee)),
+        ),
       }))
-    : stageFiltered;
+    : stageFiltered.map((candidate) => ({
+        ...candidate,
+        stories: candidate.stories.filter((story) => !assignee || story.assignees.includes(assignee)),
+      }));
   const activeStatusLabel =
     activeStage && activeStatus
       ? pipelineStageStateLabel(
@@ -79,6 +90,8 @@ export default async function ProjectStoriesPage({
           visibleStages.reduce((total, candidate) => total + candidate.stories.length, 0),
         )
       : null;
+
+  const assigneeFilterActive = assignee === "mine";
 
   return (
     <div className="flex flex-col gap-8">
@@ -147,6 +160,33 @@ export default async function ProjectStoriesPage({
             </span>
           </>
         ) : null}
+        {myGithubLogin ? (
+          <Link
+            href={`/projects/${projectId}/stories${activeStage ? `?stage=${activeStage}` : ""}${assigneeFilterActive ? "" : `&assignee=mine`}`}
+            className={cx(
+              "inline-flex items-center gap-2 border px-3 py-1.5 text-[12px] font-medium transition-colors",
+              assigneeFilterActive
+                ? "border-(--line-strong) text-(--ink)"
+                : "border-(--line) text-(--mut) hover:text-(--ink)",
+            )}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-4 rounded-full border border-(--line) bg-(--bg-subtle) font-mono text-[10px] font-medium text-(--ink)">
+                {myGithubLogin.charAt(0).toUpperCase()}
+              </span>
+              <span className="font-mono text-[11px]">mine</span>
+            </span>
+            {assigneeFilterActive && (
+              <Link
+                href={`/projects/${projectId}/stories${activeStage ? `?stage=${activeStage}` : ""}`}
+                aria-label="clear assignee filter"
+                className="text-(--dim) hover:text-(--ink)"
+              >
+                ×
+              </Link>
+            )}
+          </Link>
+        ) : null}
       </div>
 
       {!pipelineResult.ok ? (
@@ -157,7 +197,7 @@ export default async function ProjectStoriesPage({
               : `Couldn't load stories — ${pipelineResult.message}`
           }
         />
-      ) : items.length === 0 ? (
+      ) : assigneeFilteredItems.length === 0 ? (
         <p className="max-w-lg text-sm leading-relaxed text-(--dim)">
           No active stories right now. Closed and merged stories leave Shipped after seven days;
           sync refreshes the GitHub mirror.
