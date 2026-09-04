@@ -1948,6 +1948,27 @@ describe("api", async () => {
     expect(requiredPolicy.statusCode).toBe(200);
     expect(requiredPolicy.json().builderPlanPolicy).toBe("required");
 
+    const codexBuilder = (
+      await db
+        .select()
+        .from(agentDefs)
+        .where(
+          and(
+            eq(agentDefs.orgId, orgId),
+            eq(agentDefs.projectId, planProjectId),
+            eq(agentDefs.name, "codex-builder"),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!codexBuilder) throw new Error("codex builder fixture missing");
+    // Projects seeded before command triggers were introduced retained only
+    // the manual trigger even though the UI advertised /codex-builder.
+    await db
+      .update(agentDefs)
+      .set({ triggers: [{ type: "manual", config: {} }] })
+      .where(eq(agentDefs.id, codexBuilder.id));
+
     await db
       .update(repos)
       .set({ fingerprintStatus: "pending", fingerprintVerifiedAt: null })
@@ -2106,20 +2127,6 @@ describe("api", async () => {
       );
     expect(builderRuns).toHaveLength(1);
     expect(builderRuns[0]?.mode).toBe("codex-builder");
-    const codexBuilder = (
-      await db
-        .select()
-        .from(agentDefs)
-        .where(
-          and(
-            eq(agentDefs.orgId, orgId),
-            eq(agentDefs.projectId, planProjectId),
-            eq(agentDefs.name, "codex-builder"),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (!codexBuilder) throw new Error("codex builder fixture missing");
     expect(builderRuns[0]).toMatchObject({
       agentDefId: codexBuilder.id,
       engine: codexBuilder.engine,
