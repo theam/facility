@@ -16,7 +16,8 @@ Supported triggers are:
 - `manual`, used by trusted internal or direct API dispatch;
 - `mcp`, used by the embedded MCP server;
 - `ui`, used by the web application;
-- `github`, with an event, optional action list, and optional labels; and
+- `github`, with an event, optional action list, optional labels, and an author gate that
+  defaults to repository owners, members, and collaborators; and
 - `schedule`, with a named cron expression and IANA timezone.
 
 An agent runs only when its manifest is enabled and declares the matching trigger type. MCP and UI

@@ -33,6 +33,9 @@ Facility still enforces:
 - isolation between workspace processes, networks, and volumes;
 - short-lived GitHub credentials scoped to configured project repositories;
 - signed, deduplicated GitHub webhooks bound to an installation and organization;
+- a per-trigger author gate on GitHub-activated agents that, by default, lets only repository
+  owners, members, and collaborators start a turn from issue, comment, pull request, or review
+  text;
 - authenticated, expiring, revocable preview sessions with membership checks on every request;
 - secret redaction from persisted command events and API responses; and
 - explicit confirmation and idempotency for durable workspace deletion.

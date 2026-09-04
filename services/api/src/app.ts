@@ -80,6 +80,7 @@ export async function buildApp(
         db,
         config,
         enqueue: (queue, data) => app.enqueue(queue, data),
+        logger: app.log,
       }),
   );
 

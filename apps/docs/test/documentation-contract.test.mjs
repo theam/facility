@@ -122,9 +122,13 @@ test("the agent reference covers engines, options, and every trigger", () => {
     "pull_request_review",
     "check_suite",
     "workflow_run",
+    "authors",
+    "author_association",
   ]) {
     assert.match(guide, new RegExp(`\\b${value}\\b`), `${value} must be documented`);
   }
+  assert.match(guide, /authors[\s\S]*OWNER[\s\S]*MEMBER[\s\S]*COLLABORATOR/);
+  assert.match(guide, /dispatch\s+filter, not a permission profile/i);
   assert.match(guide, /permissions[\s\S]*not part of the manifest/i);
   assert.match(guide, /full workspace[\s\S]*GitHub/i);
 });
