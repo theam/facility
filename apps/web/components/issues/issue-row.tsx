@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CiStatusLink } from "@/components/ci-status";
+import { CompactAssignees } from "@/components/issues/assignees";
 import { WsjfChip } from "@/components/issues/wsjf-chip";
 import type { PipelineStory } from "@/lib/pipeline";
 import { storyHref } from "@/lib/pipeline";
@@ -212,6 +213,7 @@ export function IssueRow({
           </span>
         ))}
         {story.wsjf ? <WsjfChip wsjf={story.wsjf} /> : null}
+        <CompactAssignees assignees={story.assignees} />
         <span className="font-mono text-[10.5px] text-(--dim)">{fmtAgo(story.ghUpdatedAt)}</span>
         {action()}
       </div>

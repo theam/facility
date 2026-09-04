@@ -2,6 +2,7 @@ import { Eyebrow, PillTag, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CiStatusLink } from "@/components/ci-status";
+import { Assignees } from "@/components/issues/assignees";
 import { Markdown } from "@/components/markdown";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -167,6 +168,7 @@ export default async function StoryPage({
               {label}
             </span>
           ))}
+          <Assignees assignees={story.assignees} />
           <a
             href={story.htmlUrl}
             target="_blank"
