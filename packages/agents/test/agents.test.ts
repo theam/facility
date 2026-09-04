@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AgentManifestError,
+  DEFAULT_GITHUB_TRIGGER_AUTHORS,
+  githubTriggerAllowsAuthor,
+  githubTriggerAuthors,
   loadAgentCatalog,
   parseAgentCatalog,
   parseAgentManifest,
@@ -96,6 +99,68 @@ describe("agent manifests", () => {
     expect(githubTrigger).toBeDefined();
     if (!githubTrigger) throw new Error("expected GitHub trigger");
     expect(triggerIdentity(githubTrigger)).toBe("github:assigned-issue");
+  });
+
+  it("gates GitHub triggers to repository owners, members, and collaborators by default", () => {
+    const parsed = parseAgentManifest(manifest(), "builder.md");
+    const trigger = parsed.triggers[3];
+    if (trigger?.type !== "github") throw new Error("expected GitHub trigger");
+
+    expect(trigger.authors).toBeUndefined();
+    expect(githubTriggerAuthors(trigger)).toEqual(DEFAULT_GITHUB_TRIGGER_AUTHORS);
+    expect(githubTriggerAllowsAuthor(trigger, "MEMBER")).toBe(true);
+    expect(githubTriggerAllowsAuthor(trigger, "COLLABORATOR")).toBe(true);
+    expect(githubTriggerAllowsAuthor(trigger, "CONTRIBUTOR")).toBe(false);
+    expect(githubTriggerAllowsAuthor(trigger, "NONE")).toBe(false);
+    expect(parsed.hash).toBe(parseAgentManifest(manifest(), "builder.md").hash);
+  });
+
+  it("widens or opens the GitHub author gate only when the manifest says so", () => {
+    const widened = parseAgentManifest(
+      manifest().replace(
+        "    actions: [assigned]",
+        "    actions: [assigned]\n    authors: [MEMBER, CONTRIBUTOR]",
+      ),
+      "builder.md",
+    ).triggers[3];
+    if (widened?.type !== "github") throw new Error("expected GitHub trigger");
+    expect(widened.authors).toEqual(["MEMBER", "CONTRIBUTOR"]);
+    expect(githubTriggerAllowsAuthor(widened, "CONTRIBUTOR")).toBe(true);
+    expect(githubTriggerAllowsAuthor(widened, "OWNER")).toBe(false);
+
+    const open = parseAgentManifest(
+      manifest().replace("    actions: [assigned]", "    actions: [assigned]\n    authors: any"),
+      "builder.md",
+    ).triggers[3];
+    if (open?.type !== "github") throw new Error("expected GitHub trigger");
+    expect(open.authors).toBe("any");
+    expect(githubTriggerAllowsAuthor(open, "NONE")).toBe(true);
+
+    const rendered = renderAgentManifest({
+      name: "builder",
+      description: "Builds and verifies stories.",
+      engine: "codex",
+      model: "gpt-5.6-sol",
+      enabled: true,
+      options: {},
+      triggers: [{ type: "github", name: "community-issue", event: "issues", authors: "any" }],
+      prompt: "Implement the story and verify it.",
+    });
+    expect(rendered.source).toContain("authors: any");
+  });
+
+  it("rejects unknown, empty, or misspelled GitHub author gates", () => {
+    for (const authors of ["[]", "[maintainer]", "[OWNER, everyone]", "all", "true"]) {
+      expect(() =>
+        parseAgentManifest(
+          manifest().replace(
+            "    actions: [assigned]",
+            `    actions: [assigned]\n    authors: ${authors}`,
+          ),
+          "builder.md",
+        ),
+      ).toThrow(AgentManifestError);
+    }
   });
 
   it("rejects access controls because every agent has the same fixed capability", () => {

@@ -104,6 +104,44 @@ Declaring one does not imply the others. A request from an undeclared surface is
 an optional non-empty string array that filters labeled work. Each string is bounded by the schema.
 Only events subscribed on the GitHub App can reach these triggers.
 
+### Author gate
+
+Event text is passed to an agent that holds maintainer credentials for the project repositories.
+`authors` decides whose text may start a turn. It accepts GitHub's `author_association` values
+(`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`,
+`MANNEQUIN`, `NONE`) as a non-empty array, or the word `any` to accept every account:
+
+```yaml
+- type: github
+  name: community-question
+  event: issue_comment
+  actions: [created]
+  authors: [OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR]
+```
+
+When `authors` is omitted the trigger fires only for `OWNER`, `MEMBER`, and `COLLABORATOR`. A
+payload without an `author_association` field is treated as `NONE`. The gate reads the association
+of the account whose text enters the prompt: the issue author for `issues`, the commenter for
+`issue_comment`, the pull request author for `pull_request`, and the reviewer for
+`pull_request_review`.
+
+Two cases are not gated because no untrusted account can produce them:
+
+- `check_suite` and `workflow_run` deliveries describe CI state and carry no author association.
+- The `assigned`, `labeled`, and `milestoned` actions require triage permission on the repository,
+  so a maintainer has already vouched for the item whoever opened it. The kickstart `builder`
+  trigger on `issues: [assigned]` therefore keeps working for community-opened issues.
+
+A skipped delivery is not an error. The worker logs the delivery id, event, action, agent, trigger,
+sender, and association at `warn` level without the event text, and the webhook is still recorded
+and mirrored.
+
+Facility 0.12.x introduced this default. A public repository that relied on any account starting a
+reviewer or triage agent must now say so with `authors: any` or an explicit list; private
+repositories where every account is a member or collaborator are unaffected. This is a dispatch
+filter, not a permission profile: once a turn starts, every agent still receives the same full
+workspace and GitHub capability.
+
 Duplicate webhook deliveries do not create duplicate turns. Check and workflow events are attached
 to the matching pull request only when their head SHA is current.
 

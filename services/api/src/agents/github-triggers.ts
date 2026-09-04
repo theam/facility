@@ -1,4 +1,10 @@
-import type { AgentTrigger } from "@facility/agents";
+import {
+  type AgentTrigger,
+  GITHUB_AUTHOR_ASSOCIATIONS,
+  type GithubAuthorAssociation,
+  githubTriggerAllowsAuthor,
+  githubTriggerAuthors,
+} from "@facility/agents";
 import {
   type FacilityDb,
   githubWebhookEvents,
@@ -30,6 +36,24 @@ type GithubEvent = {
 
 type GithubObject = Record<string, unknown>;
 
+type GithubTrigger = Extract<AgentTrigger, { type: "github" }>;
+
+export type GithubTriggerLogger = {
+  warn(context: Record<string, unknown>, message: string): void;
+};
+
+/**
+ * Events whose text is written by the acting account. Only these carry `author_association`;
+ * check and workflow deliveries describe CI state and are attributed to GitHub itself.
+ */
+const AUTHORED_EVENTS = new Set(["issues", "issue_comment", "pull_request", "pull_request_review"]);
+
+/**
+ * Actions GitHub only accepts from accounts with triage permission on the repository. When one of
+ * them fires, a maintainer has already vouched for the item, whoever originally opened it.
+ */
+const TRIAGE_ACTIONS = new Set(["assigned", "labeled", "milestoned"]);
+
 export class GithubAgentTriggerService {
   constructor(
     private readonly db: FacilityDb,
@@ -38,6 +62,7 @@ export class GithubAgentTriggerService {
     private readonly projectManifests: ProjectManifestSource,
     private readonly defaultImage: string,
     private readonly mirror?: GithubMirrorService,
+    private readonly logger?: GithubTriggerLogger,
   ) {}
 
   async handleInbound(inboundEventId: string) {
@@ -48,7 +73,7 @@ export class GithubAgentTriggerService {
         .where(eq(githubWebhookEvents.id, inboundEventId))
         .limit(1)
     )[0];
-    if (!event?.verified) return { matched: 0, queued: 0, merged: 0 };
+    if (!event?.verified) return { matched: 0, queued: 0, merged: 0, skipped: 0 };
     await this.mirror?.handleWebhook({
       id: event.id,
       orgId: event.orgId,
@@ -69,12 +94,13 @@ export class GithubAgentTriggerService {
   }
 
   async handle(event: GithubEvent) {
-    if (!SUPPORTED_EVENTS.has(event.eventType)) return { matched: 0, queued: 0, merged: 0 };
+    if (!SUPPORTED_EVENTS.has(event.eventType))
+      return { matched: 0, queued: 0, merged: 0, skipped: 0 };
     const repository = object(event.payload.repository);
     const fullName = string(repository.full_name)?.split("/") ?? [];
     const owner = string(object(repository.owner).login) ?? fullName[0];
     const name = string(repository.name) ?? fullName[1];
-    if (!owner || !name) return { matched: 0, queued: 0, merged: 0 };
+    if (!owner || !name) return { matched: 0, queued: 0, merged: 0, skipped: 0 };
 
     const project = (
       await this.db
@@ -101,15 +127,15 @@ export class GithubAgentTriggerService {
         )
         .limit(1)
     )[0];
-    if (!project) return { matched: 0, queued: 0, merged: 0 };
+    if (!project) return { matched: 0, queued: 0, merged: 0, skipped: 0 };
 
     if (isMergedPullRequest(event)) {
       const merged = await this.markMerged(project.id, project.repositoryId, event);
-      return { matched: 0, queued: 0, merged };
+      return { matched: 0, queued: 0, merged, skipped: 0 };
     }
 
     const eventIdentity = storyIdentity(event);
-    if (!eventIdentity) return { matched: 0, queued: 0, merged: 0 };
+    if (!eventIdentity) return { matched: 0, queued: 0, merged: 0, skipped: 0 };
     const safeEventBranch = safeBranch(eventIdentity.branch);
     const linkedStory = await this.findLinkedStory(
       event.orgId,
@@ -142,18 +168,38 @@ export class GithubAgentTriggerService {
           branch: safeEventBranch,
         };
     const projections = await this.catalog.list(event.orgId, project.id);
-    const matches = projections
+    const candidates = projections
       .map(manifestFromProjection)
       .filter((manifest) => manifest.enabled)
       .flatMap((manifest) =>
         manifest.triggers
           .filter(
-            (trigger): trigger is Extract<AgentTrigger, { type: "github" }> =>
+            (trigger): trigger is GithubTrigger =>
               trigger.type === "github" && triggerMatches(trigger, event),
           )
           .map((trigger) => ({ manifest, trigger })),
       );
-    if (matches.length === 0) return { matched: 0, queued: 0, merged: 0 };
+    const association = eventAuthorAssociation(event);
+    const matches = candidates.filter(({ manifest, trigger }) => {
+      if (!association || githubTriggerAllowsAuthor(trigger, association)) return true;
+      // Skipped, not failed: the delivery is valid, the account is outside the trigger's gate.
+      this.logger?.warn(
+        {
+          delivery: event.id,
+          event: event.eventType,
+          action: string(event.payload.action) ?? null,
+          agent: manifest.name,
+          trigger: trigger.name,
+          sender: sender(event.payload),
+          authorAssociation: association,
+          allowedAuthors: githubTriggerAuthors(trigger),
+        },
+        "github trigger skipped: author outside trigger gate",
+      );
+      return false;
+    });
+    const skipped = candidates.length - matches.length;
+    if (matches.length === 0) return { matched: 0, queued: 0, merged: 0, skipped };
 
     const projectManifest = await this.projectManifests.load(event.orgId, project.id);
     let queued = 0;
@@ -185,7 +231,7 @@ export class GithubAgentTriggerService {
       }
       if (result.queued.created) queued += 1;
     }
-    return { matched: matches.length, queued, merged: 0 };
+    return { matched: matches.length, queued, merged: 0, skipped };
   }
 
   private async markMerged(projectId: string, repositoryId: string, event: GithubEvent) {
@@ -260,7 +306,7 @@ export class GithubAgentTriggerService {
   }
 }
 
-function triggerMatches(trigger: Extract<AgentTrigger, { type: "github" }>, event: GithubEvent) {
+function triggerMatches(trigger: GithubTrigger, event: GithubEvent) {
   if (trigger.event !== event.eventType) return false;
   const action = string(event.payload.action);
   if (trigger.actions && (!action || !trigger.actions.includes(action))) return false;
@@ -269,6 +315,29 @@ function triggerMatches(trigger: Extract<AgentTrigger, { type: "github" }>, even
     if (!trigger.labels.every((label) => labels.has(label.toLowerCase()))) return false;
   }
   return true;
+}
+
+/**
+ * The association of the account whose text enters the agent prompt, or undefined when the event
+ * carries none and the gate does not apply. A missing field on an authored event is `NONE`: an
+ * absent claim never widens access.
+ */
+function eventAuthorAssociation(event: GithubEvent): GithubAuthorAssociation | undefined {
+  if (!AUTHORED_EVENTS.has(event.eventType)) return undefined;
+  const action = string(event.payload.action);
+  if (action && TRIAGE_ACTIONS.has(action)) return undefined;
+  const actor =
+    event.eventType === "issue_comment"
+      ? object(event.payload.comment)
+      : event.eventType === "pull_request_review"
+        ? object(event.payload.review)
+        : event.eventType === "pull_request"
+          ? object(event.payload.pull_request)
+          : object(event.payload.issue);
+  const claimed = string(actor.author_association);
+  return claimed && (GITHUB_AUTHOR_ASSOCIATIONS as readonly string[]).includes(claimed)
+    ? (claimed as GithubAuthorAssociation)
+    : "NONE";
 }
 
 function storyIdentity(event: GithubEvent) {

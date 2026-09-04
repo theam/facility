@@ -1,6 +1,6 @@
 import type { FacilityDb } from "@facility/db";
 import { AgentCatalogService, GithubAgentCatalogSource } from "./agents/catalog.js";
-import { GithubAgentTriggerService } from "./agents/github-triggers.js";
+import { GithubAgentTriggerService, type GithubTriggerLogger } from "./agents/github-triggers.js";
 import { AgentScheduler } from "./agents/scheduler.js";
 import {
   createGithubClientFactory,
@@ -49,6 +49,7 @@ export function createStoryDomain(input: {
   runtime?: WorkspaceRuntime;
   githubFactory?: GithubClientFactory;
   maintainerTokenFactory?: GithubMaintainerTokenFactory;
+  logger?: GithubTriggerLogger;
 }): StoryDomain {
   const runtime = input.runtime ?? workspaceRuntime(input.config);
   const githubFactory =
@@ -115,6 +116,7 @@ export function createStoryDomain(input: {
     projectManifests,
     input.config.workspaceImage,
     mirror,
+    input.logger,
   );
   return {
     runtime,

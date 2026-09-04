@@ -36,8 +36,10 @@ and completed Workflow run. Matching happens against triggers in the primary rep
 destroying durable state.
 
 The GitHub trigger `event` must match one of those event names, and optional `actions` and `labels`
-must match the payload. The manifest must be enabled at the current primary-repository commit.
-Facility records the trigger identity and manifest snapshot on the resulting turn.
+must match the payload. The acting account's `author_association` must also pass the trigger's
+[author gate](agent-manifest.md#author-gate), which defaults to repository owners, members, and
+collaborators. The manifest must be enabled at the current primary-repository commit. Facility
+records the trigger identity and manifest snapshot on the resulting turn.
 
 Delivery deduplication and story message deduplication are separate. A repeated GitHub delivery id
 is ignored; distinct deliveries that represent the same logical event are also constrained by the
@@ -80,8 +82,9 @@ changing subscriptions or repository access, send a test delivery and request an
 
 For a missing activation, compare the GitHub delivery page with Facility API and worker logs using
 the delivery id. Verify the request reached the API, the HMAC matched, the installation is active,
-the project connects the repository, the manifest contains a matching trigger, and no equivalent
-message or turn already exists.
+the project connects the repository, the manifest contains a matching trigger, the sender passes
+that trigger's author gate (a skipped delivery is logged by the worker with the delivery id and
+association), and no equivalent message or turn already exists.
 
 Do not replay a delivery with an edited body under its old signature or delivery id. Use GitHub's
 redelivery feature so the signature and request metadata remain coherent.

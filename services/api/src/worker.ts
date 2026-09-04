@@ -25,6 +25,7 @@ export async function startWorker() {
     config,
     githubFactory,
     enqueue: (queue, data) => boss.send(queue, data),
+    logger,
   });
   const queues = ["turns.dispatch", "github.webhook", "github.mirror", "agent.schedules"];
   for (const queue of queues) {

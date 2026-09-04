@@ -35,6 +35,35 @@ const ScheduleTrigger = z
     }
   });
 
+/** GitHub's `author_association` vocabulary, as delivered on issue, comment, pull request, and review payloads. */
+export const GITHUB_AUTHOR_ASSOCIATIONS = [
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+  "CONTRIBUTOR",
+  "FIRST_TIME_CONTRIBUTOR",
+  "FIRST_TIMER",
+  "MANNEQUIN",
+  "NONE",
+] as const;
+
+export type GithubAuthorAssociation = (typeof GITHUB_AUTHOR_ASSOCIATIONS)[number];
+
+/**
+ * Event text reaches an agent that holds maintainer credentials, so a GitHub trigger only fires
+ * for accounts with a standing relationship to the repository unless the manifest widens it.
+ */
+export const DEFAULT_GITHUB_TRIGGER_AUTHORS: readonly GithubAuthorAssociation[] = [
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+];
+
+const GithubTriggerAuthors = z.union([
+  z.literal("any"),
+  z.array(z.enum(GITHUB_AUTHOR_ASSOCIATIONS)).min(1),
+]);
+
 const GithubTrigger = z
   .object({
     type: z.literal("github"),
@@ -49,6 +78,7 @@ const GithubTrigger = z
     ]),
     actions: z.array(z.string().min(1).max(64)).min(1).optional(),
     labels: z.array(z.string().min(1).max(128)).min(1).optional(),
+    authors: GithubTriggerAuthors.optional(),
   })
   .strict();
 
@@ -287,4 +317,23 @@ export function findAgent(manifests: AgentManifest[], name: string): AgentManife
 
 export function triggerIdentity(trigger: AgentTrigger): string {
   return "name" in trigger ? `${trigger.type}:${trigger.name}` : trigger.type;
+}
+
+/**
+ * Resolves the author gate of a GitHub trigger. Manifests parsed before the field existed carry no
+ * value, so the default is applied here rather than by the schema to keep stored snapshots and
+ * content hashes unchanged.
+ */
+export function githubTriggerAuthors(
+  trigger: Extract<AgentTrigger, { type: "github" }>,
+): "any" | readonly GithubAuthorAssociation[] {
+  return trigger.authors ?? DEFAULT_GITHUB_TRIGGER_AUTHORS;
+}
+
+export function githubTriggerAllowsAuthor(
+  trigger: Extract<AgentTrigger, { type: "github" }>,
+  association: GithubAuthorAssociation,
+): boolean {
+  const authors = githubTriggerAuthors(trigger);
+  return authors === "any" || authors.includes(association);
 }
