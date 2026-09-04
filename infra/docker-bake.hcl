@@ -15,7 +15,7 @@ variable "PLATFORM" {
 }
 
 group "default" {
-  targets = ["api", "gateway", "mcp", "web", "runner"]
+  targets = ["api", "web", "runner"]
 }
 
 target "service" {
@@ -41,20 +41,6 @@ target "api" {
   target   = "api"
   contexts = { build-service-packages = "target:service-packages" }
   tags     = ["${ECR_REGISTRY}/${ECR_PREFIX}/api:${IMAGE_TAG}"]
-}
-
-target "gateway" {
-  inherits = ["service"]
-  target   = "gateway"
-  contexts = { build-service-packages = "target:service-packages" }
-  tags     = ["${ECR_REGISTRY}/${ECR_PREFIX}/gateway:${IMAGE_TAG}"]
-}
-
-target "mcp" {
-  inherits = ["service"]
-  target   = "mcp"
-  contexts = { build-service-packages = "target:service-packages" }
-  tags     = ["${ECR_REGISTRY}/${ECR_PREFIX}/mcp:${IMAGE_TAG}"]
 }
 
 target "web" {

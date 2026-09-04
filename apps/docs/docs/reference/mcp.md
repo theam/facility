@@ -2,155 +2,130 @@
 title: MCP
 ---
 
-# MCP server
+# MCP
 
-Manage Facility from Claude Code, Cowork, Codex, or any MCP client — with
-the same RBAC and audit as every other surface.
+Facility serves Streamable HTTP MCP at `POST /mcp` from the control API. OAuth clients discover its
+resource metadata at `/.well-known/oauth-protected-resource/mcp`. API keys use the same endpoint
+with `Authorization: Bearer <key>`.
 
-## Connect
+The server exposes twenty task-oriented tools:
 
-Local (stdio). `@facility/mcp` is not published to a public registry, so build it
-from the repo (`pnpm --filter @facility/mcp build`) and point the client at the
-built binary (`packages/mcp/dist/bin/facility-mcp.js`). With no subcommand it
-speaks MCP over stdio:
+| Tool | Result |
+|---|---|
+| `facility_list_projects` | Projects visible to the principal. |
+| `facility_list_agents` | Valid `.agents/` catalog with engines, models, and triggers. |
+| `facility_list_skills` | Valid skills installed in `.agents/skills/` or `.claude/skills/`. |
+| `facility_list_stories` | Stories, optionally filtered by status. |
+| `facility_get_story` | Story, workspace, turns, artifacts, attention, and ordered evidence timeline. |
+| `facility_start_story` | Idempotently create or resume a story and queue its first message. |
+| `facility_send_message` | Append a message and queue the selected agent. |
+| `facility_get_conversation` | Read the shared ordered conversation. |
+| `facility_get_environment` | Read runtime, services, readiness, endpoints, and recent events. |
+| `facility_open_preview` | Wake and issue a short-lived authenticated preview handoff. |
+| `facility_suspend_story` | Stop compute while preserving durable state. |
+| `facility_archive_story` | Archive and suspend without deleting. |
+| `facility_restore_story` | Restore the archived story and its existing state. |
+| `facility_delete_workspace` | Explicitly destroy compute, volume, worktree, and engine sessions. |
+| `facility_get_costs` | Read measured token use and cost by turn for a selected period. |
+| `facility_get_budget` | Read the current monthly budget and amount spent. |
+| `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
+| `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
+| `facility_get_pipeline` | Read mirrored issues, pull requests, CI state, and story stage. |
+| `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
+
+## Connect Claude Code or Codex
+
+Register the same Streamable HTTP endpoint in either client. Replace the example origin with the
+Facility deployment:
+
+```bash
+claude mcp add --transport http facility https://facility.example.com/mcp
+
+codex mcp add facility --url https://facility.example.com/mcp
+codex mcp login facility
+```
+
+Claude Code starts its OAuth flow when the server is first used. Codex can also read a service API
+key from an environment variable:
+
+```bash
+codex mcp add facility \
+  --url https://facility.example.com/mcp \
+  --bearer-token-env-var FACILITY_API_KEY
+```
+
+## Complete story flow
+
+Claude Code, Codex, and any other MCP client send the same tool calls. Start or resume an issue-backed
+story:
 
 ```json
 {
-  "mcpServers": {
-    "facility": {
-      "command": "node",
-      "args": ["/abs/path/to/facility/packages/mcp/dist/bin/facility-mcp.js"],
-      "env": {
-        "FACILITY_API_URL": "https://facility.yourorg.com",
-        "FACILITY_API_KEY": "fak_…"
-      }
-    }
+  "name": "facility_start_story",
+  "arguments": {
+    "projectId": "proj_example",
+    "provider": "github",
+    "externalId": "issue:272",
+    "title": "Persistent story workspaces",
+    "agent": "builder",
+    "message": "Implement the accepted story and verify it in its development environment.",
+    "idempotencyKey": "issue-272-initial"
   }
 }
 ```
 
-Remote: run the same built binary with `node
-/absolute/path/to/facility/packages/mcp/dist/bin/facility-mcp.js serve`; the bundled
-compose stack already includes it, while other deployments host it next to the
-control plane. It exposes streamable HTTP at `https://<mcp-host>/mcp` with
-`Authorization: Bearer <credential>`.
-Two credential kinds are accepted: a `fak_…` API key (for non-interactive services) or a Facility
-OAuth access token (for interactive clients like Claude, Cursor, and ChatGPT). Interactive
-clients discover the flow from the RFC 9728 path-aware metadata URL
-`/.well-known/oauth-protected-resource/mcp` (advertised on a `401` via
-`WWW-Authenticate`). The former `/.well-known/oauth-protected-resource` URL remains a discovery
-alias during upgrades, but Facility never advertises that alias or associates it with the legacy
-`POST /` transport path. Each instance publishes authorization metadata, dynamic client registration,
-PKCE authorization, revocation, and JWKS endpoints. Tokens are bound to the canonical
-`MCP_PUBLIC_URL` resource ending in `/mcp`; an origin-only value is accepted and normalized for
-backward-compatible deployments. It must use HTTPS unless it names a loopback development host.
-Configure the API with `FACILITY_OAUTH_ISSUER` set to the web
-origin and `FACILITY_OAUTH_JWKS`, then point the MCP process's `MCP_AUTHORIZATION_SERVER` at that
-same issuer. `MCP_AUTHORIZATION_SERVER` must be an HTTPS origin; HTTP is accepted only for a
-loopback development origin. The web origin proxies `/.well-known/*` and `/oauth/*` to the API so authorization,
-interaction, GitHub login/callback, and resume retain host-only cookies on one browser origin.
+Continue the same conversation, optionally choosing another repository-defined agent:
 
-### Codex remote OAuth smoke test
-
-Register the canonical MCP transport URL, complete browser authorization, and inspect the
-configured server:
-
-```console
-codex mcp add facility --url https://mcp.facility.yourorg.com/mcp
-codex mcp login facility
-codex mcp list
+```json
+{
+  "name": "facility_send_message",
+  "arguments": {
+    "projectId": "proj_example",
+    "storyId": "story_example",
+    "agent": "pr-reviewer",
+    "message": "Review the current branch and run the relevant checks.",
+    "idempotencyKey": "issue-272-review-1"
+  }
+}
 ```
 
-Restart any Codex session that was already open when the server was added, then read
-`facility://me` to verify authenticated access. Codex requests all authorization-server scopes
-advertised by `scopes_supported`. Facility advertises `facility:mcp` there so DCR can register it,
-also identifies it in protected-resource metadata, and grants it only for `MCP_PUBLIC_URL`; the
-requested `openid`, `offline_access`, `email`, and `profile` scopes remain in the OIDC grant.
-Clients must request `facility:mcp`; omitting that scope never grants MCP API access implicitly.
-Authorization-code callbacks include the exact configured issuer in `iss`, as advertised by
-`authorization_response_iss_parameter_supported`. A repeated consent screen usually indicates an
-advertised scope was not persisted in the grant. A client error about a missing issuer means the
-authorization response did not satisfy that metadata contract.
+Open the running application, suspend compute, and later restore the same workspace:
 
-### Breaking upgrade: same-origin, path-aware OAuth
+```json
+{"name":"facility_open_preview","arguments":{"projectId":"proj_example","storyId":"story_example","service":"app"}}
+{"name":"facility_suspend_story","arguments":{"projectId":"proj_example","storyId":"story_example"}}
+{"name":"facility_restore_story","arguments":{"projectId":"proj_example","storyId":"story_example"}}
+```
 
-This OAuth layout changes both token identity boundaries: the issuer moves from the API origin to
-the web origin, and the resource/audience moves from the MCP origin to the canonical `/mcp` URL.
-Treat the upgrade as breaking for interactive MCP clients.
+Deletion is deliberately separate and permanent:
 
-1. Update deployment configuration or Terraform **before deploying the new API, web, and MCP
-   images**. Set `WEB_URL` and `FACILITY_OAUTH_ISSUER` to the same canonical origin,
-   `AUTH_CALLBACK_URL` to exactly `<WEB_URL>/api/auth/callback`, `MCP_PUBLIC_URL` to the MCP origin
-   or `/mcp`, and `MCP_AUTHORIZATION_SERVER` to the web origin. Production endpoints require HTTPS.
-2. Deploy API, web, and MCP together. Do not leave an API-origin issuer or origin-only token
-   audience active behind only part of the new runtime.
-3. Reconnect every interactive MCP client. Existing access tokens, refresh flows, and browser OAuth
-   sessions must be treated as invalid after the issuer/audience transition; `fak_` API keys are
-   unchanged.
+```json
+{
+  "name": "facility_delete_workspace",
+  "arguments": {
+    "projectId": "proj_example",
+    "storyId": "story_example",
+    "confirm": true,
+    "idempotencyKey": "issue-272-delete-after-export"
+  }
+}
+```
 
-For `pnpm dev`, inspect a pre-existing `.env`: older copies used
-`FACILITY_OAUTH_ISSUER=http://localhost:4400` and
-`MCP_AUTHORIZATION_SERVER=http://localhost:4400`. Change both to
-`http://localhost:3400`; keep `AUTH_CALLBACK_URL=http://localhost:3400/api/auth/callback`.
-Fresh `.env.example` values are already aligned. The dev launcher preserves non-empty legacy
-values rather than rewriting operator configuration.
+`facility_get_conversation` uses `after` and `limit` as a stable message-sequence cursor.
+`facility_get_environment` uses the same fields for ordered workspace events and returns
+`next_cursor` and `has_more`. Story and environment responses include typed attention, available
+next operations, active-compute status, retained-storage status, provider usage, and an explicit
+marker when monetary cost is unavailable.
 
-Remote binds fail closed unless `MCP_ALLOWED_HOSTS` or `MCP_PUBLIC_URL` names a
-trusted authority. Browser `Origin` is checked against the same set, request
-bodies are bounded, `/healthz` reports the MCP process, and `/readyz` checks the
-upstream API. Bearers are validated with the control plane before MCP protocol
-admission, so invalid credentials cannot enumerate tools, resources, or prompts.
-If validation is unavailable, admission fails closed with `503` and `Retry-After`.
-When a known reverse proxy terminates TLS, set `MCP_TRUST_PROXY_HOPS` to its
-exact hop count so per-client rate limits use the trusted `X-Forwarded-For`
-address; the default `0` ignores forwarded headers.
+`facility_list_skills` is an inventory operation. It does not install or upgrade skills. A story's
+`timeline` combines Facility turn events, Git snapshots, artifacts, attention, and mirrored GitHub
+branches, pull requests, reviews, and checks. `occurred_at` is the source event time and
+`observed_at` is when Facility stored it; they can differ after reconciliation.
 
-## Tools
+Mutations execute directly after normal authentication and project authorization. They do not
+create an internal approval object. Delete requires `confirm: true` and a matching idempotency key.
 
-The tool catalog is immutable for the lifetime of a server process and does not
-advertise `tools.listChanged`; reconnect after a deployment to discover its catalog.
-
-The 79 tools cover identity, org/members/roles/keys, projects/repos/health,
-agents/status/runs/paged events/transcripts, durable conversations, GitHub App
-discovery and issue workflows, outcomes, HITL/action types, issues,
-budgets/spend/raw LLM envelopes, registry, sandboxes/tasks/virtual keys, KB,
-analytics/audit, the capability catalog, kickstart/upgrade, and integration
-event/delivery history. Tool inputs and structured outputs are JSON Schema,
-descriptions name their required permission, and API errors preserve
-status/code/details with MCP `isError` set.
-
-Mutations include run trigger/steer/interrupt/resume/cancel; conversation start
-and send; GitHub issue sync and trigger; project/agent/repo/task/KB/registry
-creation or transition; issue acknowledgement/resolution; webhook retry;
-budgets; kickstart; and upgrade. Every intended mutation is recorded as a
-durable proposal first.
-
-## The approval pattern
-
-A write tool creates a human-in-the-loop proposal and does nothing else. A
-separate principal with `hitl:decide` reviews the proposal in the HITL inbox
-and approves or rejects it through the CLI or API. MCP deliberately exposes no
-decision tool: untrusted model output cannot invoke an approval. MCP write keys are refused if they also carry
-`hitl:decide`, so the same key cannot propose and approve its own write. Use the
-bundled `operator` role for an AI client and an owner/admin human principal for
-the decision. The operator grants cover standard project, repository, agent,
-run, registry, budget, KB, task, and issue mutations. Tools outside those grants
-need a custom role that still omits `hitl:decide`; webhook delivery retry, for
-example, additionally requires `integrations:write`. Proposal idempotency hashes the tool, JSON-RPC request id, and
-canonical arguments, so retries replay while reused ids with different inputs
-cannot collide. Immediately before execution, Facility revalidates that the
-original requester still exists, is active, retains the required permission,
-remains within the target project scope, and still cannot decide HITL. Revoked
-or downgraded requesters therefore produce an explicit failed execution and no
-side effect.
-
-This is deliberately the complete **AI-operable** surface, not a credential
-administration backdoor. Secret issuance/rotation, member and role changes,
-provider credentials, API keys, proposal decisions, and other human-accountability
-operations stay in the CLI and API. An MCP client can discover those resources
-but cannot bypass the separate human principal required to authorize them.
-
-Clients can enumerate `facility://me`, visible projects, and recent runs;
-project/run URI templates support completion and run resources include recent
-events. Prompts provide org status, cost review, and run triage with an optional
-`runId`.
+When a budget is enabled, Facility checks it before starting a provider call. Usage and cost are
+recorded after the call from provider-reported values when available, otherwise from the built-in
+model price book. A call already running may cross the limit; subsequent turns are blocked. Models
+without a known price are rejected while budget enforcement is enabled.

@@ -1,0 +1,4 @@
+FROM scratch
+COPY busybox /busybox
+COPY --chmod=0755 api/items /www/cgi-bin/items
+ENTRYPOINT ["/busybox", "httpd", "-f", "-p", "3001", "-h", "/www"]

@@ -1,6 +1,6 @@
-# Facility platform — self-host stack. Production-shaped, single host.
+# Facility 0.12 — persistent story workspaces, MCP-first, single host.
 #   SECRET_MASTER_KEY=$(openssl rand -base64 32) docker compose up -d
-# For a real deployment, front web+api with TLS and use managed Postgres + S3.
+# For a real deployment, front web+api with TLS and use managed Postgres.
 name: facility
 
 services:
@@ -19,42 +19,6 @@ services:
       timeout: 3s
       retries: 10
 
-  # Bundled MinIO object store. Behind the "local-storage" profile so a
-  # deployment pointed at an external S3-compatible endpoint runs neither MinIO
-  # nor createbuckets. Enable it with `docker compose --profile local-storage up`.
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
-    profiles: ["local-storage"]
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-facility}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-facility-dev-secret}
-    volumes:
-      - minio:/data
-
-  createbuckets:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
-    profiles: ["local-storage"]
-    depends_on:
-      - minio
-    # The script must be the third element of entrypoint (the -c arg), NOT a
-    # separate `command:` block scalar — compose v2.33+ word-splits a string
-    # `command`, truncating the script and dropping the `mc mb` bucket creation.
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        until mc alias set local http://minio:9000 "$${S3_ACCESS_KEY:-facility}" "$${S3_SECRET_KEY:-facility-dev-secret}"; do
-          sleep 1
-        done
-        mc mb --ignore-existing "local/$${S3_BUCKET:-facility}"
-    environment:
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-facility}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-facility-dev-secret}
-      S3_BUCKET: ${S3_BUCKET:-facility}
-    restart: "no"
-
   migrate:
     build: { context: ., target: api }
     command:
@@ -69,12 +33,12 @@ services:
       postgres: { condition: service_healthy }
     restart: "no"
 
-  # Build the default sandbox runner image before the control plane starts.
+  # Build the default persistent workspace image before the control plane starts.
   # This one-shot service never runs an agent; it only makes the image available
   # to the host Docker daemon used by api/worker.
   runner-image:
     build: { context: ., dockerfile: runner/Dockerfile }
-    image: ${FACILITY_RUNNER_IMAGE:-facility-runner:dev}
+    image: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
     entrypoint: ["/bin/true"]
     restart: "no"
 
@@ -87,14 +51,6 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:4400}
       WEB_URL: ${WEB_URL:-http://localhost:3400}
       FACILITY_PREVIEW_URL: ${FACILITY_PREVIEW_URL:-http://preview.localhost:4400}
-      # Defaults to the in-network MinIO of the local-storage profile. Point it
-      # at an external S3-compatible endpoint (with matching S3_* credentials)
-      # to run without the bundled store.
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-facility}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-facility-dev-secret}
-      S3_BUCKET: ${S3_BUCKET:-facility}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
       AUTH_IDENTITY_PROVIDER: ${AUTH_IDENTITY_PROVIDER:-github}
       AUTH_CALLBACK_URL: ${AUTH_CALLBACK_URL:-http://localhost:3400/api/auth/callback}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
@@ -106,7 +62,7 @@ services:
       FACILITY_INSTANCE_ID: ${FACILITY_INSTANCE_ID:-}
       FACILITY_OAUTH_ISSUER: ${FACILITY_OAUTH_ISSUER:-http://localhost:3400}
       FACILITY_OAUTH_JWKS: ${FACILITY_OAUTH_JWKS:-}
-      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4420}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4400/mcp}
       # GitHub App (repo automation): webhooks 401 and clone-token minting fail
       # without these; doctor flags them when repo automation is enabled.
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
@@ -114,24 +70,14 @@ services:
       GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_CLONE_TOKEN: ${GITHUB_CLONE_TOKEN:-}
-      FACILITY_SANDBOX_DRIVER: docker
-      FACILITY_RUNNER_IMAGE: ${FACILITY_RUNNER_IMAGE:-facility-runner:dev}
-      # The api builds the runner bundle, so the api/gateway URLs it hands a
-      # sandbox come from ITS config — they must be sandbox-reachable service
-      # names, not PUBLIC_URL (localhost, which is the sandbox itself).
-      SANDBOX_API_URL: http://api:4400
-      SANDBOX_GATEWAY_URL: http://gateway:4410
+      FACILITY_WORKSPACE_DRIVER: docker
+      FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
     ports: ["4400:4400"]
     volumes:
-      # doctor's sandbox_runner check probes the Docker daemon for the docker driver.
+      # The API inspects workspace state through the host Docker daemon.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       migrate: { condition: service_completed_successfully }
-      # Only hard-wait for the bucket when the local-storage profile supplies it;
-      # an external S3 endpoint leaves createbuckets absent and must not block.
-      createbuckets:
-        condition: service_completed_successfully
-        required: false
       runner-image: { condition: service_completed_successfully }
     healthcheck:
       test:
@@ -154,99 +100,22 @@ services:
       DATABASE_URL: postgres://facility:${POSTGRES_PASSWORD:-facility}@postgres:5432/facility
       SECRET_MASTER_KEY: ${SECRET_MASTER_KEY:?set SECRET_MASTER_KEY}
       FACILITY_PREVIEW_URL: ${FACILITY_PREVIEW_URL:-http://preview.localhost:4400}
-      # The worker dispatches runs, so it mints repo clone credentials — it needs
+      # The worker dispatches turns, so it mints repository credentials and needs
       # the same GitHub App env as the api (installation-token minting + fallback).
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_CLONE_TOKEN: ${GITHUB_CLONE_TOKEN:-}
-      # docker driver → the worker launches sandboxes on the host Docker daemon.
-      FACILITY_SANDBOX_DRIVER: docker
-      FACILITY_RUNNER_IMAGE: ${FACILITY_RUNNER_IMAGE:-facility-runner:dev}
-      # A platform-lane sandbox authenticates back to the api and proxies models
-      # through the gateway. It's a sibling container on the host daemon, so it
-      # must reach them by their names on the compose network — NOT PUBLIC_URL
-      # (localhost), which resolves to the sandbox itself.
-      SANDBOX_API_URL: http://api:4400
-      SANDBOX_GATEWAY_URL: http://gateway:4410
-      # The seeded default profile is egress=restricted, so a sandbox gets NO
-      # network unless a docker network is named. Attach it to this stack's
-      # network so api/gateway resolve; compose's default network is
-      # "<project>_default" and the project name (top of this file) is "facility".
-      FACILITY_SANDBOX_DOCKER_NETWORK: ${FACILITY_SANDBOX_DOCKER_NETWORK:-facility_default}
+      # The Docker provider launches persistent workspaces on the host daemon.
+      FACILITY_WORKSPACE_DRIVER: docker
+      FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
     volumes:
-      # The worker launches docker-driver sandboxes via the host Docker daemon;
-      # doctor's sandbox_runner probe needs the same access on the api service.
+      # Workspace volumes outlive these API and worker containers.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       migrate: { condition: service_completed_successfully }
       runner-image: { condition: service_completed_successfully }
-
-  gateway:
-    build: { context: ., target: gateway }
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://facility:${POSTGRES_PASSWORD:-facility}@postgres:5432/facility
-      SECRET_MASTER_KEY: ${SECRET_MASTER_KEY:?set SECRET_MASTER_KEY}
-      # Mirror the api: in-network MinIO by default, external S3 when configured.
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-facility}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-facility-dev-secret}
-      S3_BUCKET: ${S3_BUCKET:-facility}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-    ports: ["4410:4410"]
-    depends_on:
-      migrate: { condition: service_completed_successfully }
-      createbuckets:
-        condition: service_completed_successfully
-        required: false
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:4410/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
-        ]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-
-  mcp:
-    build: { context: ., target: mcp }
-    restart: unless-stopped
-    environment:
-      FACILITY_API_URL: http://api:4400
-      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:4420}
-      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,mcp}
-      MCP_AUTHORIZATION_SERVER: ${MCP_AUTHORIZATION_SERVER:-http://localhost:3400}
-      MCP_TRUST_PROXY_HOPS: ${MCP_TRUST_PROXY_HOPS:-0}
-    command:
-      [
-        "node",
-        "dist/bin/facility-mcp.js",
-        "serve",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "4420",
-      ]
-    ports: ["4420:4420"]
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:4420/readyz').then(r=>{if(!r.ok)process.exit(1)})",
-        ]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    depends_on:
-      api: { condition: service_healthy }
 
   web:
     build:
@@ -273,4 +142,3 @@ services:
 
 volumes:
   pg:
-  minio:

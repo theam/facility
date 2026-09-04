@@ -12,6 +12,7 @@ import { PACKAGE_NAME, publishTarball, registryState } from "./release.mjs";
 const releaseScript = fileURLToPath(new URL("./release.mjs", import.meta.url));
 const repoRoot = dirname(dirname(releaseScript));
 const packagePath = `/${encodeURIComponent(PACKAGE_NAME)}`;
+const currentVersion = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8")).version;
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "facility-release-test-"));
@@ -24,7 +25,7 @@ async function fixture(t) {
     join(packageDir, "package.json"),
     JSON.stringify({
       name: PACKAGE_NAME,
-      version: "0.3.0",
+      version: currentVersion,
       scripts: { prepublishOnly: "node lifecycle.mjs" },
     }),
   );
@@ -690,7 +691,7 @@ test("existing, replayed, unavailable, and malformed registry states fail closed
       lookupStatus: 200,
       lookupBody: JSON.stringify({
         name: PACKAGE_NAME,
-        versions: { "0.3.0": { dist: { integrity: "sha512-conflicting" } } },
+        versions: { [currentVersion]: { dist: { integrity: "sha512-conflicting" } } },
       }),
       error: /already published with different contents; refusing conflicting replay/,
     },
@@ -734,7 +735,7 @@ test("an exact already-published tarball is an idempotent retry with no npm invo
     lookupStatus: 200,
     lookupBody: JSON.stringify({
       name: PACKAGE_NAME,
-      versions: { "0.3.0": { dist: { integrity } } },
+      versions: { [currentVersion]: { dist: { integrity } } },
     }),
   });
   const env = await npmEnvironment(state, registry.url, "must-not-be-used");

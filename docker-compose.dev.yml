@@ -1,7 +1,7 @@
 # Local development infrastructure for the Facility platform.
 #   docker compose -f docker-compose.dev.yml up -d
-# Postgres on 5461 and MinIO on 9000/9001 to avoid colliding with other
-# local stacks (Supabase local, system Postgres).
+# Postgres is the only persistent control-plane dependency. Story workspaces
+# run through the selected workspace provider.
 name: facility-dev
 
 services:
@@ -21,46 +21,5 @@ services:
       timeout: 3s
       retries: 10
 
-  # Bundled MinIO, behind the "local-storage" profile. `pnpm dev` enables the
-  # profile only when the effective S3 endpoint is local; point S3_ENDPOINT at an
-  # external store to develop against it and leave MinIO stopped.
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
-    profiles: ["local-storage"]
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: facility
-      MINIO_ROOT_PASSWORD: facility-dev-secret
-    volumes:
-      - facility-minio:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  createbuckets:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
-    profiles: ["local-storage"]
-    depends_on:
-      - minio
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        until mc alias set local http://minio:9000 "$${S3_ACCESS_KEY:-facility}" "$${S3_SECRET_KEY:-facility-dev-secret}"; do
-          sleep 1
-        done
-        mc mb --ignore-existing "local/$${S3_BUCKET:-facility}"
-    environment:
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-facility}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-facility-dev-secret}
-      S3_BUCKET: ${S3_BUCKET:-facility}
-    restart: "no"
-
 volumes:
   facility-pg:
-  facility-minio:

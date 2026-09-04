@@ -1,69 +1,83 @@
 # @theagilemonkeys/facility
 
-The command-line half of [Facility](https://github.com/theam/facility) —
-open-source, self-hosted tooling for running AI coding agents as part of a
-reviewable delivery process, with the humans, the gates and the evidence in one
-place.
-
-One binary with two jobs, and you rarely need both:
-
-- **A client for a Facility platform.** Dispatch agents, follow sessions, decide
-  proposals, inspect spend, manage projects and repositories — everything the
-  web application does, from a terminal or a script.
-- **An installer for a repository.** When a team wants the process running in
-  its own CI, invoked from issue comments, `facility init` writes the workflows,
-  the standard, the skills and the guards into the repository.
-
-```bash
-npx @theagilemonkeys/facility --help
-```
-
-Node.js 24 LTS recommended; Node.js 22 supported from 22.13.0. Zero
-configuration to read; one dependency.
-
-**Early software.** Facility is published while it is still being built: the
-API is young, generated files change shape between `0.x` releases, and no
-upgrade path is promised across them. Apache-2.0 means what it says — no
-warranty, use at your own risk.
-
-## Talking to a platform
-
-```bash
-npx @theagilemonkeys/facility login --url https://facility.example.com --key fak_…
-npx @theagilemonkeys/facility status      # runs, approvals, issues and spend at a glance
-npx @theagilemonkeys/facility inbox       # review and decide pending proposals
-npx @theagilemonkeys/facility sessions    # trigger, watch, steer or cancel agent runs
-```
-
-Platform commands take a global `--json`, `--profile <name>` and
-`--timeout <seconds>`, so the CLI is as usable from a script as from a prompt.
-It speaks the same versioned REST API and obeys the same permissions as the web
-application: what your key cannot do, the CLI will not do either.
-
-## Installing the process into a repository
+The Facility CLI installs and validates the small repository contract used by
+Facility 0.12. Day-to-day story work happens through the Facility MCP server or
+web application.
 
 ```bash
 cd your-repository
 npx @theagilemonkeys/facility init
-npx @theagilemonkeys/facility doctor --run-guards --github
+npx @theagilemonkeys/facility doctor
 ```
 
-`init` asks about the package manager, the default branch, the commands that
-provision an environment and verify a change, then writes GitHub workflows for
-planning, building, reviewing and repairing, plus `STANDARD.md`, agent
-instructions, skills, deterministic guards, and a `.facility.json` recording the
-answers. It never overwrites an existing generated file unless you pass
-`--force`, and it appends to `AGENTS.md` and `CLAUDE.md` inside a delimited
-managed block rather than replacing them.
+Node.js 24 LTS is recommended; Node.js 22 is supported from 22.13.0.
 
-This is the second step, not the entry price: a repository connected to a
-Facility platform is operated entirely from the platform, without a single file
-being added to it.
+## Initialize a repository
 
-## Documentation
+Interactive init detects the GitHub remote, package manager, setup command,
+development command, and application port. For automation, provide the values
+explicitly:
 
-- [CLI reference](https://github.com/theam/facility/blob/main/apps/docs/docs/reference/cli.md)
-- [Self-hosting guide](https://github.com/theam/facility/blob/main/apps/docs/docs/self-host/quickstart.md)
-- [Repository and issues](https://github.com/theam/facility)
+```bash
+npx @theagilemonkeys/facility init --yes \
+  --repo=acme/application \
+  --provision='pnpm install --frozen-lockfile' \
+  --start='docker compose up -d' \
+  --preview-readiness-command='curl --fail http://localhost:3000/health' \
+  --service-port=3000
+```
 
-Apache-2.0 · an initiative by [The Agile Monkeys](https://theagilemonkeys.com)
+`init` writes exactly two kinds of project-owned configuration:
+
+- `.facility.yml` describes the repositories, setup command, development
+  command, readiness check, and exposed services for a persistent workspace.
+- `.agents/*.md` describes each agent's prompt, engine, model, and manual, MCP,
+  UI, scheduled, or GitHub triggers.
+
+Existing files are preserved unless `--force` is explicit. Agent manifests do
+not contain permission profiles: every enabled agent receives the same full
+workspace and GitHub maintainer capability for the connected project.
+
+Init creates `architect`, `builder`, `pr-reviewer`, `address-review`,
+`ci-doctor`, and `security-audit`. Model flags customize the initial templates:
+
+```text
+--build-model=<id>        --review-model=<id>
+--plan-model=<id>         --codex-build-model=<id>
+--codex-plan-model=<id>
+```
+
+Use `--dir=<path>` to configure another checkout. Existing targets are
+preserved independently; `--force` overwrites only `.facility.yml` and those
+six agent files. Review them before using force because they are project-owned
+configuration.
+
+## Validate locally
+
+`doctor` checks the seven-file contract locally. It never connects to a
+Facility instance and supports machine-readable output with `--json`.
+
+```bash
+npx @theagilemonkeys/facility doctor --json
+```
+
+Doctor provides fast local feedback; the server's strict manifest parsers and
+a real disposable workspace remain authoritative for runtime acceptance.
+
+## Bootstrap an instance
+
+Instance operators can create the first organization, owner, and GitHub App
+installation with `facility instance bootstrap`. See the
+[Facility documentation](https://github.com/theam/facility/tree/main/apps/docs/docs)
+for deployment and MCP setup.
+
+Bootstrap requires `DATABASE_URL` and explicit organization, owner GitHub
+identity, account, and installation values. It is safe to repeat only with the
+exact same binding and refuses a different binding when instance data exists.
+Run `facility instance bootstrap --help` for the full command.
+
+Facility 0.x is early software and does not promise in-place database upgrades
+between minor versions. Facility 0.12 specifically requires a new database
+rather than a 0.11 in-place migration.
+
+Apache-2.0

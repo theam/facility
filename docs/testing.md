@@ -1,6 +1,9 @@
-# Verification and sandbox E2E policy
+# Verification and workspace E2E policy
 
-Facility has two acceptance tiers. A green fast test run is not release evidence.
+Facility has two acceptance tiers. A fast test run is useful feedback, but it is
+not release evidence. Use focused tests during implementation, but finish with
+the tier required by the changed boundary. Never skip, relax, delete, or
+reclassify an existing test or guard to make a change pass.
 
 ## Root acceptance
 
@@ -10,55 +13,95 @@ Run:
 pnpm verify
 ```
 
-This command fails unless all of the following execute successfully:
+The verifier performs these stages:
 
-1. repository lint and typecheck;
-2. every declared build output removed, then every workspace rebuilt with the
-   Turbo cache disabled;
-3. database, CLI bootstrap, API, and gateway integration suites invoked
-   directly (not through Turbo), against `facility_test` and `facility_gw`; any
-   reported skip is a failure;
-4. the development-launcher tests and all remaining workspace tests with the
-   Turbo cache disabled;
-5. deterministic repository guards; and
-6. `pnpm audit --audit-level low`, so any known advisory fails acceptance.
+1. formatting and lint checks;
+2. removal of stale generated outputs;
+3. TypeScript checking and a clean cache-disabled build;
+4. isolated local PostgreSQL startup;
+5. critical database and API integration suites with skips forbidden;
+6. the remaining uncached package tests;
+7. unused-reference and repository guard checks; and
+8. dependency auditing.
 
-The verifier starts the development Postgres container when needed, creates only
-the isolated test databases, and stops the container afterward when it started it.
-Tests must never point at the `facility` development tenant or a production URL.
+Tests use allowlisted disposable databases. Do not override their URLs with a
+database that contains useful data.
 
-CI also runs `docker compose build --pull` from a clean checkout. This is the gate
-for the documented self-host images and catches missing workspace build artifacts
-that a host build can accidentally hide.
+## Focused feedback
 
-## Docker-backed sandbox E2E
-
-The sandbox E2E provisions a real runner container, sends steering through the
-API, waits for the governed session to finish, checks its receipt/events, verifies
-credential revocation, and confirms the container was destroyed.
-
-It may be skipped only for:
-
-- local feedback where Docker or the runner image is unavailable; or
-- a pull request whose diff does not touch `runner/`, the API sandbox
-  orchestrator/driver, the root service Dockerfile, `runner/Dockerfile`, either
-  Compose file, or the sandbox E2E itself. The web-only Dockerfile does not alter
-  sandbox execution boundaries and is covered by the self-host image gate.
-
-It is required for:
-
-- every push to the default branch and every release candidate; and
-- every pull request that changes any sandbox execution boundary listed above.
-
-The CI policy step enforces those rules and records the reason for every allowed
-skip. A release must never be cut from a run where the sandbox E2E was required but
-skipped.
-
-To run the tier locally after preparing the runner image and `facility_sbx`
-database:
+Common commands include:
 
 ```bash
-FACILITY_E2E_DOCKER=1 \
-DATABASE_URL=postgres://facility:facility@127.0.0.1:5461/facility_sbx \
-pnpm test:e2e-sandbox
+pnpm --filter @facility/agents test
+pnpm --filter @facility/api test
+pnpm --filter @facility/mcp test
+pnpm --filter @theagilemonkeys/facility test
+pnpm --filter @facility/web typecheck
+pnpm --filter @facility/docs test
+pnpm --filter @facility/docs build
+node guards/run.mjs
 ```
+
+Use deterministic fakes or local servers for GitHub, OAuth, Vercel, engine, and
+other external behavior. The default suite must not need network access or live
+credentials.
+
+## Docker-backed workspace E2E
+
+Build the durable development image, then run the workspace acceptance tier:
+
+```bash
+docker build -f runner/Dockerfile -t facility-runner:dev .
+FACILITY_E2E_DOCKER=1 \
+DATABASE_URL=postgres://facility:facility@127.0.0.1:5461/facility_ws \
+FACILITY_WORKSPACE_TEST_IMAGE=facility-runner:dev \
+pnpm test:e2e-workspace
+```
+
+This tier creates a persistent workspace, exercises its nested Docker daemon,
+replaces compute while retaining the worktree and native session files, opens
+an authenticated preview, and verifies that archive and suspension retain the
+volume. Explicit deletion must remove only the selected volume.
+
+Run it when changing workspace provider semantics, runtime interfaces, the
+runner, repository checkout and preparation, nested Docker, GitHub credentials,
+native engine session persistence, preview HTTP/WebSocket routing, browser
+artifacts, suspension, archive/restore, or deletion.
+
+CI requires this tier for default-branch and release acceptance, and for pull
+requests that change workspace execution boundaries. A path-based skip is
+recorded only when those boundaries are untouched.
+
+## Critical security and money paths
+
+Authentication, authorization, tenant scoping, secrets, cryptography, billing,
+budgets, webhook signatures, previews, and privileged external integrations
+need both unit and integration coverage. Test success and applicable malformed,
+expired, revoked, replayed, and cross-tenant denials. Add a regression that
+would fail if the previous unsafe behavior returned.
+
+Cost tests must distinguish a real zero from unavailable usage or pricing.
+Scanner and CI mirror tests must distinguish clean/current from unavailable or
+stale data.
+
+## Manual verification
+
+UI changes require a browser pass over loading, empty, error, denied, and
+successful states. Story-loop changes require the real workspace where the
+behavior depends on files, Docker, browser preview, GitHub, or engine sessions.
+
+Record the setup, exact actions, and observed result. Keep private repository
+content and credentials out of screenshots and artifacts.
+
+## Documentation
+
+Documentation changes run the docs test suite, Docusaurus production build,
+and Markdown link guard. Contract tests should protect required subjects,
+fields, and lifecycle warnings rather than line counts.
+
+## Evidence in a pull request
+
+List the exact commands that ran and their results. Distinguish deterministic
+automation from manual browser/provider checks. Include the relevant failure
+output when a check is blocked. Do not report a check as passing when it was
+not run.

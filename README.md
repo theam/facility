@@ -15,23 +15,11 @@ Facility is open-source, self-hosted tooling for running AI coding agents as
 part of a reviewable software delivery process — with the humans, the gates
 and the evidence in one place.
 
-**Connect a repository and your repository stays yours.** Install the GitHub
-App, and the work already in it appears in Facility: every issue, with its
-history. From there a person dispatches agents, reads the plan they wrote,
-approves or refuses it, and follows the work to a merged pull request —
-without a single file being added to the repository. Agents run in Facility's
-own sandboxes and write back only what a human collaborator would: branches,
-pull requests, and comments. The project's context — its charter, its
-decisions, its documentation — lives in the platform, not vendored into the
-codebase.
-
-That matters most where it is hardest to adopt anything: a team with a working
-process can connect Facility, watch it for a week, and disconnect it without a
-trace if it does not earn its place.
-
-When a team *wants* the process in the repository — agents running in its own
-CI, invoked from issue comments — Facility installs that too. It is the second
-step, not the entry price.
+Facility connects software work, agents, development environments, GitHub delivery state, human
+review, costs, and operational evidence. Each story has a persistent workspace and shared
+conversation that agents and people can continue until the work is complete. MCP is the primary
+automation interface, while the web application is a first-class surface over the same projects,
+agents, stories, conversations, environments, previews, and lifecycle controls.
 
 ## Status: early software, published early on purpose
 
@@ -59,468 +47,440 @@ hit are the ones worth fixing first.
   reproducible environments for agent runs, and deterministic checks for
   repository-specific rules.
 - **Platform and engineering leaders** operating agents across several
-  repositories who need centrally managed templates, upgrades, credentials,
+  repositories who need repository-owned agent configuration, credentials,
   spend limits, audit history, and outcome data.
 - **Security-conscious organizations** that need to keep the control plane,
-  run records, and model traffic in their own environment while using scoped
-  machine credentials and human approval gates.
+  run records, and model traffic in their own environment while using
+  repository-scoped maintainer credentials and GitHub review and merge controls.
 
-Start by connecting one repository. Install the process into the repository
-itself when the team wants agents running in its own CI.
+Start by connecting one repository, then add its `.facility.yml` and `.agents/` contracts through
+the kickstart pull request.
 
 ## What you can do with it
 
-| Goal | Facility provides | Available with |
-|---|---|---|
-| Take work from an issue to a pull request | `/architect` investigates and proposes a plan; a human invokes `/builder`; the builder implements and publishes a reviewable PR. Platform runs publish a draft before GitHub CI decides acceptance. | Installer or platform |
-| Keep accountability with people | A person accepts the plan; at Gate 2 a person validates the live preview, reviews the PR, and squash-merges it. Agents cannot approve, merge, or push to protected branches. | Installer or platform |
-| Give agents a usable job site | Each run starts with the repository's provision command, then follows `STANDARD.md`, relevant skills, specialist review, and the configured test/build commands. | Installer or platform |
-| Validate behavior before merge | Facility can provision a private Docker or AWS preview from a project-defined image, wait for its readiness endpoint, and expose it only through the SSO-authenticated proxy. Existing provider previews remain supported. | Installer or platform |
-| Turn team rules into enforcement | Repository-specific invariants live in zero-dependency guards. Repeated review feedback can graduate from prose into a deterministic check. | Installer or platform |
-| Keep repositories on a known system version | The platform fingerprints managed files, reports drift, and delivers template upgrades as reviewable pull requests. | Platform |
-| Control model access and spend | The gateway issues project-scoped virtual keys, enforces budgets, attributes usage by project/agent/task, and can store request/response envelopes in your object store. | Platform |
-| Run and supervise agents outside CI | The platform launches Claude Code, Codex, or bring-your-own agents in disposable Docker or AWS CodeBuild sandboxes, streams sessions, and records human steering. | Platform |
-| Reuse operational knowledge | The harness versions skills, rules, agent contracts, guards, and templates. Project knowledge and learning proposals remain human-validated. | Platform |
-| See whether the process works | Receipts, outcomes, health checks, analytics, issues, and a synthetic canary show cost, reliability, acceptance, and recurring failures. | Installer or platform |
-| Operate from different clients | The same permission model is exposed through the web app, REST API, CLI, and MCP server. | Platform |
+| Goal | Facility provides |
+|---|---|
+| Take work from an issue to a pull request | Mirror GitHub issues into stories, dispatch repository-defined agents, and follow their branches, commits, checks, reviews, and pull requests through delivery. |
+| Keep work available between agent turns | One shared conversation, persistent worktree and volume, and resumable Claude Code or Codex sessions live until an authorized user explicitly deletes the workspace. |
+| Give agents a complete development environment | `.facility.yml` defines setup, startup, readiness, browser tests, services, and secrets. Workspaces can run Docker and Docker Compose. |
+| Test the running result | Facility opens authenticated previews of services running inside the workspace, including WebSocket applications. |
+| Configure every agent in the repository | Markdown manifests in `.agents/` define prompts, engines, models, options, and manual, MCP, UI, GitHub, or scheduled triggers. |
+| Inspect project capabilities | The web UI and MCP list the agents and the skills installed under `.agents/skills/` and `.claude/skills/` at the repository commit used by Facility. |
+| Review what an agent changed | Every turn records its agent, model, session, workspace, initial and final Git state, commits, changed files, and related GitHub delivery events in the story timeline. |
+| Keep accountability with people and repository rules | People steer the conversation and review the running result and pull request. Branch protection, required CI, reviews, and merge controls remain the delivery boundary. |
+| Track and limit spend | Facility attributes model and workspace costs to projects and agents, presents cost analysis, and enforces monthly project budgets before new provider calls. |
+| Operate the system | Audit history, observability records, analytics, and periodic GitHub reconciliation make delivery and control-plane health inspectable. |
+| Work from automation or a human interface | MCP is the primary automation interface; the web application exposes the same stories, agents, environments, previews, evidence, and lifecycle operations. |
+
+## The working model
+
+Starting a story creates one durable unit of work:
+
+- one shared conversation;
+- one persistent worktree and volume;
+- one or more resumable native Claude Code or Codex sessions;
+- one normal Git branch and pull request; and
+- the complete development environment declared by the repository.
+
+Compute can sleep or be replaced. The conversation, session files, dependencies, uncommitted
+changes, and worktree remain until an authorized user explicitly deletes the workspace. Merging or
+archiving a story only suspends compute.
+
+Agents use ordinary `git` and `gh` commands. Every configured agent receives the same full access
+to the workspace and the same GitHub App installation capability for the project's repositories.
+Facility uses one maintainer trust model for every agent instead of per-agent permission profiles.
+Project budgets use a preflight check: a running provider call may finish and is accounted
+afterwards, while later turns are blocked once the monthly limit has been reached. GitHub branch
+protection, reviews, and CI remain the merge boundary.
+
+## Agents as code
+
+Every agent is a Markdown manifest under `.agents/`. The frontmatter selects its engine, model,
+options, and triggers; the Markdown body is the prompt.
+
+```markdown
+---
+name: security-audit
+description: Audits the repository for actionable security risks.
+engine: claude_code
+model: claude-opus-4-8
+enabled: true
+triggers:
+  - type: manual
+  - type: mcp
+  - type: ui
+  - type: schedule
+    name: weekly-security-audit
+    cron: "0 5 * * 1"
+    timezone: UTC
+---
+
+Audit reachable risks, preserve evidence, and continue from this story's shared workspace.
+```
+
+The same parser and dispatcher handle manual, MCP, UI, GitHub, and scheduled activations. A
+manifest cannot declare `permissions`, `sandbox`, or `tools`; access is fixed for all agents.
+
+Kickstart creates:
+
+```text
+.agents/
+  architect.md
+  builder.md
+  pr-reviewer.md
+  address-review.md
+  ci-doctor.md
+  security-audit.md
+```
+
+Teams can add or change agents by editing files in this directory. The database keeps only a cache
+of the exact repository commit and content hash used for each turn.
+
+Facility also inventories valid skills installed under `.agents/skills/**/SKILL.md` and
+`.claude/skills/**/SKILL.md`. The Agents page and `facility_list_skills` MCP tool show their names,
+descriptions, paths, and source commit. Facility does not distribute or upgrade a separate catalog;
+the repository remains the source of truth for both agents and skills.
+
+## Delivery evidence
+
+Each turn records its agent, engine, model, resumable session, workspace, branch, and initial Git
+SHA before the engine starts. When the turn settles, Facility records the final SHA, commits,
+changed files, and whether uncommitted changes remain. These records are available for review in
+the story timeline.
+
+GitHub webhooks and ten-minute reconciliation add branch, pull-request, review, and check facts.
+Facility links a GitHub fact to the exact turn when its head SHA matches that turn's final SHA and
+otherwise keeps it as an external change on the story. The web UI and `facility_get_story` expose
+conversation, agent activity, Git changes, artifacts, attention, and GitHub delivery in one ordered
+story timeline.
+
+## Repository environment
+
+`.facility.yml` tells Facility what to clone, set up, start, wait for, and expose:
+
+```yaml
+version: 1
+repositories:
+  primary: github.com/acme/app
+  related:
+    - github.com/acme/shared
+environment:
+  setup: pnpm install --frozen-lockfile
+  start: docker compose up -d
+  ready: curl --fail http://localhost:3000/health
+  secrets:
+    - ANTHROPIC_API_KEY
+    - OPENAI_API_KEY
+  services:
+    app:
+      port: 3000
+      protocol: http
+      websocket: true
+```
+
+The workspace can run Docker and Docker Compose and includes browser tooling for end-to-end tests.
+Secret names are committed in `.facility.yml`; their values come from the operator's secret
+environment and are injected only while setup, services, or agents run. Use the provider variable
+names supported by the selected Claude Code and Codex authentication method.
+Declared services are available through short-lived, authenticated preview sessions routed to the
+live workspace. Facility does not build a second preview deployment.
+
+## MCP surface
+
+The embedded Streamable HTTP server is available at `POST /mcp`. It exposes twenty tools:
+
+```text
+facility_list_projects       facility_list_agents
+facility_list_skills
+facility_list_stories        facility_get_story
+facility_start_story         facility_send_message
+facility_get_conversation    facility_get_environment
+facility_open_preview        facility_suspend_story
+facility_archive_story       facility_restore_story
+facility_delete_workspace
+facility_get_costs           facility_get_budget
+facility_set_budget          facility_get_observability
+facility_get_pipeline        facility_sync_github
+```
+
+`facility_delete_workspace` is the only operation that destroys durable state. It requires an
+explicit confirmation value and an idempotency key. Other lifecycle operations are reversible.
+
+OAuth protected-resource metadata is served from
+`/.well-known/oauth-protected-resource/mcp`. API keys can also authenticate MCP clients with a
+Bearer header.
 
 ## Quick start: run Facility
 
-Running Facility locally takes one command for the stack plus a one-time GitHub
-App setup for sign-in and repository automation. You need Docker, Node.js 24
-LTS, and the repository-pinned pnpm 11.20.0. Node.js 22 remains supported from
-22.13.0.
+Running Facility locally takes one command for the stack, a runner image for story workspaces, and
+a GitHub App when you want to use a real repository. You need Docker, Node.js 24 LTS, and the
+repository-pinned pnpm 11.20.0. Node.js 22 is supported from 22.13.0.
 
 ### 1. Clone and boot the stack
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-npm install --global pnpm@11.20.0
+corepack install --global pnpm@11.20.0
 pnpm dev
 ```
 
-`pnpm dev` creates `.env` when needed, fills only blank required development
-values (including `SECRET_MASTER_KEY` and the MCP signing keys), starts
-Postgres plus MinIO when `S3_ENDPOINT` is local (or only Postgres for an external
-S3-compatible endpoint), installs dependencies, builds shared packages, migrates and
-seeds platform essentials, then launches the API (`:4400`), worker, gateway
-(`:4410`), web app (`:3400`), and documentation site. Existing `.env` values
-are never replaced, and the command refuses a non-local `DATABASE_URL`.
+`pnpm dev` creates `.env` when needed, fills only blank development values, starts PostgreSQL,
+installs dependencies, builds shared packages, applies migrations, seeds local data, and launches
+the API and worker, web application, and documentation site. Existing `.env` values are never
+replaced, and the command refuses a non-local `DATABASE_URL`.
 
-The stack is now up, but sign-in answers `501 auth_unconfigured` until you
-finish the steps below.
+The local services are:
 
-### 2. Create the GitHub App
+| Service | Address | Role |
+|---|---|---|
+| Web | `http://localhost:3400` | Human interface |
+| API | `http://localhost:4400` | REST, MCP, webhooks, previews, and OAuth |
+| Docs | `http://localhost:3500` | Documentation site |
+| PostgreSQL | `localhost:5461` | Persistent control-plane data |
 
-Facility uses one GitHub App per instance for BOTH human sign-in and
-repository automation. Create it on the organization (or user account) that
-owns the repositories you will automate: **Settings → Developer settings →
-GitHub Apps → New GitHub App**.
-
-- **GitHub App name / Homepage URL**: anything you like.
-- **Callback URL**: `http://localhost:3400/api/auth/callback` — it must match
-  `AUTH_CALLBACK_URL` in `.env` exactly, byte for byte.
-- Leave **"Request user authorization (OAuth) during installation"** unchecked.
-  Facility requests authorization when you sign in after configuring `.env`
-  and restarting the stack.
-- **Webhook**: optional for local evaluation — you can disable it and use the
-  "sync from GitHub" button instead. To receive events on a development
-  machine you need a public URL for your laptop; the
-  [local development guide](apps/docs/docs/self-host/local-development.md)
-  walks through a Cloudflare tunnel and the exact payload URL
-  (`https://<your-host>/api/webhooks/github` — through the `/api` proxy).
-- **Permissions**:
-
-  | Scope | Permission | Access |
-  |---|---|---|
-  | Repository | Actions, Checks, Deployments, Metadata | Read-only |
-  | Repository | Contents, Workflows | Read and write |
-  | Repository | Issues, Pull requests | Read and write |
-  | Organization | Members | Read-only |
-  | **Account** | **Email addresses** | **Read-only — required for sign-in** |
-
-  Sign-in checks every verified email on your GitHub account against explicit
-  Facility invitations, so a company address may remain secondary on GitHub.
-  Without the Email addresses permission every login fails with a generic
-  `auth_failed` error.
-- **Subscribe to events** (only if the webhook is enabled): Installation,
-  Push, Issues, Issue comment, Pull request, Pull request review, Workflow
-  run, Check run, Deployment status.
-
-### 3. Collect the App credentials
-
-From the App's **General** tab:
-
-1. Note the **App ID** and the **Client ID**.
-2. **Client secrets → Generate a new client secret** — copy it immediately,
-   GitHub shows it once.
-3. **Private keys → Generate a private key** — a `.pem` file downloads.
-4. **Install App** (left sidebar) on your organization/account, selecting the
-   repositories Facility may automate. Note the **installation id** — it is
-   the number at the end of the installation page URL
-   (`…/settings/installations/<id>`).
-
-### 4. Configure `.env`
-
-Fill these values (everything else was auto-filled by `pnpm dev`):
-
-```dotenv
-# Human sign-in (the App acts as the OAuth provider)
-AUTH_IDENTITY_PROVIDER=github
-AUTH_CALLBACK_URL=http://localhost:3400/api/auth/callback
-GITHUB_OAUTH_CLIENT_ID=<Client ID from step 3>
-GITHUB_OAUTH_CLIENT_SECRET=<client secret from step 3>
-# Optional: require active membership in this GitHub organization
-GITHUB_OAUTH_ALLOWED_ORGANIZATION=<organization login>
-
-# Repository automation (the same App)
-GITHUB_APP_ID=<App ID from step 3>
-GITHUB_APP_SLUG=<the app slug from its URL>
-GITHUB_APP_PRIVATE_KEY="<contents of the .pem, kept as a quoted multiline value>"
-GITHUB_APP_WEBHOOK_SECRET=<only if you enabled the webhook>
-
-# Model provider for local development (or store credentials via the API later)
-DEV_ANTHROPIC_API_KEY=<your key>
-```
-
-Set `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` together — the
-configuration refuses one without the other.
-
-`GITHUB_OAUTH_ALLOWED_ORGANIZATION` is optional. When set, Facility verifies
-active membership in that organization during every direct GitHub login. When
-blank or unset, the existing explicit invitation and App-installation access
-checks apply without an additional organization restriction.
-
-### 5. Bind the instance and provision yourself
-
-Every instance is dedicated to one Facility organization, one GitHub account,
-and one App installation, and sign-in only admits explicitly provisioned
-members. Bootstrap that binding once:
-
-```bash
-# Find your ids:
-#   your user id:          gh api /user --jq .id
-#   the account id:        gh api /orgs/<org> --jq .id   (or /users/<login> for a personal account)
-#   the installation id:   from step 3.4
-
-pnpm exec facility instance bootstrap \
-  --org-name "My Org" --org-slug my-org \
-  --owner-email you@example.com --owner-name "Your Name" \
-  --github-user-id <your user id> --github-login <your login> \
-  --github-account-id <account id> --github-account-login <org-or-user login> \
-  --github-installation-id <installation id> \
-  --github-account-type organization
-```
-
-The command connects to the local database, is idempotent for the same
-binding, and refuses to modify a database bound to a different instance.
-
-### 6. Sign in
-
-Restart `pnpm dev` (configuration is read at boot), open
-`http://localhost:3400`, and press **continue with GitHub**. GitHub asks you
-to authorize the App once; you land back in Facility with a session.
-
-To run agents in local Docker sandboxes, also build the runner image named in
-`.env`:
+Build the workspace image before starting a real story:
 
 ```bash
 docker build -f runner/Dockerfile -t facility-runner:dev .
 ```
 
-To delegate all of this to Claude Code or Codex, paste this prompt:
+To delegate local setup to Claude Code or Codex, paste this prompt:
 
-> Set up and launch Facility from this repository. Run `pnpm dev`, fix
-> prerequisite errors without replacing existing `.env` values, wait for the
-> services to be ready, then report their local URLs.
+> Set up and launch Facility from this repository. Run `pnpm dev`, fix prerequisite errors without
+> replacing existing `.env` values, build the runner image, wait for the services to be ready, then
+> report their local URLs.
 
-### Troubleshooting sign-in
+### 2. Create the GitHub App
+
+Create one GitHub App for the Facility instance and install it only on repositories the instance
+may automate. Use `http://localhost:4400/webhooks/github` as the local webhook URL.
+
+Grant these repository permissions:
+
+| Permission | Access |
+|---|---|
+| Actions, Checks, Contents, Deployments, Issues, Pull requests, Workflows | Read and write |
+| Code scanning alerts, Dependabot alerts, Secret scanning alerts, Metadata | Read-only |
+
+Grant organization membership read access when repository discovery or identity policy requires
+it. Subscribe to Issues, Issue comment, Pull request, Pull request review, Workflow run, and Check
+suite events. The [GitHub App guide](apps/docs/docs/self-host/github-app.md) covers the exact setup,
+validation, and rotation procedure.
+
+### 3. Configure the instance
+
+Add the App values to `.env`:
+
+```dotenv
+GITHUB_APP_ID=<App ID>
+GITHUB_APP_SLUG=<App slug>
+GITHUB_APP_PRIVATE_KEY="<private key>"
+GITHUB_APP_WEBHOOK_SECRET=<webhook secret>
+```
+
+Use the project-scoped environment convention for model credentials. For a project whose id is
+`proj_example`:
+
+```dotenv
+FACILITY_PROJECT_PROJ_EXAMPLE_ANTHROPIC_API_KEY=<key>
+FACILITY_PROJECT_PROJ_EXAMPLE_OPENAI_API_KEY=<key>
+```
+
+Restart `pnpm dev` after changing `.env`. For production authentication, configure GitHub OAuth or
+OIDC and bind the first owner and GitHub installation:
+
+```bash
+pnpm exec facility instance bootstrap \
+  --org-name "My Org" --org-slug my-org \
+  --owner-email you@example.com --owner-name "Your Name" \
+  --github-user-id <user-id> --github-login <login> \
+  --github-account-id <account-id> --github-account-login <account-login> \
+  --github-installation-id <installation-id> \
+  --github-account-type organization
+```
+
+Local development can use **continue locally** on the login page. That shortcut cannot mint
+GitHub installation tokens, so real clone, push, pull-request, webhook, mirror, and kickstart tests
+need the App configuration above.
+
+### Troubleshooting setup
 
 | Symptom | Cause and fix |
 |---|---|
-| `501 auth_unconfigured` on `/api/auth/login` | `GITHUB_OAUTH_CLIENT_ID`/`SECRET` missing — set both and restart. |
-| GitHub shows a `redirect_uri` mismatch page | The App's Callback URL and `AUTH_CALLBACK_URL` differ — they must match exactly. |
-| `auth_failed: GitHub identity or installation access could not be verified` | The App lacks the **Email addresses: Read-only** account permission, or no verified GitHub email is available. Fix the permission and re-authorize. |
-| `403 not_invited` / `installation_access_required` | Your GitHub user is not provisioned, or the user/account/installation ids in the bootstrap don't match — re-run step 5 with the real ids. |
-| Login succeeds but you land on the wrong host | `WEB_URL` must be the origin your browser uses. |
-| Testing through an HTTPS tunnel: navigation, live updates or hot reload fail | Set `WEB_URL` and `AUTH_CALLBACK_URL` to the tunnel origin (and the App's Callback URL to match), and put the tunnel hostname in `FACILITY_DEV_ORIGINS` — Next blocks cross-origin development requests otherwise. Full walkthrough: [local development](apps/docs/docs/self-host/local-development.md). |
+| The UI starts but no repositories are available | Configure and install the GitHub App, bind its installation to the instance, then restart the API and worker. |
+| A story stays queued | Confirm the worker process is running and inspect its queue and dispatch logs. |
+| Workspace creation reports a missing image | Build `facility-runner:dev` or set `FACILITY_WORKSPACE_IMAGE` to the runner image available to the selected provider. |
+| A webhook has no effect | Check its HMAC secret, event subscription, installation binding, repository connection, and the agent's GitHub trigger. |
+| A preview does not open | Check the service name, readiness command, preview origin, workspace state, and preview authorization logs. |
 
-## Connect your first repository
+### 4. Connect your first repository
 
-Create a project and connect a repository from the web application. The issues
-already in it appear in Facility with their history, and you can dispatch an
-agent against any of them from there. Nothing is written to the repository by
-connecting it: agents work in Facility's sandboxes and push branches, pull
-requests and comments the way a collaborator would. Disconnecting leaves no
-trace either.
+Create a project in the web application and choose a repository visible to the GitHub App. Facility
+imports its issues and delivery state. Review the detected setup command, development command, and
+service port, then open and merge the kickstart pull request.
 
-That is the whole entry path. If the repository already runs Facility's
-vendored workflows, follow the
-[existing-repository adoption guide](apps/docs/docs/guides/existing-repo.md).
-For the rest of the platform, follow the
-[self-host quickstart](apps/docs/docs/self-host/quickstart.md),
-[authentication guide](apps/docs/docs/self-host/authentication.md), and
-[production deployment guide](apps/docs/docs/self-host/production.md).
+The pull request adds the repository contracts Facility needs:
+
+```text
+.facility.yml
+.agents/
+  architect.md
+  builder.md
+  pr-reviewer.md
+  address-review.md
+  ci-doctor.md
+  security-audit.md
+```
+
+The local CLI writes the same files:
+
+```bash
+pnpm exec facility init \
+  --repo=acme/app \
+  --provision='pnpm install --frozen-lockfile' \
+  --start='docker compose up -d' \
+  --preview-readiness-command='curl --fail http://localhost:3000/health' \
+  --service-port=3000
+
+pnpm exec facility doctor
+```
+
+Existing files are preserved unless `--force` is explicit.
+
+### 5. Start a story
+
+Start an issue-backed or ad hoc story from MCP or the web application. Select an agent whose
+manifest admits that trigger. Facility creates the shared conversation and workspace, prepares the
+repository environment, and queues the first turn.
+
+Open the declared service preview, suspend the story, and continue it to verify that the
+conversation, worktree, and engine session persist. Follow the [story operations
+guide](apps/docs/docs/guides/operate-story.md) for normal work and the [end-to-end validation
+guide](apps/docs/docs/guides/validate-workspace-loop.md) before connecting sensitive code.
 
 ## Operate without the web application
 
-Every control-plane workflow is available over the versioned REST API and the
-zero-dependency CLI; AI clients use the same permissions through MCP.
+AI clients use the embedded MCP server. Operators can also use the versioned REST API and OpenAPI
+schema:
 
 ```bash
 # REST/OpenAPI
 open http://localhost:4400/docs
 
-# CLI from this checkout (the API key is hidden when entered interactively)
-node packages/cli/bin/facility.mjs login --url http://localhost:4400 --key fak_…
-node packages/cli/bin/facility.mjs status
-node packages/cli/bin/facility.mjs --help
-
-# MCP streamable HTTP (Bearer credentials are forwarded to the API)
-curl http://localhost:4420/healthz
+# MCP streamable HTTP
+curl --fail http://localhost:4400/health
 ```
 
-See the [API reference](apps/docs/docs/reference/api.md) and
-[webhooks reference](apps/docs/docs/reference/webhooks.md) for
-authentication, automation-safe output, streaming, write approvals, deployment,
-and troubleshooting.
-
-## Optional: install the process into the repository
-
-Everything above happens without touching the repository. When a team decides it
-wants the process *in* the repository — agents running in its own CI, invoked
-from issue comments — the standalone installer writes it there. This is the
-second step, not the entry price, and it is the only step that adds files.
-
-The installer needs a GitHub repository and uses the same runtime contract:
-Node.js 24 LTS is recommended, with Node.js 22 supported from 22.13.0. It does
-not require you to deploy Facility at all.
+Register the MCP endpoint directly in Claude Code or Codex:
 
 ```bash
-git clone https://github.com/theam/facility.git /absolute/path/to/facility
-cd your-repository
-node /absolute/path/to/facility/packages/cli/bin/facility.mjs init
-node /absolute/path/to/facility/packages/cli/bin/facility.mjs doctor --run-guards --github
+claude mcp add --transport http facility https://facility.example.com/mcp
+codex mcp add facility --url https://facility.example.com/mcp
+codex mcp login facility
 ```
 
-Until the CLI is published to npm, run it from a Facility checkout as above.
-
-The installer detects the repository's package manager, default branch, checks,
-and useful quality modules. It asks for the commands that create a working
-environment and verify a change, then adds:
-
-- GitHub workflows for planning, building, reviewing, addressing feedback,
-  repairing routine CI failures, security sweeps, and the watchtower;
-- `STANDARD.md`, agent instructions, skills, hooks, and deterministic guards;
-- `.facility.json`, which records the choices needed to reproduce the install.
-
-The installer skips existing generated destinations unless you explicitly use
-`--force`. `AGENTS.md` and `CLAUDE.md` receive a delimited managed block instead
-of being replaced, and the current answers are written to `.facility.json`.
-
-For a Facility-owned preview, supply an immutable review image, its start
-command, internal port, and readiness path. The image command may seed
-non-production data before it starts the server. The workflow requests the
-preview only after verified builder delivery:
-
-```bash
-node /absolute/path/to/facility/packages/cli/bin/facility.mjs init \
-  --preview-image='ghcr.io/acme/app:${{ steps.delivery.outputs.head_sha }}' \
-  --preview-command='npm run preview' \
-  --preview-port=3000 \
-  --preview-readiness-path=/healthz \
-  --preview-ttl-hours=24
-```
-
-Configure `FACILITY_API_URL`, `FACILITY_PROJECT_ID`, and a project-scoped
-`FACILITY_PREVIEW_KEY` in GitHub. Production Facility deployments must have a
-complete GitHub/OIDC login configuration or preview creation fails closed. The review
-image must already exist; Facility does not build application images.
-
-After installation, follow the human-only steps printed by the CLI: configure
-the [selected authentication mode](#repository-automation-authentication),
-install the Claude GitHub App, protect the default branch, and use test-tier
-spend-capped credentials for integration tests. Choose Facility-owned or
-existing-provider previews and require their readiness check. Then commit the generated files, open
-an issue, and comment `/architect` to start the delivery loop described below.
-
-See the [CLI reference](apps/docs/docs/reference/cli.md) and
-[guards guide](apps/docs/docs/reference/guards.md) for the available commands and extension points.
-
-## Repository automation authentication
-
-`facility init --auth=<mode>` renders one authentication mode consistently into
-every generated workflow and records it in `.facility.json`. The default is
-`api-key`; enterprises should prefer short-lived WIF or cloud OIDC when their
-provider setup supports it.
-
-| Mode | GitHub configuration | Intended use |
-|---|---|---|
-| `wif` | `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID` variables | Preferred direct-Anthropic enterprise path; short-lived GitHub OIDC exchange |
-| `bedrock` | `AWS_ROLE_TO_ASSUME` secret, `AWS_REGION` variable | Amazon Bedrock through an AWS GitHub OIDC role |
-| `vertex` | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` variables | Vertex AI through Google Workload Identity Federation |
-| `api-key` | `ANTHROPIC_API_KEY` secret | Simple default; use a dedicated, spend-capped test-tier key |
-| `oauth` | `CLAUDE_CODE_OAUTH_TOKEN` secret | Compatibility path for a Claude subscription token |
-
-`facility doctor` reads the manifest and workflows, checks the selected mode,
-and reports the three configured model tiers. Do not configure multiple modes
-in the same workflow; static credentials take precedence over WIF and defeat
-its purpose. For `bedrock` and `vertex`, pass provider-compatible model
-identifiers through the three `--*-model` flags instead of relying on the
-direct-Anthropic defaults.
+See the [MCP](apps/docs/docs/reference/mcp.md), [API](apps/docs/docs/reference/api.md), and
+[webhook](apps/docs/docs/reference/webhooks.md) references for the complete contracts.
 
 ## How the delivery loop works
 
-Whichever setup you choose, work follows the same reviewed path:
+1. Work starts from a GitHub issue, an ad hoc request, a schedule, or a configured GitHub event.
+2. Facility creates or resumes the story's shared conversation and persistent workspace.
+3. The selected repository-defined agent continues the work with its configured engine and model.
+4. The repository setup, services, tests, and browser checks run inside the workspace.
+5. A person can steer the conversation and test the running service through an authenticated
+   preview.
+6. The agent uses normal Git and GitHub operations to commit, push, and open or update a pull
+   request.
+7. Facility mirrors the branch, pull request, reviews, and checks and relates them to the agent turn
+   when their Git SHAs match.
+8. Repository CI, review, branch protection, and merge controls decide what is accepted.
+9. Merge suspends compute and marks the story done. The conversation, worktree, and engine session
+   stay available until explicit deletion.
 
-1. Work starts as an issue or another owned signal.
-2. `/architect` inspects the real repository and proposes a plan in the issue.
-3. A human accepts that plan by invoking `/builder`.
-4. `/builder` provisions the environment and implements the complete change.
-   Repo-lane builders run the configured checks before opening a PR. A
-   platform-lane builder runs focused checks and Facility immediately publishes
-   its signed commit as a draft PR.
-5. Facility or the configured deployment provider creates a live, isolated preview for fast validation.
-6. Automated review, deterministic guards, and the repository's CI examine the
-   result. GitHub CI is authoritative for platform-lane delivery; failed checks
-   can dispatch the configured CI-doctor on the same branch, and Facility marks
-   the draft ready only after the current head's aggregate rollup succeeds.
-7. At Gate 2, a human validates the preview, reviews the PR, and squash-merges it.
-8. The run leaves a receipt; the watchtower joins it with the eventual outcome
-   and reports health over time.
-
-Facility supports two execution lanes. The **repo lane** runs the vendored
-GitHub workflows in your existing CI and has no platform dependency at run
-time. The **platform lane** runs the same contracts in an isolated sandbox and
-adds live streaming, steering, centralized credentials, and platform-enforced
-budgets. A project can move one trigger at a time between lanes.
-
-Platform-lane Anthropic credentials support both API-key billing and Claude
-Code Pro/Max subscription tokens. Add the latter in Settings → Providers or
-with `facility providers create --provider anthropic --auth-mode oauth ...`;
-the setup token remains sealed behind the gateway and the sandbox receives only
-its expiring run-scoped virtual key.
-
-Platform CI repair is limited to branches produced by that project's Facility
-builder runs. It retries the same SHA-stable failure at most twice and retains
-an absolute three-attempt branch ceiling by default; set the project setting
-`ci_repair_max_attempts` to an integer from 1 through 10 to change that branch
-ceiling. Exhaustion leaves the draft PR and its failing checks intact for human
-iteration.
-
-Read [the method](apps/docs/docs/concepts/method.md) for the reasoning behind the roles, gates,
-standards, guards, and watchtower.
+Read [the method](apps/docs/docs/concepts/method.md) and [the story
+loop](apps/docs/docs/concepts/the-loop.md) for the operating model and exact lifecycle.
 
 ## Getting the most from Facility
 
-1. **Make provisioning real.** The provision command should create everything
-   the checks need on a fresh machine: databases, migrations, seeds, browsers,
-   generated clients, and local services. If an agent cannot reproduce a
-   failure, it cannot reliably fix it.
-2. **Define completion in executable terms.** Put the exact lint, typecheck,
-   test, build, and guard commands in `STANDARD.md` and `.facility.json`. Keep
-   judgment calls in the standard; turn stable invariants into guards.
-3. **Protect the default branch.** Require pull requests and a human review.
-   Facility's prompts and hooks reinforce this boundary, but branch protection
-   makes it structural.
-4. **Use least-privilege test credentials.** Give agent jobs only test-tier,
-   spend-capped secrets. Use gateway virtual keys and project budgets when the
-   platform is available; never expose production credentials to a run.
-5. **Adopt the platform incrementally.** For an existing Facility repository,
-   connect and fingerprint it first, route model traffic through the gateway
-   second, add telemetry third, and move individual triggers to sandboxes only
-   when the team is ready.
-6. **Review the numbers, not just individual PRs.** Watch acceptance rate,
-   one-shot delivery, human fixups, cost, failed runs, and canary health. Use
-   recurring failures to improve the standard, provision command, skills, or
-   guards.
-7. **Set an object-store retention policy.** Envelope and transcript capture is
-   useful for audit and diagnosis, but the current platform relies on your S3
-   lifecycle policy for deletion.
+1. **Make setup reproducible.** `environment.setup` should create everything the development
+   environment and checks need on a fresh machine.
+2. **Define readiness.** Use `environment.ready` so agents, previews, and browser checks do not race
+   a service that has not started.
+3. **Keep agents focused.** Give each `.agents/*.md` manifest one clear role, select its engine and
+   model explicitly, and configure only the triggers it should accept.
+4. **Protect the default branch.** Require pull requests, current CI, and human review. Agents have
+   maintainer access to their working branches.
+5. **Set project budgets.** Facility checks the monthly limit before new provider calls and records
+   usage after each turn. Treat unavailable pricing as unavailable, not zero.
+6. **Review the whole story.** Use the timeline to inspect prompts, agents, Git changes, previews,
+   costs, reviews, and checks together.
+7. **Plan retention.** Workspace storage persists across suspend, archive, merge, and compute
+   replacement. Delete it only after preserving anything the team needs.
+8. **Watch the mirror and control plane.** Monitor webhook and reconciliation freshness, queue lag,
+   workspace failures, cost collection, and preview authorization.
 
-The [existing-repository guide](apps/docs/docs/guides/existing-repo.md),
-[security model](apps/docs/docs/reference/security.md), and
-[hardening notes](apps/docs/docs/reference/hardening.md) cover these practices in more detail.
+The [security model](apps/docs/docs/reference/security.md), [hardening
+notes](apps/docs/docs/reference/hardening.md), and [production
+guide](apps/docs/docs/self-host/production.md) cover these practices in detail.
 
 ## Current status
 
-Facility v0.3 is a pre-1.0 release. The repository installer and delivery method
-precede the platform; the control plane is newer and its APIs and file layout may
-still change.
+Facility is pre-1.0 software. The schema, APIs, manifests, and deployment shape may change between
+`0.x` releases. The current web application covers projects, repository-defined agents and skills,
+stories and shared conversations, persistent environments and previews, delivery pipelines, costs
+and budgets, insights, settings, and members. MCP is the primary automation interface; the REST API
+and web application expose the same domain operations for their respective clients.
 
-The web app currently covers projects, agents, sessions and live steering,
-issues, Project Owner knowledge, the human inbox, harness items, analytics,
-audit, integrations, providers, API keys, budgets, and members. The REST API is
-the complete platform surface, with focused subsets exposed through the CLI and
-MCP. Production deployments use GitHub directly or the SaaS OIDC broker for human login and a separately
-configured GitHub App for repository automation.
-
-The [architecture document](apps/docs/docs/reference/architecture.md) describes the
-platform topology, security boundaries, and major design decisions.
-
-Once this repository is public, a maintainer must enable GitHub Pages with
-**GitHub Actions** as its source. After that one-time setting, the docs workflow
-deploys pushes to `main` (or a manual run from `main`); it does not require an
-admin token or PAT.
+The [architecture document](apps/docs/docs/reference/architecture.md) describes the topology,
+security boundaries, and component responsibilities.
 
 ## Repository map
 
 ```text
-apps/web            Next.js operator interface
-apps/docs           Docusaurus documentation
-services/api        REST control plane, workers, GitHub integration, HITL
-services/gateway    model proxy, budgets, metering, envelope capture
-packages/cli        @theagilemonkeys/facility installer and platform client
-packages/core       domain logic, permissions, receipts, fingerprints
-packages/db         Postgres schema and migrations
-packages/mcp        MCP server
-packages/harness    Project Owner and learning-agent contracts
-packages/sdk        generated TypeScript API client
-packages/ui         shared React design system
-runner              sandbox agent host
-infra               Docker and AWS deployment assets
+apps/web              Next.js human interface
+apps/docs             Docusaurus documentation
+services/api          REST control plane, MCP, workers, GitHub, previews, and workspaces
+packages/agents       agent manifests and trigger contracts
+packages/cli          repository setup, validation, and instance bootstrap
+packages/core         shared domain primitives
+packages/db           PostgreSQL schema and migrations
+packages/mcp          MCP tools and schemas
+packages/sdk          generated TypeScript API client
+packages/ui           shared React design system
+runner                complete agent workspace image
+infra/terraform/aws   AWS control-plane reference deployment
 ```
-
-The full topology and design decisions are in the
-[architecture document](apps/docs/docs/reference/architecture.md).
 
 ## Contributing
 
-Bug reports, documentation improvements, and focused feature proposals are
-welcome. Before implementing a substantial change, open an
-[issue](https://github.com/theam/facility/issues) so its behavior and boundaries
-can be agreed on.
+Bug reports, documentation improvements, and focused feature proposals are welcome. Before
+implementing a substantial change, open an [issue](https://github.com/theam/facility/issues) so its
+behavior and boundaries can be agreed on.
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-npm install --global pnpm@11.20.0
+corepack install --global pnpm@11.20.0
 pnpm install --frozen-lockfile
 pnpm verify
 ```
 
-`pnpm verify` is the release-shaped local acceptance command: lint, typecheck,
-output cleanup followed by a cache-disabled build, uncached critical integration
-tests against isolated databases, the remaining uncached tests, guards, and the
-all-severity dependency gate. A clean `docker compose build` is a separate
-required CI job.
-
-The Docker-backed sandbox E2E is a separate acceptance tier. Its required versus
-allowed-skip policy and local command are defined in
+`pnpm verify` runs lint and type checks, a clean cache-disabled build, critical integration tests,
+the remaining uncached tests, repository guards, and the dependency gate. CI separately builds the
+self-host images and applies the Docker-backed workspace E2E policy documented in
 [docs/testing.md](docs/testing.md).
 
-Use a semantic branch name such as `docs/readme` or `fix/gateway-metering`, keep
-the change to one coherent intent, add tests for behavior changes, and include
-the commands you ran in the pull request. Do not weaken an existing test, guard,
-or check to make a change pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-repository-specific rules and test commands. Report vulnerabilities through
-[SECURITY.md](SECURITY.md), not a public issue.
+Use a semantic branch name such as `docs/readme` or `fix/workspace-recovery`, keep the change to one
+coherent intent, add tests for behavior changes, and include the commands you ran in the pull
+request. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [contributor
+documentation](apps/docs/docs/contributors/architecture.md) for the complete workflow. Report
+vulnerabilities through [SECURITY.md](SECURITY.md), not a public issue.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 The Agile
-Monkeys.
+Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 The Agile Monkeys.
 
 ---
 

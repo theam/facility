@@ -1,23 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "../types.js";
-import { registerAdminDoctorRoutes } from "./v1/admin-doctor.js";
-import { registerAgentsSandboxesRoutes } from "./v1/agents-sandboxes.js";
-import { registerAssistantRoutes } from "./v1/assistant.js";
-import { registerCatalogIntegrationsRoutes } from "./v1/catalog-integrations.js";
-import { registerConversationsRoutes } from "./v1/conversations.js";
-import { registerGithubV1Routes } from "./v1/github.js";
-import { registerHitlRoutes } from "./v1/hitl.js";
-import { registerIntegrationRoutes } from "./v1/integrations.js";
-import { registerAnalyticsRoutes, registerIssuesAuditRoutes } from "./v1/issues-audit-analytics.js";
-import { registerKbTasksRoutes } from "./v1/kb-tasks.js";
+import { registerGithubInstallationRoutes } from "./v1/github-installations.js";
+import { registerInsightsPipelineRoutes } from "./v1/insights-pipeline.js";
 import { registerMeMembersRolesRoutes } from "./v1/me-members-roles.js";
-import { registerPreviewRoutes } from "./v1/previews.js";
-import { registerProjectsReposRoutes } from "./v1/projects-repos.js";
-import { registerProvidersBudgetsSpendRoutes } from "./v1/providers-budgets-spend.js";
-import { registerPullRequestLinkRoutes } from "./v1/pull-request-links.js";
-import { registerRegistryRoutes } from "./v1/registry.js";
-import { registerRunsRoutes } from "./v1/runs.js";
+import { registerProjectRoutes } from "./v1/projects.js";
 import { assertProjectInOrg } from "./v1/shared.js";
+import { registerStoryWorkspaceRoutes } from "./v1/story-workspaces.js";
+import { registerWorkspacePreviewRoutes } from "./v1/workspace-previews.js";
 
 export async function registerV1Routes(app: FastifyInstance, config: AppConfig) {
   const db = app.facilityDb;
@@ -30,21 +19,9 @@ export async function registerV1Routes(app: FastifyInstance, config: AppConfig) 
   });
 
   await registerMeMembersRolesRoutes(app, context);
-  await registerProjectsReposRoutes(app, context);
-  await registerRegistryRoutes(app, context);
-  await registerRunsRoutes(app, context);
-  await registerConversationsRoutes(app, context);
-  await registerAssistantRoutes(app, context);
-  await registerGithubV1Routes(app, context);
-  await registerPullRequestLinkRoutes(app, context);
-  await registerProvidersBudgetsSpendRoutes(app, context);
-  await registerPreviewRoutes(app, context);
-  await registerAnalyticsRoutes(app, context);
-  await registerHitlRoutes(app, context);
-  await registerIntegrationRoutes(app, context);
-  await registerIssuesAuditRoutes(app, context);
-  await registerKbTasksRoutes(app, context);
-  await registerAgentsSandboxesRoutes(app, context);
-  await registerCatalogIntegrationsRoutes(app, context);
-  await registerAdminDoctorRoutes(app, context);
+  await registerProjectRoutes(app, context);
+  await registerGithubInstallationRoutes(app, context);
+  await registerInsightsPipelineRoutes(app, context);
+  await registerStoryWorkspaceRoutes(app, config);
+  await registerWorkspacePreviewRoutes(app, config);
 }

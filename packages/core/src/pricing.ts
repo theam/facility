@@ -26,43 +26,34 @@ export type CostInput = {
   cacheWriteTokens?: number;
 };
 
-const MICRO_CENTS_PER_CENT = 1_000_000;
-
-// Common aliases and dated model IDs providers return (e.g.
-// "claude-haiku-4-5-20251001", "gpt-5.5-2025-xx") map to our price keys.
 const MODEL_ALIASES: Record<string, keyof typeof MODEL_PRICES_USD_PER_1M> = {
   "claude-3-5-haiku": "claude-haiku-4-5",
   "gpt-5.6": "gpt-5.6-sol",
 };
 
-/** Resolve a provider model id to a known price key, tolerating date suffixes. */
+/** Resolve aliases and provider date suffixes to a price-book entry. */
 export function normalizeModel(model: string): keyof typeof MODEL_PRICES_USD_PER_1M | null {
   if (model in MODEL_PRICES_USD_PER_1M) {
     return model as keyof typeof MODEL_PRICES_USD_PER_1M;
   }
-  if (model in MODEL_ALIASES) {
-    return MODEL_ALIASES[model] ?? null;
-  }
-  // Strip a trailing -YYYYMMDD or -YYYY-MM-DD date the provider appends.
+  if (model in MODEL_ALIASES) return MODEL_ALIASES[model] ?? null;
   const undated = model.replace(/-\d{8}$/, "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  if (undated in MODEL_PRICES_USD_PER_1M) {
-    return undated as keyof typeof MODEL_PRICES_USD_PER_1M;
-  }
-  return null;
+  return undated in MODEL_PRICES_USD_PER_1M
+    ? (undated as keyof typeof MODEL_PRICES_USD_PER_1M)
+    : null;
 }
 
+/** Calculate cents with six decimal places so low-token turns are not rounded away. */
 export function costCents(input: CostInput): number | null {
   const key = normalizeModel(input.model);
   const price = key ? MODEL_PRICES_USD_PER_1M[key] : undefined;
-  if (!price) {
-    return null;
-  }
+  if (!price) return null;
   const usd =
     (input.inputTokens / 1_000_000) * price.input +
     (input.outputTokens / 1_000_000) * price.output +
     ((input.cacheReadTokens ?? 0) / 1_000_000) * (price.cacheRead ?? 0) +
     ((input.cacheWriteTokens ?? 0) / 1_000_000) * (price.cacheWrite ?? 0);
-  return Math.round(usd * 100 * MICRO_CENTS_PER_CENT) / MICRO_CENTS_PER_CENT;
+  return Math.round(usd * 100_000_000) / 1_000_000;
 }
 
 export function displayCents(cents: number): number {

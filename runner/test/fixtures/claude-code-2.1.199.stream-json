@@ -1,4 +1,0 @@
-{"type":"assistant","message":{"content":[{"type":"text","text":"I will inspect the repo."}]}}
-{"type":"tool_use","name":"Bash","input":{"command":"pnpm test","timeout":120000}}
-{"type":"result","subtype":"success","duration_ms":1234}
-

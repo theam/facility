@@ -1,5 +1,5 @@
 export const DEV_COMPOSE = ["compose", "-f", "docker-compose.dev.yml"];
-export const TEST_DATABASES = ["facility_test", "facility_gw"];
+export const TEST_DATABASES = ["facility_test", "facility_ws"];
 
 export function recreateTestDatabase(name, execute) {
   if (!TEST_DATABASES.includes(name)) {

@@ -6,8 +6,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateReleaseCandidate } from "./release.mjs";
 
-export const BUILD_IMAGES = Object.freeze(["api", "gateway", "mcp", "web", "runner"]);
-export const PUBLISHED_IMAGES = Object.freeze(["api", "worker", "gateway", "web", "mcp", "runner"]);
+export const BUILD_IMAGES = Object.freeze(["api", "web", "runner"]);
+export const PUBLISHED_IMAGES = Object.freeze(["api", "worker", "web", "runner"]);
 export const GITHUB_API_URL = "https://api.github.com/";
 
 const BAKE_AUXILIARY_TARGETS = new Set(["service-packages"]);

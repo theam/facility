@@ -1,18 +1,101 @@
-# Facility Runner
+# Facility workspace runner
 
-The runner boots inside a sandbox container with only `FACILITY_API_URL`, `RUN_ID`, and `RUNNER_TOKEN`.
-It calls `/internal/runs/:id/hello`, fetches the signed bundle URL, writes `/work/contract.md`, mirrors skills into `.claude/skills` and `.agents/skills`, runs provisioning, launches the configured engine, streams run events, runs the platform-owned acceptance gates (`bundle.checkCmds`) and parses the agent's self-reported `.agent-sdlc/checks.jsonl`, and posts the final result. Each completed, failed, or skipped lifecycle phase emits one best-effort `phase` event with a monotonic `duration_ms`; the terminal event's persisted timestamp minus that duration approximates the phase start time because persistence follows the event round trip. When a run has no terminal result, the first missing phase bounds an out-of-process death to during or before it; a clean early failure has a terminal result and legitimately omits later phases. Sandbox allocation and the CodeBuild wrapper happen before the runner process, so measure that interval from the existing `provisioning` and `hello` event timestamps.
+The runner is the complete Linux environment used by persistent story
+workspaces. It is trusted agent compute, not a restricted command sandbox. The
+control plane creates, wakes, inspects, suspends, and replaces its compute while
+the workspace volume retains repositories and native engine state.
 
-On AWS, a sandbox profile may set `setup.nested_docker` to `false` to skip the rootless Docker daemon, restricted proxy, and bind broker. Missing or invalid persisted values retain the legacy Docker-capable boundary; API writes reject non-booleans. Docker-capable runs try `overlay2`, then `fuse-overlayfs`, and use `vfs` only as a degraded fallback. The runner persists the allowlisted choice as a best-effort `sandbox_runtime` event without copying arbitrary environment values.
+## Included capabilities
 
-The AWS driver restores only pnpm's content-addressed store and npm's `_cacache` from a control-plane-selected, per-project S3 prefix. The partition is not exposed as a sandbox environment variable. The wrapper gives restored directories to the untrusted UID before provisioning; it never caches the workspace, configuration, credentials, browser executables, Supabase state, or Docker data.
+The image contains:
 
-A run **succeeds only if the engine exits 0 AND every platform check passes** — a green agent report cannot make a red gate pass. Platform checks emit `check` events with `self_reported: false`, a pass/fail `status`, an `exit_code`, and (on failure) a capped, secret-redacted output tail; the agent's self-reports are flagged `self_reported: true` (the runner forces the flag, so provenance can't be spoofed). Check commands come from the sandbox profile's `setup.check_cmds`, falling back to the project's `settings.check_cmds`.
+- Claude Code and Codex from the locked `runner/agent-clis` package set;
+- Git and GitHub CLI with Facility's installation-token credential helper;
+- Chromium, Xvfb, fonts, and browser runtime libraries;
+- Docker Engine, CLI, Compose, Buildx, containerd, runc, RootlessKit, and
+  rootless networking/storage support;
+- Node.js, npm, Corepack, the repository-pinned pnpm release, Python, native
+  build tools, curl, jq, and ripgrep; and
+- the Facility preview gateway used to expose declared services.
 
-Agent sessions have no Facility turn limit or wall-clock execution limit. They stop only at a manual cancellation or a governed policy boundary such as budget or security enforcement. Provider sandboxes still require finite leases (36 hours on CodeBuild and 5 hours on Vercel), so Facility requests the provider maximum, persists the engine session id as soon as it is observed, and uploads the Claude session plus governed workspace checkpoint every minute. A provider disconnect or lease boundary is therefore a resumable interruption, not a logical end to the work. Manual resume replays the checkpoint onto the current base; clean upstream changes are preserved and three-way conflicts remain in the worktree for the resumed agent to reconcile.
+Go-based container and GitHub tools are rebuilt from checksum-pinned source and
+audited during the image build. Base image and package changes must preserve
+that executable supply-chain check rather than bypassing it.
 
-## Steering
+## Persistent layout
 
-- `byo`: long-polls `/internal/runs/:id/steer`, appends delivered messages to `STEERING.md`, and emits a `steer` run event immediately. The BYO process can read that file.
-- `claude_code`: records steer messages in `STEERING.md` while the current `claude -p` turn runs. A manual resume uses `claude -p --resume <session_id>` together with the latest periodic workspace checkpoint; this runner does not pretend stdin turn injection works for the non-interactive CLI.
-- `codex`: v1 baseline records steer messages in `STEERING.md` and emits audit events. `codex exec --json` is treated as a single non-interactive turn.
+The working directory is `/workspace`. Facility checks repositories out beneath
+`/workspace/repos/<owner>/<repository>`. `HOME` is
+`/workspace/.facility/home`, so Claude Code and Codex session/configuration
+files live on the persistent workspace volume.
+
+Project dependencies, uncommitted files, local commits, Docker project data,
+and artifacts may also live on that volume. Replacing the container must not
+replace the volume.
+
+## Docker isolation
+
+The Docker workspace runtime starts a workspace-scoped daemon during trusted
+bootstrap. Agent and project commands use that daemon. They do not receive the
+Facility host Docker socket, even though the control-plane API and worker need
+host daemon access to manage workspace resources.
+
+Avoid adding a host-socket mount to repository Compose examples or runner
+entrypoints. A project can run privileged software inside its trusted workspace
+without becoming an administrator of every Facility workspace on the host.
+
+## Targets
+
+- `runner` is the default Docker workspace image and runs normal commands as
+  the `node` user.
+- `vercel-runner` leaves Vercel's trusted initialization path as root; Facility
+  runs agent commands as `node` after initialization.
+
+The default command sleeps because lifecycle and agent commands arrive through
+the workspace provider. The image is not the Facility API or worker image.
+
+## Build and inspect
+
+From the repository root:
+
+```bash
+docker build -f runner/Dockerfile -t facility-runner:dev .
+docker run --rm facility-runner:dev sh -lc \
+  'node --version && claude --version && codex --version && gh --version && docker compose version'
+```
+
+The second command checks client availability; nested Docker acceptance needs
+the Facility Docker workspace E2E because daemon bootstrap, volumes, network,
+preview, and compute replacement are runtime responsibilities.
+
+## Verification
+
+Run:
+
+```bash
+FACILITY_E2E_DOCKER=1 \
+FACILITY_WORKSPACE_TEST_IMAGE=facility-runner:dev \
+pnpm test:e2e-workspace
+```
+
+The full command and database requirements are in `docs/testing.md`. Runner
+changes also require `pnpm verify`, a successful image build for each supported
+target architecture, and vulnerability review using the repository scanner
+configuration.
+
+## Updating tools
+
+Update one coherent toolchain at a time. Pin image digests, source commits,
+archive checksums, package locks, and executable version assertions together.
+Retain the final-image size and Vercel layer constraints documented in the
+Dockerfile comments.
+
+After an engine CLI update, verify fresh and resumed Claude Code and Codex
+sessions. After a Docker tool update, verify Compose, Buildx, nested daemon
+startup, compute replacement, and volume persistence. After Chromium or font
+changes, run browser tests and inspect screenshots rather than relying on the
+binary version alone.
+
+Do not put engine tokens, GitHub credentials, project secrets, or provider
+configuration into the image. Facility injects short-lived and project-scoped
+values when preparing a story.

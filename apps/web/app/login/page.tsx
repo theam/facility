@@ -1,8 +1,7 @@
-"use client";
-
 import { ButtonLink } from "@facility/ui";
 
 export default function LoginPage() {
+  const localDevelopment = process.env.NODE_ENV !== "production";
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-10 px-6">
       <div className="flex flex-col gap-3">
@@ -10,13 +9,17 @@ export default function LoginPage() {
           facility<span className="text-(--accent)">.</span>
         </span>
         <p className="text-sm leading-relaxed text-(--mut)">
-          Agents build. People decide twice. Everything gets measured.
+          One persistent workspace and shared agent conversation for every story.
         </p>
       </div>
 
       <div className="flex flex-col gap-6">
-        <ButtonLink href="/api/auth/login" variant="primary" size="lg">
-          continue with GitHub
+        <ButtonLink
+          href={localDevelopment ? "/api/auth/dev-login" : "/api/auth/login"}
+          variant="primary"
+          size="lg"
+        >
+          {localDevelopment ? "continue locally" : "continue with GitHub"}
         </ButtonLink>
       </div>
 

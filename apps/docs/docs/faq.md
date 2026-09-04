@@ -2,91 +2,92 @@
 title: FAQ
 ---
 
-# FAQ
+# Frequently asked questions
 
-## GitHub already lets me assign issues to Claude, Codex, or Copilot. Why this?
+## What is Facility?
 
-Agent HQ answers "how do I run an agent on an issue". Facility answers what
-hits you the week after: the agent ships plans instead of code because it
-cannot verify anything; PRs merge on vibes because the review step has no
-standard to enforce; nobody wrote down who approves what. Facility is the
-method layer — provisioned verification, a binding standard, deterministic
-guards, human-owned transitions. It rides on top of whatever execution
-substrate wins; today that's `claude-code-action`, and the engine seam in
-`.facility.json` exists so it doesn't have to stay the only one.
+Facility is an AI SDLC system for running coding agents inside a reviewable software delivery
+process. It joins persistent story workspaces with human steering and review, repository gates,
+GitHub delivery state, costs, audit history, observability, and operational evidence.
 
-## How is this different from GitHub Agentic Workflows (gh-aw)?
+## How do humans, gates, and evidence fit into the workflow?
 
-gh-aw is a compiler: Markdown in, hardened workflow out. It is mechanism, and
-good mechanism. It has no opinion about *what* your SDLC should be — roles,
-board semantics, quality contracts, the verification ladder, what humans must
-own. Facility is those opinions, packaged. If gh-aw becomes the best way to
-execute them, Facility should compile to it rather than compete with it.
+Humans steer work, inspect previews and pull requests, and control repository merge policy. Branch
+protection, required CI, and reviews provide structural gates. Conversations, turns, Git state,
+pull requests, CI, costs, audits, previews, and lifecycle events provide reviewable evidence in the
+story timeline.
 
-## Why does everything get vendored into my repo?
+## Is a workspace deleted after merge?
 
-Because your SDLC configuration should not have a runtime dependency on us.
-After `init`, every file is yours: readable in your repo, reviewable in your
-PRs, editable without forking anything. The CLI is an installer, not a
-framework. The cost is that updates are not automatic — `facility update` is
-on the roadmap, and the `.facility.json` manifest exists so it can diff what
-you have against what's current.
+No. Merge marks the story done and may suspend compute. The worktree, volume, conversation, and
+Claude or Codex session files remain. Only `facility_delete_workspace` or the corresponding UI
+control destroys them.
 
-## Why can't the agents merge? They wrote the code and the checks pass.
+## Are agents sandboxed differently by role?
 
-Because the merge is where accountability lives. The crew makes the work
-cheap; it does not make the judgment optional. The day an agent-authored
-change breaks production, "a human read it and signed off" is the difference
-between an incident and a crisis of the whole approach. Protect your default
-branch so this is enforced by GitHub, not by trust in a prompt.
+No. Every agent receives the same full workspace and GitHub installation access. Role-specific
+restraint belongs in its prompt. Tenant and project isolation still apply.
 
-## What does it cost to run?
+## Where are agents configured?
 
-Each crew invocation is a GitHub Actions job (most of it: your provision
-command) plus Claude usage under your subscription via the OAuth token.
-The review workflow caps at 20 turns; crew runs are bounded by the job
-timeout. The real cost driver is invoking /builder before the plan is good —
-which is exactly what the /architect column is for.
+Only in `.agents/*.md`. Each manifest contains the name, engine, model, options, triggers, and
+prompt. The database stores a cache tied to the source commit, not an editable second definition.
 
-## My tests need API keys. Where do they go?
+## Do scheduled agents still exist?
 
-In the `facility-crew` GitHub Environment, as dedicated TEST-tier keys with
-spend caps — never production keys. An unset secret resolves to empty and
-simply disables that integration's tests. The agent runs on an ephemeral
-runner with `bypassPermissions`; treat every key you give it as exposed to
-the code in your repo.
+Yes. A schedule in an agent manifest creates or resumes a stable scheduled story. GitHub events and
+manual requests use the same dispatcher.
 
-## Does this work for non-Node projects?
+## Is a preview another deployment?
 
-Yes. The CLI and the vendored guards need Node on the runner (present on all
-GitHub-hosted runners) — your project doesn't. `init` detects pnpm/yarn/npm
-and otherwise leaves a marked slot for your toolchain steps. The provision
-command is yours: `make db`, `docker compose up -d`, `mix ecto.setup`.
+No. Facility authenticates a short-lived session and proxies the declared port from the live
+workspace, including WebSockets.
 
-## Can I use my existing AGENTS.md / CLAUDE.md / .claude setup?
+## Are Vercel Sandbox compute sessions permanent?
 
-Yes. `init` never overwrites: it appends a managed block to existing
-AGENTS.md/CLAUDE.md, skips an existing `.claude/settings.json`, and leaves
-any file it finds in place (`--force` to override). `facility doctor` tells
-you what state you're in.
+No. Provider compute has a finite lease. Facility creates a named persistent sandbox with
+non-expiring retained snapshots, stops or replaces compute, and resumes the same workspace state.
+Persistence still depends on the provider resource and snapshot, so operators must monitor and back
+them up according to their recovery policy.
 
-## What is the watchtower, in one paragraph?
+## Does a project budget delete or stop a workspace?
 
-The layer that answers "is any of this actually working?" with numbers
-instead of vibes: nightly agent-PR outcomes (human squash-merge acceptance,
-assessment coverage, issue-to-merge lead time, one-shot rate, human fixups)
-published in the Actions run and its immutable artifact (plus an optional JSON
-sink), a daily health monitor with per-workflow budgets that goes red on
-breach, and a weekly canary that flies a synthetic `/architect` probe through
-the real pipeline. Repository-lane instruments read the GitHub API rather than
-self-reported telemetry, and their guard checks the required cron entries and
-pinned canary hash. Full design: [the watchtower](concepts/watchtower.md).
+No. A budget is checked before a provider call. A call already running may finish and be accounted
+afterwards; later turns are blocked once the monthly limit is reached. The worktree, conversation,
+and engine sessions remain. Unknown model pricing is rejected while budget enforcement is enabled,
+and unavailable workspace pricing is not reported as zero.
 
-## Why "facility"?
+## How does Facility cover cost, observability, analytics, and delivery pipelines?
 
-*"This is our software factory."* A facility is where units of work enter as
-signals and leave as shipped, inspected, signed-off software: the architect
-plans, the builder makes the change, every change gets its own world, the
-work survives the gauntlet, the watchtower keeps score — and a person opens
-both gates. The name is the place, because the point was never one agent; it
-is the whole floor.
+Facility stores turn usage and cost, monthly project budgets, audit and observability records,
+product summaries, and a webhook-plus-reconciliation mirror of GitHub issues, pull requests,
+checks, and workflows. The API, worker, and PostgreSQL provide these functions.
+
+## Is MCP the only interface?
+
+No. MCP is the primary automation interface. The web UI uses the same story, agent, environment,
+preview, lifecycle, budget, and pipeline services and can inspect and continue the shared
+conversation.
+
+## How do I configure an existing repository?
+
+Add the small [project manifest](reference/project-manifest.md) and [agent
+catalog](reference/agent-manifest.md), or use [kickstart](guides/kickstart.md) to open that change as
+a pull request. Validate it with a disposable story before connecting important work.
+
+## Where should I start when something fails?
+
+Use the [troubleshooting guide](guides/troubleshooting.md) to separate control-plane, workspace,
+environment, engine, preview, GitHub, and cost failures. Keep the request, story, turn, workspace,
+delivery, and provider identifiers together when inspecting logs.
+
+## How can I work on Facility?
+
+Read [Contributing](https://github.com/theam/facility/blob/main/CONTRIBUTING.md), then use the
+[contributor architecture](contributors/architecture.md), [testing](contributors/testing.md), and
+[documentation](contributors/documentation.md) guides. Public contributions must avoid private
+repository, deployment, and customer details.
+
+## Can I upgrade a 0.11 database?
+
+Not in place. Back it up and start 0.12 with an empty database. See [the upgrade boundary](reference/upgrade-012.md).

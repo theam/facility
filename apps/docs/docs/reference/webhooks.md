@@ -2,91 +2,86 @@
 title: Webhooks
 ---
 
-# Integration webhooks
+# GitHub webhooks
 
-Facility both receives events from other systems and emits its own. Both
-directions use the same four headers and the same signing formula, so one
-verification routine covers them. The summary lives in the
-[control-plane API reference](api.md); this page is the wire contract you
-implement against.
+GitHub webhooks keep Facility's delivery mirror current and can activate repository-defined
+agents. Configure one webhook secret per Facility GitHub App and send deliveries to the public API
+origin, never the preview origin.
 
-Create `generic_inbound` integrations for events entering Facility and
-`webhook` integrations for Facility events leaving it. The plaintext signing
-secret is returned only when the integration is created or rotated.
+## Required request
 
-Inbound requests use `POST /webhooks/inbound/:integrationId`, an unmodified JSON
-body, and these required headers:
+Send GitHub App deliveries to `POST /webhooks/github`. Facility requires
+`X-Hub-Signature-256`, `X-GitHub-Delivery`, `X-GitHub-Event`, and an installation id in the JSON
+payload.
 
-```text
-X-Facility-Timestamp: <10-digit Unix seconds>
-X-Facility-Delivery: <sender-unique delivery id>
-X-Facility-Event: <event type>
-X-Facility-Signature: sha256=<hex HMAC-SHA256>
-```
+The content type should be `application/json`. The signature is GitHub's SHA-256 HMAC over the exact
+raw request body using `GITHUB_APP_WEBHOOK_SECRET`. A proxy must not rewrite the body before it
+reaches Facility.
 
-Compute the HMAC over this exact byte sequence, where `body` is the exact body
-sent on the wire:
+## Verification and deduplication
 
-```text
-timestamp + "." + deliveryId + "." + eventType + "." + body
-```
+The body is authenticated before parsing. The installation resolves the organization; unknown or
+suspended installations are ignored without guessing a tenant. Delivery ids are deduplicated per
+installation. Replays return success and do not queue another turn.
 
-Facility rejects signatures outside a five-minute clock-skew window. A valid
-delivery is deduplicated per integration and delivery id; a repeat returns
-`202 {"ok":true,"replayed":true}` without processing twice.
+Returning success for an ignored unknown or duplicate delivery prevents GitHub from retrying an
+event that Facility cannot safely attribute. Inspect the webhook and worker logs when an expected
+activation is absent; do not infer that every 2xx response created a turn.
 
-For lifecycle telemetry, send the stable `facility.signal.v1` envelope. The
-provider-specific identifier stays in `source`; Facility routes only the typed
-outcome and never requires a particular deployment or monitoring vendor:
+## Supported events and triggers
 
-```json
-{
-  "schema": "facility.signal.v1",
-  "type": "deployment",
-  "status": "failed",
-  "source": "my-deployer",
-  "fingerprint": "deployment:acme/app:production",
-  "title": "Production deployment failed",
-  "bodyMd": "Release 4f9c did not become ready.",
-  "projectId": "proj_…",
-  "severity": "error",
-  "metadata": { "commit": "4f9c…", "environment": "production" }
-}
-```
+Supported agent events are Issues, Issue comment, Pull request, Pull request review, Check suite,
+and completed Workflow run. Matching happens against triggers in the primary repository's
+`.agents/` catalog. A merged pull request marks the linked story done and suspends compute without
+destroying durable state.
 
-`type` is `issue`, `deployment`, `security`, or `check`; `status` is `failed`,
-`recovered`, `pending`, or `succeeded`. Failed signals open or update one
-fingerprinted issue, recovered/succeeded signals resolve it, and pending
-signals are recorded without claiming failure. GitHub deployment-status and
-check-run webhooks are adapted into this same contract.
+The GitHub trigger `event` must match one of those event names, and optional `actions` and `labels`
+must match the payload. The manifest must be enabled at the current primary-repository commit.
+Facility records the trigger identity and manifest snapshot on the resulting turn.
 
-Keep `fingerprint` stable across every status update for the same lifecycle
-condition. In particular, a recovery must use the fingerprint from the failed
-signal so Facility can resolve the existing issue instead of addressing a
-different one.
+Delivery deduplication and story message deduplication are separate. A repeated GitHub delivery id
+is ignored; distinct deliveries that represent the same logical event are also constrained by the
+stable trigger/story identity before dispatch.
 
-A project-scoped integration always routes to its configured project. You may
-omit `projectId` or repeat that project, but naming another project is rejected
-with `generic_inbound_project_scope_mismatch`. An organization-scoped
-integration may select a project in its organization through its configuration
-or payload. A fingerprint already owned by another project is rejected with
-`generic_inbound_fingerprint_scope_mismatch` rather than mutating that issue.
+## Delivery mirror
 
-Outbound webhook integrations receive the same four headers and signing
-formula. Supported events are `run.finished` and `proposal.decided`; set
-`config.events` to an array to subscribe to a subset, or omit it for both.
+Push, create, delete, issue, pull request, pull request review, workflow run, check suite, and check
+run deliveries update the project mirror where applicable. CI state attaches to the matching pull
+request only when the event's head SHA is current. The worker reconciles every connected repository
+every ten minutes, and maintainers can request an immediate sync through MCP, API, or the Pipeline
+page.
 
-Receivers must compute the HMAC from the exact raw request bytes before parsing
-or re-serializing JSON, compare the expected and supplied signatures in
-constant time, and reject stale timestamps. Persist `X-Facility-Delivery` as
-the stable idempotency key and suppress duplicates before performing side
-effects; the id stays the same across delivery attempts even though a retry's
-timestamp and signature can change.
+The mirror is a local operating view, not a replacement for GitHub. Issue, branch, pull-request,
+review, and check records retain GitHub identity and current state. Check suites and workflow runs
+attach to the pull request whose current head SHA matches the event, preventing stale CI from being
+shown as the present result. Reconciliation discovers matching changes that happened outside
+Facility and records them on the story timeline without attributing them to an agent turn unless
+the final SHA proves that relationship.
 
-Delivery is at least once. A durable outbox claims with row locks, recovers
-five-minute-stale claims, times out requests after ten seconds, follows no
-redirects, and retries network errors plus HTTP 408/425/429/5xx up to eight
-attempts. Backoff begins at 30 seconds, honors bounded `Retry-After`, and caps at
-24 hours. Other non-2xx responses become dead immediately. Operators can list
-deliveries, inspect the last status/error, and retry `failed` or `dead` entries
-through CLI/API.
+## App subscriptions
+
+Subscribe the GitHub App to:
+
+- Issues
+- Issue comment
+- Pull request
+- Pull request review
+- Push
+- Create
+- Delete
+- Workflow run
+- Check suite
+- Check run
+
+Adding a manifest for an event that the App does not subscribe to cannot activate the agent. After
+changing subscriptions or repository access, send a test delivery and request an immediate sync.
+
+## Operational checks
+
+For a missing activation, compare the GitHub delivery page with Facility API and worker logs using
+the delivery id. Verify the request reached the API, the HMAC matched, the installation is active,
+the project connects the repository, the manifest contains a matching trigger, and no equivalent
+message or turn already exists.
+
+Do not replay a delivery with an edited body under its old signature or delivery id. Use GitHub's
+redelivery feature so the signature and request metadata remain coherent.

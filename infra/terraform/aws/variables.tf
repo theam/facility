@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "AWS region for the reference deployment."
+  description = "AWS region for the Facility control plane."
   type        = string
   default     = "us-east-1"
 }
@@ -7,236 +7,154 @@ variable "aws_region" {
 variable "environment" {
   description = "Environment name used in resource names and tags."
   type        = string
-  default     = "playground"
-}
-
-variable "project" {
-  description = "Short project name used in resource names and tags."
-  type        = string
-  default     = "facility"
-}
-
-variable "sandbox_driver" {
-  description = "Sandbox compute provider. Use vercel for the production path; aws remains available as the CodeBuild/Fargate development provider."
-  type        = string
-  default     = "aws"
-
-  validation {
-    condition     = contains(["aws", "vercel"], var.sandbox_driver)
-    error_message = "sandbox_driver must be aws or vercel for the AWS-hosted control plane."
-  }
-}
-
-variable "vercel_team_id" {
-  description = "Vercel team id that owns Sandboxes when sandbox_driver is vercel."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.sandbox_driver != "vercel" || trimspace(var.vercel_team_id) != ""
-    error_message = "vercel_team_id is required when sandbox_driver is vercel."
-  }
-}
-
-variable "vercel_project_id" {
-  description = "Vercel project id that owns Sandboxes and its project-scoped VCR images."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.sandbox_driver != "vercel" || trimspace(var.vercel_project_id) != ""
-    error_message = "vercel_project_id is required when sandbox_driver is vercel."
-  }
-}
-
-variable "vercel_runner_image" {
-  description = "Vercel Container Registry image used by platform-lane sandboxes."
-  type        = string
-  default     = "facility-runner:latest"
-
-  validation {
-    condition     = var.sandbox_driver != "vercel" || trimspace(var.vercel_runner_image) != ""
-    error_message = "vercel_runner_image is required when sandbox_driver is vercel."
-  }
-}
-
-variable "allowed_http_cidr_blocks" {
-  description = "CIDR blocks allowed to reach the public ALB."
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = "production"
 }
 
 variable "vpc_cidr" {
-  description = "CIDR block for the VPC."
+  description = "CIDR block for the Facility VPC."
   type        = string
   default     = "10.61.0.0/16"
 }
 
 variable "app_hostname" {
-  description = "Public hostname for the Next.js web app."
+  description = "Public hostname shared by the web UI, API, webhooks, and MCP endpoint."
   type        = string
-}
 
-variable "api_hostname" {
-  description = "Public hostname for the Fastify API."
-  type        = string
-}
-
-variable "mcp_hostname" {
-  description = "Public hostname for the Facility MCP resource server."
-  type        = string
+  validation {
+    condition     = can(regex("^[A-Za-z0-9.-]+$", var.app_hostname))
+    error_message = "app_hostname must be a hostname, not a URL."
+  }
 }
 
 variable "preview_hostname" {
-  description = "Optional custom hostname for untrusted preview content. Empty uses an AWS-managed, cookie-isolated CloudFront origin."
+  description = "Separate public hostname used only for authenticated workspace previews."
   type        = string
-  default     = ""
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9.-]+$", var.preview_hostname)) && var.preview_hostname != var.app_hostname
+    error_message = "preview_hostname must be a hostname on a different registered site from app_hostname."
+  }
 }
 
 variable "route53_zone_id" {
-  description = "Optional Route53 hosted zone ID. When set, app/api alias records are created."
+  description = "Optional Route53 hosted zone id for app_hostname."
   type        = string
   default     = ""
 }
 
 variable "preview_route53_zone_id" {
-  description = "Optional Route53 hosted zone ID for preview_hostname. Keep this separate from the control-plane zone."
+  description = "Optional Route53 hosted zone id for preview_hostname. This is normally a different zone from route53_zone_id."
   type        = string
   default     = ""
 }
 
 variable "acm_certificate_arn" {
-  description = "Optional ACM certificate ARN for HTTPS listeners on the ALB."
+  description = "ACM certificate covering app_hostname and preview_hostname."
   type        = string
-  default     = ""
-}
 
-variable "enable_cloudfront_api_endpoint" {
-  description = "Expose the API through an AWS-managed CloudFront HTTPS hostname when no public DNS zone is available."
-  type        = bool
-  default     = false
-}
-
-variable "auth_identity_provider" {
-  description = "Upstream human identity mode: github for direct self-hosted OAuth, oidc for the commercial broker."
-  type        = string
-  default     = "github"
   validation {
-    condition     = contains(["github", "oidc"], var.auth_identity_provider)
-    error_message = "auth_identity_provider must be github or oidc."
+    condition     = can(regex("^arn:aws[a-z-]*:acm:", var.acm_certificate_arn))
+    error_message = "acm_certificate_arn must be an ACM certificate ARN."
+  }
+}
+
+variable "allowed_http_cidr_blocks" {
+  description = "CIDR blocks allowed to reach the public load balancer."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "image_tag" {
+  description = "Immutable release tag pushed to the module-owned API and web ECR repositories."
+  type        = string
+  default     = "bootstrap"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$", var.image_tag))
+    error_message = "image_tag must be a valid non-empty container tag."
+  }
+}
+
+variable "workspace_image" {
+  description = "Runner image visible to Vercel Sandbox."
+  type        = string
+
+  validation {
+    condition     = trimspace(var.workspace_image) != ""
+    error_message = "workspace_image is required."
+  }
+}
+
+variable "vercel_team_id" {
+  description = "Vercel team that owns Facility workspaces."
+  type        = string
+
+  validation {
+    condition     = trimspace(var.vercel_team_id) != ""
+    error_message = "vercel_team_id is required."
+  }
+}
+
+variable "vercel_project_id" {
+  description = "Vercel project that owns Facility workspaces."
+  type        = string
+
+  validation {
+    condition     = trimspace(var.vercel_project_id) != ""
+    error_message = "vercel_project_id is required."
+  }
+}
+
+variable "facility_instance_id" {
+  description = "Stable identifier for this Facility installation."
+  type        = string
+
+  validation {
+    condition     = trimspace(var.facility_instance_id) != ""
+    error_message = "facility_instance_id is required."
   }
 }
 
 variable "github_oauth_allowed_organization" {
-  description = "Optional GitHub organization login whose active members may authenticate in direct GitHub mode. Empty preserves the default invitation and installation checks."
-  type        = string
-  default     = ""
-  validation {
-    condition     = trimspace(var.github_oauth_allowed_organization) == "" || can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", trimspace(var.github_oauth_allowed_organization)))
-    error_message = "github_oauth_allowed_organization must be empty or a GitHub organization login, not a URL."
-  }
-}
-
-variable "oidc_issuer" {
-  description = "Commercial identity broker issuer when auth_identity_provider is oidc."
+  description = "Optional GitHub organization whose members may authenticate."
   type        = string
   default     = ""
 }
 
-variable "facility_instance_id" {
-  description = "Stable SaaS instance identifier required by the commercial OIDC broker."
-  type        = string
-  default     = ""
-}
-
-variable "enable_dev_provider_fallback" {
-  description = "Inject DEV_ANTHROPIC_API_KEY and DEV_OPENAI_API_KEY into the gateway. Keep false for production."
-  type        = bool
-  default     = false
-}
-
-variable "enable_package_registry_token" {
-  description = "Inject the optional private package registry token into the trusted API for scoped runner handoff. Populate the secret before enabling."
-  type        = bool
-  default     = false
-}
-
-variable "database_name" {
-  description = "Initial RDS database name."
-  type        = string
-  default     = "facility"
-}
-
-variable "database_username" {
-  description = "RDS master username. The password is AWS-managed in Secrets Manager."
-  type        = string
-  default     = "facility"
-}
-
-variable "database_instance_class" {
-  description = "RDS instance class."
-  type        = string
-  default     = "db.t4g.micro"
-}
-
-variable "database_allocated_storage_gb" {
-  description = "Allocated RDS storage in GiB."
-  type        = number
-  default     = 20
-}
-
-variable "database_backup_retention_days" {
-  description = "RDS backup retention in days."
-  type        = number
-  default     = 7
-}
-
-variable "enable_deletion_protection" {
-  description = "Enable deletion protection on persistent resources."
-  type        = bool
-  default     = true
-}
-
-variable "force_destroy_bucket" {
-  description = "Allow Terraform to destroy the object bucket even when it contains objects. Keep false for production."
-  type        = bool
-  default     = false
-}
-
-variable "enable_ecr_enhanced_scanning" {
-  description = "Manage the account-and-region ECR registry scan type with Amazon Inspector and scan only this Facility repository prefix on push. This is a paid, registry-wide setting; enable it only when this stack owns the registry scanning policy."
-  type        = bool
-  default     = false
-}
-
-variable "container_image_tags" {
-  description = "Image tags used when image_overrides does not provide a full image URI. The worker tag is retained for tfvars compatibility; the AWS fallback runs worker from the API image."
-  type = object({
-    api     = string
-    worker  = string
-    gateway = string
-    web     = string
-    mcp     = string
-    runner  = string
-  })
-  default = {
-    api     = "latest"
-    worker  = "latest"
-    gateway = "latest"
-    web     = "latest"
-    mcp     = "latest"
-    runner  = "latest"
-  }
-}
-
-variable "image_overrides" {
-  description = "Advanced full image template overrides keyed by api, worker, gateway, web, mcp, or runner. The automated AWS release path replaces service images from its ECR-only manifest; use runner to pin the Terraform-owned CodeBuild image."
+variable "project_secret_arns" {
+  description = "Additional engine/project environment variables mapped to Secrets Manager ARNs."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition = alltrue([
+      for name, arn in var.project_secret_arns :
+      can(regex("^FACILITY_PROJECT_[A-Z0-9_]+$", name)) && can(regex("^arn:aws[a-z-]*:secretsmanager:", arn))
+    ])
+    error_message = "Project secret names must use FACILITY_PROJECT_<PROJECT_ID>_<NAME> and values must be Secrets Manager ARNs."
+  }
+}
+
+variable "api_desired_count" {
+  description = "Desired number of API tasks. Keep zero until image_tag has been pushed."
+  type        = number
+  default     = 0
+}
+
+variable "worker_desired_count" {
+  description = "Desired number of worker tasks. Keep zero until image_tag has been pushed."
+  type        = number
+  default     = 0
+}
+
+variable "web_desired_count" {
+  description = "Desired number of web tasks. Keep zero until image_tag has been pushed."
+  type        = number
+  default     = 0
 }
 
 variable "task_cpu_architecture" {
-  description = "CPU architecture for ECS tasks. Images must be built for the matching platform."
+  description = "CPU architecture used by the API and web images."
   type        = string
   default     = "X86_64"
 
@@ -246,93 +164,32 @@ variable "task_cpu_architecture" {
   }
 }
 
-variable "api_desired_count" {
-  description = "Desired ECS task count for the API service."
+variable "database_instance_class" {
+  description = "RDS PostgreSQL instance class."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "database_allocated_storage_gb" {
+  description = "Initial RDS storage allocation in GiB."
   type        = number
-  default     = 2
+  default     = 20
 }
 
-variable "worker_desired_count" {
-  description = "Desired ECS task count for the worker service."
+variable "database_backup_retention_days" {
+  description = "RDS automated backup retention."
   type        = number
-  default     = 1
+  default     = 7
 }
 
-variable "gateway_desired_count" {
-  description = "Desired ECS task count for the internal gateway service."
+variable "enable_deletion_protection" {
+  description = "Protect the ALB and RDS instance from accidental deletion."
+  type        = bool
+  default     = true
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch log retention for API, worker, web, and migration tasks."
   type        = number
-  default     = 2
-}
-
-variable "web_desired_count" {
-  description = "Desired ECS task count for the web service."
-  type        = number
-  default     = 2
-}
-
-variable "mcp_desired_count" {
-  description = "Desired ECS task count for the public MCP service."
-  type        = number
-  default     = 2
-}
-
-variable "target_deregistration_delay_seconds" {
-  description = "Seconds ALB target groups wait for in-flight requests before completing an ECS rollout. Keep the 300-second default for normal production traffic; validation stacks may use a shorter value."
-  type        = number
-  default     = 300
-
-  validation {
-    condition     = var.target_deregistration_delay_seconds >= 0 && var.target_deregistration_delay_seconds <= 3600
-    error_message = "target_deregistration_delay_seconds must be between 0 and 3600."
-  }
-}
-
-variable "task_cpu" {
-  description = "Per-service Fargate CPU units."
-  type = object({
-    api     = number
-    worker  = number
-    gateway = number
-    web     = number
-    mcp     = number
-    runner  = number
-    migrate = number
-  })
-  default = {
-    api     = 512
-    worker  = 512
-    gateway = 512
-    web     = 512
-    mcp     = 256
-    runner  = 1024
-    migrate = 512
-  }
-}
-
-variable "task_memory" {
-  description = "Per-service Fargate memory in MiB."
-  type = object({
-    api     = number
-    worker  = number
-    gateway = number
-    web     = number
-    mcp     = number
-    runner  = number
-    migrate = number
-  })
-  default = {
-    api     = 1024
-    worker  = 1024
-    gateway = 1024
-    web     = 1024
-    mcp     = 512
-    runner  = 2048
-    migrate = 1024
-  }
-}
-
-variable "envelope_retention_days" {
-  type        = number
-  default     = 90
-  description = "Days to retain stored LLM request/response envelopes (the objects bucket `envelopes/` prefix) before S3 expires them — bounds raw-body retention for privacy/compliance while preserving recent data-mining."
+  default     = 30
 }

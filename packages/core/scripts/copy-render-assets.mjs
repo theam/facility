@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = join(packageRoot, "../..");
 const destinationRoot = join(packageRoot, "dist/render-assets");
-const assetDirectories = ["packages/cli/templates", "packages/cli/modules"];
+const assetDirectories = ["packages/cli/templates/agents"];
 
 mkdirSync(destinationRoot, { recursive: true });
 for (const relativePath of assetDirectories) {
@@ -16,7 +16,7 @@ for (const relativePath of assetDirectories) {
   cpSync(source, join(destinationRoot, relativePath), { recursive: true, force: true });
 }
 
-const canary = "packages/cli/templates/watchtower/canary.mjs";
-if (!existsSync(join(destinationRoot, canary))) {
-  throw new Error(`Required render asset was not packaged: ${canary}`);
+const builder = "packages/cli/templates/agents/builder.md";
+if (!existsSync(join(destinationRoot, builder))) {
+  throw new Error(`Required render asset was not packaged: ${builder}`);
 }

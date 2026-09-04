@@ -2,130 +2,146 @@
 title: API
 ---
 
-# Control-plane API
+# HTTP API
 
-REST, OpenAPI-described, permission-gated per route. In development the
-interactive reference lives at `http://localhost:4400/docs`; the machine
-spec is generated into `packages/sdk/openapi.json` and the typed TypeScript
-client is `@facility/sdk`. The SDK is currently a private workspace package,
-not an npm distribution; the examples below run inside this monorepo. External
-clients can generate from the committed OpenAPI document until SDK distribution.
+The interactive OpenAPI document is served from `/docs` by the API process. It is the authoritative
+source for request bodies, response schemas, operation ids, and current status codes. This page
+maps the supported resources and cross-cutting behavior.
 
-## Authentication
+## Public and protocol endpoints
 
-- **Session cookie** — browser sign-in backed by a verified GitHub identity.
-- **API key** — `Authorization: Bearer fak_…`, issued with
-  `facility keys issue` or `POST /v1/keys`; each key binds a role, so RBAC is identical for
-  humans and machines. Use a project-scoped key wherever possible.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Process and database liveness; returns 503 when the database is down. |
+| `GET /readyz` | Readiness probe with the same version and database status shape. |
+| `POST /webhooks/github` | Signed GitHub App delivery ingress. |
+| `POST /mcp` | Streamable HTTP MCP endpoint. |
+| `GET /.well-known/oauth-protected-resource/mcp` | MCP protected-resource discovery. |
+| `/auth/*` | Web login, callback, logout, and loopback-only development login. |
+| `/oauth/*` | Facility's MCP authorization server when interactive OAuth is configured. |
 
-## Conventions
+The preview origin also reaches the API process, but it accepts only preview routes. Facility
+rejects attempts to use that origin as another control-plane host.
 
-- Base path `/v1`. JSON is the default representation. Run transcripts are
-  `application/x-ndjson`; live run streams are `text/event-stream`.
-- Errors: `{ "error": { "code", "message", "details?" } }` with meaningful
-  status codes; `403` includes the permission you lacked. Signed webhook
-  endpoints intentionally answer invalid signatures with only `{ "ok": false }`
-  to avoid exposing authentication diagnostics to an unauthenticated sender.
-- Privileged v1 mutations (protected, non-GET routes that declare an audit action)
-  are recorded in the append-only, hash-chained audit log on success; verify the
-  org's chain with `GET /v1/audit/verify`. Webhook deliveries and run-lifecycle
-  events are captured separately in their own event logs (`inbound_events`,
-  `run_events`) — durable evidence, but not part of the audit hash chain.
-- Streams (run events) are SSE: `GET /v1/runs/:id/stream`.
-- Growing list routes use bounded `limit`/`offset` or cursor pagination. Run
-  event reads support `afterSeq` and a true `tail`; SSE resumes through
-  `Last-Event-ID` or `afterSeq`.
-- Creation routes that advertise `Idempotency-Key` accept 8–200 characters.
-  The same principal/method/path/key and body replays the stored response for
-  24 hours; a changed body is a `409 idempotency_key_reused`. An active first
-  request returns `409 idempotency_in_progress` with `Retry-After`; pending
-  claims older than 15 minutes may be reclaimed after a crashed request.
+## Organization and access
 
-## Resource map
+- `/v1/me` returns the resolved principal and effective membership.
+- `/v1/org` reads or updates organization settings.
+- `/v1/members` and `/v1/members/:userId` manage membership.
+- `/v1/roles` and `/v1/roles/:roleId` manage roles.
+- `/v1/keys` and `/v1/keys/:keyId` create, list, and revoke API keys.
 
-The committed contract currently contains 138 `/v1` operations. Its domains are:
+Organization-administration endpoints reject project-scoped keys. Key plaintext is returned only
+at creation; store it as a secret.
 
-- identity and policy: `/me`, `/org`, `/members`, `/roles`, `/keys`;
-- project delivery: `/projects`, repositories, GitHub App discovery and issue
-  sync/trigger, project health, kickstart, upgrade, and outcomes;
-- agent work: agents and status, sessions/runs, durable transcripts, exact-SHA
-  pull-request delivery inspection/retry, interrupt, resume, live events, and
-  conversations;
-- knowledge and governance: KB, tasks, registry, action types, proposals, inbox,
-  operational issues, and the audit chain;
-- infrastructure and cost: providers, virtual keys, budgets, spend, raw LLM
-  envelopes, analytics, sandbox profiles, and the capability catalog;
-- integrations: signed inbound events, outbound webhooks, inbound event history,
-  delivery history, secret rotation, and manual delivery retry.
+## GitHub installations and projects
 
-`/health`, `/readyz`, browser authentication, `/webhooks/github`, and
-`/webhooks/inbound/:integrationId` are documented alongside `/v1`. Runner-only
-transport endpoints under `/internal` are deliberately absent from the public
-contract. The one runner callback under `/v1`, `runs/:id/kb-checkpoint`, is
-explicitly marked with runner-token security and is not offered as an operator
-SDK or CLI method.
+- `/v1/github/installations` lists installations visible to kickstart.
+- `/v1/github/installations/:installationId/repos` lists repositories available to an
+  installation.
+- `/v1/projects` creates and lists projects.
+- `/v1/projects/:projectId` reads, updates, or deletes a project.
+- `/v1/projects/:projectId/repos` lists or connects repositories.
+- `/v1/projects/:projectId/repos/:repoId` removes a repository connection.
+- `/v1/projects/:projectId/kickstart/preview` detects and renders the proposed contract.
+- `/v1/projects/:projectId/kickstart` opens the configuration pull request.
 
-The generated OpenAPI document is the authoritative, always-current
-reference — CI compares the committed paths and components with the live
-Fastify document. The SDK exports both generated `paths`/`components` types and
-ergonomic methods:
+Repository connections are organization- and installation-bound. A project-scoped key requesting
+another project receives 404 rather than a distinguishable authorization error.
 
-```ts
-import { FacilityClient } from "@facility/sdk";
+## Agents and stories
 
-const facility = new FacilityClient({ baseUrl, apiKey });
-for await (const run of facility.iterateAllRuns({ status: "running" })) {
-  console.log(run.id);
+- `/v1/projects/:projectId/story-agents` lists the catalog and schedule status.
+- `/v1/projects/:projectId/story-agents/:agentName` reads an agent or proposes an update PR.
+- `/v1/projects/:projectId/project-skills` lists valid repository-installed skills and their source
+  commit. It is inventory only; it does not install or upgrade skills.
+- `/v1/projects/:projectId/workspace-stories` lists or starts stories.
+- `/v1/projects/:projectId/workspace-stories/:storyId` returns the story bundle and ordered
+  timeline of turn, Git, artifact, attention, and GitHub evidence.
+- `/v1/projects/:projectId/workspace-stories/:storyId/messages` queues a shared-conversation
+  message.
+- `/v1/projects/:projectId/workspace-stories/:storyId/conversation` pages durable messages.
+- `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/cancel` cancels active work.
+- `/v1/projects/:projectId/workspace-stories/:storyId/attention/:attentionId/retry` retries an
+  attention item.
+- `/v1/projects/:projectId/workspace-stories/:storyId/attention/:attentionId/dismiss` dismisses it.
+
+Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
+request can also use the HTTP `Idempotency-Key` behavior described below.
+
+## Environments, previews, and lifecycle
+
+- `/v1/projects/:projectId/workspace-stories/:storyId/environment` returns provider inspection,
+  metrics, and cursor-paged environment events.
+- `/environment/clean-setup` forces the setup and optional seed commands in the retained worktree.
+- `/environment/browser-test` runs the declared check and records artifacts.
+- `/preview/:service/open` creates a one-time authenticated preview handoff.
+- `/:storyId/suspend`, `/:storyId/archive`, and `/:storyId/restore` apply reversible lifecycle
+  operations.
+- `DELETE /v1/projects/:projectId/workspace-stories/:storyId/workspace` destroys the durable
+  workspace after explicit confirmation.
+
+The delete body must contain `confirm: true` and an `idempotency_key` identical to the
+`Idempotency-Key` header. See the [lifecycle reference](lifecycle.md) before exposing this operation
+in another client.
+
+## Costs, budgets, operations, and delivery
+
+- `/v1/projects/:projectId/costs` returns cost and usage analysis.
+- `/v1/projects/:projectId/budget` reads or updates the monthly project budget.
+- `/v1/projects/:projectId/observability` returns operational events and summaries.
+- `/v1/projects/:projectId/pipeline` returns the issue, pull-request, check, and workflow view.
+- `/v1/projects/:projectId/github/sync` requests immediate mirror reconciliation.
+- `/v1/projects/:projectId/audit` returns project audit events.
+
+Unavailable provider pricing is represented explicitly and must not be interpreted as zero.
+
+## Authentication and authorization
+
+Protected routes accept a browser session, a Facility API key as a Bearer token, or an MCP access
+token where applicable. Every request resolves one organization principal and checks route-level
+permissions. Project routes verify both organization ownership and optional key project scope.
+
+## Idempotency
+
+Authenticated `POST`, `PATCH`, `PUT`, and `DELETE` routes accept `Idempotency-Key` from 8 through 200
+characters. The key is scoped to principal, method, and path and retained for 24 hours.
+
+- The same key and body replay the original status and JSON response with
+  `idempotency-status: replayed`.
+- The same key with a different body returns `idempotency_key_reused`.
+- A concurrent request returns `idempotency_in_progress` and `retry-after: 1`.
+- An uncertain committed outcome is sealed as `idempotency_outcome_indeterminate` rather than
+  automatically repeated.
+
+Use a random key per logical mutation and reuse it only to retry that exact operation.
+
+## Pagination, errors, and request ids
+
+List operations use route-specific cursor or `limit`/`offset` parameters. Generic page limits are
+1–200 with a default of 100. Conversation and environment events return cursors so clients can
+continue without refetching the entire history.
+
+Errors use:
+
+```json
+{
+  "error": {
+    "code": "not_found",
+    "message": "Project not found",
+    "details": {}
+  }
 }
-const stream = facility.watchRun(runId, ({ data }) => console.log(data));
-const transcript = await facility.runTranscript(runId); // raw NDJSON text
 ```
 
-GETs retry transient failures. POSTs retry only when the caller supplies an
-idempotency key; non-idempotent writes are never retried automatically.
-For ordinary JSON requests, non-2xx responses become `FacilityApiError` with
-the HTTP `status`, the server's `code` and `details`, and the parsed error
-`payload` when available. A non-empty 2xx body that is not valid JSON becomes
-`FacilityApiError` with the response status and code `invalid_response`. If the
-SDK's deadline aborts a request before a response arrives, it reports status
-`408` and code `request_timeout`; a caller-supplied `AbortSignal` instead
-preserves the rejection produced by `fetch` rather than wrapping it.
+Common codes include `validation_error`, `unauthorized`, `forbidden`, `not_found`, `conflict`,
+`invalid_reference`, and `bad_request`. Unknown server failures are masked as `internal_error`.
+Every response includes `x-request-id`; include it in support and log searches.
 
-Streams do not turn every termination into `FacilityApiError`. A
-non-retryable HTTP response rejects `done` with that type; retryable HTTP and
-transport failures are passed to `onError` while reconnecting. Calling
-`close()` or aborting the stream's caller signal stops it and fulfills `done`.
+Long-running work is represented by persisted turns and events rather than an open HTTP request.
+Start and message operations normally return 202, after which clients poll the story or
+conversation without creating duplicate work.
 
-## Facility-signed webhooks
-
-Inbound and outbound Facility webhooks carry `X-Facility-Timestamp`,
-`X-Facility-Delivery`, `X-Facility-Event`, and `X-Facility-Signature`. The
-signature is `sha256=` plus HMAC-SHA256 over the exact bytes:
-
-```text
-timestamp + "." + deliveryId + "." + eventType + "." + body
-```
-
-Inbound timestamps have a five-minute acceptance window and delivery ids are
-deduplicated per integration. Outbound delivery is at least once, never follows
-redirects, and durably retries network failures and HTTP 408/425/429/5xx up to
-eight attempts. See the OpenAPI integration routes for delivery inspection and
-manual retry.
-
-The full wire contract — integration types, the `facility.signal.v1` envelope
-for lifecycle telemetry, and outbound delivery semantics — is in the
-[webhooks reference](webhooks.md).
-
-## Troubleshooting
-
-- `facility doctor [--json]` checks the local installation; `facility doctor
-  --platform [--profile <name>] [--allow-insecure] [--json]` checks deployment
-  readiness. Both modes print actionable remediation and preserve the JSON
-  contract.
-- HTTP 401 / CLI exit 2 means missing, invalid, expired, or revoked credentials.
-- HTTP 403 identifies the needed permission in `error.details`.
-- HTTP 409 means current resource state or idempotency ownership conflicts.
-- MCP HTTP 421 means the request `Host` or browser `Origin` is not trusted.
-- Outbound webhooks require HTTPS in production, reject private/reserved DNS
-  answers, pin the validated address for delivery, sign timestamp plus body,
-  never follow redirects, and retry transient failures durably.
+Timeline entries expose `source`, `type`, optional `turn_id`, structured `data`, `occurred_at`, and
+`observed_at`. Consumers should render unknown event types generically so later evidence additions
+remain backward compatible.

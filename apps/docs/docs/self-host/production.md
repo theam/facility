@@ -4,208 +4,164 @@ title: Production
 
 # Production deployment
 
-The production shape is four long-running control services (`api`, `worker`,
-`gateway`, and `mcp`), an optional `web` service, a one-shot migration/seed job,
-managed Postgres, and any S3-compatible store. Deploy them with whatever runs
-containers in your organization — ECS, Cloud Run, Kubernetes, Nomad, or a VM
-with compose.
+Facility runs trusted repository code with maintainer-level project credentials. A production
+installation needs the same care as a CI control plane and a persistent development fleet. Start
+with a private validation repository and complete the [end-to-end
+checklist](../guides/validate-workspace-loop.md) before connecting important code.
 
-## Requirements
+## Required components
 
-- **Postgres 16+** (managed recommended). One database; the platform runs its
-  own schema and system-data reconciliation at deploy (`@facility/db deploy`). The gateway holds a
-  `LISTEN` connection for cache invalidation — the api `NOTIFY`s
-  `facility_key_revoked` (revoked keys) and `facility_provider_changed` (rotated
-  provider credentials) so the gateway evicts immediately instead of waiting out
-  its 60s cache. Give the gateway a **direct/session-mode** connection: a
-  transaction-mode pooler (e.g. PgBouncer) silently drops `LISTEN/NOTIFY`, so
-  credential/key changes would only take effect after the TTL.
-- **S3-compatible object storage** — AWS S3, GCS (S3 mode), MinIO, R2.
-  Facility signs envelope reads/writes with AWS SigV4 for both AWS S3 and
-  configured `S3_ENDPOINT` stores.
-- **Secrets**: `SECRET_MASTER_KEY` (32-byte base64 — everything sealed at
-  rest derives from it; store it in your secret manager, rotate = re-seal),
-  upstream identity credentials, OAuth signing keys, and GitHub App credentials.
-- **TLS + public URLs** for the API (webhooks, OAuth callbacks) and remote MCP.
-  The web application is optional.
+The permanent services are the control API with embedded MCP and webhooks, one worker with the
+generic scheduler and GitHub reconciliation, PostgreSQL, the web UI, and a workspace provider. Cost
+accounting, budgets, observability, audit events, analytics summaries, and pipeline state live in
+those services. They do not require sidecars or separate control-plane applications.
 
-## Production deploy sequence
+The single-host Compose file uses Docker named volumes. The [AWS reference deployment](aws.md)
+runs the control plane on ECS and RDS while Vercel Sandbox runs and retains story workspaces.
 
-1. Build and publish immutable images for `api`, `worker`, `gateway`, and `mcp`
-   (plus `web` when you deploy the optional operator app).
-2. Provision Postgres and object storage. Set `DATABASE_URL`, `S3_BUCKET`,
-   and `AWS_REGION` for AWS S3. Credentials must come from static
-   `S3_ACCESS_KEY`/`S3_SECRET_KEY`, standard AWS env credentials
-   (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), or ECS/container
-   credentials. For non-AWS S3-compatible stores, also set `S3_ENDPOINT` and
-   use static `S3_ACCESS_KEY`/`S3_SECRET_KEY` unless that runtime supplies
-   AWS-compatible credentials. The compose stack only runs the bundled MinIO and
-   auto-creates its bucket under the `local-storage` profile; a production
-   deployment points `S3_ENDPOINT` at an externally provisioned store and omits
-   the profile, so the API and gateway neither run MinIO nor wait on bucket
-   creation.
-3. Load secrets into the runtime: `SECRET_MASTER_KEY`, identity/OAuth variables, and
-   the GitHub App variables when repo automation is enabled.
-4. Run the database deploy gate once, before app traffic. Set
-   `FACILITY_RUNNER_IMAGE` first (build/push the runner image from `runner/`) so
-   the reconciled default profile can run platform-lane agents. The command
-   holds one bounded advisory-lock session across migrations and bundled roles,
-   action types, registry essentials, and sandbox profiles:
+Run at least one API, one worker, and one web process. API and worker must use the same release,
+database, master key, GitHub App configuration, workspace provider configuration, and project value
+namespace. Multiple API replicas are stateless apart from PostgreSQL. Multiple workers coordinate
+through durable queue claims and schedule locks.
 
-   ```bash
-   FACILITY_RUNNER_IMAGE=<your-runner-image> FACILITY_SEED_DEMO=0 pnpm --filter @facility/db deploy
-   ```
+## Hostnames, TLS, and routing
 
-   In a production image the equivalent entry point is
-   `node node_modules/@facility/db/dist/bin/deploy.js`. The task emits JSON phase
-   timings. Exit `10` means lock timeout and is safe to retry; `11` means an
-   already-applied migration changed and requires operator correction; `12`
-   means a migration failed and its transaction was rolled back. Existing
-   filename-only ledgers adopt SHA-256 checksums on their first upgraded run.
-   Checksums cover the migration's exact UTF-8 bytes, including whitespace and
-   line endings; correct drift by restoring the shipped file, never by editing
-   the ledger.
+Use managed PostgreSQL, HTTPS, encrypted backups, and a dedicated preview registered site separate
+from the control plane. The web UI and API/MCP may share one application hostname behind a reverse
+proxy or use separate origins. Give the worker Docker access only on a host dedicated to trusted
+project workspaces. Monitor disk usage: Facility does not delete worktrees or session volumes by
+age.
 
-5. Start or roll the services in this order: `api`, `worker`, `gateway`, `mcp`,
-   then optional `web`.
+`FACILITY_PREVIEW_URL` is mandatory in production. Its hostname must belong to a registered site
+different from `PUBLIC_URL`, `WEB_URL`, and `MCP_PUBLIC_URL`; a sibling subdomain on the same site is
+not sufficient. Route HTTP and WebSocket traffic from that origin to the API preview surface while
+preventing it from reaching control-plane routes.
 
-   Repository-write tracking uses an explicit two-phase promotion during the
-   upgrade that introduces durable write leases:
+Set `PUBLIC_URL` to the public API origin, `WEB_URL` to the browser UI origin, `MCP_PUBLIC_URL` to
+the exact MCP resource URL, and `AUTH_CALLBACK_URL` to the exact web `/api/auth/callback` URL. When
+Facility's MCP OAuth server is enabled, `FACILITY_OAUTH_ISSUER` must equal the `WEB_URL` origin.
 
-   1. Deploy the new API and runner everywhere with
-      `FACILITY_REPOSITORY_WRITE_TRACKING_PROMOTION=0` (the default). New
-      runners negotiate version `0` and use the legacy token wire format; those
-      runs remain permanently ineligible for governed retry.
-   2. After every old API replica is drained, set
-      `FACILITY_REPOSITORY_WRITE_TRACKING_PROMOTION=1` on every API replica.
-      New handshakes then negotiate version `1`, and every write token is
-      backed by a durable repository-write lease.
+## Core configuration
 
-   Once phase 2 has created any version-1 run, do not roll back to an old API
-   binary until all version-1 runs are terminal and drained. The promotion flag
-   controls only new `/hello` negotiation: a new API always enforces an existing
-   version-1 marker even when the flag is off.
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection URL for API, worker, migration, and bootstrap jobs. |
+| `SECRET_MASTER_KEY` | Canonical base64 for exactly 32 random bytes. |
+| `FACILITY_WORKSPACE_DRIVER` | `docker` or `vercel`. |
+| `FACILITY_WORKSPACE_IMAGE` | Complete runner image available to the provider. |
+| `AUTH_IDENTITY_PROVIDER` | `github` or `oidc`. |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | Installation-token minting. |
+| `GITHUB_APP_WEBHOOK_SECRET` | Raw-body webhook HMAC verification. |
+| `GITHUB_APP_SLUG` | GitHub App identity used by installation flows. |
+| `FACILITY_OAUTH_JWKS` | Private ES256 JWK set when interactive MCP OAuth is enabled. |
+| `LOG_LEVEL` | Structured service log level. |
 
-   Governed Builder successor retries use a second, independent two-phase gate:
+Vercel workspaces also require `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, and either
+`VERCEL_OIDC_TOKEN` or `VERCEL_TOKEN`; the OIDC token takes precedence. Docker workspaces require
+API and worker access to the host daemon, while agents receive only their workspace-scoped daemon.
 
-   1. Deploy the migration, API, and worker everywhere with
-      `FACILITY_GOVERNED_BUILDER_RETRY_PROMOTION=0` (the default). Drain every
-      worker that predates immutable retry-lineage validation.
-   2. Set `FACILITY_GOVERNED_BUILDER_RETRY_PROMOTION=1` on every API replica.
-      Only then can `POST /v1/runs/:runId/retry` create successor rows.
+See [Authentication](authentication.md) and [GitHub App](github-app.md) for provider-specific
+variables and callbacks.
 
-   Once any successor row exists, do not reintroduce an old API or worker binary
-   until every successor is terminal and drained. Turning the promotion flag
-   off stops creation only; upgraded workers continue to enforce and dispatch
-   already-created successors.
-6. Bootstrap the first owner and issue an API key. On an empty installation,
-   run `facility instance bootstrap`, then open `https://<web-host>/api/auth/login`; the configured GitHub user
-   signs into the organization already created by bootstrap. With the optional web
-   app, issue the key in settings. Without it, reopen
-   `https://<api-host>/docs` after login and call `POST /v1/keys` from Swagger;
-   the API session cookie authenticates the request and the key secret is
-   returned once. Then run the go/no-go check:
+## Project and engine values
 
-   ```bash
-   node packages/cli/bin/facility.mjs doctor --url https://<api-host> --key fak_...
-   ```
+Required secrets include `SECRET_MASTER_KEY`, GitHub App credentials, OAuth credentials, and the
+engine credentials made available to workspaces. Installation and engine tokens should be
+short-lived where the provider supports it.
 
-   Production is ready only when the doctor reports no `FAIL` checks. The
-   command verifies database connectivity and migrations, a recent worker
-   scheduler heartbeat, object-store
-   envelope write/read with SigV4, seed essentials, the `sandbox_runner` profile
-   (its driver + runner image match this deployment), production `auth_config`
-   (GitHub/OIDC login configured), GitHub App env completeness when
-   enabled, and the org audit hash chain.
+Repositories list required engine and project secret names under `environment.secrets` in
+`.facility.yml`. Put each value in the API and worker secret environment as
+`FACILITY_PROJECT_<PROJECT_ID>_<NAME>`. For example, project `proj_abc` can declare
+`ANTHROPIC_API_KEY` and receive it from `FACILITY_PROJECT_PROJ_ABC_ANTHROPIC_API_KEY`. Facility
+never resolves a repository declaration directly against the control process environment, so a
+project cannot request `DATABASE_URL`, `SECRET_MASTER_KEY`, or another project's credential.
+Rotating or removing a value affects the next turn and does not delete the stored worktree or native
+session files.
 
-   The doctor runs through the API task's object-store configuration. Give
-   the API and gateway identical `S3_*` and `AWS_REGION` env so the API-side
-   round trip is a valid readiness proxy for gateway envelope writes.
-   Envelope capture is best-effort with fail-loud logging: if a configured
-   bucket rejects a write, the failure is logged and the metering row is still
-   recorded.
+Apply migrations before starting API or worker replicas. Follow the [versioned upgrade
+guide](../reference/upgrade-012.md) when the existing database is incompatible.
 
-## Sandbox networking (docker driver)
+Configure project values on both API and worker because environment inspection and turn dispatch
+cross those process boundaries. In a managed secret store, map each exact environment name to one
+secret value when separate rotation is useful.
 
-A platform-lane run executes in a sandbox the **worker** launches on the host
-Docker daemon — a *sibling* container, not a child of the worker. That sandbox
-authenticates back to the api with its one-time runner token and proxies every
-model call through the gateway, so it has to be able to reach both. Two worker
-settings make that work (the bundled `docker-compose.yml` pre-wires all three):
+## Database bootstrap and upgrades
 
-- **`SANDBOX_API_URL` / `SANDBOX_GATEWAY_URL`** — the api and gateway URLs *as
-  resolved from inside a sandbox container*. This is **not** `PUBLIC_URL`: that
-  is the browser-facing origin (often `localhost`), which inside the sandbox
-  points back at the sandbox itself. On a shared Docker network use the service
-  names (`http://api:4400`, `http://gateway:4410`); with host networking use
-  `http://host.docker.internal:4400` / `:4410`. If unset, they fall back to
-  `PUBLIC_URL` / `GATEWAY_URL`, which only works when those are already
-  sandbox-reachable.
-- **`FACILITY_SANDBOX_DOCKER_NETWORK`** — the seeded **Default runner** profile
-  is `egress=restricted`, so a sandbox is given **no** network unless a Docker
-  network is named. Point this at the network where the api and gateway live
-  (the compose stack's default network is `facility_default`) so the sandbox can
-  resolve them. A profile can override per-profile via `network.docker_network`;
-  set `network.egress="unrestricted"` only for trusted local/e2e profiles.
+Create an empty PostgreSQL database, run the deployment migration entrypoint, and require a zero
+exit status before starting the API or worker. Then run `facility instance bootstrap` once to bind
+the first organization owner and GitHub App installation. Repeating the exact binding is safe; a
+different binding against a populated instance is refused.
 
-If a run never leaves `provisioning` and the sandbox logs show connection
-failures to the api or gateway, one of these two is almost always the cause.
+For application upgrades:
 
-## GitHub login
+1. take a restorable database backup and confirm workspace provider retention;
+2. build immutable API, worker, web, and runner images;
+3. stop new dispatch or scale the worker down if the release requires a controlled cutover;
+4. run migrations as a one-shot administrative job;
+5. deploy API, worker, and web at the same version;
+6. verify `/readyz`, queue processing, login, MCP discovery, GitHub webhook delivery, and preview
+   authorization; and
+7. run a disposable story through wake, environment readiness, agent continuation, and suspend.
 
-Self-hosted installations create their own GitHub App and enable user authorization.
-Set its callback to `https://<web-host>/api/auth/callback`, grant read access to
-user email addresses, and configure `AUTH_IDENTITY_PROVIDER=github`,
-`GITHUB_OAUTH_CLIENT_ID`, and `GITHUB_OAUTH_CLIENT_SECRET`. Optionally set
-`GITHUB_OAUTH_ALLOWED_ORGANIZATION` to a GitHub organization login to require
-active membership at sign-in. Bootstrap the dedicated organization, owner,
-account, and installation binding with `facility instance bootstrap`.
+Do not roll application code back across an incompatible migration. Restore the pre-upgrade
+database and matching service images together when a migration cannot be safely used by the prior
+release.
 
-SaaS instances instead set `AUTH_IDENTITY_PROVIDER=oidc` and use the commercial
-identity broker. See [Authentication modes](authentication) for the broker claim contract.
+## Backups and recovery
 
-### Remote MCP OAuth 2.1 (interactive clients)
+Back up PostgreSQL and durable workspace state. A database backup preserves conversations, turns,
+provider references, costs, budgets, mirrors, and audit events but not unpushed files. A provider
+snapshot preserves files and engine sessions but not Facility ownership and lifecycle records.
 
-Each Facility instance is the authorization server for its MCP resource. Set
-`FACILITY_OAUTH_ISSUER` to the exact `WEB_URL` origin, configure a private ES256
-`FACILITY_OAUTH_JWKS`, and set `MCP_PUBLIC_URL` to the MCP origin or its canonical
-`/mcp` endpoint; point `MCP_AUTHORIZATION_SERVER` at the issuer. The web runtime
-proxies the authorization endpoints to the API, keeping every browser cookie
-host-only and same-origin. Interactive
-clients use Authorization Code + PKCE and receive 15-minute, audience-bound JWTs
-plus rotating refresh tokens. All four browser/resource URLs must use HTTPS in production; an
-all-loopback HTTP configuration is retained only for local development. `fak_` keys remain
-available for services.
+Test recovery into an isolated instance. A meaningful drill restores a story, reads its
+conversation, locates the correct workspace, inspects Git status, wakes the environment, and
+resumes a native engine session. Record recovery time and any provider-specific manual mapping.
 
-> **Breaking upgrade:** update configuration or Terraform before deploying the new API, web, and
-> MCP images. The issuer changes from the API origin to `WEB_URL`, and the token audience changes
-> from the MCP origin to the canonical `/mcp` resource. Deploy those three services together, then
-> reconnect interactive MCP clients and start new browser sessions; existing access/refresh flows
-> must not be reused. For old `pnpm dev` `.env` files, replace the legacy
-> `FACILITY_OAUTH_ISSUER=http://localhost:4400` and
-> `MCP_AUTHORIZATION_SERVER=http://localhost:4400` values with `http://localhost:3400`. See the
-> [MCP upgrade guide](../reference/mcp#breaking-upgrade-same-origin-path-aware-oauth).
+Protect `SECRET_MASTER_KEY` separately and restore the exact key with its database. Rotate it only
+through an implemented key-rotation procedure; replacing it ad hoc can make encrypted values
+unreadable.
 
-## GitHub App
+## Monitoring
 
-Create a GitHub App in your organization; the platform is installed **in your
-environment**, so no third-party App trust is required. The App needs separate
-permissions for repository contents, workflow files, Actions runs, checks,
-deployments, issues, and pull requests. Its webhook URL is the public API origin
-plus `/webhooks/github`.
+Monitor:
 
-Follow the [complete GitHub App guide](github-app) for the current permission
-matrix, event subscriptions, private key and webhook-secret setup, installation
-order, and end-to-end verification.
+- API `/readyz`, error rate, latency, and authentication failures;
+- worker health, queue depth and age, failed dispatch, schedule lag, and reconciliation lag;
+- PostgreSQL connections, locks, storage, backups, and transaction failures;
+- workspace create/wake duration, provider failures, active compute, and retained storage;
+- turn success, cancellation, attention, usage, cost collection, and project budget thresholds;
+- GitHub webhook signature failures, unknown installations, duplicate rate, and mirror freshness;
+- preview authorization failures and WebSocket errors; and
+- audit activity for membership, key, project, agent, budget, and deletion changes.
 
-## Hardening checklist
+Facility's observability and analytics views remain the product-level source for stories and
+delivery. Provider metrics and centralized logs remain necessary for host, network, and service
+failures. Preserve `x-request-id`, GitHub delivery id, story id, turn id, workspace id, and provider
+reference as correlation fields.
 
-- Postgres and MinIO/S3 unreachable from the public network.
-- Gateway reachable from sandboxes and CI only (it holds no read endpoints,
-  but it is the money path).
-- Sandboxes on an isolated network segment; egress per profile.
-- Backups: Postgres PITR + object-store lifecycle; audit retention per your
-  compliance window.
-- Keep `node packages/cli/bin/facility.mjs doctor --url https://<api-host> --key
-  fak_...` in the release
-  checklist after every deploy and migration.
+## Scaling and maintenance
+
+Scale API and web horizontally behind a load balancer. Worker replicas can share the queue, but
+validate provider quotas and rate limits before increasing concurrency. Retained workspace storage
+does not shrink when worker count falls.
+
+For Docker, reserve CPU, memory, inode, and disk headroom for nested project environments. For
+Vercel, monitor sandbox concurrency, snapshot storage, token validity, and API quotas. A finite
+provider compute lease is normal; failure to snapshot or wake the retained state is not.
+
+Use Facility's explicit delete operation for one verified story workspace. Never use broad
+provider cleanup based on age or a prefix without reconciling it to active database records and
+backups.
+
+## Go-live checklist
+
+- TLS and registered-site separation are verified from an external browser.
+- GitHub or OIDC login, MCP OAuth/API key authentication, and logout/revocation work.
+- The GitHub App has the documented repositories, permissions, event subscriptions, and branch
+  rules.
+- Database and workspace backups have passed a restore drill.
+- Project secrets are isolated, available to API and worker, and absent from logs.
+- Budgets, cost-unavailable states, observability, analytics, audit, and GitHub mirror views work.
+- A disposable story passes the complete workspace validation, including deletion denial paths.
+- Operators have the [troubleshooting](../guides/troubleshooting.md) and
+  [hardening](../reference/hardening.md) runbooks available during incidents.
