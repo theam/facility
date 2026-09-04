@@ -1,0 +1,18 @@
+diff --git a/src/sum.mjs b/src/sum.mjs
+new file mode 100644
+index 0000000..3f1c2aa
+--- /dev/null
++++ b/src/sum.mjs
+@@ -0,0 +1,3 @@
++export function sum(a, b) {
++  return a - b;
++}
+diff --git a/src/greet.mjs b/src/greet.mjs
+index 5d2f1b0..9e8c4d1 100644
+--- a/src/greet.mjs
++++ b/src/greet.mjs
+@@ -1,3 +1,3 @@
+ export function greet(name) {
+-  return `Hello, ${name}!`;
++  return `Hey, ${name}!`;
+ }
