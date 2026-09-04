@@ -6,6 +6,21 @@ import type { FastifyBaseLogger } from "fastify";
 import { addBudgetSpend, reconcileBudgetReservations, reserveHardBudgets } from "./budgets.js";
 import type { AuthedKey, BudgetState, EnvelopeStore, RequestRecord } from "./types.js";
 
+export function resolveMeteredCost(record: RequestRecord): number {
+  const computedCost = costCents({
+    model: record.model,
+    inputTokens: record.usage.inputTokens,
+    outputTokens: record.usage.outputTokens,
+    cacheReadTokens: record.usage.cacheReadTokens,
+    cacheWriteTokens: record.usage.cacheWriteTokens,
+  });
+  const measuredCost = record.priced ? (computedCost ?? 0) : 0;
+  const usageIncomplete = record.usageComplete === false;
+  const conservativeFallback =
+    record.providerMayHaveCharged && (measuredCost === 0 || usageIncomplete);
+  return conservativeFallback ? Math.max(measuredCost, record.estimatedCents ?? 0) : measuredCost;
+}
+
 export function enqueueMetering(
   db: FacilityDb,
   store: EnvelopeStore,
@@ -48,18 +63,7 @@ export async function writeMetering(
   record: RequestRecord,
   now: Date,
 ) {
-  const computedCost = costCents({
-    model: record.model,
-    inputTokens: record.usage.inputTokens,
-    outputTokens: record.usage.outputTokens,
-    cacheReadTokens: record.usage.cacheReadTokens,
-    cacheWriteTokens: record.usage.cacheWriteTokens,
-  });
-  const measuredCost = record.priced ? (computedCost ?? 0) : 0;
-  const cost =
-    record.status === "error" && record.providerMayHaveCharged && measuredCost === 0
-      ? (record.estimatedCents ?? 0)
-      : measuredCost;
+  const cost = resolveMeteredCost(record);
   let envelopeUri: string | null = null;
   try {
     envelopeUri = await store.putEnvelope({

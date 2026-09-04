@@ -60,6 +60,7 @@ function nestedNumber(value: unknown, key: string): number | undefined {
 
 export class UsageTee extends Transform {
   readonly usage = emptyUsage();
+  usageComplete = false;
   readonly textParts: string[] = [];
   private pending = "";
   private retainedBytes = 0;
@@ -123,6 +124,7 @@ export class UsageTee extends Transform {
   private parseJsonText(text: string) {
     try {
       const parsed = JSON.parse(text);
+      this.noteTerminalUsage(parsed);
       if (this.provider === "anthropic") {
         // Anthropic splits streamed usage across frames: `message_start` carries
         // input and cache tokens under `message.usage`, and `message_delta`
@@ -149,6 +151,27 @@ export class UsageTee extends Transform {
       }
     } catch {
       // Provider bytes are still passed through; malformed telemetry frames only affect metering.
+    }
+  }
+
+  private noteTerminalUsage(parsed: unknown) {
+    if (!parsed || typeof parsed !== "object") return;
+    const row = parsed as Record<string, unknown>;
+    if (this.provider === "anthropic" && row.type === "message_delta") {
+      const usage = row.usage;
+      if (usage && typeof usage === "object") {
+        const output = (usage as Record<string, unknown>).output_tokens;
+        if (typeof output === "number" && Number.isFinite(output)) {
+          this.usageComplete = true;
+        }
+      }
+      return;
+    }
+    const usage = row.usage;
+    if (!usage || typeof usage !== "object") return;
+    const output = (usage as Record<string, unknown>).output_tokens;
+    if (typeof output === "number" && Number.isFinite(output)) {
+      this.usageComplete = true;
     }
   }
 
