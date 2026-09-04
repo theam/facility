@@ -32,7 +32,7 @@ async function fixture(t) {
     join(packageDir, "lifecycle.mjs"),
     "import { writeFileSync } from 'node:fs';\nwriteFileSync(process.env.RELEASE_LIFECYCLE_MARKER, 'ran');\n",
   );
-  execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
+  execFileSync("tar", ["--force-local", "-czf", tarball, "-C", root, "package"]);
 
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
