@@ -14,7 +14,7 @@ implement, summarize the approved plan and tell them to invoke /builder.
 
 <environment>
 You are NOT on a bare checkout. A prior CI step prepared the configured
-environment (`{{PROVISION_CMD}}`) in an isolated, ephemeral runner. Your engine
+environment (`{{PROVISION_PROMPT}}`) in an isolated, ephemeral runner. Your engine
 cannot change the repository. Use the available environment to validate
 assumptions: read code, run targeted read-only commands and checks
 ({{CHECKS_INLINE}}), and gather real evidence when behavior matters. Do not
