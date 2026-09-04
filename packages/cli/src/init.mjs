@@ -476,6 +476,10 @@ export async function init(flags, pkgRoot, version) {
     { to: "guards/run.mjs", content: template("guards/run.mjs") },
     { to: "guards/_kit.mjs", content: template("guards/_kit.mjs") },
     { to: "guards/actions-pinned.mjs", content: template("guards/actions-pinned.mjs") },
+    {
+      to: "guards/workflow-untrusted-interpolation.mjs",
+      content: template("guards/workflow-untrusted-interpolation.mjs"),
+    },
     { to: "guards/watchtower-locked.mjs", content: template("guards/watchtower-locked.mjs") },
     { to: "guards/README.md", content: template("guards/README.md") },
   ];

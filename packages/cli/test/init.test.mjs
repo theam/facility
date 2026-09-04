@@ -215,6 +215,7 @@ test("init installs the method end to end", async (t) => {
     "guards/run.mjs",
     "guards/_kit.mjs",
     "guards/actions-pinned.mjs",
+    "guards/workflow-untrusted-interpolation.mjs",
     "guards/watchtower-locked.mjs",
     ".facility.json",
   ];
