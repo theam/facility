@@ -71,6 +71,7 @@ import type {
   Project,
   ProjectRepo,
   Proposal,
+  ProposalReviewContext,
   ProposalWithEvents,
   Provider,
   QueryParams,
@@ -611,6 +612,13 @@ export class FacilityClient {
     options?: FacilityWriteOptions,
   ): Promise<Proposal> {
     return this.post(`/v1/proposals/${proposalId}/decide`, body, options);
+  }
+
+  proposalReviewContext(
+    proposalId: string,
+    options?: FacilityWriteOptions,
+  ): Promise<ProposalReviewContext> {
+    return this.post(`/v1/proposals/${proposalId}/review-context`, undefined, options);
   }
 
   executeProposal(proposalId: string, options?: FacilityWriteOptions): Promise<JsonObject> {

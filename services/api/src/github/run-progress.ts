@@ -1,3 +1,5 @@
+import { type ReviewContextV1, renderReviewContextMarkdown } from "../hitl-review-context.js";
+
 export type GithubRunProgressPhase =
   | "queued"
   | "provisioning"
@@ -18,6 +20,7 @@ export type GithubRunProgressInput = {
   finalText?: string | null;
   error?: string | null;
   proposalId?: string | null;
+  reviewContext?: ReviewContextV1 | null;
   pullRequest?: { number: number; url: string } | null;
 };
 
@@ -84,6 +87,9 @@ export function renderGithubRunProgress(input: GithubRunProgressInput) {
       );
     }
     if (input.proposalId) {
+      if (input.reviewContext) {
+        lines.push("", renderReviewContextMarkdown(input.reviewContext));
+      }
       lines.push(
         "",
         "## Continue from GitHub",

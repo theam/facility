@@ -20,6 +20,7 @@ import {
 } from "../builder-plan-policy.js";
 import { ApiError } from "../errors.js";
 import { executeApprovedProposal, loadPlanBuilderRun } from "../executors.js";
+import { reviewContextFromEventData } from "../hitl-review-context.js";
 import { appendRunEvents } from "../sandbox/state.js";
 import { findAgentDef, laneFor } from "./agent-routing.js";
 import { type FacilityGithubClient, GithubIssueContextTooLargeError } from "./client.js";
@@ -196,6 +197,32 @@ export async function routeTrigger(
   let run: typeof runs.$inferSelect | undefined;
   let approvedByThisInvocation = false;
   if (governedBuilder && accepted?.proposal) {
+    const publishedReview =
+      accepted.proposal.state === "open"
+        ? await githubPublishedReviewContext(db, accepted.proposal)
+        : null;
+    if (accepted.proposal.state === "open" && !publishedReview) {
+      await recordBuilderPlanDenial(
+        db,
+        {
+          orgId: repo.orgId,
+          projectId: repo.projectId,
+          mode: agent.name,
+          agentDefId: agent.id,
+          trigger: {
+            source: "plan_acceptance",
+            proposalId: accepted.proposal.id,
+            architectRunId: accepted.architectRun.id,
+          },
+          gh: runGh,
+          actor: githubActor,
+          source: "github_builder_review_context",
+        },
+        "builder_plan_context_invalid",
+        "review_context_missing",
+      );
+      return { routed: false, reason: "builder_plan_context_invalid" };
+    }
     const approvalCommentId = await githubProposalApprovalCommentId(db, accepted.proposal);
     const sameApprovalComment = typeof commentId === "number" && approvalCommentId === commentId;
     const executedRun =
@@ -273,7 +300,14 @@ export async function routeTrigger(
           seq: (latest[0]?.seq ?? 0) + 1,
           type: "approved",
           actor: githubActor,
-          data: { source: "github_command", commentId: commentId ?? null },
+          data: {
+            source: "github_command",
+            commentId: commentId ?? null,
+            approvalCommentId: commentId ?? null,
+            publishedEventSeq: publishedReview?.seq ?? null,
+            publicationCommentId: publishedReview?.commentId ?? null,
+            reviewContext: publishedReview?.reviewContext ?? null,
+          },
         });
         return claimed;
       });
@@ -723,6 +757,42 @@ async function githubProposalApprovalCommentId(
   )[0];
   const commentId = objectOrEmpty(event?.data).commentId;
   return typeof commentId === "number" && Number.isInteger(commentId) ? commentId : null;
+}
+
+async function githubPublishedReviewContext(
+  db: FacilityDb,
+  proposal: typeof proposals.$inferSelect,
+) {
+  const event = (
+    await db
+      .select({ seq: proposalEvents.seq, data: proposalEvents.data })
+      .from(proposalEvents)
+      .where(
+        and(
+          eq(proposalEvents.orgId, proposal.orgId),
+          eq(proposalEvents.proposalId, proposal.id),
+          eq(proposalEvents.type, "published"),
+        ),
+      )
+      .orderBy(desc(proposalEvents.seq))
+      .limit(1)
+  )[0];
+  const parsed = reviewContextFromEventData(event?.data);
+  if (
+    !event ||
+    !parsed.success ||
+    parsed.data.source !== "github_plan_comment" ||
+    parsed.data.status !== "available"
+  ) {
+    return null;
+  }
+  const commentId = objectOrEmpty(event.data).commentId;
+  if (typeof commentId !== "number" || !Number.isInteger(commentId)) return null;
+  return {
+    seq: event.seq,
+    commentId,
+    reviewContext: parsed.data,
+  };
 }
 
 export function githubRequestContext(

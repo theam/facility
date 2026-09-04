@@ -164,6 +164,7 @@ describe("api", async () => {
   const app = await buildApp(config, { rateLimitMax: 10_000 });
   let cookie = "";
   let approverCookie = "";
+  let approverId = "";
   let orgId = "";
   const ownerRole = "role_bundled_owner";
   const viewerRole = "role_bundled_viewer";
@@ -215,6 +216,7 @@ describe("api", async () => {
     });
     expect(approverLogin.statusCode).toBe(200);
     approverCookie = approverLogin.cookies.map((item) => `${item.name}=${item.value}`).join("; ");
+    approverId = approverLogin.json().userId;
     // Every integration file uses the seeded dev org. This suite deliberately
     // mutates and repairs the audit chain, so isolate it from receipts and audit
     // rows left by an earlier file or a prior local run as one atomic fixture reset.
@@ -1859,7 +1861,36 @@ describe("api", async () => {
         actor: { type: "agent", id: runId },
         data: { source: "architect_run" },
       });
-      return { statusCode: 200, json: () => ({ id }) };
+      await db.insert(proposalEvents).values({
+        orgId,
+        proposalId: id,
+        seq: 2,
+        type: "review_presented",
+        actor: { type: "user", id: approverId },
+        data: {
+          source: "facility_web",
+          reviewContext: {
+            version: 1,
+            source: "facility_web",
+            status: "available",
+            repository: { id: planRepo.id, owner: planRepo.owner, name: planRepo.name },
+            branch: planRepo.defaultBranch,
+            planBaseSha: "a".repeat(40),
+            planSha256: "b".repeat(64),
+            presentedBaseSha: "a".repeat(40),
+            issueRevisionSha256: "c".repeat(64),
+            presentedAt: new Date().toISOString(),
+            comparison: {
+              status: "identical",
+              aheadBy: 0,
+              behindBy: 0,
+              changedPaths: [],
+              changedPathsTruncated: false,
+            },
+          },
+        },
+      });
+      return { statusCode: 200, json: () => ({ id, reviewContextSeq: 2 }) };
     };
     await db
       .update(repos)
@@ -2085,7 +2116,7 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/proposals/${proposal.json().id}/decide`,
       headers: { cookie: approverCookie },
-      payload: { decision: "approve" },
+      payload: { decision: "approve", reviewContextSeq: proposal.json().reviewContextSeq },
     });
     expect(approved.statusCode).toBe(200);
     expect(approved.json().state).toBe("executed");
@@ -2219,7 +2250,10 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/proposals/${duplicateProposal.json().id}/decide`,
       headers: { cookie: approverCookie },
-      payload: { decision: "approve" },
+      payload: {
+        decision: "approve",
+        reviewContextSeq: duplicateProposal.json().reviewContextSeq,
+      },
     });
     expect(duplicateApproval.statusCode).toBe(200);
     expect(duplicateApproval.json().state).toBe("executed");
@@ -2322,7 +2356,10 @@ describe("api", async () => {
         method: "POST",
         url: `/v1/proposals/${racedProposal.json().id}/decide`,
         headers: { cookie: approverCookie },
-        payload: { decision: "approve" },
+        payload: {
+          decision: "approve",
+          reviewContextSeq: racedProposal.json().reviewContextSeq,
+        },
       });
       let executing = false;
       for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -2389,7 +2426,10 @@ describe("api", async () => {
       method: "POST",
       url: `/v1/proposals/${repoLaneProposal.json().id}/decide`,
       headers: { cookie: approverCookie },
-      payload: { decision: "approve" },
+      payload: {
+        decision: "approve",
+        reviewContextSeq: repoLaneProposal.json().reviewContextSeq,
+      },
     });
     expect(repoLaneApproval.json().state).toBe("execution_failed");
     expect(repoLaneApproval.json().executionError).toBe("plan_acceptance_builder_uses_repo_lane");
@@ -2400,6 +2440,328 @@ describe("api", async () => {
     expect(repoLaneEvents.find((event) => event.type === "execution_failed")?.data).toMatchObject({
       error: "plan_acceptance_builder_uses_repo_lane",
     });
+  });
+
+  it("binds plan decisions to the review context actually presented to the approver", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const reviewProject = (
+      await db
+        .insert(projects)
+        .values({
+          id: newId("proj"),
+          orgId,
+          name: "HITL review context",
+          slug: `hitl-review-context-${suffix}`,
+          settings: {},
+        })
+        .returning()
+    )[0];
+    const installation = (
+      await db
+        .insert(githubInstallations)
+        .values({
+          id: newId("int"),
+          orgId,
+          installationId: Math.floor(Math.random() * 2_000_000_000) + 1,
+          accountLogin: `hitl-review-${suffix}`,
+          targetType: "Organization",
+        })
+        .returning()
+    )[0];
+    if (!reviewProject || !installation) throw new Error("review context fixtures missing");
+    const reviewRepo = (
+      await db
+        .insert(repos)
+        .values({
+          id: newId("repo"),
+          orgId,
+          projectId: reviewProject.id,
+          installationId: installation.id,
+          owner: installation.accountLogin,
+          name: "facility",
+          defaultBranch: "main",
+        })
+        .returning()
+    )[0];
+    const planAcceptance = (
+      await db
+        .select()
+        .from(actionTypes)
+        .where(and(eq(actionTypes.orgId, orgId), eq(actionTypes.name, "plan_acceptance")))
+        .limit(1)
+    )[0];
+    if (!reviewRepo || !planAcceptance) throw new Error("review context fixtures missing");
+    const planBaseSha = "1".repeat(40);
+    let presentedBaseSha = "2".repeat(40);
+    const createPlan = async () => {
+      const run = (
+        await db
+          .insert(runs)
+          .values({
+            id: newId("run"),
+            orgId,
+            projectId: reviewProject.id,
+            mode: "architect",
+            engine: "codex",
+            status: "succeeded",
+            trigger: { type: "github_comment", issue: { number: 147 } },
+            gh: { owner: reviewRepo.owner, repo: reviewRepo.name, issueNumber: 147 },
+            createdBy: { type: "user", id: "review-requester" },
+          })
+          .returning()
+      )[0];
+      if (!run) throw new Error("review run missing");
+      const proposal = (
+        await db
+          .insert(proposals)
+          .values({
+            id: newId("prop"),
+            orgId,
+            projectId: reviewProject.id,
+            runId: run.id,
+            actionTypeId: planAcceptance.id,
+            payload: {
+              architectRunId: run.id,
+              issueNumber: 147,
+              repoId: reviewRepo.id,
+              workspaceBaseSha: planBaseSha,
+              planSha256: "3".repeat(64),
+            },
+            contextMd: "Review this plan",
+            expiresAt: new Date(Date.now() + 3_600_000),
+          })
+          .returning()
+      )[0];
+      if (!proposal) throw new Error("review proposal missing");
+      await db.insert(proposalEvents).values({
+        orgId,
+        proposalId: proposal.id,
+        seq: 1,
+        type: "open",
+        actor: { type: "agent", id: run.id },
+        data: { source: "architect_run" },
+      });
+      return proposal;
+    };
+    const previousFactory = app.githubClientFactory;
+    app.githubClientFactory = (async () =>
+      ({
+        rest: {
+          repos: {
+            getBranch: async () => ({ data: { commit: { sha: presentedBaseSha } } }),
+            compareCommitsWithBasehead: async () => ({
+              data: {
+                status: "ahead",
+                ahead_by: 4,
+                behind_by: 0,
+                files: [{ filename: "services/api/src/routes/v1/hitl.ts" }],
+              },
+            }),
+          },
+          issues: {
+            get: async () => ({
+              data: {
+                number: 147,
+                title: "Human approval evidence",
+                body: "Capture what the approver saw",
+                state: "open",
+                html_url: "https://github.test/theam/facility/issues/147",
+                user: { login: "reviewer" },
+                labels: [],
+              },
+            }),
+            listComments: async () => ({ data: [] }),
+          },
+        },
+      }) as never) as GithubClientFactory;
+    try {
+      const proposal = await createPlan();
+      const bareDecision = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposal.id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: { decision: "reject" },
+      });
+      expect(bareDecision.statusCode).toBe(409);
+      expect(bareDecision.json().error.code).toBe("review_context_required");
+
+      const presented = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposal.id}/review-context`,
+        headers: { cookie: approverCookie },
+      });
+      expect(presented.statusCode, presented.body).toBe(200);
+      expect(presented.json().reviewContext).toMatchObject({
+        status: "available",
+        planBaseSha,
+        presentedBaseSha,
+        comparison: {
+          status: "ahead",
+          aheadBy: 4,
+          changedPaths: ["services/api/src/routes/v1/hitl.ts"],
+        },
+      });
+      const wrongActor = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposal.id}/decide`,
+        headers: { cookie },
+        payload: {
+          decision: "reject",
+          reviewContextSeq: presented.json().reviewContextSeq,
+        },
+      });
+      expect(wrongActor.statusCode).toBe(409);
+      expect(wrongActor.json().error.code).toBe("review_context_invalid");
+
+      // A later branch movement cannot rewrite what was actually presented.
+      presentedBaseSha = "4".repeat(40);
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${proposal.id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: {
+          decision: "reject",
+          reviewContextSeq: presented.json().reviewContextSeq,
+        },
+      });
+      expect(rejected.statusCode, rejected.body).toBe(200);
+      const decisionEvent = (
+        await db
+          .select()
+          .from(proposalEvents)
+          .where(
+            and(eq(proposalEvents.proposalId, proposal.id), eq(proposalEvents.type, "rejected")),
+          )
+          .limit(1)
+      )[0];
+      expect(decisionEvent?.data).toMatchObject({
+        reviewContextSeq: presented.json().reviewContextSeq,
+        reviewContext: { presentedBaseSha: "2".repeat(40) },
+      });
+
+      const unavailableProposal = await createPlan();
+      app.githubClientFactory = (async () => {
+        throw new Error("credential details must not enter the ledger");
+      }) as GithubClientFactory;
+      const unavailable = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${unavailableProposal.id}/review-context`,
+        headers: { cookie: approverCookie },
+      });
+      expect(unavailable.json().reviewContext).toMatchObject({
+        status: "unavailable",
+        reason: "github_client_unavailable",
+      });
+      expect(unavailable.body).not.toContain("credential details");
+      const blockedApproval = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${unavailableProposal.id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: {
+          decision: "approve",
+          reviewContextSeq: unavailable.json().reviewContextSeq,
+        },
+      });
+      expect(blockedApproval.statusCode).toBe(409);
+      expect(blockedApproval.json().error.code).toBe("review_context_unavailable");
+      const allowedRejection = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${unavailableProposal.id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: {
+          decision: "reject",
+          reviewContextSeq: unavailable.json().reviewContextSeq,
+        },
+      });
+      expect(allowedRejection.statusCode).toBe(200);
+      expect(allowedRejection.json().state).toBe("rejected");
+
+      app.githubClientFactory = (async () =>
+        ({
+          rest: {
+            repos: {
+              getBranch: async () => ({ data: { commit: { sha: presentedBaseSha } } }),
+              compareCommitsWithBasehead: async () => ({
+                data: { status: "ahead", ahead_by: 1, behind_by: 0, files: [] },
+              }),
+            },
+            issues: {
+              get: async () => ({
+                data: {
+                  number: 147,
+                  title: "Human approval evidence",
+                  body: "Capture what the approver saw",
+                  state: "open",
+                  html_url: "https://github.test/theam/facility/issues/147",
+                  user: { login: "reviewer" },
+                  labels: [],
+                },
+              }),
+              listComments: async () => ({ data: [] }),
+            },
+          },
+        }) as never) as GithubClientFactory;
+      const expiredProposal = await createPlan();
+      const expiringContext = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${expiredProposal.id}/review-context`,
+        headers: { cookie: approverCookie },
+      });
+      await db
+        .update(proposalEvents)
+        .set({ ts: new Date(Date.now() - 6 * 60_000) })
+        .where(
+          and(
+            eq(proposalEvents.proposalId, expiredProposal.id),
+            eq(proposalEvents.seq, expiringContext.json().reviewContextSeq),
+          ),
+        );
+      const expiredDecision = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${expiredProposal.id}/decide`,
+        headers: { cookie: approverCookie },
+        payload: {
+          decision: "reject",
+          reviewContextSeq: expiringContext.json().reviewContextSeq,
+        },
+      });
+      expect(expiredDecision.statusCode).toBe(409);
+      expect(expiredDecision.json().error.code).toBe("review_context_expired");
+
+      const isolatedOrgId = newId("org");
+      const isolatedUserId = newId("user");
+      await db.insert(orgs).values({
+        id: isolatedOrgId,
+        name: "Review context isolation",
+        slug: `review-context-isolation-${suffix}`,
+        settings: {},
+      });
+      await db.insert(users).values({
+        id: isolatedUserId,
+        email: `review-context-isolation-${suffix}@example.com`,
+        status: "active",
+      });
+      await db.insert(orgMembers).values({
+        id: newId("member"),
+        orgId: isolatedOrgId,
+        userId: isolatedUserId,
+        roleId: ownerRole,
+      });
+      const isolatedCookie = `facility_session=${await mintSessionCookie(
+        config,
+        isolatedUserId,
+        isolatedOrgId,
+      )}`;
+      const crossTenant = await app.inject({
+        method: "POST",
+        url: `/v1/proposals/${expiredProposal.id}/review-context`,
+        headers: { cookie: isolatedCookie },
+      });
+      expect(crossTenant.statusCode).toBe(404);
+      expect(crossTenant.json().error.code).toBe("not_found");
+    } finally {
+      app.githubClientFactory = previousFactory;
+    }
   });
 
   it("refuses an mcp_tool_call proposal on the generic route (per-tool perm bypass)", async () => {

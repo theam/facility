@@ -89,6 +89,7 @@ import {
   validateGovernedRetryForDispatch,
 } from "../governed-builder-retry.js";
 import { harnessFragmentForBundle, validateProjectKb } from "../harness.js";
+import { buildPlanReviewContext, type ReviewContextV1 } from "../hitl-review-context.js";
 import {
   assertPreviewProvisioningAvailable,
   createPreviewRecord,
@@ -1012,6 +1013,7 @@ function renderProgressForRun(
     finalText?: string | null;
     agentProgress?: string | null;
     proposalId?: string | null;
+    reviewContext?: ReviewContextV1 | null;
     error?: string | null;
   } = {},
 ) {
@@ -1036,6 +1038,7 @@ function renderProgressForRun(
     finalText: result.finalText,
     error: result.error,
     proposalId: result.proposalId,
+    reviewContext: result.reviewContext,
     pullRequest: prNumber && prUrl ? { number: prNumber, url: prUrl } : null,
   });
 }
@@ -1606,6 +1609,7 @@ async function publishArchitectPlanAcceptance(
     }
 
     let remoteComment: { id: number; url?: string };
+    let reviewContext: ReviewContextV1 | undefined;
     if (!effectiveOpen && recovered) {
       // GitHub already accepted the stable marker before the proposal changed
       // state. Replace the old CTA with a terminal snapshot, then close the
@@ -1613,10 +1617,17 @@ async function publishArchitectPlanAcceptance(
       await remote(() => client.updateIssueComment(recovered.id, closedBody));
       remoteComment = { id: recovered.id, url: recovered.url };
     } else {
+      reviewContext = await buildPlanReviewContext(tx, proposal, "github_plan_comment", {
+        githubClient: { owner: repo.owner, repo: repo.name, client },
+      });
+      if (reviewContext.status !== "available") {
+        throw new Error(`architect_plan_review_context_${reviewContext.reason}`);
+      }
       const body = `${renderProgressForRun(run, "succeeded", {
         finalText: proposal.contextMd,
         agentProgress: await lastAgentProgress(tx, run),
         proposalId: proposal.id,
+        reviewContext,
       })}\n\n${publicationMarker}`;
       const progressId = progressCommentId(run.gh);
       if (progressId) {
@@ -1663,6 +1674,7 @@ async function publishArchitectPlanAcceptance(
         publicationKey,
         commentId: remoteComment.id,
         commentUrl: remoteComment.url ?? null,
+        ...(reviewContext ? { reviewContext } : {}),
       },
     });
     if (!effectiveOpen) {

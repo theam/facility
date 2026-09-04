@@ -45,6 +45,14 @@ export type Octokit = {
       }>;
       getContent: (args: Record<string, unknown>) => Promise<{ data: unknown }>;
       getBranch: (args: Record<string, unknown>) => Promise<{ data: { commit: { sha: string } } }>;
+      compareCommitsWithBasehead: (args: Record<string, unknown>) => Promise<{
+        data: {
+          status: string;
+          ahead_by: number;
+          behind_by: number;
+          files?: Array<{ filename?: string }>;
+        };
+      }>;
       getCollaboratorPermissionLevel: (
         args: Record<string, unknown>,
       ) => Promise<{ data: { permission: string } }>;
@@ -330,6 +338,40 @@ export class FacilityGithubClient {
     return response.data.commit.sha;
   }
 
+  async compareCommits(
+    base: string,
+    head: string,
+  ): Promise<{
+    status: "identical" | "ahead" | "behind" | "diverged";
+    aheadBy: number;
+    behindBy: number;
+    changedPaths: string[];
+    changedPathsTruncated: boolean;
+  }> {
+    const response = await this.octokit.rest.repos.compareCommitsWithBasehead({
+      owner: this.repo.owner,
+      repo: this.repo.repo,
+      basehead: `${base}...${head}`,
+      per_page: 100,
+      page: 1,
+    });
+    if (!["identical", "ahead", "behind", "diverged"].includes(response.data.status)) {
+      throw new Error("GitHub returned an unknown comparison status");
+    }
+    const status = response.data.status as "identical" | "ahead" | "behind" | "diverged";
+    const changedPaths = (response.data.files ?? [])
+      .map((file) => file.filename)
+      .filter((path): path is string => typeof path === "string")
+      .slice(0, 300);
+    return {
+      status,
+      aheadBy: response.data.ahead_by,
+      behindBy: response.data.behind_by,
+      changedPaths,
+      // GitHub caps the comparison's file list at 300. Treat the boundary as
+      // truncated rather than claiming an exact total we cannot prove.
+      changedPathsTruncated: changedPaths.length === 300,
+    };
   async assertRepositoryAccessible(): Promise<void> {
     if (!this.octokit.rest.repos.get) {
       throw new Error("GitHub repository lookup is unavailable");

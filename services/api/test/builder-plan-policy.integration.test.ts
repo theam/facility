@@ -453,6 +453,29 @@ describe("builder plan policy integration", async () => {
       await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
     )[0];
     expect(storedProposal?.state).toBe("executed");
+    const approvedEvent = (
+      await db
+        .select({ data: proposalEvents.data })
+        .from(proposalEvents)
+        .where(
+          and(
+            eq(proposalEvents.proposalId, fixture.proposalId),
+            eq(proposalEvents.type, "approved"),
+          ),
+        )
+        .orderBy(desc(proposalEvents.seq))
+        .limit(1)
+    )[0];
+    expect(approvedEvent?.data).toMatchObject({
+      source: "github_command",
+      publishedEventSeq: 2,
+      publicationCommentId: 203,
+      approvalCommentId: 204,
+      reviewContext: {
+        source: "github_plan_comment",
+        status: "available",
+      },
+    });
     const deliveryReplay = await routeTrigger(
       db,
       fixture.orgId,
@@ -1755,6 +1778,29 @@ describe("builder plan policy integration", async () => {
     expect(await projectRuns(fixture.orgId, fixture.projectId)).toHaveLength(before.length);
   });
 
+  it("rejects a legacy GitHub proposal whose published event has no review context", async () => {
+    const fixture = await githubRouteFixture("open");
+    await db
+      .update(projects)
+      .set({ builderPlanPolicy: "required" })
+      .where(eq(projects.id, fixture.projectId));
+    await db
+      .update(proposalEvents)
+      .set({ data: { source: "architect_run", commentId: 203 } })
+      .where(
+        and(
+          eq(proposalEvents.proposalId, fixture.proposalId),
+          eq(proposalEvents.type, "published"),
+        ),
+      );
+    const before = await projectRuns(fixture.orgId, fixture.projectId);
+
+    const result = await routeTrigger(db, fixture.orgId, fixture.client, fixture.payload);
+
+    expect(result).toMatchObject({ routed: false, reason: "builder_plan_context_invalid" });
+    expect(await projectRuns(fixture.orgId, fixture.projectId)).toHaveLength(before.length);
+  });
+
   it.each([
     "expired",
     "rejected",
@@ -2113,6 +2159,44 @@ describe("builder plan policy integration", async () => {
       await db
         .delete(proposalEvents)
         .where(and(eq(proposalEvents.proposalId, fixture.proposalId), eq(proposalEvents.seq, 2)));
+      const proposal = (
+        await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+      )[0];
+      const repo = (
+        await db.select().from(repos).where(eq(repos.projectId, fixture.projectId)).limit(1)
+      )[0];
+      const payload = (proposal?.payload ?? {}) as Record<string, unknown>;
+      if (!proposal || !repo) throw new Error("published review fixture missing");
+      await db.insert(proposalEvents).values({
+        orgId: fixture.orgId,
+        proposalId: fixture.proposalId,
+        seq: 2,
+        type: "published",
+        actor: { type: "agent", id: proposal.runId },
+        data: {
+          source: "architect_run",
+          commentId: 203,
+          reviewContext: {
+            version: 1,
+            source: "github_plan_comment",
+            status: "available",
+            repository: { id: repo.id, owner: repo.owner, name: repo.name },
+            branch: repo.defaultBranch,
+            planBaseSha: payload.workspaceBaseSha,
+            planSha256: payload.planSha256,
+            presentedBaseSha: payload.workspaceBaseSha,
+            issueRevisionSha256: payload.issueRevisionSha256,
+            presentedAt: new Date().toISOString(),
+            comparison: {
+              status: "identical",
+              aheadBy: 0,
+              behindBy: 0,
+              changedPaths: [],
+              changedPathsTruncated: false,
+            },
+          },
+        },
+      });
     } else {
       await db
         .update(proposalEvents)

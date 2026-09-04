@@ -127,6 +127,7 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/proposals",
   "POST /v1/proposals/:proposalId/decide",
   "POST /v1/proposals/:proposalId/execute",
+  "POST /v1/proposals/:proposalId/review-context",
   "POST /v1/providers",
   "POST /v1/registry/items",
   "POST /v1/registry/items/:itemId/versions",

@@ -48,6 +48,7 @@ export type {
   Project,
   ProjectRepo,
   Proposal,
+  ProposalReviewContext,
   Provider,
   RegistryItem,
   RegistryItemWithVersions,

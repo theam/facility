@@ -1315,6 +1315,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/proposals/{proposalId}/review-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create review context */
+        post: operations["postProposalsByProposalIdReviewContext"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/proposals/{proposalId}/decide": {
         parameters: {
             query?: never;
@@ -13272,6 +13289,152 @@ export interface operations {
             };
         };
     };
+    postProposalsByProposalIdReviewContext: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the original response for the same principal, path, key, and request body for 24 hours. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                proposalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        reviewContextSeq: number;
+                        reviewContext: {
+                            /** @enum {number} */
+                            version: 1;
+                            /** @enum {string} */
+                            source: "facility_web" | "github_plan_comment";
+                            repository: {
+                                id: string;
+                                owner: string;
+                                name: string;
+                            } | null;
+                            branch: string | null;
+                            planBaseSha: string | null;
+                            planSha256: string | null;
+                            /** Format: date-time */
+                            presentedAt: string;
+                            /** @enum {string} */
+                            status: "available";
+                            presentedBaseSha: string;
+                            issueRevisionSha256: string;
+                            comparison: {
+                                /** @enum {string} */
+                                status: "identical" | "ahead" | "behind" | "diverged";
+                                aheadBy: number;
+                                behindBy: number;
+                                changedPaths: string[];
+                                changedPathsTruncated: boolean;
+                            };
+                        } | {
+                            /** @enum {number} */
+                            version: 1;
+                            /** @enum {string} */
+                            source: "facility_web" | "github_plan_comment";
+                            repository: {
+                                id: string;
+                                owner: string;
+                                name: string;
+                            } | null;
+                            branch: string | null;
+                            planBaseSha: string | null;
+                            planSha256: string | null;
+                            /** Format: date-time */
+                            presentedAt: string;
+                            /** @enum {string} */
+                            status: "unavailable";
+                            /** @enum {string} */
+                            reason: "proposal_context_invalid" | "repository_unavailable" | "github_client_unavailable" | "github_evidence_unavailable" | "comparison_unavailable";
+                        };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The requested resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     postProposalsByProposalIdDecide: {
         parameters: {
             query?: never;
@@ -13290,6 +13453,7 @@ export interface operations {
                     /** @enum {string} */
                     decision: "approve" | "reject";
                     note?: string;
+                    reviewContextSeq?: number;
                 };
             };
         };

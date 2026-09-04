@@ -283,6 +283,10 @@ export type DecideProposalRequest = FacilityGeneratedBody<
   "POST",
   "/v1/proposals/{proposalId}/decide"
 >;
+export type ProposalReviewContext = FacilityGeneratedResponse<
+  "POST",
+  "/v1/proposals/{proposalId}/review-context"
+>;
 export type McpToolProposalRequest = FacilityGeneratedBody<"POST", "/v1/mcp/tool-proposals">;
 export type CreateBudgetRequest = FacilityGeneratedBody<"POST", "/v1/budgets">;
 export type UpdateBudgetRequest = FacilityGeneratedBody<"PATCH", "/v1/budgets/{budgetId}">;

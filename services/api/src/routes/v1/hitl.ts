@@ -12,6 +12,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
 import { executeApprovedProposal, resolveMcpToolTargetProject } from "../../executors.js";
+import {
+  buildPlanReviewContext,
+  REVIEW_CONTEXT_MAX_AGE_MS,
+  ReviewContextV1Schema,
+  reviewContextFromEventData,
+} from "../../hitl-review-context.js";
 import { MCP_TOOL_PERMISSIONS } from "../../mcp-policy.js";
 import type { Principal } from "../../types.js";
 import { ACTIONABLE_SEVERITIES } from "../../watchtower/issues.js";
@@ -469,19 +475,155 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
   );
 
   app.post(
+    "/v1/proposals/:proposalId/review-context",
+    {
+      config: { permission: "hitl:decide", auditAction: "hitl.review_presented" },
+      schema: {
+        params: IdParams,
+        response: {
+          200: z.object({
+            reviewContextSeq: z.number().int().positive(),
+            reviewContext: ReviewContextV1Schema,
+          }),
+        },
+      },
+    },
+    async (request) => {
+      const p = principal(request);
+      const { proposalId } = request.params as { proposalId: string };
+      const candidate = (
+        await db
+          .select({ proposal: proposals, actionType: actionTypes })
+          .from(proposals)
+          .innerJoin(actionTypes, eq(actionTypes.id, proposals.actionTypeId))
+          .where(and(eq(proposals.orgId, p.orgId), eq(proposals.id, proposalId)))
+          .limit(1)
+      )[0];
+      if (!candidate) throw notFound("Proposal not found");
+      assertBareRowProjectScope(p, candidate.proposal.projectId, "Proposal not found");
+      if (candidate.actionType.name !== "plan_acceptance") {
+        throw new ApiError(
+          409,
+          "review_context_not_supported",
+          "Review context is only available for plan acceptance proposals",
+        );
+      }
+      if (
+        candidate.proposal.state !== "open" ||
+        candidate.proposal.expiresAt.getTime() <= Date.now()
+      ) {
+        throw new ApiError(409, "not_open", "Proposal is not open");
+      }
+      const candidateOpener = (
+        await db
+          .select({ actor: proposalEvents.actor })
+          .from(proposalEvents)
+          .where(
+            and(
+              eq(proposalEvents.orgId, p.orgId),
+              eq(proposalEvents.proposalId, proposalId),
+              eq(proposalEvents.seq, 1),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (sameActor(candidateOpener?.actor, { type: p.type, id: p.id })) {
+        throw new ApiError(
+          403,
+          "same_principal_approval_denied",
+          "Proposals must be approved by a different principal than the requester",
+        );
+      }
+
+      const reviewContext = await buildPlanReviewContext(db, candidate.proposal, "facility_web", {
+        config,
+        githubFactory: app.githubClientFactory,
+      });
+      const reviewContextSeq = await db.transaction(async (tx) => {
+        const locked = (
+          await tx
+            .select({ proposal: proposals, actionType: actionTypes })
+            .from(proposals)
+            .innerJoin(actionTypes, eq(actionTypes.id, proposals.actionTypeId))
+            .where(and(eq(proposals.orgId, p.orgId), eq(proposals.id, proposalId)))
+            .for("update", { of: proposals })
+            .limit(1)
+        )[0];
+        if (
+          locked?.actionType.name !== "plan_acceptance" ||
+          locked.proposal.state !== "open" ||
+          locked.proposal.expiresAt.getTime() <= Date.now()
+        ) {
+          throw new ApiError(409, "not_open", "Proposal is not open");
+        }
+        assertBareRowProjectScope(p, locked.proposal.projectId, "Proposal not found");
+        const opener = (
+          await tx
+            .select({ actor: proposalEvents.actor })
+            .from(proposalEvents)
+            .where(
+              and(
+                eq(proposalEvents.orgId, p.orgId),
+                eq(proposalEvents.proposalId, proposalId),
+                eq(proposalEvents.seq, 1),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (sameActor(opener?.actor, { type: p.type, id: p.id })) {
+          throw new ApiError(
+            403,
+            "same_principal_approval_denied",
+            "Proposals must be approved by a different principal than the requester",
+          );
+        }
+        const latest = (
+          await tx
+            .select({ seq: proposalEvents.seq })
+            .from(proposalEvents)
+            .where(
+              and(eq(proposalEvents.orgId, p.orgId), eq(proposalEvents.proposalId, proposalId)),
+            )
+            .orderBy(desc(proposalEvents.seq))
+            .limit(1)
+        )[0];
+        const seq = (latest?.seq ?? 0) + 1;
+        await tx.insert(proposalEvents).values({
+          orgId: p.orgId,
+          proposalId,
+          seq,
+          type: "review_presented",
+          actor: { type: p.type, id: p.id },
+          data: { source: "facility_web", reviewContext },
+        });
+        return seq;
+      });
+      return { reviewContextSeq, reviewContext };
+    },
+  );
+
+  app.post(
     "/v1/proposals/:proposalId/decide",
     {
       config: { permission: "hitl:decide", auditAction: "hitl.decided" },
       schema: {
         params: IdParams,
-        body: z.object({ decision: z.enum(["approve", "reject"]), note: z.string().optional() }),
+        body: z.object({
+          decision: z.enum(["approve", "reject"]),
+          note: z.string().optional(),
+          reviewContextSeq: z.number().int().positive().optional(),
+        }),
         response: { 200: ProposalSchema },
       },
     },
     async (request) => {
       const p = principal(request);
       const { proposalId } = request.params as { proposalId: string };
-      const body = request.body as { decision: "approve" | "reject"; note?: string };
+      const body = request.body as {
+        decision: "approve" | "reject";
+        note?: string;
+        reviewContextSeq?: number;
+      };
       const state = body.decision === "approve" ? "approved" : "rejected";
       const row = await db.transaction(async (tx) => {
         const proposal = (
@@ -534,6 +676,61 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
             "Proposals must be approved by a different principal than the requester",
           );
         }
+        let decisionReviewContext:
+          | { seq: number; context: z.infer<typeof ReviewContextV1Schema> }
+          | undefined;
+        if (proposal.actionType.name === "plan_acceptance") {
+          if (!body.reviewContextSeq) {
+            throw new ApiError(
+              409,
+              "review_context_required",
+              "Review the current plan context before deciding",
+            );
+          }
+          const reviewEvent = (
+            await tx
+              .select()
+              .from(proposalEvents)
+              .where(
+                and(
+                  eq(proposalEvents.orgId, p.orgId),
+                  eq(proposalEvents.proposalId, proposalId),
+                  eq(proposalEvents.seq, body.reviewContextSeq),
+                  eq(proposalEvents.type, "review_presented"),
+                ),
+              )
+              .limit(1)
+          )[0];
+          const parsed = reviewContextFromEventData(reviewEvent?.data);
+          if (
+            !reviewEvent ||
+            !sameActor(reviewEvent.actor, { type: p.type, id: p.id }) ||
+            !parsed.success ||
+            parsed.data.source !== "facility_web"
+          ) {
+            throw new ApiError(
+              409,
+              "review_context_invalid",
+              "The referenced review context is not valid for this decision",
+            );
+          }
+          const ageMs = Date.now() - reviewEvent.ts.getTime();
+          if (ageMs < 0 || ageMs > REVIEW_CONTEXT_MAX_AGE_MS) {
+            throw new ApiError(
+              409,
+              "review_context_expired",
+              "The review context expired; review the current plan context again",
+            );
+          }
+          if (body.decision === "approve" && parsed.data.status !== "available") {
+            throw new ApiError(
+              409,
+              "review_context_unavailable",
+              "Facility could not capture the repository state shown for approval",
+            );
+          }
+          decisionReviewContext = { seq: reviewEvent.seq, context: parsed.data };
+        }
         const updated = (
           await tx
             .update(proposals)
@@ -562,7 +759,13 @@ export async function registerHitlRoutes(app: FastifyInstance, context: V1RouteC
           seq: (current[0]?.seq ?? 0) + 1,
           type: state,
           actor: { type: p.type, id: p.id },
-          data: { note: body.note },
+          data: decisionReviewContext
+            ? {
+                note: body.note,
+                reviewContextSeq: decisionReviewContext.seq,
+                reviewContext: decisionReviewContext.context,
+              }
+            : { note: body.note },
         });
         return updated;
       });
