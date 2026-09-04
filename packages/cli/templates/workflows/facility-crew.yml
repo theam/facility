@@ -102,23 +102,10 @@ jobs:
             fi
           done
 
-          if [ "$has_builder" = true ] && [ "$has_architect" = true ]; then
-            echo "::error::Use exactly one agent command: /builder or /architect."
-            exit 1
-          fi
-          if [ "$has_builder" = false ] && [ "$has_architect" = false ]; then
-            echo "::error::No supported agent command found. Use /builder or /architect at the start of a line."
-            exit 1
-          fi
-
-          if [ "$has_builder" = true ]; then
-            echo "mode=builder" >> "$GITHUB_OUTPUT"
-            echo "trigger_phrase=/builder" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=architect" >> "$GITHUB_OUTPUT"
-            echo "trigger_phrase=/architect" >> "$GITHUB_OUTPUT"
-          fi
-
+          # Authorization decides before command shape does. The job prefilter
+          # matches '/builder' or '/architect' ANYWHERE in the body, so on a
+          # public repository any sender reaches this step: one without write
+          # access must leave a quiet skip, never a red run.
           sender="$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")"
 
           # Authorize the canary: '{{CANARY_BOT}}' is the ONLY Bot sender
@@ -152,7 +139,6 @@ jobs:
               echo "::warning::Skipping crew: canary bot comment does not match the pinned canary probe text."
               echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
-            echo "run=true" >> "$GITHUB_OUTPUT"
           else
             # Explicit write-access gate — defense in depth beyond the
             # action's own check, and it skips gracefully instead of failing
@@ -160,14 +146,35 @@ jobs:
             permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$sender/permission" --jq '.permission' 2>/dev/null || echo none)"
             case "$permission" in
               admin|maintain|write)
-                echo "run=true" >> "$GITHUB_OUTPUT"
+                # Authorized: fall through to command-shape validation.
                 ;;
               *)
                 echo "::warning::Skipping crew: @$sender has repository permission '$permission', but /builder and /architect require write access."
-                echo "run=false" >> "$GITHUB_OUTPUT"
+                echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
                 ;;
             esac
           fi
+
+          if [ "$has_builder" = true ] && [ "$has_architect" = true ]; then
+            echo "::error::Use exactly one agent command: /builder or /architect."
+            exit 1
+          fi
+          # Only a command at the start of a line dispatches, but the prefilter also
+          # matches prose that merely names one ("ask /architect about it"). That is
+          # not a request, so skip it instead of failing the run red on the issue.
+          if [ "$has_builder" = false ] && [ "$has_architect" = false ]; then
+            echo "::warning::Skipping crew: no /builder or /architect command at the start of a line."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          if [ "$has_builder" = true ]; then
+            echo "mode=builder" >> "$GITHUB_OUTPUT"
+            echo "trigger_phrase=/builder" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=architect" >> "$GITHUB_OUTPUT"
+            echo "trigger_phrase=/architect" >> "$GITHUB_OUTPUT"
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
