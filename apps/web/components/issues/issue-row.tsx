@@ -7,7 +7,7 @@ import { useState } from "react";
 import { CiStatusLink } from "@/components/ci-status";
 import { WsjfChip } from "@/components/issues/wsjf-chip";
 import type { PipelineStory } from "@/lib/pipeline";
-import { storyHref } from "@/lib/pipeline";
+import { storyHref, storyOwner } from "@/lib/pipeline";
 
 function fmtAgo(iso: string | null) {
   if (!iso) return "—";
@@ -64,6 +64,7 @@ export function IssueRow({
   }
 
   const current = story.currentRun;
+  const owner = storyOwner(story.assignees);
   const openPull = story.prs.find((pull) => pull.state === "open") ?? null;
   const failedAgent = current?.mode.includes("architect")
     ? "architect"
@@ -212,6 +213,12 @@ export function IssueRow({
           </span>
         ))}
         {story.wsjf ? <WsjfChip wsjf={story.wsjf} /> : null}
+        {owner ? (
+          <span className="font-mono text-[10.5px] text-(--dim)">
+            @{owner.login}
+            {owner.extra > 0 ? ` +${owner.extra}` : ""}
+          </span>
+        ) : null}
         <span className="font-mono text-[10.5px] text-(--dim)">{fmtAgo(story.ghUpdatedAt)}</span>
         {action()}
       </div>
