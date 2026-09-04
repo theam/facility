@@ -15,12 +15,14 @@ import { accent, banner, bold, dim, heading, item, ok, skip, warn } from "./ui.m
 
 const CHECKOUT_SHA = "34e114876b0b11c390a56381ad16ebd13914f8d5"; // actions/checkout v4
 const SETUP_NODE_SHA = "49933ea5288caeca8642d1e84afbd3f7d6820020"; // actions/setup-node v4
+const SETUP_PYTHON_SHA = "a26af69be951a213d495a4c3e4e4022e16d87065"; // actions/setup-python v5
 const PNPM_SHA = "b906affcce14559ad1aafd4ab0e942779e9f58b1"; // pnpm/action-setup v4
 const AWS_AUTH_SHA = "517a711dbcd0e402f90c77e7e2f81e849156e31d"; // aws-actions/configure-aws-credentials v6.2.2
 const GOOGLE_AUTH_SHA = "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093"; // google-github-actions/auth v3
 const AUTH_MODES = new Set(["api-key", "oauth", "wif", "bedrock", "vertex"]);
 
-function toolchainSteps(packageManager, { conditional = false } = {}) {
+function toolchainSteps(detected, { conditional = false } = {}) {
+  const { packageManager } = detected;
   const guard = conditional ? "\n        if: steps.workflow-change.outputs.changed != 'true'" : "";
   if (packageManager === "pnpm") {
     return [
@@ -49,9 +51,23 @@ function toolchainSteps(packageManager, { conditional = false } = {}) {
       "",
     ].join("\n");
   }
+  if (packageManager === "poetry" || packageManager === "pipenv" || packageManager === "pip") {
+    // python-version is quoted so YAML does not read e.g. 3.10 as the float 3.1.
+    const steps = [
+      "",
+      `      - uses: actions/setup-python@${SETUP_PYTHON_SHA} # v5${guard}`,
+      "        with:",
+      `          python-version: ${JSON.stringify(detected.pythonVersion || "3.x")}`,
+    ];
+    if (packageManager === "poetry") steps.push("", `      - run: python -m pip install --upgrade poetry${guard}`);
+    else if (packageManager === "pipenv") steps.push("", `      - run: python -m pip install --upgrade pipenv${guard}`);
+    if (detected.install) steps.push("", `      - run: ${detected.install}${guard}`);
+    steps.push("");
+    return steps.join("\n");
+  }
   return [
     "",
-    "      # facility: no Node toolchain detected. Add your language setup steps",
+    "      # facility: no toolchain detected. Add your language setup steps",
     "      # here (compilers, package managers) so the crew can build and test.",
     "",
   ].join("\n");
@@ -418,8 +434,8 @@ export async function init(flags, pkgRoot, version) {
     CHECKS_RUN: checksRun(checks),
     CHECKS_LIST: checksList(checks),
     ALLOW_CHECKS_JSON: checksAllowJson(checks),
-    TOOLCHAIN_STEPS: toolchainSteps(detected.packageManager),
-    TOOLCHAIN_STEPS_CONDITIONAL: toolchainSteps(detected.packageManager, { conditional: true }),
+    TOOLCHAIN_STEPS: toolchainSteps(detected),
+    TOOLCHAIN_STEPS_CONDITIONAL: toolchainSteps(detected, { conditional: true }),
     BOARD_STEP: boardStep(org, project),
     BOARD_REVIEW_STEP: boardReviewStep(org, project),
     CANARY_BOT: canaryBot,
