@@ -4,6 +4,21 @@ title: FAQ
 
 # Frequently asked questions
 
+## Is Facility now only a persistent workspace manager?
+
+No. Facility remains an AI SDLC system for running coding agents inside a reviewable software
+delivery process. Persistent story workspaces are the 0.12 execution core. The product still joins
+human steering and review, repository gates, GitHub delivery state, costs, audit history,
+observability, and operational evidence around that core.
+
+## Did 0.12 remove humans, gates, or evidence?
+
+No. It removed unstable implementations of receipts, internal write approvals, and separate
+execution services. Humans still steer work and control repository merge policy. Branch protection,
+required CI, and reviews remain structural gates. Conversations, turns, Git state, pull requests,
+CI, costs, audits, previews, and lifecycle events remain reviewable evidence. Facility can add
+richer governance later without restoring the previous architecture unchanged.
+
 ## Is a workspace deleted after merge?
 
 No. Merge marks the story done and may suspend compute. The worktree, volume, conversation, and

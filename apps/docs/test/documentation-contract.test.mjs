@@ -39,6 +39,30 @@ test("the published navigation covers user, operator, reference, and contributor
   }
 });
 
+test("the product identity remains a reviewable AI SDLC rather than a workspace utility", () => {
+  const readme = read("README.md");
+  assert.match(
+    readme,
+    /Facility is open-source, self-hosted tooling for running AI coding agents as[\s\S]*part of a reviewable software delivery process[\s\S]*humans, the gates[\s\S]*evidence in one place/,
+  );
+  assert.match(readme, /Status: early software, published early on purpose/);
+  assert.match(readme, /Who Facility is for/);
+  assert.match(readme, /0\.12 simplifies Facility's architecture, not its purpose/);
+
+  const index = read("apps/docs/docs/index.md");
+  assert.match(index, /Facility is an AI SDLC system/);
+  assert.match(index, /Persistent story workspaces are the execution core[\s\S]*not a replacement/);
+  assert.match(index, /Humans, gates, and evidence/);
+
+  const method = read("apps/docs/docs/concepts/method.md");
+  assert.match(method, /reviewable software delivery process/);
+  assert.match(method, /Humans, gates, and evidence/);
+
+  const roadmap = read("apps/docs/docs/roadmap.md");
+  assert.match(roadmap, /Persistent story workspaces change its execution foundation, not that[\s\S]*direction/);
+  assert.match(roadmap, /Beyond 0\.12/);
+});
+
 test("the project manifest reference covers every strict 0.12 field", () => {
   const guide = read("apps/docs/docs/reference/project-manifest.md");
   for (const field of [

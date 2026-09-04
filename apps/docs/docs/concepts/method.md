@@ -1,12 +1,31 @@
 ---
-title: Operating model
+title: AI SDLC operating model
 ---
 
-# Operating model
+# AI SDLC operating model
 
-Facility gives an agent the same practical working surface a repository maintainer expects: a
-checkout, a shell, the project development environment, a browser, Git, and GitHub. It adds
-durability around that surface instead of inserting a second software-delivery process.
+Facility runs AI coding agents as part of a reviewable software delivery process. It keeps the
+humans, repository gates, and delivery evidence connected from the first story message to the pull
+request and its outcome.
+
+The persistent workspace is the execution foundation for that process. It gives an agent the same
+practical working surface a repository maintainer expects: a checkout, a shell, the project
+development environment, a browser, Git, and GitHub. Durability lets several agents and people
+continue the same work without replacing the software-delivery process a team already trusts.
+
+## Humans, gates, and evidence
+
+Facility does not define software delivery as autonomous code generation. A person chooses or
+accepts the work, can steer the shared conversation, inspects the resulting branch and preview, and
+retains authority over merge policy.
+
+Repository rules provide structural gates: protected branches, required CI, required reviews, and
+the final merge controls. Facility adds operating gates such as project budgets, authenticated
+previews, trigger configuration, and explicit confirmation before permanent deletion.
+
+The story keeps the evidence needed to review and operate that process: prompts and messages, agent
+and model identity, turn outcomes, worktree state, branches and pull requests, CI and issue state,
+usage and cost, audit events, previews, and workspace lifecycle events.
 
 ## Repository-owned configuration
 
@@ -41,6 +60,11 @@ push, and open or update a pull request for configured repositories.
 This is deliberately a maintainer trust model. The structural safety boundary remains the normal
 repository workflow: protected branches, required CI, required reviews, and a human decision to
 merge. Agent prompts describe expected conduct; they are not a security sandbox.
+
+0.12 removes Facility-managed receipts and internal write approvals because those implementations
+were not stable enough to justify their complexity. It does not remove humans, gates, or evidence
+from the product. Those outcomes remain visible through the story, GitHub, CI, audit history, and
+the web UI, and richer governance can be added later on top of the persistent lifecycle.
 
 ## Persistence is explicit
 

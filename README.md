@@ -11,9 +11,61 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-FFD923" alt="Apache License 2.0">
 </p>
 
-Facility is a self-hosted service for continuing a software story with Claude Code or Codex in a
-persistent development workspace. MCP is the primary interface. The web application exposes the
-same projects, agents, stories, conversations, environments, previews, and lifecycle controls.
+Facility is open-source, self-hosted tooling for running AI coding agents as
+part of a reviewable software delivery process — with the humans, the gates
+and the evidence in one place.
+
+Facility remains an AI SDLC system. It connects software work, agents, development environments,
+GitHub delivery state, human review, costs, and operational evidence. In 0.12, a persistent story
+workspace becomes the durable execution core for that system. MCP is the primary automation
+interface, while the web application remains a first-class surface over the same projects, agents,
+stories, conversations, environments, previews, and lifecycle controls.
+
+## Status: early software, published early on purpose
+
+Facility runs the delivery of the team that builds it, and nowhere else yet. It
+is published at this stage deliberately: a platform for governing AI-assisted
+delivery is not something to design in private for a year and then unveil. It
+gets better by being used, argued with, and corrected.
+
+What that means in practice: the database schema moves, the API is versioned
+but young, features arrive ahead of their documentation, and no upgrade path is
+promised between `0.x` releases. Point it at repositories where a bad agent
+pull request is an inconvenience rather than an incident, and read the
+[security model](apps/docs/docs/reference/security.md) and the
+[hardening notes](apps/docs/docs/reference/hardening.md) before pointing it at
+anything else. Apache-2.0 means what it says: no warranty, use at your own
+risk.
+
+Bug reports, questions and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Rough edges are expected, and the ones you
+hit are the ones worth fixing first.
+
+## Who Facility is for
+
+- **Engineering teams** that want one explicit standard for humans and agents,
+  reproducible environments for agent runs, and deterministic checks for
+  repository-specific rules.
+- **Platform and engineering leaders** operating agents across several
+  repositories who need centrally managed templates, upgrades, credentials,
+  spend limits, audit history, and outcome data.
+- **Security-conscious organizations** that need to keep the control plane,
+  run records, and model traffic in their own environment while using scoped
+  machine credentials and human approval gates.
+
+Start by connecting one repository. Install the process into the repository
+itself when the team wants agents running in its own CI.
+
+## What changes in 0.12
+
+0.12 simplifies Facility's architecture, not its purpose. It removes execution and governance
+components that were not yet stable and concentrates the product around a faster, more robust
+persistent core. Cost and budget controls, observability, analytics, audit history, scheduled
+agents, the GitHub issue and CI mirror, and the human web interface remain part of Facility.
+
+Capabilities removed from this release are not excluded from Facility's future. They can return in
+simpler forms as the persistent lifecycle proves itself. The immediate goal is to make the complete
+issue-to-pull-request loop dependable before adding more policy and orchestration layers around it.
 
 Facility 0.12 is a breaking simplification currently under development. Do not use a 0.11 database
 with it. Back up existing data and start from an empty 0.12 database.

@@ -1,7 +1,12 @@
 # Contributing
 
-Facility uses the same operating rules it installs into other repositories:
-one coherent change, explicit verification, and human review before merge.
+Facility is an AI SDLC system for running coding agents as part of reviewable
+software delivery. Contributions must preserve that product direction even
+when simplifying its implementation: humans, gates, and evidence remain part
+of the system around its persistent workspace core.
+
+Facility uses the same operating rules it applies to other repositories: one
+coherent change, explicit verification, and human review before merge.
 
 ## Before you start
 
