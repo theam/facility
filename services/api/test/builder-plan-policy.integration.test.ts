@@ -35,6 +35,10 @@ import {
 import { ApiError } from "../src/errors.js";
 import { githubIssueRevisionSha256 } from "../src/github/issue-revision.js";
 import { syncRepoFacilityConfig } from "../src/github/kickstart.js";
+import {
+  insertGithubPlanAcceptanceReplacingSiblings,
+  supersedeOpenGithubPlanAcceptances,
+} from "../src/github/plan-acceptance.js";
 import { routeTrigger, type TriggerPayload } from "../src/github/router.js";
 import {
   createGovernedBuilderRetry,
@@ -482,6 +486,268 @@ describe("builder plan policy integration", async () => {
         .where(and(eq(auditEvents.orgId, fixture.orgId), eq(auditEvents.action, "hitl.decided")))
     ).filter((event) => (event.target as { id?: unknown }).id === fixture.proposalId);
     expect(decisions).toHaveLength(1);
+  });
+
+  it("refuses bare /builder when multiple live plan_acceptance proposals exist on the issue", async () => {
+    const fixture = await githubRouteFixture("open");
+    await db
+      .update(projects)
+      .set({ builderPlanPolicy: "required" })
+      .where(eq(projects.id, fixture.projectId));
+    await db
+      .update(repos)
+      .set({
+        fingerprint: { files: [] },
+        fingerprintStatus: "ok",
+        fingerprintVerifiedAt: new Date(),
+      })
+      .where(eq(repos.projectId, fixture.projectId));
+    await insertSiblingOpenPlanAcceptance(fixture);
+    const before = await projectRuns(fixture.orgId, fixture.projectId);
+    const result = await routeTrigger(db, fixture.orgId, fixture.client, fixture.payload);
+    expect(result).toMatchObject({ routed: false, reason: "builder_plan_ambiguous" });
+    expect(await projectRuns(fixture.orgId, fixture.projectId)).toHaveLength(before.length);
+    await expect(lastDenialCode(fixture.orgId)).resolves.toBe("builder_plan_ambiguous");
+  });
+
+  it("binds GitHub /builder to the explicit proposal id when several live plans exist", async () => {
+    const fixture = await githubRouteFixture("open");
+    await db
+      .update(projects)
+      .set({ builderPlanPolicy: "required" })
+      .where(eq(projects.id, fixture.projectId));
+    await db
+      .update(repos)
+      .set({
+        fingerprint: { files: [] },
+        fingerprintStatus: "ok",
+        fingerprintVerifiedAt: new Date(),
+      })
+      .where(eq(repos.projectId, fixture.projectId));
+    const sibling = await insertSiblingOpenPlanAcceptance(fixture);
+    const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+    const result = await routeTrigger(
+      db,
+      fixture.orgId,
+      fixture.client,
+      {
+        ...fixture.payload,
+        comment: { id: 205, body: `/builder ${fixture.proposalId}` },
+      },
+      async (queue, data) => {
+        enqueued.push({ queue, data });
+        return null;
+      },
+      `delivery_${crypto.randomUUID()}`,
+    );
+    expect(result.routed).toBe(true);
+    const run = (
+      await db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, result.runId ?? ""))
+        .limit(1)
+    )[0];
+    expect(run?.trigger).toMatchObject({
+      source: "plan_acceptance",
+      proposalId: fixture.proposalId,
+      architectRunId: fixture.architectRunId,
+    });
+    expect(run?.trigger).not.toMatchObject({ proposalId: sibling.proposalId });
+    expect(enqueued).toHaveLength(1);
+    const siblingProposal = (
+      await db.select().from(proposals).where(eq(proposals.id, sibling.proposalId)).limit(1)
+    )[0];
+    expect(siblingProposal?.state).toBe("open");
+  });
+
+  it("supersedes older open proposals when a newer architect plan opens on the same issue", async () => {
+    const fixture = await githubRouteFixture("open");
+    const repo = (
+      await db.select().from(repos).where(eq(repos.projectId, fixture.projectId)).limit(1)
+    )[0];
+    if (!repo) throw new Error("supersede repo fixture missing");
+    const sibling = await insertSiblingOpenPlanAcceptance(fixture);
+    const superseded = await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      return supersedeOpenGithubPlanAcceptances(tx, {
+        orgId: fixture.orgId,
+        projectId: fixture.projectId,
+        issueNumber: 204,
+        repoId: repo.id,
+        architectRunId: sibling.architectRunId,
+        keepProposalId: sibling.proposalId,
+      });
+    });
+    expect(superseded).toBe(1);
+    const original = (
+      await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+    )[0];
+    expect(original?.state).toBe("cancelled");
+    const enqueued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+    const result = await routeTrigger(
+      db,
+      fixture.orgId,
+      fixture.client,
+      fixture.payload,
+      async (queue, data) => {
+        enqueued.push({ queue, data });
+        return null;
+      },
+      `delivery_${crypto.randomUUID()}`,
+    );
+    expect(result.routed).toBe(true);
+    expect(enqueued).toHaveLength(1);
+    const run = (
+      await db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, result.runId ?? ""))
+        .limit(1)
+    )[0];
+    expect(run?.trigger).toMatchObject({
+      source: "plan_acceptance",
+      proposalId: sibling.proposalId,
+    });
+  });
+
+  it("keeps the previous live plan open when creating the replacement proposal fails", async () => {
+    const fixture = await githubRouteFixture("open");
+    const repo = (
+      await db.select().from(repos).where(eq(repos.projectId, fixture.projectId)).limit(1)
+    )[0];
+    if (!repo) throw new Error("create-failure repo fixture missing");
+    const original = (
+      await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+    )[0];
+    if (!original) throw new Error("create-failure proposal fixture missing");
+    const architectRunId = newId("run");
+    await db.insert(runs).values({
+      id: architectRunId,
+      orgId: fixture.orgId,
+      projectId: fixture.projectId,
+      mode: "architect",
+      engine: "codex",
+      status: "succeeded",
+      trigger: { type: "github_comment" },
+      gh: fixture.dispatch.gh,
+      createdBy: { type: "user", id: "architect-create-fail" },
+    });
+
+    await expect(
+      db.transaction(async (transaction) => {
+        const tx = transaction as unknown as FacilityDb;
+        await insertGithubPlanAcceptanceReplacingSiblings(tx, {
+          orgId: fixture.orgId,
+          projectId: fixture.projectId,
+          repoId: repo.id,
+          owner: repo.owner,
+          repo: repo.name,
+          issueNumber: 204,
+          architectRunId,
+          // Invalid action type forces the insert to fail before supersede.
+          actionTypeId: "act_missing_for_atomicity_regression",
+          proposalId: newId("prop"),
+          payload: {
+            ...(original.payload as Record<string, unknown>),
+            architectRunId,
+          },
+          contextMd: "This plan must never replace the live Gate 1 proposal.",
+          expiresAt: new Date(Date.now() + 3_600_000),
+        });
+      }),
+    ).rejects.toThrow();
+
+    const stillOpen = (
+      await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+    )[0];
+    expect(stillOpen?.state).toBe("open");
+    const live = await db
+      .select({ id: proposals.id, state: proposals.state })
+      .from(proposals)
+      .innerJoin(actionTypes, eq(actionTypes.id, proposals.actionTypeId))
+      .where(
+        and(
+          eq(proposals.orgId, fixture.orgId),
+          eq(proposals.projectId, fixture.projectId),
+          eq(actionTypes.name, "plan_acceptance"),
+          eq(proposals.state, "open"),
+        ),
+      );
+    expect(live.map((row) => row.id)).toEqual([fixture.proposalId]);
+  });
+
+  it("creates the new plan first, then cancels older live plans in one transaction", async () => {
+    const fixture = await githubRouteFixture("open");
+    const repo = (
+      await db.select().from(repos).where(eq(repos.projectId, fixture.projectId)).limit(1)
+    )[0];
+    if (!repo) throw new Error("atomic-create repo fixture missing");
+    const original = (
+      await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+    )[0];
+    if (!original) throw new Error("atomic-create proposal fixture missing");
+    const actionTypeId = original.actionTypeId;
+    const architectRunId = newId("run");
+    const proposalId = newId("prop");
+    await db.insert(runs).values({
+      id: architectRunId,
+      orgId: fixture.orgId,
+      projectId: fixture.projectId,
+      mode: "architect",
+      engine: "codex",
+      status: "succeeded",
+      trigger: { type: "github_comment" },
+      gh: fixture.dispatch.gh,
+      createdBy: { type: "user", id: "architect-atomic" },
+    });
+
+    const created = await db.transaction(async (transaction) => {
+      const tx = transaction as unknown as FacilityDb;
+      return insertGithubPlanAcceptanceReplacingSiblings(tx, {
+        orgId: fixture.orgId,
+        projectId: fixture.projectId,
+        repoId: repo.id,
+        owner: repo.owner,
+        repo: repo.name,
+        issueNumber: 204,
+        architectRunId,
+        actionTypeId,
+        proposalId,
+        payload: {
+          ...(original.payload as Record<string, unknown>),
+          architectRunId,
+          planSha256: createHash("sha256").update("Atomic replacement plan").digest("hex"),
+        },
+        contextMd: "Atomic replacement plan",
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+    });
+
+    expect(created.id).toBe(proposalId);
+    expect(
+      (await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1))[0]
+        ?.state,
+    ).toBe("cancelled");
+    expect(
+      (await db.select().from(proposals).where(eq(proposals.id, proposalId)).limit(1))[0]?.state,
+    ).toBe("open");
+    const result = await routeTrigger(db, fixture.orgId, fixture.client, {
+      ...fixture.payload,
+      comment: { id: 301, body: "/builder" },
+    });
+    expect(result).toMatchObject({ routed: true });
+    const run = (
+      await db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, result.runId ?? ""))
+        .limit(1)
+    )[0];
+    expect(run?.trigger).toMatchObject({
+      source: "plan_acceptance",
+      proposalId,
+    });
   });
 
   it.each([
@@ -2222,6 +2488,56 @@ describe("builder plan policy integration", async () => {
       live,
       payload,
     };
+  }
+
+  async function insertSiblingOpenPlanAcceptance(
+    fixture: Awaited<ReturnType<typeof githubRouteFixture>>,
+  ) {
+    const original = (
+      await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+    )[0];
+    if (!original) throw new Error("sibling plan fixture missing");
+    const architectRunId = newId("run");
+    const proposalId = newId("prop");
+    await db.insert(runs).values({
+      id: architectRunId,
+      orgId: fixture.orgId,
+      projectId: fixture.projectId,
+      mode: "architect",
+      engine: "codex",
+      status: "succeeded",
+      trigger: { type: "github_comment" },
+      gh: fixture.dispatch.gh,
+      createdBy: { type: "user", id: "architect-2" },
+    });
+    await db.insert(proposals).values({
+      ...original,
+      id: proposalId,
+      runId: architectRunId,
+      contextMd: "Second architect plan with a different scope.",
+      payload: {
+        ...(original.payload as Record<string, unknown>),
+        architectRunId,
+        planSha256: createHash("sha256")
+          .update("Second architect plan with a different scope.")
+          .digest("hex"),
+      },
+      state: "open",
+      decidedBy: null,
+      decidedAt: null,
+      createdAt: new Date(Date.now() + 1_000),
+      updatedAt: new Date(Date.now() + 1_000),
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    await db.insert(proposalEvents).values({
+      orgId: fixture.orgId,
+      proposalId,
+      seq: 1,
+      type: "open",
+      actor: { type: "agent", id: architectRunId },
+      data: { source: "architect_run" },
+    });
+    return { architectRunId, proposalId };
   }
 
   async function projectRuns(orgId: string, projectId: string) {

@@ -74,6 +74,8 @@ describe("builder plan policy", () => {
   it.each([
     "builder_plan_expired",
     "builder_plan_rejected",
+    "builder_plan_superseded",
+    "builder_plan_ambiguous",
     "builder_plan_already_consumed",
     "builder_plan_stale",
     "builder_plan_freshness_unavailable",

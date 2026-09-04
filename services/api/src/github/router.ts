@@ -1,6 +1,5 @@
 import { newId } from "@facility/core";
 import {
-  actionTypes,
   type FacilityDb,
   insertAuditEvent,
   proposalEvents,
@@ -24,6 +23,7 @@ import { appendRunEvents } from "../sandbox/state.js";
 import { findAgentDef, laneFor } from "./agent-routing.js";
 import { type FacilityGithubClient, GithubIssueContextTooLargeError } from "./client.js";
 import { syncRepoFacilityConfig } from "./kickstart.js";
+import { resolveGithubPlanAcceptance } from "./plan-acceptance.js";
 import { renderGithubRunProgress } from "./run-progress.js";
 
 export { findAgentDef, laneFor } from "./agent-routing.js";
@@ -58,18 +58,34 @@ export type GithubIssueCommentContext = {
 export const ISSUE_CONTEXT_MAX_CHARS = 512 * 1024;
 
 const COMMAND_RE =
-  /(?:^|\n)\s*\/(builder|architect|codex-builder|codex-architect)(?=$|[\s,.:;!?)])/g;
+  /(?:^|\n)\s*\/(builder|architect|codex-builder|codex-architect)(?:\s+(prop_[0-9a-z_]+))?(?=$|[\s,.:;!?)])/gi;
 
 export function resolveSlashCommand(body: string): {
   command?: string;
   agentCommand?: string;
+  proposalId?: string;
   ambiguous: boolean;
 } {
-  const commands = [...body.matchAll(COMMAND_RE)].map((match) => match[1]).filter(Boolean);
+  const pattern = new RegExp(COMMAND_RE.source, COMMAND_RE.flags);
+  const matches = [...body.matchAll(pattern)];
+  const commands = matches.map((match) => match[1]).filter(Boolean);
   const unique = [...new Set(commands)];
   if (unique.length !== 1) return { ambiguous: unique.length > 1 };
   const raw = unique[0] ?? "";
-  return { command: raw.replace(/^codex-/, ""), agentCommand: raw, ambiguous: false };
+  const proposalIds = matches
+    .filter((match) => match[1] === raw)
+    .map((match) => match[2])
+    .filter((value): value is string => Boolean(value));
+  const uniqueProposalIds = [...new Set(proposalIds)];
+  if (uniqueProposalIds.length > 1) return { ambiguous: true };
+  const proposalId =
+    raw.includes("builder") && uniqueProposalIds.length === 1 ? uniqueProposalIds[0] : undefined;
+  return {
+    command: raw.replace(/^codex-/, ""),
+    agentCommand: raw,
+    proposalId,
+    ambiguous: false,
+  };
 }
 
 export function githubTriggerRequiresClient(payload: TriggerPayload) {
@@ -151,15 +167,24 @@ export async function routeTrigger(
   const request = githubRequestContext(payload, issueComments);
   assertGithubRequestContextSize(request);
   const governedBuilder = builderIdentity(command, agent.name);
-  let accepted = governedBuilder
+  const acceptance = governedBuilder
     ? await githubPlanAcceptance(db, {
         orgId: repo.orgId,
         projectId: repo.projectId,
         owner,
         repo: name,
         issueNumber,
+        proposalId: resolved.proposalId,
       })
     : null;
+  let accepted =
+    acceptance?.status === "resolved"
+      ? {
+          proposal: acceptance.proposal,
+          architectRun: acceptance.architectRun,
+          blockedRunId: acceptance.blockedRunId,
+        }
+      : null;
   // `optional` is the backwards-compatible default. Before the policy seam,
   // only a non-expired open/approved/executing/executed proposal participated
   // in /builder routing; every other lifecycle state fell through to an
@@ -193,6 +218,27 @@ export async function routeTrigger(
     ...(payload.issue?.node_id ? { issueNodeId: payload.issue.node_id } : {}),
   };
   const githubActor = { type: "user" as const, id: `github:${sender}`, name: sender };
+  if (acceptance?.status === "ambiguous") {
+    await recordBuilderPlanDenial(
+      db,
+      {
+        orgId: repo.orgId,
+        projectId: repo.projectId,
+        mode: agent.name,
+        agentDefId: agent.id,
+        trigger: {
+          type: "github_comment",
+          ambiguousProposalIds: acceptance.liveProposalIds,
+        },
+        gh: runGh,
+        actor: githubActor,
+        source: "github_builder_ambiguous",
+      },
+      "builder_plan_ambiguous",
+      `multiple_live_plans:${acceptance.liveProposalIds.join(",")}`,
+    );
+    return { routed: false, reason: "builder_plan_ambiguous" };
+  }
   let run: typeof runs.$inferSelect | undefined;
   let approvedByThisInvocation = false;
   if (governedBuilder && accepted?.proposal) {
@@ -646,31 +692,19 @@ async function githubPlanAcceptance(
     owner: string;
     repo: string;
     issueNumber: number;
+    proposalId?: string;
   },
 ) {
-  const latest = (
-    await db
-      .select({ proposal: proposals, architectRun: runs })
-      .from(proposals)
-      .innerJoin(actionTypes, eq(actionTypes.id, proposals.actionTypeId))
-      .innerJoin(runs, eq(runs.id, proposals.runId))
-      .where(
-        and(
-          eq(proposals.orgId, input.orgId),
-          eq(proposals.projectId, input.projectId),
-          eq(actionTypes.name, "plan_acceptance"),
-          eq(runs.status, "succeeded"),
-          sql`${runs.gh} ->> 'owner' = ${input.owner}`,
-          sql`${runs.gh} ->> 'repo' = ${input.repo}`,
-          sql`(${runs.gh} ->> 'issueNumber')::int = ${input.issueNumber}`,
-        ),
-      )
-      .orderBy(desc(proposals.createdAt))
-      .limit(1)
-  )[0];
-  if (!latest) return null;
-  const existing = await loadPlanBuilderRun(db, latest.proposal);
-  return { ...latest, blockedRunId: existing?.id ?? null };
+  const resolved = await resolveGithubPlanAcceptance(db, input);
+  if (!resolved) return null;
+  if (resolved.status === "ambiguous") return resolved;
+  const existing = await loadPlanBuilderRun(db, resolved.proposal);
+  return {
+    status: "resolved" as const,
+    proposal: resolved.proposal,
+    architectRun: resolved.architectRun,
+    blockedRunId: existing?.id ?? null,
+  };
 }
 
 async function githubProposalDenialCode(
@@ -678,6 +712,7 @@ async function githubProposalDenialCode(
   proposal: typeof proposals.$inferSelect,
 ): Promise<BuilderPlanDenialCode> {
   if (proposal.state === "rejected") return "builder_plan_rejected";
+  if (proposal.state === "cancelled") return "builder_plan_superseded";
   if (proposal.state === "expired") return "builder_plan_expired";
   if (["approved", "executing", "executed"].includes(proposal.state)) {
     return "builder_plan_already_consumed";

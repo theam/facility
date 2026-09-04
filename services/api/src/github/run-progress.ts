@@ -88,7 +88,7 @@ export function renderGithubRunProgress(input: GithubRunProgressInput) {
         "",
         "## Continue from GitHub",
         "",
-        `- Approve this plan and start implementation by commenting \`/${builderCommand(input.command, input.mode)}\`.`,
+        `- Approve this plan and start implementation by commenting \`/${builderCommand(input.command, input.mode)} ${input.proposalId}\`, or \`/${builderCommand(input.command, input.mode)}\` when it is the only open plan on the issue.`,
         `- Request another planning pass by commenting \`/${architectCommand(input.command, input.mode)} <feedback>\`.`,
         `- Proposal audit ID: \`${input.proposalId}\`. The architect cannot approve its own proposal.`,
       );
@@ -120,6 +120,10 @@ export function renderBuilderPlanDenial(code: string) {
       "The Architect approval expired. Run `/architect` again to create a fresh plan.",
     builder_plan_rejected:
       "The Architect plan was rejected. Run `/architect` again after updating the request.",
+    builder_plan_superseded:
+      "A newer Architect plan replaced this one. Review the latest plan comment, then approve with `/builder <proposal-id>`.",
+    builder_plan_ambiguous:
+      "More than one open Architect plan exists on this issue. Approve the plan you reviewed with `/builder <proposal-id>` (shown in the plan comment).",
     builder_plan_already_consumed:
       "That Architect approval has already been consumed. Inspect its Builder run or create a new plan with `/architect`.",
     builder_plan_stale:

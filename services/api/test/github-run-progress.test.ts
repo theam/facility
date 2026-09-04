@@ -43,7 +43,8 @@ describe("GitHub run progress", () => {
     expect(body).toContain("1. Add the behavior.");
     expect(body).toContain("## Agent progress");
     expect(body).toContain("- [x] Inspect the code");
-    expect(body).toContain("commenting `/codex-builder`");
+    expect(body).toContain("commenting `/codex-builder prop_validation`");
+    expect(body).toContain("when it is the only open plan on the issue");
     expect(body).toContain("commenting `/codex-architect <feedback>`");
     expect(body).toContain("`prop_validation`");
   });
