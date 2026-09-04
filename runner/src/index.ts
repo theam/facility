@@ -121,8 +121,7 @@ async function main() {
   const phases = new RunPhaseRecorder(emit);
   let bundle: RunBundle | null = null;
   let steerStop: (() => void) | undefined;
-  let progressStop: (() => Promise<boolean>) | undefined;
-  let checkpointStop: (() => Promise<void>) | undefined;
+  const polls: RunPolls = {};
   let preparedSecuritySweep: PreparedSecuritySweepEvidence | null = null;
   let restoredSessionState = false;
   secretsToRedact.add(runnerToken());
@@ -211,10 +210,8 @@ async function main() {
     if (managedProgress) {
       await emit([{ type: "agent_progress", data: { markdown: managedProgress } }]);
     }
-    progressStop = startAgentProgressPoll(cwdFor(bundle));
-    const stopProgress = progressStop;
-    checkpointStop = startSessionCheckpointPoll(activeBundle);
-    const stopCheckpoint = checkpointStop;
+    polls.progress = startAgentProgressPoll(cwdFor(bundle));
+    polls.checkpoint = startSessionCheckpointPoll(activeBundle);
     const engineCode = await phases.measure(
       "agent",
       () => runEngine(activeBundle, restoredSessionState),
@@ -222,69 +219,15 @@ async function main() {
         outcome: interruptRequested ? "canceled" : code === 0 ? "succeeded" : "failed",
       }),
     );
-    const captured = await phases.measure("result_capture", async () => {
-      const agentProgressPublished = await stopProgress();
-      progressStop = undefined;
-      if (managedProgress) {
-        await emit([
-          {
-            type: "agent_progress",
-            data: { markdown: readOnlyEngineProgress(engineCode === 0) },
-          },
-        ]);
-      }
-      const progressPublished = managedProgress !== null || agentProgressPublished;
-      const securityReport = isSecurityMode(activeBundle.mode)
-        ? await readSecurityReport(
-            join(cwdFor(activeBundle), ".agent-sdlc", "security-findings.json"),
-          )
-        : undefined;
-      const securityReportConfigured =
-        !isSecurityMode(activeBundle.mode) || securityReport !== null;
-      const securityEvidenceConfigured =
-        !isSecurityMode(activeBundle.mode) ||
-        (preparedSecuritySweep !== null &&
-          (await verifySecuritySweepEvidence(preparedSecuritySweep)));
-      if (isSecurityMode(activeBundle.mode)) {
-        await emit([
-          {
-            type: "check",
-            data: {
-              self_reported: false,
-              name: "deterministic security evidence",
-              status: securityEvidenceConfigured ? "passed" : "failed",
-              ...(securityEvidenceConfigured ? {} : { reason: "security_evidence_invalid" }),
-            },
-          },
-          {
-            type: "check",
-            data: {
-              self_reported: false,
-              name: "structured security findings",
-              status: securityReportConfigured ? "passed" : "failed",
-              ...(securityReportConfigured ? {} : { reason: "security_report_invalid" }),
-            },
-          },
-        ]);
-      }
-      if (engineEventTransportDegraded) {
-        await emit([
-          {
-            type: "artifact_error",
-            data: { kind: "engine_events_degraded" },
-          },
-        ]).catch(() => undefined);
-      }
-      await uploadTranscript();
-      await stopCheckpoint();
-      checkpointStop = undefined;
-      return {
-        progressPublished,
-        securityReport,
-        securityReportConfigured,
-        securityEvidenceConfigured,
-      };
-    });
+    const captured = await phases.measure("result_capture", () =>
+      captureRunResult({
+        bundle: activeBundle,
+        engineCode,
+        managedProgress,
+        preparedSecuritySweep,
+        polls,
+      }),
+    );
     const {
       progressPublished,
       securityReport,
@@ -432,10 +375,111 @@ async function main() {
     );
     process.exitCode = 1;
   } finally {
-    await progressStop?.().catch(() => false);
-    await checkpointStop?.().catch(() => undefined);
+    await polls.progress?.().catch(() => false);
+    await polls.checkpoint?.().catch(() => undefined);
     steerStop?.();
   }
+}
+
+/**
+ * The polls a run starts before the engine. `captureRunResult` clears each
+ * handle as it stops it, so `main()`'s `finally` cannot stop one a second time.
+ */
+export type RunPolls = {
+  progress?: () => Promise<boolean>;
+  checkpoint?: () => Promise<void>;
+};
+
+export type RunResultCapture = {
+  progressPublished: boolean;
+  securityReport: Record<string, unknown> | null | undefined;
+  securityReportConfigured: boolean;
+  securityEvidenceConfigured: boolean;
+};
+
+/**
+ * The run's `result_capture` phase: close the progress poll, record the
+ * security evidence the mode requires, and preserve the transcript.
+ *
+ * Exported because this is the only definition of that sequence. `main()` runs
+ * exactly this and the integration tests drive exactly this, so a step that
+ * stops happening for real stops happening under test too. Reassembling these
+ * calls in a test instead would keep the test green while the phase drifted —
+ * which is how the transcript evidence came to be emitted apart from the upload
+ * it describes.
+ */
+export async function captureRunResult({
+  bundle,
+  engineCode,
+  managedProgress,
+  preparedSecuritySweep,
+  polls,
+  transcriptPath,
+}: {
+  bundle: RunBundle;
+  engineCode: number;
+  managedProgress: string | null;
+  preparedSecuritySweep: PreparedSecuritySweepEvidence | null;
+  polls: RunPolls;
+  transcriptPath?: string;
+}): Promise<RunResultCapture> {
+  const agentProgressPublished = (await polls.progress?.()) ?? false;
+  polls.progress = undefined;
+  if (managedProgress) {
+    await emit([
+      {
+        type: "agent_progress",
+        data: { markdown: readOnlyEngineProgress(engineCode === 0) },
+      },
+    ]);
+  }
+  const progressPublished = managedProgress !== null || agentProgressPublished;
+  const securityReport = isSecurityMode(bundle.mode)
+    ? await readSecurityReport(join(cwdFor(bundle), ".agent-sdlc", "security-findings.json"))
+    : undefined;
+  const securityReportConfigured = !isSecurityMode(bundle.mode) || securityReport !== null;
+  const securityEvidenceConfigured =
+    !isSecurityMode(bundle.mode) ||
+    (preparedSecuritySweep !== null && (await verifySecuritySweepEvidence(preparedSecuritySweep)));
+  if (isSecurityMode(bundle.mode)) {
+    await emit([
+      {
+        type: "check",
+        data: {
+          self_reported: false,
+          name: "deterministic security evidence",
+          status: securityEvidenceConfigured ? "passed" : "failed",
+          ...(securityEvidenceConfigured ? {} : { reason: "security_evidence_invalid" }),
+        },
+      },
+      {
+        type: "check",
+        data: {
+          self_reported: false,
+          name: "structured security findings",
+          status: securityReportConfigured ? "passed" : "failed",
+          ...(securityReportConfigured ? {} : { reason: "security_report_invalid" }),
+        },
+      },
+    ]);
+  }
+  if (engineEventTransportDegraded) {
+    await emit([
+      {
+        type: "artifact_error",
+        data: { kind: "engine_events_degraded" },
+      },
+    ]).catch(() => undefined);
+  }
+  await uploadTranscript({ transcriptPath });
+  await polls.checkpoint?.();
+  polls.checkpoint = undefined;
+  return {
+    progressPublished,
+    securityReport,
+    securityReportConfigured,
+    securityEvidenceConfigured,
+  };
 }
 
 export async function prepareWorkspace(
@@ -891,8 +935,16 @@ function isSecurityReport(value: unknown): value is Record<string, unknown> {
   });
 }
 
-async function uploadTranscript() {
-  const size = await stat(transcriptFile)
+// `transcriptPath` stays injectable because the default is an absolute path
+// inside the sandbox runtime root, which tests cannot write to. Nothing here is
+// exported: `captureRunResult` is the only entry the tests drive, so the upload
+// is exercised as part of the phase that runs it or not at all.
+async function uploadTranscript({
+  transcriptPath = transcriptFile,
+}: {
+  transcriptPath?: string;
+} = {}) {
+  const size = await stat(transcriptPath)
     .then((info) => info.size)
     .catch(() => 0);
   if (size === 0) return;
@@ -904,12 +956,23 @@ async function uploadTranscript() {
         headers: { "content-type": "application/x-ndjson" },
         duplex: "half",
       } as RequestInit & { duplex: "half" },
-      () => createReadStream(transcriptFile) as unknown as RequestInit["body"],
+      () => createReadStream(transcriptPath) as unknown as RequestInit["body"],
     );
   } catch {
-    await emit([{ type: "artifact_error", data: { kind: "transcript_upload_failed" } }]).catch(
-      () => undefined,
-    );
+    // Best-effort, and deliberately one batch: `appendRunEvents` inserts a
+    // batch inside a single transaction, so the anonymous error and the named
+    // evidence either both land or neither does. Split across two requests, a
+    // transient failure on the second leaves the receipt holding the anonymous
+    // half alone — the loss this evidence exists to name. The whole emit stays
+    // guarded because this evidence is non-gating: a degraded events endpoint
+    // must not turn an otherwise successful run into a failed one.
+    await emit([
+      { type: "artifact_error", data: { kind: "transcript_upload_failed" } },
+      {
+        type: "evidence",
+        data: { name: "transcript", status: "failed", reason: "transcript_upload_failed" },
+      },
+    ]).catch(() => undefined);
   }
 }
 

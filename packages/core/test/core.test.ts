@@ -486,4 +486,53 @@ describe("receipts", () => {
       }),
     ).toBe(false);
   });
+
+  it("seals non-gating evidence without disturbing receipts that carry none", () => {
+    const base = parseLegacyAgentReceipt({
+      schema: "example.agent_sdlc.run.v1",
+      provider: "claude_code",
+      mode: "builder",
+      result: "succeeded",
+      usage: { input_tokens: 1, output_tokens: 1, cost_source: "provider" },
+      activity: {},
+      timing: { started_at: "2026-08-16T00:00:00.000Z" },
+    });
+    // A receipt sealed before `evidence` existed must still verify: both fields
+    // are optional and the digest skips undefined, so its payload hash is
+    // unchanged.
+    const withoutEvidence = sealFacilityReceipt(base, null);
+    expect(verifyFacilityReceipt(withoutEvidence)).toBe(true);
+    expect(
+      receiptContentDigest({ ...base, evidence: undefined, evidence_truncated: undefined }),
+    ).toBe(receiptContentDigest(base));
+
+    const withEvidence = sealFacilityReceipt(
+      {
+        ...base,
+        evidence: [{ name: "transcript", status: "failed", reason: "transcript_upload_failed" }],
+      },
+      null,
+    );
+    expect(verifyFacilityReceipt(withEvidence)).toBe(true);
+    expect(withEvidence.evidence).toEqual([
+      { name: "transcript", status: "failed", reason: "transcript_upload_failed" },
+    ]);
+    // Evidence is covered by the seal, so it cannot be edited after the fact.
+    expect(withEvidence.integrity?.payload_sha256).not.toBe(
+      withoutEvidence.integrity?.payload_sha256,
+    );
+    expect(
+      verifyFacilityReceipt({
+        ...withEvidence,
+        evidence: [{ name: "transcript", status: "passed" }],
+      }),
+    ).toBe(false);
+
+    // The truncation flag is sealed too, so a receipt cannot be made to look
+    // complete after the fact.
+    const truncated = sealFacilityReceipt({ ...withEvidence, evidence_truncated: true }, null);
+    expect(verifyFacilityReceipt(truncated)).toBe(true);
+    expect(truncated.evidence_truncated).toBe(true);
+    expect(verifyFacilityReceipt({ ...truncated, evidence_truncated: false })).toBe(false);
+  });
 });
