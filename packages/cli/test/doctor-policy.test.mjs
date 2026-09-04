@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+const resolverPath = join(dirname(fileURLToPath(import.meta.url)), "../templates/doctor/resolve.mjs");
+const { main: resolveMain } = await import(pathToFileURL(resolverPath));
 import {
   classifyFailure,
   countBranchAttempts,
@@ -309,8 +311,8 @@ test("posts a new sensitive-boundary triage after an earlier repair attempt", ()
   assert.equal(decision.action, "triage");
 });
 
-test("resolver integrates with deterministic GitHub fixtures and emits a repair packet", (t) => {
-  const result = runResolverFixture(t, {});
+test("resolver integrates with deterministic GitHub fixtures and emits a repair packet", async (t) => {
+  const result = await runResolverFixture(t, {});
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.output, /^action=repair$/m);
   assert.match(result.output, new RegExp(`^head_sha=${SHA_A}$`, "m"));
@@ -327,8 +329,8 @@ test("resolver integrates with deterministic GitHub fixtures and emits a repair 
   assert.match(readFileSync(result.commentLog, "utf8"), /outcome="started"/);
 });
 
-test("resolver integration denies a cross-repository repair", (t) => {
-  const result = runResolverFixture(t, {
+test("resolver integration denies a cross-repository repair", async (t) => {
+  const result = await runResolverFixture(t, {
     pull: pullRequest({ draft: true, head: { repo: { full_name: "outside/fork" } } }),
   });
   assert.equal(result.status, 0, result.stderr);
@@ -337,8 +339,8 @@ test("resolver integration denies a cross-repository repair", (t) => {
   assert.match(readFileSync(result.commentLog, "utf8"), /cross-repository/);
 });
 
-test("resolver integration rejects stale and replayed evidence", (t) => {
-  const stale = runResolverFixture(t, {
+test("resolver integration rejects stale and replayed evidence", async (t) => {
+  const stale = await runResolverFixture(t, {
     pull: pullRequest({ draft: true, head: { sha: SHA_B } }),
   });
   assert.equal(stale.status, 0, stale.stderr);
@@ -347,7 +349,7 @@ test("resolver integration rejects stale and replayed evidence", (t) => {
 
   const fingerprint = classifyFailure(check()).fingerprint;
   const marker = `<!-- facility-doctor attempt fingerprint="${fingerprint}" head_sha="${SHA_A}" outcome="started" -->`;
-  const replayed = runResolverFixture(t, {
+  const replayed = await runResolverFixture(t, {
     comments: [{ body: marker }, { body: marker }],
   });
   assert.equal(replayed.status, 0, replayed.stderr);
@@ -355,27 +357,23 @@ test("resolver integration rejects stale and replayed evidence", (t) => {
   assert.ok(!replayed.contextExists);
 });
 
-test("resolver integration fails closed on malformed events and unavailable GitHub evidence", (t) => {
-  const malformed = runResolverFixture(t, { eventText: "{" });
+test("resolver integration fails closed on malformed events and unavailable GitHub evidence", async (t) => {
+  const malformed = await runResolverFixture(t, { eventText: "{" });
   assert.equal(malformed.status, 1, malformed.stderr);
   assert.match(malformed.output, /^action=none$/m);
 
-  const unavailable = runResolverFixture(t, { failGithub: true });
+  const unavailable = await runResolverFixture(t, { failGithub: true });
   assert.equal(unavailable.status, 1, unavailable.stderr);
   assert.match(unavailable.output, /^action=none$/m);
   assert.doesNotMatch(unavailable.stdout, /fixture-secret/);
 });
 
-function runResolverFixture(t, overrides) {
+async function runResolverFixture(t, overrides = {}) {
   const directory = mkdtempSync(join(tmpdir(), "facility-doctor-test-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const bin = join(directory, "bin");
   const eventPath = join(directory, "event.json");
-  const fixturePath = join(directory, "fixtures.json");
   const outputPath = join(directory, "github-output.txt");
   const commentLog = join(directory, "comments.txt");
-  const ghPath = join(bin, "gh");
-  mkdirSync(bin);
   const event = {
     workflow_run: {
       id: 10,
@@ -394,56 +392,54 @@ function runResolverFixture(t, overrides) {
     ],
     "repos/acme/demo/issues/7/comments?per_page=100": [overrides.comments ?? []],
   };
-
   writeFileSync(eventPath, overrides.eventText ?? JSON.stringify(event));
-  writeFileSync(fixturePath, JSON.stringify(fixtures));
-  writeFileSync(
-    ghPath,
-    [
-      "#!/usr/bin/env node",
-      'import { appendFileSync, readFileSync } from "node:fs";',
-      "if (process.env.FAKE_GH_FAIL === 'true') {",
-      '  process.stderr.write("GitHub unavailable: fixture-secret\\n");',
-      "  process.exit(1);",
-      "}",
-      "const args = process.argv.slice(2);",
-      'const endpoint = args.find((arg) => arg.startsWith("repos/"));',
-      'if (args.includes("-f")) {',
-      '  appendFileSync(process.env.FAKE_GH_COMMENT_LOG, args.find((arg) => arg.startsWith("body=")) ?? "");',
-      '  process.stdout.write("{\\"id\\":123}");',
-      "  process.exit(0);",
-      "}",
-      "const fixtures = JSON.parse(readFileSync(process.env.FAKE_GH_FIXTURES, 'utf8'));",
-      "if (!(endpoint in fixtures)) process.exit(2);",
-      "process.stdout.write(JSON.stringify(fixtures[endpoint]));",
-    ].join("\n"),
-  );
-  chmodSync(ghPath, 0o755);
   writeFileSync(outputPath, "");
   writeFileSync(commentLog, "");
 
-  const resolver = join(dirname(fileURLToPath(import.meta.url)), "../templates/doctor/resolve.mjs");
-  const spawned = spawnSync(process.execPath, [resolver], {
-    cwd: directory,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
-      GITHUB_REPOSITORY: "acme/demo",
-      GITHUB_EVENT_PATH: eventPath,
-      GITHUB_OUTPUT: outputPath,
-      GITHUB_RUN_ID: "900",
-      FAKE_GH_FIXTURES: fixturePath,
-      FAKE_GH_COMMENT_LOG: commentLog,
-      FAKE_GH_FAIL: overrides.failGithub ? "true" : "false",
-      FACILITY_BOT_LOGIN: "facility-agent",
-    },
-  });
+  // The runner is injected at the exported module boundary — the only seam.
+  const gh = async (args) => {
+    if (overrides.failGithub) throw new Error("GitHub unavailable: fixture-secret");
+    if (args.includes("-f")) {
+      appendFileSync(commentLog, args.find((arg) => arg.startsWith("body=")) ?? "");
+      return '{"id":123}';
+    }
+    const endpoint = args.find((arg) => arg.startsWith("repos/"));
+    if (!(endpoint in fixtures)) throw new Error(`unfixtured endpoint: ${endpoint}`);
+    return JSON.stringify(fixtures[endpoint]);
+  };
+
+  const savedEnv = {};
+  const applied = {
+    GITHUB_REPOSITORY: "acme/demo",
+    GITHUB_EVENT_PATH: eventPath,
+    GITHUB_OUTPUT: outputPath,
+    GITHUB_RUN_ID: "900",
+    FACILITY_BOT_LOGIN: "facility-agent",
+  };
+  for (const key of Object.keys(applied)) {
+    savedEnv[key] = process.env[key];
+    process.env[key] = applied[key];
+  }
+  const savedCwd = process.cwd();
+  const savedExit = process.exitCode;
+  process.exitCode = 0;
+  process.chdir(directory);
+  try {
+    await resolveMain({ gh });
+  } finally {
+    process.chdir(savedCwd);
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+  const status = process.exitCode ? 1 : 0;
+  process.exitCode = savedExit ?? 0;
 
   return {
-    status: spawned.status,
-    stdout: spawned.stdout,
-    stderr: spawned.stderr,
+    status,
+    stdout: "",
+    stderr: "",
     output: readFileSync(outputPath, "utf8"),
     directory,
     commentLog,
@@ -457,3 +453,42 @@ function runResolverFixture(t, overrides) {
     })(),
   };
 }
+
+test("hostile ambient environment cannot redirect the resolver's gh", (t) => {
+  // PR #245 review regression: $GITHUB_ENV-persisted variables must not be
+  // able to swap the executable the shipped resolver runs with GH_TOKEN.
+  const directory = mkdtempSync(join(tmpdir(), "facility-doctor-hostile-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const marker = join(directory, "hostile-executed");
+  const hostile = join(directory, "hostile-gh.mjs");
+  writeFileSync(
+    hostile,
+    `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "pwned");\nconsole.log("{}");\n`,
+  );
+  const eventPath = join(directory, "event.json");
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ workflow_run: { id: 10, event: "pull_request", head_sha: SHA_A } }),
+  );
+  const outputPath = join(directory, "github-output.txt");
+  writeFileSync(outputPath, "");
+  const spawned = spawnSync(process.execPath, [resolverPath], {
+    cwd: directory,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      FACILITY_GH_BIN: process.execPath,
+      FACILITY_GH_ARGS: JSON.stringify([hostile]),
+      GH_HOST: "gh-stub.invalid",
+      GH_TOKEN: "stub-only",
+      GITHUB_REPOSITORY: "acme/demo",
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_RUN_ID: "900",
+      FACILITY_BOT_LOGIN: "facility-agent",
+    },
+  });
+  assert.ok(!existsSync(marker), "ambient FACILITY_GH_BIN must never be executed");
+  assert.notEqual(spawned.status, 0, "resolver must fail closed without reachable gh");
+  assert.match(spawned.stdout + spawned.stderr, /fail(ed)? closed|doctor: none/i);
+});

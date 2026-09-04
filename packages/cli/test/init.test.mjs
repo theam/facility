@@ -154,7 +154,12 @@ test("local help and leading global flags are side-effect free", () => {
   }
 });
 
-test("init installs the method end to end", async (t) => {
+test("init installs the method end to end", {
+  // The .agents/skills symlink fails on Windows without Developer Mode and
+  // init mishandles the failure — that is #230's bug, not this test's subject.
+  // Unskipping this on win32 is #230's acceptance criterion.
+  skip: process.platform === "win32" && "blocked by #230 (skills symlink on Windows)",
+}, async (t) => {
   const dir = makeTargetRepo();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 

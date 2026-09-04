@@ -3,131 +3,141 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const mode = process.argv[2];
-const repo = required("GITHUB_REPOSITORY");
-const defaultBranch = required("DEFAULT_BRANCH");
-const receiptDir = join(required("RUNNER_TEMP"), "facility-delivery");
-const receiptPath = join(receiptDir, "receipt.json");
 const conventionalSubject =
   /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\((?=\S)[^()\r\n]*[^\s()\r\n]\))?!?: \S.*$/;
 
-if (mode === "discover") discover();
-else if (mode === "finalize") finalize();
-else throw new Error("Usage: verify.mjs discover|finalize");
+// The GitHub runner is injectable ONLY through this exported entry point:
+// the test seam lives at the module boundary, and the production script
+// path always constructs the fixed executable below. Nothing about the gh
+// invocation is readable from the ambient environment, so an earlier
+// workflow step persisting variables through $GITHUB_ENV cannot redirect
+// this verifier while it holds GH_TOKEN.
+export function runDelivery(mode, { gh = defaultGh } = {}) {
+  const repo = required("GITHUB_REPOSITORY");
+  const defaultBranch = required("DEFAULT_BRANCH");
+  const receiptDir = join(required("RUNNER_TEMP"), "facility-delivery");
+  const receiptPath = join(receiptDir, "receipt.json");
+  const ghJson = (args) => JSON.parse(gh(args));
 
-function discover() {
-  const event = JSON.parse(readFileSync(required("GITHUB_EVENT_PATH"), "utf8"));
-  const startedAt = required("FACILITY_STARTED_AT");
-  const startSha = required("FACILITY_START_SHA");
-  const existingPr =
-    event.pull_request?.number ?? (event.issue?.pull_request ? event.issue.number : undefined);
-  const pr = existingPr ? pull(existingPr) : newlyOpenedPull(startedAt);
+  if (mode === "discover") discover();
+  else if (mode === "finalize") finalize();
+  else throw new Error("Usage: verify.mjs discover|finalize");
 
-  assert(pr.state === "open", `PR #${pr.number} is not open`);
-  assert(!pr.draft, `PR #${pr.number} is still a draft; automated review would not run`);
-  assert(
-    pr.base?.ref === defaultBranch,
-    `PR #${pr.number} targets ${pr.base?.ref}, not ${defaultBranch}`,
-  );
-  assert(pr.head?.repo?.full_name === repo, `PR #${pr.number} is not a same-repository PR`);
-  assert(
-    pr.user?.type === "Bot",
-    `PR #${pr.number} is not bot-authored; address-review would be disabled`,
-  );
-  assert(
-    /^(feature|fix|chore|ci|docs|refactor|perf|test|build|revert)\/[a-z0-9][a-z0-9._/-]*$/.test(
-      pr.head.ref,
-    ),
-    `branch ${pr.head?.ref} is not semantic or still carries an agent/tool prefix`,
-  );
-  assert(pr.head?.sha !== startSha, "builder reported success without delivering a new commit");
+  function discover() {
+    const event = JSON.parse(readFileSync(required("GITHUB_EVENT_PATH"), "utf8"));
+    const startedAt = required("FACILITY_STARTED_AT");
+    const startSha = required("FACILITY_START_SHA");
+    const existingPr =
+      event.pull_request?.number ?? (event.issue?.pull_request ? event.issue.number : undefined);
+    const pr = existingPr ? pull(existingPr) : newlyOpenedPull(startedAt);
 
-  const commits = ghJson(["api", `repos/${repo}/pulls/${pr.number}/commits?per_page=100`]);
-  const startIndex = commits.findIndex((commit) => commit.sha === startSha);
-  if (existingPr) {
+    assert(pr.state === "open", `PR #${pr.number} is not open`);
+    assert(!pr.draft, `PR #${pr.number} is still a draft; automated review would not run`);
     assert(
-      startIndex >= 0,
-      `PR #${pr.number} no longer contains its pre-builder head; history was rewritten`,
+      pr.base?.ref === defaultBranch,
+      `PR #${pr.number} targets ${pr.base?.ref}, not ${defaultBranch}`,
     );
+    assert(pr.head?.repo?.full_name === repo, `PR #${pr.number} is not a same-repository PR`);
+    assert(
+      pr.user?.type === "Bot",
+      `PR #${pr.number} is not bot-authored; address-review would be disabled`,
+    );
+    assert(
+      /^(feature|fix|chore|ci|docs|refactor|perf|test|build|revert)\/[a-z0-9][a-z0-9._/-]*$/.test(
+        pr.head.ref,
+      ),
+      `branch ${pr.head?.ref} is not semantic or still carries an agent/tool prefix`,
+    );
+    assert(pr.head?.sha !== startSha, "builder reported success without delivering a new commit");
+
+    const commits = ghJson(["api", `repos/${repo}/pulls/${pr.number}/commits?per_page=100`]);
+    const startIndex = commits.findIndex((commit) => commit.sha === startSha);
+    if (existingPr) {
+      assert(
+        startIndex >= 0,
+        `PR #${pr.number} no longer contains its pre-builder head; history was rewritten`,
+      );
+    }
+    const delivered = startIndex >= 0 ? commits.slice(startIndex + 1) : commits;
+    assert(delivered.length > 0, `PR #${pr.number} contains no builder-delivered commits`);
+
+    for (const commit of delivered) {
+      const message = commit.commit?.message ?? "";
+      const subject = message.split(/\r?\n/, 1)[0];
+      assert(
+        !hasForbiddenSubjectCharacters(subject) && conventionalSubject.test(subject),
+        `commit ${commit.sha} is not Conventional Commits: ${subject}`,
+      );
+      assert(
+        !/^Co-authored-by:/im.test(message),
+        `commit ${commit.sha} contains a Co-authored-by trailer`,
+      );
+      assert(
+        commit.commit?.verification?.verified === true,
+        `commit ${commit.sha} is not verified by GitHub`,
+      );
+    }
+
+    mkdirSync(receiptDir, { recursive: true });
+    const receipt = {
+      schema: "facility.delivery.v1",
+      repository: repo,
+      pullRequest: { number: pr.number, url: pr.html_url, base: pr.base.ref },
+      branch: pr.head.ref,
+      headSha: pr.head.sha,
+      author: pr.user.login,
+      deliveredCommits: delivered.map((commit) => commit.sha),
+      startedAt,
+      verification: "pending",
+    };
+    writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    output("pr_number", String(pr.number));
+    output("head_ref", pr.head.ref);
+    output("head_sha", pr.head.sha);
+    console.log(`Validated delivery metadata for ${pr.html_url} at ${pr.head.sha}.`);
   }
-  const delivered = startIndex >= 0 ? commits.slice(startIndex + 1) : commits;
-  assert(delivered.length > 0, `PR #${pr.number} contains no builder-delivered commits`);
 
-  for (const commit of delivered) {
-    const message = commit.commit?.message ?? "";
-    const subject = message.split(/\r?\n/, 1)[0];
-    assert(
-      !hasForbiddenSubjectCharacters(subject) && conventionalSubject.test(subject),
-      `commit ${commit.sha} is not Conventional Commits: ${subject}`,
-    );
-    assert(
-      !/^Co-authored-by:/im.test(message),
-      `commit ${commit.sha} contains a Co-authored-by trailer`,
-    );
-    assert(
-      commit.commit?.verification?.verified === true,
-      `commit ${commit.sha} is not verified by GitHub`,
-    );
+  function finalize() {
+    const prNumber = required("FACILITY_PR_NUMBER");
+    const headRef = required("FACILITY_HEAD_REF");
+    const headSha = required("FACILITY_HEAD_SHA");
+    const pr = pull(prNumber);
+    assert(pr.head?.ref === headRef, `PR #${prNumber} head branch changed during verification`);
+    assert(pr.head?.sha === headSha, `PR #${prNumber} head commit changed during verification`);
+
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    receipt.verification = "passed";
+    receipt.verifiedAt = new Date().toISOString();
+    writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    console.log(JSON.stringify(receipt));
   }
 
-  mkdirSync(receiptDir, { recursive: true });
-  const receipt = {
-    schema: "facility.delivery.v1",
-    repository: repo,
-    pullRequest: { number: pr.number, url: pr.html_url, base: pr.base.ref },
-    branch: pr.head.ref,
-    headSha: pr.head.sha,
-    author: pr.user.login,
-    deliveredCommits: delivered.map((commit) => commit.sha),
-    startedAt,
-    verification: "pending",
-  };
-  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-  output("pr_number", String(pr.number));
-  output("head_ref", pr.head.ref);
-  output("head_sha", pr.head.sha);
-  console.log(`Validated delivery metadata for ${pr.html_url} at ${pr.head.sha}.`);
+  function newlyOpenedPull(startedAt) {
+    const pulls = ghJson([
+      "api",
+      `repos/${repo}/pulls?state=open&base=${encodeURIComponent(defaultBranch)}&sort=created&direction=desc&per_page=50`,
+    ]).filter(
+      (pr) =>
+        pr.head?.repo?.full_name === repo &&
+        pr.created_at >= startedAt &&
+        pr.head?.sha !== process.env.FACILITY_START_SHA,
+    );
+    assert(
+      pulls.length === 1,
+      `expected exactly one new PR from this builder run; found ${pulls.length}`,
+    );
+    return pulls[0];
+  }
+
+  function pull(number) {
+    return ghJson(["api", `repos/${repo}/pulls/${number}`]);
+  }
 }
 
-function finalize() {
-  const prNumber = required("FACILITY_PR_NUMBER");
-  const headRef = required("FACILITY_HEAD_REF");
-  const headSha = required("FACILITY_HEAD_SHA");
-  const pr = pull(prNumber);
-  assert(pr.head?.ref === headRef, `PR #${prNumber} head branch changed during verification`);
-  assert(pr.head?.sha === headSha, `PR #${prNumber} head commit changed during verification`);
-
-  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
-  receipt.verification = "passed";
-  receipt.verifiedAt = new Date().toISOString();
-  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-  console.log(JSON.stringify(receipt));
-}
-
-function newlyOpenedPull(startedAt) {
-  const pulls = ghJson([
-    "api",
-    `repos/${repo}/pulls?state=open&base=${encodeURIComponent(defaultBranch)}&sort=created&direction=desc&per_page=50`,
-  ]).filter(
-    (pr) =>
-      pr.head?.repo?.full_name === repo &&
-      pr.created_at >= startedAt &&
-      pr.head?.sha !== process.env.FACILITY_START_SHA,
-  );
-  assert(
-    pulls.length === 1,
-    `expected exactly one new PR from this builder run; found ${pulls.length}`,
-  );
-  return pulls[0];
-}
-
-function pull(number) {
-  return ghJson(["api", `repos/${repo}/pulls/${number}`]);
-}
-
-function ghJson(args) {
-  return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+function defaultGh(args) {
+  return execFileSync("gh", args, { encoding: "utf8" });
 }
 
 function output(name, value) {
@@ -154,4 +164,9 @@ function required(name) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+const invoked = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
+if (import.meta.url === invoked) {
+  runDelivery(process.argv[2]);
 }

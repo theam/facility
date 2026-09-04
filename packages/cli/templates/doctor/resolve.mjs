@@ -5,6 +5,7 @@
 // resolver has proved that the PR head is current, every check is terminal,
 // the failure is low risk, and the bounded retry budget remains.
 import { execFileSync } from "node:child_process";
+
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -341,7 +342,13 @@ export async function resolveDoctor({
   });
 }
 
-async function main() {
+// The GitHub runner is injectable ONLY through this exported entry point:
+// the test seam lives at the module boundary, and the production script
+// path always constructs the fixed executable below. Nothing about the gh
+// invocation is readable from the ambient environment, so an earlier
+// workflow step persisting variables through $GITHUB_ENV cannot redirect
+// this verifier while it holds GH_TOKEN.
+export async function main({ gh: injectedGh } = {}) {
   const outputPath = process.env.GITHUB_OUTPUT;
   const output = (key, value) => {
     if (outputPath) appendFileSync(outputPath, `${key}=${String(value).replaceAll("\n", " ")}\n`);
@@ -351,8 +358,9 @@ async function main() {
   try {
     const repository = requiredEnv("GITHUB_REPOSITORY");
     const event = JSON.parse(readFileSync(requiredEnv("GITHUB_EVENT_PATH"), "utf8"));
-    const gh = async (args) =>
-      execFileSync("gh", args, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+    const gh =
+      injectedGh ??
+      (async (args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }));
     decision = await resolveDoctor({
       repository,
       event,

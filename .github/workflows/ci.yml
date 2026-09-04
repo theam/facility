@@ -116,6 +116,39 @@ jobs:
   # archive rather than running package lifecycle code with publication rights.
   # The stamp is never committed: the tag allocated after acceptance is the
   # immutable version record.
+  # The Windows half of the promise: run the pure-Node surfaces — the CLI
+  # suite and the guards — on windows-latest, so the Windows-only defect
+  # class (#241 has the inventory) fails loudly in CI instead of on a
+  # contributor's machine.
+  verify-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # The hosted Windows images default core.autocrlf=true; a CRLF checkout
+      # blinds the newline-anchored template assertions (found on this job's
+      # first real run). Check out with LF, as every other environment sees it.
+      - run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: CLI test suite on Windows
+        working-directory: packages/cli
+        run: node --test test/*.test.mjs
+
+      - name: Guards on Windows
+        run: node guards/run.mjs
+
   package-release:
     needs: [decide-release, verify]
     if: needs.decide-release.outputs.release == 'true' && github.event.repository.visibility == 'public'
