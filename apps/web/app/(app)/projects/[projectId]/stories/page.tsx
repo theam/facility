@@ -1,11 +1,10 @@
 import { cx, Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { IssueRow } from "@/components/issues/issue-row";
 import { SyncIssuesButton } from "@/components/issues/sync-button";
 import { ErrorNotice, Offline } from "@/components/offline";
-import { StageSection } from "@/components/project/stage-section";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { StoriesBoard } from "@/components/story/stories-board";
 import { api } from "@/lib/api";
 import type { PipelineStageKey, PipelineStageKind, PipelineStageState } from "@/lib/pipeline";
 import { pipelineStageStateLabel, pipelineStories } from "@/lib/pipeline";
@@ -163,47 +162,12 @@ export default async function ProjectStoriesPage({
           sync refreshes the GitHub mirror.
         </p>
       ) : (
-        <div className="flex flex-col gap-6">
-          {visibleStages.map((s) => {
-            const stageItems = s.stories;
-            return (
-              <StageSection
-                key={s.key}
-                label={s.label}
-                sub={s.sub}
-                kind={s.kind}
-                total={stageItems.length}
-                liveCount={stageItems.filter((story) => story.runState === "live").length}
-                failedCount={
-                  stageItems.filter(
-                    (story) => story.runState === "failed" || story.ciState === "failure",
-                  ).length
-                }
-                defaultOpen={activeStage !== null || s.key !== "shipped"}
-              >
-                {stageItems.length === 0 ? (
-                  <p className="border border-(--line) px-5 py-3.5 text-[12.5px] text-(--dim)">
-                    Nothing here right now.
-                  </p>
-                ) : (
-                  <div className="flex flex-col border border-(--line)">
-                    {stageItems.map((story) => (
-                      <IssueRow
-                        key={story.key}
-                        projectId={projectId}
-                        story={story}
-                        canTrigger={canTrigger}
-                        builderPlanRequired={
-                          !project.ok || project.data.builderPlanPolicy === "required"
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-              </StageSection>
-            );
-          })}
-        </div>
+        <StoriesBoard
+          projectId={projectId}
+          stages={visibleStages}
+          canTrigger={canTrigger}
+          builderPlanRequired={!project.ok || project.data.builderPlanPolicy === "required"}
+        />
       )}
     </div>
   );
