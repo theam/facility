@@ -1354,7 +1354,7 @@ async function executeKnownMcpTool(
         const github = await createGithubClientForRepo(db, factory, repo);
         await github.createIssueComment(
           number,
-          `Facility queued ${agentName} run ${run.id} (triggered through an approved MCP proposal).`,
+          `<!-- facility-run-queued run=${run.id} -->\nFacility queued ${agentName} run ${run.id} (triggered through an approved MCP proposal).`,
         );
       } catch {
         // Queueing is authoritative; the acknowledgement is best-effort parity

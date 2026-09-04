@@ -27,6 +27,7 @@ import { and, desc, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import { resolveBuilderPlanFreshnessForProposal } from "../src/builder-plan-freshness.js";
 import {
   assertBuilderPlanDispatch,
   lockBuilderPlanPolicy,
@@ -145,6 +146,63 @@ describe("builder plan policy integration", async () => {
         trigger: { ...fixture.dispatch.trigger, proposalId: duplicateProposalId },
       }),
     ).rejects.toMatchObject({ code: "builder_plan_already_consumed" });
+  });
+
+  it("keeps an approved plan fresh across Facility queued-run acknowledgements", async () => {
+    const fixture = await canonicalFixture();
+    const proposal = (
+      await db.select().from(proposals).where(eq(proposals.id, fixture.proposalId)).limit(1)
+    )[0];
+    if (!proposal) throw new Error("proposal fixture missing");
+    const repoName = `plan-${fixture.orgId.replace("org_plan_", "")}`;
+    const freshnessEvidence = await resolveBuilderPlanFreshnessForProposal(db, proposal, {
+      githubClient: {
+        owner: "facility-test",
+        repo: repoName,
+        client: {
+          getDefaultBranchSha: async () => fixture.dispatch.freshnessEvidence.baseSha,
+          getIssue: async () => ({
+            number: 204,
+            title: "Require a plan",
+            body: "Implement it",
+            state: "open",
+            user: { login: "requester" },
+            labels: [],
+            html_url: `https://github.test/facility-test/${repoName}/issues/204`,
+          }),
+          listIssueComments: async () => [
+            {
+              id: 9001,
+              author: "facility-agent[bot]",
+              authorType: "Bot",
+              body: "<!-- facility-run-queued run=run_01slash -->\nFacility queued /architect run run_01slash (triggered from the control plane).",
+              createdAt: "2026-08-29T17:46:47Z",
+              url: "https://github.test/comments/9001",
+            },
+            {
+              id: 9002,
+              author: "facility-agent[bot]",
+              authorType: "Bot",
+              body: "<!-- facility-run-queued run=run_01custom -->\nFacility queued release planner run run_01custom (triggered through an approved MCP proposal).",
+              createdAt: "2026-08-29T17:46:48Z",
+              url: "https://github.test/comments/9002",
+            },
+            {
+              id: 9003,
+              author: "facility-agent[bot]",
+              authorType: "Bot",
+              body: "Facility queued architect.v2 run run_01legacy (triggered from the control plane).",
+              createdAt: "2026-08-29T17:46:49Z",
+              url: "https://github.test/comments/9003",
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(
+      assertBuilderPlanDispatch(db, { ...fixture.dispatch, freshnessEvidence }),
+    ).resolves.toEqual({ mode: "builder", isBuilder: true });
   });
 
   it("recognizes a Builder by agentDefId when the run mode is a surface alias", async () => {

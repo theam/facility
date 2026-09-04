@@ -19,6 +19,13 @@ type GithubIssueLike = {
 };
 
 const FACILITY_COMMENT_MARKERS = ["<!-- facility-run-progress", "<!-- facility:architect-plan:"];
+const FACILITY_QUEUED_RUN =
+  /^<!-- facility-run-queued run=(run_[a-z0-9]+) -->\r?\nFacility queued (.+?) run \1 \(triggered (?:from the control plane|through an approved MCP proposal)\)\.\s*$/is;
+// Keep old issues usable after upgrading, but match only the exact historical
+// acknowledgement. The Bot-author check below prevents user lookalikes from
+// disappearing from the issue revision.
+const LEGACY_FACILITY_QUEUED_RUN =
+  /^Facility queued (.+?) run run_[a-z0-9]+ \(triggered (?:from the control plane|through an approved MCP proposal)\)\.\s*$/is;
 const BUILDER_APPROVAL_ONLY = /^\s*\/(?:codex-)?builder\s*[.!?]?\s*$/i;
 
 /**
@@ -93,7 +100,9 @@ function materialIssueComment(comment: GithubIssueRevisionComment) {
   if (BUILDER_APPROVAL_ONLY.test(comment.body)) return false;
   return !(
     comment.authorType.toLowerCase() === "bot" &&
-    FACILITY_COMMENT_MARKERS.some((marker) => comment.body.includes(marker))
+    (FACILITY_COMMENT_MARKERS.some((marker) => comment.body.includes(marker)) ||
+      FACILITY_QUEUED_RUN.test(comment.body) ||
+      LEGACY_FACILITY_QUEUED_RUN.test(comment.body))
   );
 }
 

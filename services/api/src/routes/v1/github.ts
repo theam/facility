@@ -1681,7 +1681,7 @@ async function ackIssueQueued(
     // guard, so this acknowledgement cannot become a trigger input.
     await client.createIssueComment(
       issueNumber,
-      `Facility queued ${agent} run ${runId} (triggered from the control plane).`,
+      `<!-- facility-run-queued run=${runId} -->\nFacility queued ${agent} run ${runId} (triggered from the control plane).`,
     );
   } catch {
     // Best effort only.

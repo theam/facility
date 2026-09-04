@@ -64,6 +64,89 @@ describe("GitHub issue revision", () => {
     expect(updated).toBe(baseline);
   });
 
+  it("ignores current and legacy Facility queued-run acknowledgements from bots", () => {
+    const baseline = githubIssueRevisionSha256(githubIssueRevisionContext(issue, comments));
+    const queueComments = ["/architect", "release planner", "architect.v2"].flatMap(
+      (agentName, index) => {
+        const legacyRunId = `run_legacy${String(index)}`;
+        const markedRunId = `run_marked${String(index)}`;
+        return [
+          {
+            id: 5 + index * 2,
+            author: "facility-agent[bot]",
+            authorType: "Bot",
+            body: `Facility queued ${agentName} run ${legacyRunId} (triggered from the control plane).`,
+            createdAt: `2026-08-26T10:0${String(4 + index * 2)}:00Z`,
+            url: `https://github.test/comments/${String(5 + index * 2)}`,
+          },
+          {
+            id: 6 + index * 2,
+            author: "facility-agent[bot]",
+            authorType: "Bot",
+            body: `<!-- facility-run-queued run=${markedRunId} -->\nFacility queued ${agentName} run ${markedRunId} (triggered through an approved MCP proposal).`,
+            createdAt: `2026-08-26T10:0${String(5 + index * 2)}:00Z`,
+            url: `https://github.test/comments/${String(6 + index * 2)}`,
+          },
+        ];
+      },
+    );
+    const legacyQueueComment = queueComments[0];
+    const markedQueueComment = queueComments[1];
+    if (!legacyQueueComment || !markedQueueComment) {
+      throw new Error("queue comment fixtures are incomplete");
+    }
+    expect(
+      githubIssueRevisionSha256(githubIssueRevisionContext(issue, [...comments, ...queueComments])),
+    ).toBe(baseline);
+
+    expect(
+      githubIssueRevisionSha256(
+        githubIssueRevisionContext(issue, [
+          ...comments,
+          { ...legacyQueueComment, authorType: "User" },
+        ]),
+      ),
+    ).not.toBe(baseline);
+    expect(
+      githubIssueRevisionSha256(
+        githubIssueRevisionContext(issue, [
+          ...comments,
+          { ...legacyQueueComment, body: `${legacyQueueComment.body} Also change the API.` },
+        ]),
+      ),
+    ).not.toBe(baseline);
+    expect(
+      githubIssueRevisionSha256(
+        githubIssueRevisionContext(issue, [
+          ...comments,
+          { ...markedQueueComment, body: `${markedQueueComment.body} Also change the API.` },
+        ]),
+      ),
+    ).not.toBe(baseline);
+    expect(
+      githubIssueRevisionSha256(
+        githubIssueRevisionContext(issue, [
+          ...comments,
+          {
+            ...markedQueueComment,
+            body: "<!-- facility-run-queued run=run_expected -->\nFacility queued /architect run run_other (triggered from the control plane).",
+          },
+        ]),
+      ),
+    ).not.toBe(baseline);
+    expect(
+      githubIssueRevisionSha256(
+        githubIssueRevisionContext(issue, [
+          ...comments,
+          {
+            ...markedQueueComment,
+            body: "<!-- facility-run-queued run=run_empty -->\nFacility queued  run run_empty (triggered from the control plane).",
+          },
+        ]),
+      ),
+    ).not.toBe(baseline);
+  });
+
   it("changes for material issue, state, or comment edits", () => {
     const baseline = githubIssueRevisionSha256(githubIssueRevisionContext(issue, comments));
     expect(
