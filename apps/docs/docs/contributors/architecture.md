@@ -29,7 +29,7 @@ behind interfaces, and durable facts in the database.
 | `packages/mcp` | `@facility/mcp` | MCP tool definitions, schemas, and server adapter over Facility domain capabilities. |
 | `packages/sdk` | `@facility/sdk` | Typed client-facing SDK surface. |
 | `packages/ui` | `@facility/ui` | Reusable presentation components shared by web surfaces. |
-| `packages/cli` | `@theagilemonkeys/facility` | Published repository init, local doctor, templates, and instance bootstrap CLI. |
+| `packages/cli` | `@theagilemonkeys/facility` | Published repository init, local doctor, starter files, and instance bootstrap CLI. |
 
 Avoid importing service or web code into these packages. If a type is part of an external
 contract, define one clear owner and derive clients or schemas from it rather than maintaining
@@ -63,8 +63,8 @@ rechecks authorization for HTTP and WebSocket traffic.
 
 ## Change routing
 
-For an agent schema change, update `packages/agents`, CLI templates, server catalog code, UI/API/MCP
-presentation, reference docs, and parser integration tests together.
+For an agent or skill inventory schema change, update `packages/agents`, CLI starter files, server
+catalog code, UI/API/MCP presentation, reference docs, and parser integration tests together.
 
 For a workspace contract change, update the project manifest parser and environment service,
 provider implementations, CLI init/doctor, MCP/API/UI surfaces, runner if needed, lifecycle and

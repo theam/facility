@@ -74,6 +74,15 @@ export const toolDefinitions: ToolDefinition[] = [
     path: (args) => `/v1/projects/${part(args.projectId)}/story-agents`,
   },
   {
+    name: "facility_list_skills",
+    permission: "projects:read",
+    description:
+      "List repository-installed skills discovered under .agents/skills and .claude/skills. Needs projects:read.",
+    inputSchema: { projectId },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/project-skills`,
+  },
+  {
     name: "facility_list_stories",
     permission: "projects:read",
     description:
@@ -90,7 +99,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story",
     permission: "projects:read",
     description:
-      "Get a story's status, workspace, active turn, branch, pull request, artifacts, and attention items. Needs projects:read.",
+      "Get a story's status, workspace, turns, branch, pull request, artifacts, attention, and ordered evidence timeline. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}`,

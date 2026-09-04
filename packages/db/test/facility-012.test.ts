@@ -40,13 +40,19 @@ describe("Facility 0.12 database", () => {
           "agent_manifests",
           "agent_schedules",
           "github_webhook_events",
+          "github_branches",
+          "github_checks",
+          "github_pull_request_reviews",
           "preview_sessions",
+          "project_skills",
           "project_repositories",
           "stories",
           "story_conversations",
           "story_messages",
           "turn_events",
+          "turn_git_evidence",
           "turns",
+          "story_evidence_events",
           "workspace_events",
           "workspaces",
         ]),
@@ -252,6 +258,31 @@ describe("Facility 0.12 database", () => {
         kind: "log",
         label: "forged",
         uri: "memory://forged",
+      }),
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+    await expect(
+      db.insert(schema.storyEvidenceEvents).values({
+        id: `evidence_${suffix}`,
+        orgId: orgB,
+        projectId: projectB,
+        storyId,
+        turnId,
+        source: "workspace",
+        type: "forged",
+        occurredAt: new Date(),
+      }),
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+    await expect(
+      db.insert(schema.projectSkills).values({
+        id: `skill_${suffix}`,
+        orgId: orgB,
+        projectId: projectA,
+        name: "forged",
+        commitSha: "a".repeat(40),
+        path: ".agents/skills/forged/SKILL.md",
+        directory: ".agents",
+        description: "Cross-tenant skill",
+        contentHash: "b".repeat(64),
       }),
     ).rejects.toMatchObject({ cause: { code: "23503" } });
     await expect(

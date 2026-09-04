@@ -38,6 +38,7 @@ import {
   type AgentTurnRequest,
   type AgentTurnResult,
 } from "../src/turns/engines.js";
+import { TurnGitEvidenceService } from "../src/turns/git-evidence.js";
 import type { AppConfig } from "../src/types.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import { WorkspacePreviewService } from "../src/workspaces/preview.js";
@@ -87,7 +88,17 @@ describe("Facility 0.12 reference journey", async () => {
   if (!builderSource) throw new Error("kickstart builder manifest is missing");
   const canonicalBuilder = parseAgentManifest(builderSource.source, ".agents/builder.md");
   const catalogSource: AgentCatalogSource = {
-    load: async () => ({ commitSha: "b".repeat(40), sources: agentSources }),
+    load: async () => ({
+      commitSha: "b".repeat(40),
+      sources: agentSources,
+      skills: [
+        {
+          file: ".agents/skills/verification/SKILL.md",
+          source:
+            "---\nname: verification\ndescription: Verifies the complete project flow.\n---\n\n# Verification\n",
+        },
+      ],
+    }),
   };
   const catalog = new AgentCatalogService(db, catalogSource);
   const credentials = new GithubWorkspaceCredentialBroker(db, async () => ({
@@ -200,6 +211,7 @@ environment:
       projectManifests,
       environment,
       engines,
+      new TurnGitEvidenceService(db, runtime),
     );
 
     const port = await unusedPort();
@@ -249,6 +261,7 @@ environment:
         throw new Error("GitHub mirror is not used by this fixture");
       }),
       costs: new CostBudgetService(db),
+      evidence: new TurnGitEvidenceService(db, runtime),
     };
     app = await buildApp(config, {
       storyDomain: domain,
@@ -324,6 +337,20 @@ environment:
         }),
       ]),
     );
+    const skills = mcpData(
+      await mcp.callTool({ name: "facility_list_skills", arguments: { projectId } }),
+    ) as { skills: Array<{ name: string; path: string }> };
+    expect(skills.skills).toEqual([
+      {
+        name: "verification",
+        description: "Verifies the complete project flow.",
+        path: ".agents/skills/verification/SKILL.md",
+        directory: ".agents",
+        hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        commit_sha: "b".repeat(40),
+        synced_at: expect.any(String),
+      },
+    ]);
 
     const startArguments = {
       projectId,
@@ -455,6 +482,17 @@ environment:
     const mcpStory = mcpData(
       await mcp.callTool({ name: "facility_get_story", arguments: { projectId, storyId } }),
     ) as StoryToolBundle;
+    expect(mcpStory.timeline.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "story.created",
+        "turn.context_recorded",
+        "git.changes_recorded",
+        "turn.succeeded",
+      ]),
+    );
+    expect(mcpStory.timeline.filter((event) => event.type === "git.changes_recorded")).toHaveLength(
+      3,
+    );
     const uiStory = await app.inject({
       method: "GET",
       url: `/v1/projects/${projectId}/workspace-stories/${storyId}`,
@@ -679,6 +717,7 @@ type StoryToolBundle = {
   queued: { turn: { id: string } };
   status: string;
   next_operations: string[];
+  timeline: Array<{ type: string; turn_id: string | null; data: Record<string, unknown> }>;
 };
 
 function mcpData(result: Awaited<ReturnType<Client["callTool"]>>) {

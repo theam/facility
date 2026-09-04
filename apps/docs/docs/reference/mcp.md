@@ -8,14 +8,15 @@ Facility serves Streamable HTTP MCP at `POST /mcp` from the control API. OAuth c
 resource metadata at `/.well-known/oauth-protected-resource/mcp`. API keys use the same endpoint
 with `Authorization: Bearer <key>`.
 
-The server exposes nineteen task-oriented tools:
+The server exposes twenty task-oriented tools:
 
 | Tool | Result |
 |---|---|
 | `facility_list_projects` | Projects visible to the principal. |
 | `facility_list_agents` | Valid `.agents/` catalog with engines, models, and triggers. |
+| `facility_list_skills` | Valid skills installed in `.agents/skills/` or `.claude/skills/`. |
 | `facility_list_stories` | Stories, optionally filtered by status. |
-| `facility_get_story` | Story, workspace, turns, artifacts, and attention state. |
+| `facility_get_story` | Story, workspace, turns, artifacts, attention, and ordered evidence timeline. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. |
 | `facility_send_message` | Append a message and queue the selected agent. |
 | `facility_get_conversation` | Read the shared ordered conversation. |
@@ -115,6 +116,11 @@ Deletion is deliberately separate and permanent:
 `next_cursor` and `has_more`. Story and environment responses include typed attention, available
 next operations, active-compute status, retained-storage status, provider usage, and an explicit
 marker when monetary cost is unavailable.
+
+`facility_list_skills` is an inventory operation. It does not install or upgrade skills. A story's
+`timeline` combines Facility turn events, Git snapshots, artifacts, attention, and mirrored GitHub
+branches, pull requests, reviews, and checks. `occurred_at` is the source event time and
+`observed_at` is when Facility stored it; they can differ after reconciliation.
 
 Mutations execute directly after normal authentication and project authorization. They do not
 create an internal approval object. Delete requires `confirm: true` and a matching idempotency key.

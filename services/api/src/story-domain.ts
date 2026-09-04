@@ -14,6 +14,7 @@ import { CostBudgetService } from "./insights/costs.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
 import { AgentEngineRegistry, ClaudeCodeEngine, CodexEngine } from "./turns/engines.js";
+import { TurnGitEvidenceService } from "./turns/git-evidence.js";
 import type { AppConfig } from "./types.js";
 import { DockerWorkspaceRuntime } from "./workspaces/docker.js";
 import { WorkspacePreviewService } from "./workspaces/preview.js";
@@ -38,6 +39,7 @@ export type StoryDomain = {
   githubTriggers: GithubAgentTriggerService;
   mirror: GithubMirrorService;
   costs: CostBudgetService;
+  evidence: TurnGitEvidenceService;
 };
 
 export function createStoryDomain(input: {
@@ -64,7 +66,6 @@ export function createStoryDomain(input: {
     new GithubAgentCatalogSource(input.db, githubFactory),
   );
   const credentials = new GithubWorkspaceCredentialBroker(input.db, tokenFactory);
-  const mirror = new GithubMirrorService(input.db, githubFactory);
   const costs = new CostBudgetService(input.db);
   const projectManifests = new GithubProjectManifestSource(input.db, githubFactory);
   const environment = new ProjectEnvironmentService(input.db, runtime);
@@ -75,10 +76,12 @@ export function createStoryDomain(input: {
       turnId: turn.id,
     });
   });
+  const mirror = new GithubMirrorService(input.db, githubFactory, stories);
   const engines = new AgentEngineRegistry([
     new ClaudeCodeEngine(runtime),
     new CodexEngine(runtime),
   ]);
+  const evidence = new TurnGitEvidenceService(input.db, runtime);
   const dispatcher = new TurnDispatcher(
     input.db,
     stories,
@@ -87,6 +90,7 @@ export function createStoryDomain(input: {
     projectManifests,
     environment,
     engines,
+    evidence,
     costs,
   );
   const previews = new WorkspacePreviewService(
@@ -126,6 +130,7 @@ export function createStoryDomain(input: {
     githubTriggers,
     mirror,
     costs,
+    evidence,
   };
 }
 

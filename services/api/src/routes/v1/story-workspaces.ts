@@ -96,6 +96,30 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
     },
   );
 
+  app.get(
+    "/v1/projects/:projectId/project-skills",
+    {
+      config: { permission: "projects:read" },
+      schema: { params: ProjectParams, operationId: "listProjectSkills" },
+    },
+    async (request) => {
+      const { projectId } = request.params as z.infer<typeof ProjectParams>;
+      const actor = principal(request);
+      const rows = await translate(() => domain.catalog.listSkills(actor.orgId, projectId));
+      return {
+        skills: rows.map((row) => ({
+          name: row.name,
+          description: row.description,
+          path: row.path,
+          directory: row.directory,
+          hash: row.contentHash,
+          commit_sha: row.commitSha,
+          synced_at: row.syncedAt,
+        })),
+      };
+    },
+  );
+
   for (const action of ["retry", "dismiss"] as const) {
     app.post(
       `/v1/projects/:projectId/workspace-stories/:storyId/attention/:attentionId/${action}`,
@@ -622,6 +646,18 @@ function storyResponse(value: Record<string, unknown>) {
           createdAt: Date;
         }>
       | undefined) ?? [];
+  const timeline =
+    (value.timeline as
+      | Array<{
+          id: string;
+          source: string;
+          type: string;
+          turnId: string | null;
+          data: unknown;
+          occurredAt: Date;
+          observedAt: Date;
+        }>
+      | undefined) ?? [];
   return {
     ...value,
     events: events.map((event) => ({
@@ -630,6 +666,15 @@ function storyResponse(value: Record<string, unknown>) {
       type: event.type,
       data: event.data,
       created_at: event.createdAt,
+    })),
+    timeline: timeline.map((event) => ({
+      id: event.id,
+      source: event.source,
+      type: event.type,
+      turn_id: event.turnId,
+      data: event.data,
+      occurred_at: event.occurredAt,
+      observed_at: event.observedAt,
     })),
     ...(workspace ? { workspace: presentWorkspace(workspace) } : {}),
     status: story?.status,

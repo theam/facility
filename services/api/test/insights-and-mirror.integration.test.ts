@@ -3,9 +3,12 @@ import { newId } from "@facility/core";
 import {
   auditEvents,
   createDb,
+  githubBranches,
+  githubChecks,
   githubCiEvents,
   githubInstallations,
   githubIssues,
+  githubPullRequestReviews,
   githubPullRequests,
   migrate,
   orgs,
@@ -14,8 +17,11 @@ import {
   projects,
   stories,
   storyConversations,
+  storyEvidenceEvents,
+  turnGitEvidence,
   turns,
   turnUsage,
+  workspaces,
 } from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
@@ -56,6 +62,7 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
   const storyId = newId("story");
   const conversationId = newId("sess");
   const turnId = newId("turn");
+  const workspaceId = newId("ws");
 
   beforeAll(async () => {
     await migrate(databaseUrl);
@@ -97,6 +104,7 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
       externalId: "issue:17",
       title: "Mirror the delivery pipeline",
       status: "working",
+      branch: "facility/mirror",
       createdBy: { type: "user", id: "maintainer" },
     });
     await db.insert(storyConversations).values({
@@ -104,6 +112,15 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
       orgId,
       projectId,
       storyId,
+    });
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      orgId,
+      projectId,
+      storyId,
+      provider: "fake",
+      volumeRef: `memory://${workspaceId}`,
+      state: "running",
     });
     await db.insert(turns).values({
       id: turnId,
@@ -119,6 +136,19 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
       state: "succeeded",
       triggerType: "mcp",
       createdBy: { type: "user", id: "maintainer" },
+    });
+    await db.insert(turnGitEvidence).values({
+      turnId,
+      orgId,
+      projectId,
+      storyId,
+      workspaceId,
+      engineSessionId: newId("esess"),
+      initialBranch: "facility/mirror",
+      initialSha: "0".repeat(40),
+      finalBranch: "facility/mirror",
+      finalSha: "a".repeat(40),
+      completedAt: new Date("2026-09-01T11:59:00Z"),
     });
   });
 
@@ -223,6 +253,42 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
       },
     });
     await mirror.handleWebhook({
+      id: "delivery-branch",
+      orgId,
+      eventType: "push",
+      payload: {
+        repository,
+        ref: "refs/heads/facility/mirror",
+        after: "a".repeat(40),
+      },
+    });
+    await mirror.handleWebhook({
+      id: "delivery-review",
+      orgId,
+      eventType: "pull_request_review",
+      payload: {
+        repository,
+        pull_request: {
+          number: 23,
+          title: "Implement the mirror",
+          state: "open",
+          draft: false,
+          html_url: "https://github.com/acme/app/pull/23",
+          head: { ref: "facility/mirror", sha: "a".repeat(40) },
+          base: { ref: "main" },
+        },
+        review: {
+          id: 99,
+          state: "approved",
+          body: "Looks good.",
+          html_url: "https://github.com/acme/app/pull/23#pullrequestreview-99",
+          commit_id: "a".repeat(40),
+          submitted_at: "2026-09-01T12:15:00Z",
+          user: { login: "reviewer" },
+        },
+      },
+    });
+    await mirror.handleWebhook({
       id: "delivery-ci",
       orgId,
       eventType: "workflow_run",
@@ -234,6 +300,25 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
           status: "completed",
           conclusion: "failure",
           head_sha: "a".repeat(40),
+          pull_requests: [{ number: 23 }],
+        },
+      },
+    });
+    await mirror.handleWebhook({
+      id: "delivery-check",
+      orgId,
+      eventType: "check_run",
+      payload: {
+        repository,
+        check_run: {
+          id: 101,
+          name: "verify",
+          status: "completed",
+          conclusion: "failure",
+          head_sha: "a".repeat(40),
+          details_url: "https://github.com/acme/app/actions/runs/101",
+          started_at: "2026-09-01T12:01:00Z",
+          completed_at: "2026-09-01T12:10:00Z",
           pull_requests: [{ number: 23 }],
         },
       },
@@ -269,6 +354,31 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
     expect(
       await db.select().from(githubCiEvents).where(eq(githubCiEvents.repositoryId, repositoryId)),
     ).toHaveLength(1);
+    expect(
+      await db.select().from(githubBranches).where(eq(githubBranches.repositoryId, repositoryId)),
+    ).toMatchObject([{ name: "facility/mirror", headSha: "a".repeat(40), deletedAt: null }]);
+    expect(
+      await db
+        .select()
+        .from(githubPullRequestReviews)
+        .where(eq(githubPullRequestReviews.repositoryId, repositoryId)),
+    ).toMatchObject([{ pullNumber: 23, reviewId: "99", state: "approved" }]);
+    expect(
+      await db.select().from(githubChecks).where(eq(githubChecks.repositoryId, repositoryId)),
+    ).toMatchObject([{ pullNumber: 23, checkId: "101", conclusion: "failure" }]);
+    expect(
+      await db
+        .select({ type: storyEvidenceEvents.type, turnId: storyEvidenceEvents.turnId })
+        .from(storyEvidenceEvents)
+        .where(eq(storyEvidenceEvents.storyId, storyId)),
+    ).toEqual(
+      expect.arrayContaining([
+        { type: "github.pull_request_observed", turnId },
+        { type: "github.branch_observed", turnId },
+        { type: "github.review_observed", turnId },
+        { type: "github.check_observed", turnId },
+      ]),
+    );
     const pipeline = await new GithubPipelineService(db).get(orgId, projectId);
     expect(pipeline.stages.validating).toMatchObject([
       { number: 17, state: "checks_failed", story: { id: storyId } },
@@ -305,6 +415,99 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
         target: { type: "project", id: projectId },
       }),
     ).rejects.toMatchObject({ cause: { code: "23503" } });
+  });
+
+  it("periodically reconciles external branch, review, and check changes", async () => {
+    const externalSha = "c".repeat(40);
+    const mirror = new GithubMirrorService(db, async () => ({
+      request: async (route: string) => {
+        if (route.endsWith("/branches")) {
+          return {
+            data: [
+              { name: "main", protected: true, commit: { sha: "d".repeat(40) } },
+              { name: "facility/mirror", protected: false, commit: { sha: externalSha } },
+            ],
+          };
+        }
+        if (route.endsWith("/issues")) return { data: [] };
+        if (route.endsWith("/pulls")) {
+          return {
+            data: [
+              {
+                number: 23,
+                title: "Implement the mirror",
+                body: "Closes #17",
+                state: "open",
+                draft: false,
+                html_url: "https://github.com/acme/app/pull/23",
+                user: { login: "maintainer" },
+                head: { ref: "facility/mirror", sha: externalSha },
+                base: { ref: "main" },
+                updated_at: "2026-09-03T10:00:00Z",
+              },
+            ],
+          };
+        }
+        if (route.includes("/reviews")) {
+          return {
+            data: [
+              {
+                id: 200,
+                state: "changes_requested",
+                body: "Please add a regression test.",
+                html_url: "https://github.com/acme/app/pull/23#pullrequestreview-200",
+                commit_id: externalSha,
+                submitted_at: "2026-09-03T10:05:00Z",
+                user: { login: "reviewer" },
+              },
+            ],
+          };
+        }
+        if (route.endsWith("/status")) return { data: { state: "pending", statuses: [] } };
+        if (route.endsWith("/check-runs")) {
+          return {
+            data: {
+              check_runs: [
+                {
+                  id: 201,
+                  name: "verify",
+                  status: "in_progress",
+                  conclusion: null,
+                  head_sha: externalSha,
+                  details_url: "https://github.com/acme/app/actions/runs/201",
+                },
+              ],
+            },
+          };
+        }
+        throw new Error(`unexpected GitHub route ${route}`);
+      },
+      rest: {} as never,
+    }));
+
+    await expect(mirror.syncProject(orgId, projectId)).resolves.toMatchObject({
+      repositories: 1,
+      branches: 2,
+      reviews: 1,
+      checks: 1,
+    });
+    const externalEvidence = await db
+      .select()
+      .from(storyEvidenceEvents)
+      .where(
+        and(
+          eq(storyEvidenceEvents.storyId, storyId),
+          eq(storyEvidenceEvents.type, "github.branch_observed"),
+        ),
+      );
+    expect(externalEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          turnId: null,
+          data: expect.objectContaining({ actor: "external", headSha: externalSha }),
+        }),
+      ]),
+    );
   });
 
   it("recognizes reconciled merged pull requests from merged_at without a merged boolean", async () => {

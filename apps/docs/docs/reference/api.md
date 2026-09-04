@@ -53,8 +53,11 @@ another project receives 404 rather than a distinguishable authorization error.
 
 - `/v1/projects/:projectId/story-agents` lists the catalog and schedule status.
 - `/v1/projects/:projectId/story-agents/:agentName` reads an agent or proposes an update PR.
+- `/v1/projects/:projectId/project-skills` lists valid repository-installed skills and their source
+  commit. It is inventory only; it does not install or upgrade skills.
 - `/v1/projects/:projectId/workspace-stories` lists or starts stories.
-- `/v1/projects/:projectId/workspace-stories/:storyId` returns the story bundle.
+- `/v1/projects/:projectId/workspace-stories/:storyId` returns the story bundle and ordered
+  timeline of turn, Git, artifact, attention, and GitHub evidence.
 - `/v1/projects/:projectId/workspace-stories/:storyId/messages` queues a shared-conversation
   message.
 - `/v1/projects/:projectId/workspace-stories/:storyId/conversation` pages durable messages.
@@ -138,3 +141,7 @@ Every response includes `x-request-id`; include it in support and log searches.
 Long-running work is represented by persisted turns and events rather than an open HTTP request.
 Start and message operations normally return 202, after which clients poll the story or
 conversation without creating duplicate work.
+
+Timeline entries expose `source`, `type`, optional `turn_id`, structured `data`, `occurred_at`, and
+`observed_at`. Consumers should render unknown event types generically so later evidence additions
+remain backward compatible.

@@ -47,7 +47,7 @@ hit are the ones worth fixing first.
   reproducible environments for agent runs, and deterministic checks for
   repository-specific rules.
 - **Platform and engineering leaders** operating agents across several
-  repositories who need centrally managed templates, upgrades, credentials,
+  repositories who need repository-owned agent configuration, credentials,
   spend limits, audit history, and outcome data.
 - **Security-conscious organizations** that need to keep the control plane,
   run records, and model traffic in their own environment while using scoped
@@ -133,6 +133,24 @@ Kickstart creates:
 
 Teams can add or change agents by editing files in this directory. The database keeps only a cache
 of the exact repository commit and content hash used for each turn.
+
+Facility also inventories valid skills installed under `.agents/skills/**/SKILL.md` and
+`.claude/skills/**/SKILL.md`. The Agents page and `facility_list_skills` MCP tool show their names,
+descriptions, paths, and source commit. Facility does not distribute or upgrade a separate catalog;
+the repository remains the source of truth for both agents and skills.
+
+## Delivery evidence
+
+Each turn records its agent, engine, model, resumable session, workspace, branch, and initial Git
+SHA before the engine starts. When the turn settles, Facility records the final SHA, commits,
+changed files, and whether uncommitted changes remain. These records describe what happened; they
+do not add an approval or receipt protocol.
+
+GitHub webhooks and ten-minute reconciliation add branch, pull-request, review, and check facts.
+Facility links a GitHub fact to the exact turn when its head SHA matches that turn's final SHA and
+otherwise keeps it as an external change on the story. The web UI and `facility_get_story` expose
+conversation, agent activity, Git changes, artifacts, attention, and GitHub delivery in one ordered
+story timeline.
 
 ## Repository environment
 

@@ -38,6 +38,22 @@ The default kickstart catalog includes `architect`, `builder`, `pr-reviewer`, `a
 `ci-doctor`, and `security-audit`. They are ordinary manifests rather than built-in runtime roles.
 You can edit, disable, or replace them and add more `.md` files using the same schema.
 
+## Installed skills
+
+Facility inventories valid project skills found at `.agents/skills/**/SKILL.md` and
+`.claude/skills/**/SKILL.md`. Each skill needs YAML frontmatter with a non-empty `name` and
+`description`; other frontmatter belongs to the client that consumes the skill and is left intact.
+The skill body and supporting files remain in the repository.
+
+Use the Agents page, `GET /v1/projects/:projectId/project-skills`, or the
+`facility_list_skills` MCP tool to inspect the installed name, description, path, source location,
+content hash, and repository commit. Facility does not install, distribute, resolve, or upgrade a
+separate catalog. It projects repository state so operators and MCP clients can see the capabilities
+available to a project.
+
+A malformed optional skill is omitted from the inventory and does not make executable agents
+unavailable. Agent manifests remain strict because they control dispatch.
+
 Facility can propose an agent change from the UI or API. It writes the manifest on a branch and
 opens a pull request against the primary repository. The catalog changes only after the repository
 contains the new commit. Concurrent edits use the expected commit SHA to avoid silently

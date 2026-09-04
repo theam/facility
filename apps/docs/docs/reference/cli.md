@@ -38,11 +38,11 @@ values without prompts.
 | `--start=<command>` | Set required `environment.start`. |
 | `--preview-readiness-command=<command>` | Set optional `environment.ready`. |
 | `--service-port=<number>` | Set the initial `app` service port. |
-| `--build-model=<id>` | Set the default Claude build model template value. |
-| `--review-model=<id>` | Set the default Claude review model template value. |
-| `--plan-model=<id>` | Set the default Claude planning model template value. |
-| `--codex-build-model=<id>` | Set the default Codex build model template value. |
-| `--codex-plan-model=<id>` | Set the default Codex planning model template value. |
+| `--build-model=<id>` | Set the initial Claude builder model. |
+| `--review-model=<id>` | Set the initial Claude reviewer model. |
+| `--plan-model=<id>` | Set the initial Claude architect model. |
+| `--codex-build-model=<id>` | Set the initial Codex builder model. |
+| `--codex-plan-model=<id>` | Set the initial Codex architect model. |
 
 Init writes only `.facility.yml` and these manifests:
 

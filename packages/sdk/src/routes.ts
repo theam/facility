@@ -20,6 +20,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/projects/:projectId/kickstart/preview",
   "GET /v1/projects/:projectId/observability",
   "GET /v1/projects/:projectId/pipeline",
+  "GET /v1/projects/:projectId/project-skills",
   "GET /v1/projects/:projectId/repos",
   "GET /v1/projects/:projectId/story-agents",
   "GET /v1/projects/:projectId/story-agents/:agentName",

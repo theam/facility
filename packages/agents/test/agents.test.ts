@@ -8,6 +8,8 @@ import {
   loadAgentCatalog,
   parseAgentCatalog,
   parseAgentManifest,
+  parseProjectSkill,
+  parseProjectSkills,
   renderAgentManifest,
   triggerIdentity,
 } from "../src/index.js";
@@ -16,6 +18,42 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+});
+
+describe("project skill inventory", () => {
+  const skill = `---
+name: maintainable-software
+description: Keeps implementation changes readable and testable.
+metadata:
+  owner: platform
+---
+
+# Maintainable software
+`;
+
+  it("indexes shared and Claude skill manifests without treating them as agent templates", () => {
+    expect(parseProjectSkill(skill, ".agents/skills/maintainable/SKILL.md")).toMatchObject({
+      name: "maintainable-software",
+      directory: ".agents",
+      path: ".agents/skills/maintainable/SKILL.md",
+    });
+    expect(parseProjectSkill(skill, ".claude/skills/maintainable/SKILL.md")).toMatchObject({
+      directory: ".claude",
+    });
+    expect(
+      parseProjectSkills([
+        { file: ".claude/skills/maintainable/SKILL.md", source: skill },
+        { file: ".agents/skills/maintainable/SKILL.md", source: skill },
+      ]).map((entry) => entry.path),
+    ).toEqual([".agents/skills/maintainable/SKILL.md", ".claude/skills/maintainable/SKILL.md"]);
+  });
+
+  it("rejects non-skill paths and malformed frontmatter", () => {
+    expect(() => parseProjectSkill(skill, ".agents/builder.md")).toThrow(/expected \.agents/);
+    expect(() => parseProjectSkill("# no frontmatter", ".agents/skills/broken/SKILL.md")).toThrow(
+      /expected YAML frontmatter/,
+    );
+  });
 });
 
 function manifest(overrides = "") {

@@ -93,6 +93,23 @@ export type AgentManifestSource = {
   source: string;
 };
 
+export const ProjectSkillFrontmatterSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160),
+    description: z.string().trim().min(1).max(1_000),
+  })
+  .passthrough();
+
+export type ProjectSkill = {
+  name: string;
+  description: string;
+  path: string;
+  directory: ".agents" | ".claude";
+  hash: string;
+};
+
+export type ProjectSkillSource = AgentManifestSource;
+
 export class AgentManifestError extends Error {
   readonly code = "agent_manifest_invalid";
   readonly statusCode = 400;
@@ -103,6 +120,19 @@ export class AgentManifestError extends Error {
   ) {
     super(`${file}: ${message}`);
     this.name = "AgentManifestError";
+  }
+}
+
+export class ProjectSkillError extends Error {
+  readonly code = "project_skill_invalid";
+  readonly statusCode = 400;
+
+  constructor(
+    readonly file: string,
+    message: string,
+  ) {
+    super(`${file}: ${message}`);
+    this.name = "ProjectSkillError";
   }
 }
 
@@ -182,6 +212,59 @@ export function parseAgentCatalog(sources: AgentManifestSource[]): AgentManifest
     names.add(manifest.name);
   }
   return manifests;
+}
+
+/** Parses repository-installed skills for inventory only; execution remains engine-owned. */
+export function parseProjectSkill(source: string, file: string): ProjectSkill {
+  if (!/^\.(?:agents|claude)\/skills\/(?:[^/]+\/)*SKILL\.md$/.test(file)) {
+    throw new ProjectSkillError(
+      file,
+      "expected .agents/skills/**/SKILL.md or .claude/skills/**/SKILL.md",
+    );
+  }
+  const normalizedNewlines = source.replace(/\r\n?/g, "\n");
+  const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(normalizedNewlines);
+  if (!match) {
+    throw new ProjectSkillError(
+      file,
+      "expected YAML frontmatter delimited by --- at the start of the file",
+    );
+  }
+  const document = parseDocument(match[1] ?? "", {
+    prettyErrors: false,
+    uniqueKeys: true,
+  });
+  if (document.errors.length > 0) {
+    throw new ProjectSkillError(file, document.errors.map((error) => error.message).join("; "));
+  }
+  const result = ProjectSkillFrontmatterSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
+  if (!result.success) {
+    throw new ProjectSkillError(
+      file,
+      result.error.issues
+        .map((issue) => `${issue.path.join(".") || "frontmatter"}: ${issue.message}`)
+        .join("; "),
+    );
+  }
+  return {
+    name: result.data.name,
+    description: result.data.description,
+    path: file,
+    directory: file.startsWith(".agents/") ? ".agents" : ".claude",
+    hash: createHash("sha256").update(`${normalizedNewlines.trimEnd()}\n`).digest("hex"),
+  };
+}
+
+export function parseProjectSkills(sources: ProjectSkillSource[]): ProjectSkill[] {
+  const skills = sources
+    .map(({ file, source }) => parseProjectSkill(source, file))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const paths = new Set<string>();
+  for (const skill of skills) {
+    if (paths.has(skill.path)) throw new ProjectSkillError(skill.path, "duplicate skill path");
+    paths.add(skill.path);
+  }
+  return skills;
 }
 
 export async function loadAgentCatalog(directory: string): Promise<AgentManifest[]> {

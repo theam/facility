@@ -2,7 +2,7 @@ import { Eyebrow, StatusDot } from "@facility/ui";
 import { AgentEditor } from "@/components/agents/agent-editor";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
-import { api, type StoryAgent } from "@/lib/api";
+import { api, type ProjectSkill, type StoryAgent } from "@/lib/api";
 import { can } from "@/lib/permissions";
 
 export const metadata = { title: "agents" };
@@ -13,7 +13,11 @@ export default async function ProjectAgentsPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [result, me] = await Promise.all([api.storyAgents(projectId), api.me()]);
+  const [result, skills, me] = await Promise.all([
+    api.storyAgents(projectId),
+    api.projectSkills(projectId),
+    api.me(),
+  ]);
   if (!result.ok) return result.offline ? <Offline /> : <ErrorNotice message={result.message} />;
   const canWrite = me.ok && can(me.data.permissions, "projects:write");
 
@@ -37,12 +41,54 @@ export default async function ProjectAgentsPage({
         ))}
       </div>
 
+      <section className="flex flex-col gap-4">
+        <div>
+          <Eyebrow>project capability inventory</Eyebrow>
+          <h2 className="mt-2 text-lg font-semibold text-(--ink)">Installed skills</h2>
+          <p className="mt-1 max-w-2xl text-[12.5px] leading-relaxed text-(--dim)">
+            Facility inventories repository-owned skills from{" "}
+            <code className="font-mono text-(--ink)">.agents/skills</code> and{" "}
+            <code className="font-mono text-(--ink)">.claude/skills</code>. Git remains the source
+            of truth; Facility has no separate catalog to distribute or upgrade.
+          </p>
+        </div>
+        {!skills.ok ? (
+          <ErrorNotice message={`Couldn't load installed skills — ${skills.message}`} />
+        ) : skills.data.skills.length === 0 ? (
+          <p className="border border-(--line) p-5 text-[12px] text-(--dim)">
+            No repository-installed skills were found.
+          </p>
+        ) : (
+          <div className="grid gap-px border border-(--line) bg-(--line) lg:grid-cols-2">
+            {skills.data.skills.map((skill) => (
+              <SkillCard key={skill.path} skill={skill} />
+            ))}
+          </div>
+        )}
+      </section>
+
       <div className="border border-(--line) bg-(--bg-subtle) p-5 text-[12px] leading-relaxed text-(--mut)">
         Every agent receives the same full workspace, Docker, browser, network, and GitHub
         maintainer access. Per-agent permissions and tool allowlists are intentionally not part of
         the manifest.
       </div>
     </div>
+  );
+}
+
+function SkillCard({ skill }: { skill: ProjectSkill }) {
+  return (
+    <article className="flex flex-col gap-3 bg-(--bg) p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-mono text-[13px] font-semibold text-(--ink)">{skill.name}</h3>
+        <span className="font-mono text-[9.5px] text-(--dim)">{skill.directory}</span>
+      </div>
+      <p className="text-[12px] leading-relaxed text-(--mut)">{skill.description}</p>
+      <p className="break-all font-mono text-[9.5px] text-(--dim)">{skill.path}</p>
+      <p className="font-mono text-[9.5px] text-(--dim)">
+        {skill.commit_sha.slice(0, 10)} · {skill.hash.slice(0, 10)}
+      </p>
+    </article>
   );
 }
 

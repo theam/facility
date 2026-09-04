@@ -174,6 +174,15 @@ export type StoryAgent = {
     last_result: { state: string; at: string; error: string | null } | null;
   };
 };
+export type ProjectSkill = {
+  name: string;
+  description: string;
+  path: string;
+  directory: ".agents" | ".claude";
+  hash: string;
+  commit_sha: string;
+  synced_at: string;
+};
 export type WorkspaceStory = {
   id: string;
   provider: "github" | "manual" | "schedule";
@@ -241,6 +250,15 @@ export type WorkspaceStoryBundle = {
     type: string;
     data: Record<string, unknown>;
     created_at: string;
+  }>;
+  timeline: Array<{
+    id: string;
+    source: "facility" | "workspace" | "github" | "agent" | "artifact";
+    type: string;
+    turn_id: string | null;
+    data: Record<string, unknown>;
+    occurred_at: string;
+    observed_at: string;
   }>;
   status: WorkspaceStory["status"];
   needs_attention: boolean;

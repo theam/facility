@@ -1120,3 +1120,259 @@ export const workspaceEvents = pgTable(
     }),
   ],
 );
+
+export const projectSkills = pgTable(
+  "project_skills",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    name: text("name").notNull(),
+    commitSha: text("commit_sha").notNull(),
+    path: text("path").notNull(),
+    directory: text("directory").notNull(),
+    description: text("description").notNull(),
+    contentHash: text("content_hash").notNull(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("project_skills_project_path_uidx").on(table.projectId, table.path),
+    index("project_skills_org_project_idx").on(table.orgId, table.projectId),
+    check("project_skills_directory_check", sql`${table.directory} in ('.agents', '.claude')`),
+    foreignKey({
+      name: "project_skills_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+  ],
+);
+
+export const turnGitEvidence = pgTable(
+  "turn_git_evidence",
+  {
+    turnId: text("turn_id")
+      .primaryKey()
+      .references(() => turns.id),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    engineSessionId: text("engine_session_id").notNull(),
+    initialBranch: text("initial_branch"),
+    initialSha: text("initial_sha").notNull(),
+    finalBranch: text("final_branch"),
+    finalSha: text("final_sha"),
+    commits: jsonb("commits").notNull().default(sql`'[]'::jsonb`),
+    changedFiles: jsonb("changed_files").notNull().default(sql`'[]'::jsonb`),
+    dirty: boolean("dirty").notNull().default(false),
+    captureError: text("capture_error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("turn_git_evidence_story_completed_idx").on(
+      table.orgId,
+      table.storyId,
+      table.completedAt.desc(),
+    ),
+    index("turn_git_evidence_final_sha_idx")
+      .on(table.orgId, table.projectId, table.finalSha)
+      .where(sql`${table.finalSha} is not null`),
+    foreignKey({
+      name: "turn_git_evidence_turn_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.turnId],
+      foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+    foreignKey({
+      name: "turn_git_evidence_workspace_scope_fk",
+      columns: [table.orgId, table.projectId, table.workspaceId],
+      foreignColumns: [workspaces.orgId, workspaces.projectId, workspaces.id],
+    }),
+  ],
+);
+
+export const storyEvidenceEvents = pgTable(
+  "story_evidence_events",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    turnId: text("turn_id"),
+    source: text("source").notNull(),
+    type: text("type").notNull(),
+    externalKey: text("external_key"),
+    data: jsonb("data").notNull().default(sql`'{}'::jsonb`),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("story_evidence_events_external_uidx")
+      .on(table.storyId, table.source, table.externalKey)
+      .where(sql`${table.externalKey} is not null`),
+    index("story_evidence_events_story_occurred_idx").on(
+      table.orgId,
+      table.storyId,
+      table.occurredAt.desc(),
+    ),
+    check(
+      "story_evidence_events_source_check",
+      sql`${table.source} in ('facility', 'workspace', 'github')`,
+    ),
+    foreignKey({
+      name: "story_evidence_events_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_evidence_events_turn_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.turnId],
+      foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+  ],
+);
+
+export const githubBranches = pgTable(
+  "github_branches",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    name: text("name").notNull(),
+    headSha: text("head_sha").notNull(),
+    protected: boolean("protected").notNull().default(false),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("github_branches_repository_name_uidx").on(table.repositoryId, table.name),
+    index("github_branches_project_updated_idx").on(
+      table.orgId,
+      table.projectId,
+      table.updatedAt.desc(),
+    ),
+    foreignKey({
+      name: "github_branches_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const githubPullRequestReviews = pgTable(
+  "github_pull_request_reviews",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    pullNumber: integer("pull_number").notNull(),
+    reviewId: text("review_id").notNull(),
+    state: text("state").notNull(),
+    author: text("author"),
+    body: text("body"),
+    htmlUrl: text("html_url"),
+    commitSha: text("commit_sha"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("github_pull_request_reviews_repository_review_uidx").on(
+      table.repositoryId,
+      table.reviewId,
+    ),
+    index("github_pull_request_reviews_pull_idx").on(
+      table.repositoryId,
+      table.pullNumber,
+      table.submittedAt.desc(),
+    ),
+    foreignKey({
+      name: "github_pull_request_reviews_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const githubChecks = pgTable(
+  "github_checks",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    pullNumber: integer("pull_number"),
+    checkId: text("check_id").notNull(),
+    headSha: text("head_sha").notNull(),
+    name: text("name").notNull(),
+    status: text("status").notNull(),
+    conclusion: text("conclusion"),
+    detailsUrl: text("details_url"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("github_checks_repository_check_uidx").on(table.repositoryId, table.checkId),
+    index("github_checks_head_idx").on(table.repositoryId, table.headSha, table.updatedAt.desc()),
+    foreignKey({
+      name: "github_checks_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);

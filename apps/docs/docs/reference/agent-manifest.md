@@ -131,7 +131,8 @@ behavior but cannot reduce credentials. Use repository rules and Facility author
 structural enforcement.
 
 The default catalog provides `architect`, `builder`, `pr-reviewer`, `address-review`, `ci-doctor`,
-and `security-audit`. They are templates, not reserved names. Custom agents use this same contract.
+and `security-audit`. They are starter manifests, not reserved names. Custom agents use this same
+contract.
 
 ## Catalog updates
 

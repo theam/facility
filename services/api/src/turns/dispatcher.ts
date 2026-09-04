@@ -22,6 +22,7 @@ import type { WorkspaceLocator } from "../workspaces/runtime.js";
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
+import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
 
 export class TurnDispatcher {
   constructor(
@@ -32,6 +33,7 @@ export class TurnDispatcher {
     private readonly projectManifests: ProjectManifestSource,
     private readonly environment: ProjectEnvironmentService,
     private readonly engines: AgentEngineRegistry,
+    private readonly evidence: TurnGitEvidenceService,
     private readonly costs = new CostBudgetService(db),
   ) {}
 
@@ -84,6 +86,8 @@ export class TurnDispatcher {
       turnId: turn.id,
     };
     let secrets: string[] = [];
+    let startedGitEvidence: StartedGitEvidence | undefined;
+    let gitEvidenceCompleted = false;
     try {
       await this.storiesService.resolveAttention({
         orgId: input.orgId,
@@ -175,6 +179,22 @@ export class TurnDispatcher {
           )
           .limit(1)
       )[0];
+      const engineSessionId = session?.id ?? newId("esess");
+      startedGitEvidence = await this.evidence.start({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: story.id,
+        turnId: turn.id,
+        workspace: workspaceLocator(workspace),
+        workspaceProvider: workspace.provider,
+        cwd: prepared.primaryCwd,
+        environment: prepared.processEnvironment,
+        engineSessionId,
+        nativeSessionId: session?.nativeSessionId,
+        agentName: manifest.name,
+        engine: manifest.engine,
+        model: manifest.model,
+      });
       const engine = this.engines.get(manifest.engine);
       const engineRequest = {
         turnId: turn.id,
@@ -213,6 +233,8 @@ export class TurnDispatcher {
           error.details,
         );
       }
+      await this.evidence.complete(startedGitEvidence);
+      gitEvidenceCompleted = true;
       for (const event of result.events) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -242,6 +264,7 @@ export class TurnDispatcher {
         manifest,
         nativeSessionId: result.nativeSessionId,
         existingId: session?.id,
+        sessionId: engineSessionId,
       });
       await this.storiesService.completeTurn({
         orgId: input.orgId,
@@ -286,6 +309,10 @@ export class TurnDispatcher {
       await this.activateQueuedSuccessor({ ...input, storyId: story.id });
       return { claimed: true as const, state: "succeeded" as const, result };
     } catch (error) {
+      if (startedGitEvidence && !gitEvidenceCompleted) {
+        await this.evidence.complete(startedGitEvidence).catch(() => undefined);
+        gitEvidenceCompleted = true;
+      }
       if (await this.isCanceled(input.orgId, input.projectId, input.turnId)) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -465,6 +492,7 @@ export class TurnDispatcher {
     manifest: AgentManifest;
     nativeSessionId: string;
     existingId?: string;
+    sessionId: string;
   }) {
     const values = {
       nativeSessionId: input.nativeSessionId,
@@ -480,7 +508,7 @@ export class TurnDispatcher {
       return;
     }
     await this.db.insert(engineSessions).values({
-      id: newId("esess"),
+      id: input.sessionId,
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: input.storyId,

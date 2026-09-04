@@ -2,8 +2,10 @@ import {
   type AgentManifest,
   type AgentManifestSource,
   AgentNameSchema,
+  type ProjectSkillSource,
   parseAgentCatalog,
   parseAgentManifest,
+  parseProjectSkill,
 } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
@@ -11,6 +13,7 @@ import {
   type FacilityDb,
   githubInstallations,
   projectRepositories,
+  projectSkills,
 } from "@facility/db";
 import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import { FacilityGithubClient, type GithubClientFactory } from "../github/client.js";
@@ -19,6 +22,7 @@ import { readRepoFiles } from "../github/repo-files.js";
 export type AgentCatalogSnapshot = {
   commitSha: string;
   sources: AgentManifestSource[];
+  skills?: ProjectSkillSource[];
 };
 
 export interface AgentCatalogSource {
@@ -103,12 +107,16 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
         defaultBranch: repository.defaultBranch,
       });
       const commitSha = await client.getDefaultBranchSha();
-      const files = await readRepoFiles(client, commitSha, [".agents"]);
+      const files = await readRepoFiles(client, commitSha, [".agents", ".claude/skills"]);
       const sources = [...files.entries()]
         .filter(([path]) => /^\.agents\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(path))
         .map(([file, source]) => ({ file, source }))
         .sort((left, right) => left.file.localeCompare(right.file));
-      return { commitSha, sources };
+      const skills = [...files.entries()]
+        .filter(([path]) => /^\.(?:agents|claude)\/skills\/(?:[^/]+\/)*SKILL\.md$/.test(path))
+        .map(([file, source]) => ({ file, source }))
+        .sort((left, right) => left.file.localeCompare(right.file));
+      return { commitSha, sources, skills };
     } catch (error) {
       if (error instanceof AgentCatalogError) throw error;
       throw new AgentCatalogError(
@@ -270,6 +278,14 @@ export class AgentCatalogService {
   async sync(orgId: string, projectId: string): Promise<AgentManifest[]> {
     const snapshot = await this.source.load(orgId, projectId);
     const manifests = parseAgentCatalog(snapshot.sources);
+    const skills = (snapshot.skills ?? []).flatMap(({ file, source }) => {
+      try {
+        return [parseProjectSkill(source, file)];
+      } catch {
+        // A malformed optional skill must not make the executable agent catalog unavailable.
+        return [];
+      }
+    });
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await tx.execute(
@@ -313,6 +329,49 @@ export class AgentCatalogService {
             )
           : scope,
       );
+      for (const skill of skills) {
+        await tx
+          .insert(projectSkills)
+          .values({
+            id: newId("skill"),
+            orgId,
+            projectId,
+            name: skill.name,
+            commitSha: snapshot.commitSha,
+            path: skill.path,
+            directory: skill.directory,
+            description: skill.description,
+            contentHash: skill.hash,
+            syncedAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: [projectSkills.projectId, projectSkills.path],
+            set: {
+              name: skill.name,
+              commitSha: snapshot.commitSha,
+              directory: skill.directory,
+              description: skill.description,
+              contentHash: skill.hash,
+              syncedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          });
+      }
+      const skillScope = and(
+        eq(projectSkills.orgId, orgId),
+        eq(projectSkills.projectId, projectId),
+      );
+      await tx.delete(projectSkills).where(
+        skills.length > 0
+          ? and(
+              skillScope,
+              notInArray(
+                projectSkills.path,
+                skills.map((skill) => skill.path),
+              ),
+            )
+          : skillScope,
+      );
     });
     return manifests;
   }
@@ -337,6 +396,28 @@ export class AgentCatalogService {
       .from(agentManifests)
       .where(and(eq(agentManifests.orgId, orgId), eq(agentManifests.projectId, projectId)))
       .orderBy(asc(agentManifests.name));
+  }
+
+  async listSkills(orgId: string, projectId: string, options: { refresh?: boolean } = {}) {
+    if (options.refresh !== false) {
+      try {
+        await this.sync(orgId, projectId);
+      } catch (error) {
+        if (!isRefreshUnavailable(error)) throw error;
+        const cached = await this.listSkillsCached(orgId, projectId);
+        if (cached.length > 0) return cached;
+        throw error;
+      }
+    }
+    return this.listSkillsCached(orgId, projectId);
+  }
+
+  private listSkillsCached(orgId: string, projectId: string) {
+    return this.db
+      .select()
+      .from(projectSkills)
+      .where(and(eq(projectSkills.orgId, orgId), eq(projectSkills.projectId, projectId)))
+      .orderBy(asc(projectSkills.name), asc(projectSkills.path));
   }
 
   async get(orgId: string, projectId: string, name: string, options: { refresh?: boolean } = {}) {

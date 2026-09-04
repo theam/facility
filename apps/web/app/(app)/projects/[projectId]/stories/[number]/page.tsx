@@ -188,6 +188,39 @@ export default async function StoryPage({
         ) : null}
       </section>
 
+      <section className="flex flex-col gap-3">
+        <div className="flex items-baseline justify-between gap-4">
+          <Eyebrow>story timeline · {bundle.timeline.length}</Eyebrow>
+          <span className="text-[11px] text-(--dim)">
+            agent, workspace, Git and GitHub evidence
+          </span>
+        </div>
+        <div className="flex flex-col border border-(--line)">
+          {bundle.timeline.map((event) => (
+            <article
+              key={event.id}
+              className="grid gap-2 border-b border-(--line) p-4 last:border-b-0 sm:grid-cols-[130px_minmax(0,1fr)]"
+            >
+              <div>
+                <p className="font-mono text-[9.5px] uppercase text-(--accent)">{event.source}</p>
+                <time className="text-[10px] text-(--dim)" dateTime={event.occurred_at}>
+                  {formatTime(event.occurred_at)}
+                </time>
+              </div>
+              <div className="min-w-0">
+                <p className="font-mono text-[11px] text-(--ink)">{event.type}</p>
+                <p className="mt-1 text-[11.5px] leading-relaxed text-(--mut)">
+                  {timelineSummary(event.type, event.data)}
+                </p>
+                {event.turn_id ? (
+                  <p className="mt-1 font-mono text-[9.5px] text-(--dim)">turn {event.turn_id}</p>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="grid gap-6 lg:grid-cols-2">
         <div className="flex flex-col gap-3">
           <Eyebrow>turns</Eyebrow>
@@ -255,24 +288,6 @@ export default async function StoryPage({
         </div>
       </section>
 
-      {bundle.events.length > 0 ? (
-        <section className="flex flex-col gap-3">
-          <Eyebrow>live agent progress</Eyebrow>
-          <div className="max-h-80 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
-            {bundle.events.map((event) => (
-              <div key={`${event.turn_id}:${event.seq}`} className="mb-3 last:mb-0">
-                <p className="text-(--accent)">
-                  {event.type} · {event.turn_id}
-                </p>
-                <pre className="mt-1 whitespace-pre-wrap break-words text-(--mut)">
-                  {JSON.stringify(event.data, null, 2)}
-                </pre>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
       {bundle.artifacts.length > 0 ? (
         <section className="flex flex-col gap-3">
           <Eyebrow>artifacts</Eyebrow>
@@ -324,6 +339,36 @@ function Message({ message }: { message: StoryMessage }) {
       <Markdown source={message.body} />
     </article>
   );
+}
+
+function timelineSummary(type: string, data: Record<string, unknown>) {
+  const text = (key: string) => (typeof data[key] === "string" ? String(data[key]) : null);
+  const count = (key: string) => (Array.isArray(data[key]) ? data[key].length : 0);
+  if (type === "story.created") return text("title") ?? "Story created.";
+  if (type === "turn.context_recorded") {
+    return [text("agent"), text("model"), text("initialSha")?.slice(0, 10), text("branch")]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (type === "git.changes_recorded") {
+    return `${count("commits")} commits · ${count("changedFiles")} changed files · ${text("initialSha")?.slice(0, 10) ?? "unknown"} → ${text("finalSha")?.slice(0, 10) ?? "unknown"}`;
+  }
+  if (type === "github.branch_observed" || type === "github.branch_deleted") {
+    return `${text("branch") ?? "branch"} · ${text("headSha")?.slice(0, 10) ?? "unknown"} · ${text("actor") ?? "external"}`;
+  }
+  if (type === "github.pull_request_observed") {
+    return `PR #${String(data.number ?? "?")} · ${text("state") ?? "unknown"} · ${text("title") ?? ""}`;
+  }
+  if (type === "github.review_observed") {
+    return `${text("author") ?? "unknown reviewer"} · ${text("state") ?? "reviewed"} · PR #${String(data.pullNumber ?? "?")}`;
+  }
+  if (type === "github.check_observed") {
+    return `${text("name") ?? "check"} · ${text("conclusion") ?? text("status") ?? "unknown"}`;
+  }
+  if (type === "artifact.recorded") return text("label") ?? "Artifact recorded.";
+  if (type.startsWith("attention.")) return text("title") ?? type;
+  if (type === "turn.failed") return text("error") ?? "Turn failed.";
+  return type.replaceAll(".", " ");
 }
 
 function storyTone(status: WorkspaceStory["status"]) {

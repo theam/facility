@@ -15,7 +15,9 @@ import {
   projectBudgets,
   projectRepositories,
   projects,
+  storyEvidenceEvents,
   turnEvents,
+  turnGitEvidence,
   turns,
   turnUsage,
 } from "@facility/db";
@@ -33,6 +35,7 @@ import {
   type AgentTurnRequest,
   type AgentTurnResult,
 } from "../src/turns/engines.js";
+import { TurnGitEvidenceService } from "../src/turns/git-evidence.js";
 import { recoverInterruptedTurns, recoverQueuedTurns } from "../src/worker.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import {
@@ -234,6 +237,7 @@ environment:
         name === "FACILITY_DISPATCH_SECRET" ? "project-secret" : undefined,
       ),
       new AgentEngineRegistry([engine]),
+      new TurnGitEvidenceService(db, runtime),
     );
   });
 
@@ -265,6 +269,34 @@ environment:
     expect(
       await db.select().from(engineSessions).where(eq(engineSessions.storyId, started.story.id)),
     ).toHaveLength(1);
+    if (!started.workspace) throw new Error("expected story workspace");
+    const gitEvidence = (
+      await db.select().from(turnGitEvidence).where(eq(turnGitEvidence.turnId, initialTurn.id))
+    )[0];
+    expect(gitEvidence).toMatchObject({
+      workspaceId: started.workspace.id,
+      initialSha: expect.stringMatching(/^[a-f0-9]{40}$/),
+      finalSha: expect.stringMatching(/^[a-f0-9]{40}$/),
+      dirty: true,
+      captureError: null,
+    });
+    expect(gitEvidence?.changedFiles).toEqual(
+      expect.arrayContaining([expect.objectContaining({ status: "?", path: "agent-work" })]),
+    );
+    const session = (
+      await db.select().from(engineSessions).where(eq(engineSessions.storyId, started.story.id))
+    )[0];
+    expect(gitEvidence?.engineSessionId).toBe(session?.id);
+    expect(
+      await db
+        .select({ type: storyEvidenceEvents.type, turnId: storyEvidenceEvents.turnId })
+        .from(storyEvidenceEvents)
+        .where(eq(storyEvidenceEvents.turnId, initialTurn.id))
+        .orderBy(asc(storyEvidenceEvents.occurredAt)),
+    ).toEqual([
+      { type: "turn.context_recorded", turnId: initialTurn.id },
+      { type: "git.changes_recorded", turnId: initialTurn.id },
+    ]);
     expect(await db.select().from(turnUsage).where(eq(turnUsage.turnId, initialTurn.id))).toEqual([
       expect.objectContaining({
         agentName: "builder",

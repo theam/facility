@@ -18,8 +18,9 @@ An MCP client normally follows this sequence:
 
 1. `facility_list_projects`
 2. `facility_list_agents`
-3. `facility_start_story`
-4. `facility_get_story` or `facility_get_conversation` until the first turn settles
+3. `facility_list_skills` when the task depends on project-installed capabilities
+4. `facility_start_story`
+5. `facility_get_story` or `facility_get_conversation` until the first turn settles
 
 Use a new idempotency key for a new start request. Reuse the same key only when retrying the exact
 same request after an uncertain network result.
@@ -37,6 +38,13 @@ Messages sent while a turn is active wait in order.
 Use `facility_get_story` to inspect status and `next_operations`. Use
 `facility_get_conversation` with its cursor for durable message history. The UI renders the same
 conversation and can continue it under the current user's project membership.
+
+The story timeline is the review path across the whole delivery. It shows which agent, model,
+session, workspace, branch, and initial SHA started each turn; the final SHA, commits, files, and
+dirty state; artifacts and attention; and the mirrored branch, pull request, reviews, and checks.
+An entry linked to a `turn_id` has an exact Facility attribution. An `external` GitHub actor means
+Facility associated the event with the story but could not prove that a particular turn produced
+it.
 
 When the story needs attention:
 
@@ -64,8 +72,10 @@ make the workspace port public.
 ## Work with GitHub
 
 Agents use Git and `gh` inside the workspace. A normal delivery leaves a reviewable branch and pull
-request. The GitHub mirror shows current issues, pull requests, checks, and workflow runs after
-webhooks or periodic reconciliation.
+request. The GitHub mirror shows current issues, branches, pull requests, reviews, checks, and
+workflow runs after webhooks or periodic reconciliation. Use `facility_sync_github` when waiting
+ten minutes for the next scheduled pass would slow an investigation. Reconciliation also records
+changes made directly in GitHub or by tools outside Facility.
 
 Facility does not merge on behalf of the story lifecycle. A merged pull request marks a linked
 story done and suspends compute. Branch protection and required review remain the merge boundary.

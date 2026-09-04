@@ -9,6 +9,7 @@ import {
   migrate,
   orgs,
   projectRepositories,
+  projectSkills,
   projects,
 } from "@facility/db";
 import { eq } from "drizzle-orm";
@@ -243,7 +244,22 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
               };
             }
             if (path === ".agents/skills") {
-              return { data: [{ type: "file", path: ".agents/skills/ignored.md" }] };
+              return { data: [{ type: "dir", path: ".agents/skills/review" }] };
+            }
+            if (path === ".agents/skills/review") {
+              return { data: [{ type: "file", path: ".agents/skills/review/SKILL.md" }] };
+            }
+            if (path === ".agents/skills/review/SKILL.md") {
+              return {
+                data: {
+                  type: "file",
+                  path,
+                  encoding: "base64",
+                  content: encoded(
+                    "---\nname: review\ndescription: Reviews project changes.\n---\n\n# Review\n",
+                  ),
+                },
+              };
             }
             return {
               data: { type: "file", path, encoding: "base64", content: encoded("ignored") },
@@ -256,7 +272,21 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
     expect(snapshot).toEqual({
       commitSha: "d".repeat(40),
       sources: [{ file: ".agents/builder.md", source: source("builder") }],
+      skills: [
+        {
+          file: ".agents/skills/review/SKILL.md",
+          source: "---\nname: review\ndescription: Reviews project changes.\n---\n\n# Review\n",
+        },
+      ],
     });
+    const catalog = new AgentCatalogService(db, { load: async () => snapshot });
+    await catalog.sync(orgId, projectId);
+    await expect(catalog.listSkills(orgId, projectId, { refresh: false })).resolves.toMatchObject([
+      { name: "review", directory: ".agents" },
+    ]);
+    expect(
+      await db.select().from(projectSkills).where(eq(projectSkills.projectId, projectId)),
+    ).toHaveLength(1);
   });
 
   it("validates an agent edit and writes it to a reviewable Git branch", async () => {

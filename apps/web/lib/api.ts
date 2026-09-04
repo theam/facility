@@ -6,6 +6,7 @@ import type {
   FacilityRouteMethod,
   FacilityRoutePath,
   FacilityRouteResponse,
+  ProjectSkill,
   StoryAgent,
   StoryEnvironment,
   StoryMessage,
@@ -30,6 +31,7 @@ export type {
   ProjectObservability,
   ProjectPipeline,
   ProjectRepo,
+  ProjectSkill,
   Role,
   StoryAgent,
   StoryEnvironment,
@@ -100,6 +102,10 @@ export const api = {
   storyAgents: (projectId: string) =>
     typed<{ agents: StoryAgent[] }>(
       apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/story-agents`),
+    ),
+  projectSkills: (projectId: string) =>
+    typed<{ skills: ProjectSkill[] }>(
+      apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/project-skills`),
     ),
   workspaceStories: (projectId: string, status?: WorkspaceStory["status"]) =>
     typed<{ stories: WorkspaceStory[] }>(

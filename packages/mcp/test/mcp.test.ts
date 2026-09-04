@@ -84,6 +84,7 @@ describe("@facility/mcp 0.12", () => {
     expect(result.tools.map((tool) => tool.name)).toEqual([
       "facility_list_projects",
       "facility_list_agents",
+      "facility_list_skills",
       "facility_list_stories",
       "facility_get_story",
       "facility_start_story",
@@ -106,6 +107,13 @@ describe("@facility/mcp 0.12", () => {
     expect(result.tools.every((tool) => tool.description?.includes("Needs "))).toBe(true);
     expect(
       result.tools.find((tool) => tool.name === "facility_list_agents")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    expect(
+      result.tools.find((tool) => tool.name === "facility_list_skills")?.annotations,
     ).toMatchObject({
       readOnlyHint: true,
       destructiveHint: false,

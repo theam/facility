@@ -59,7 +59,10 @@ test("the product identity remains a reviewable AI SDLC rather than a workspace 
   assert.match(method, /Humans, gates, and evidence/);
 
   const roadmap = read("apps/docs/docs/roadmap.md");
-  assert.match(roadmap, /Persistent story workspaces change its execution foundation, not that[\s\S]*direction/);
+  assert.match(
+    roadmap,
+    /Persistent story workspaces change its execution foundation, not that[\s\S]*direction/,
+  );
   assert.match(roadmap, /Beyond 0\.12/);
 });
 
@@ -125,6 +128,33 @@ test("the agent reference covers engines, options, and every trigger", () => {
   }
   assert.match(guide, /permissions[\s\S]*not part of the manifest/i);
   assert.match(guide, /full workspace[\s\S]*GitHub/i);
+});
+
+test("project capabilities and delivery evidence remain inspectable", () => {
+  const agents = read("apps/docs/docs/concepts/agents-as-code.md");
+  assert.match(agents, /\.agents\/skills/);
+  assert.match(agents, /\.claude\/skills/);
+  assert.match(agents, /facility_list_skills/);
+
+  const mcp = read("apps/docs/docs/reference/mcp.md");
+  assert.match(mcp, /facility_list_skills/);
+  assert.match(mcp, /timeline[\s\S]*branches[\s\S]*pull requests[\s\S]*reviews[\s\S]*checks/i);
+
+  const lifecycle = read("apps/docs/docs/reference/lifecycle.md");
+  for (const subject of [
+    "initial Git SHA",
+    "final branch and SHA",
+    "commits",
+    "changed files",
+    "periodic reconciliation",
+    "single timeline",
+  ]) {
+    assert.match(
+      lifecycle,
+      new RegExp(subject.replaceAll(" ", "\\s+"), "i"),
+      `${subject} must be documented`,
+    );
+  }
 });
 
 test("lifecycle documentation preserves state and deletion semantics", () => {

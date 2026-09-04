@@ -13,9 +13,10 @@ The web UI and MCP clients call one control API. The API owns authentication, pr
 operations, GitHub webhook ingress, the embedded MCP endpoint, and authenticated preview routing.
 PostgreSQL stores durable control-plane state and pg-boss jobs.
 
-The same database stores per-turn usage, monthly project budgets, audit events, and the GitHub
-issue, pull request, and CI mirror. The API exposes those records through MCP and the web UI. No
-separate gateway, metering service, analytics service, or pipeline service is required.
+The same database stores per-turn usage, monthly project budgets, audit events, turn Git evidence,
+and the GitHub issue, branch, pull request, review, check, and CI mirror. The API exposes those
+records through MCP and the web UI. No separate gateway, metering service, analytics service, or
+pipeline service is required.
 
 The deployable processes are:
 
@@ -47,6 +48,11 @@ The worker handles these recurring paths:
 Messages and turns are persisted before dispatch. A database claim prevents two workers from
 running the same story turn concurrently. Every activation resolves the repository catalog, checks
 the trigger, and snapshots the manifest used for history.
+
+The dispatcher captures the initial Git identity after workspace preparation and before invoking
+Claude Code or Codex. It captures final Git state after the engine settles, including failure and
+cancel paths. Evidence capture uses the provider's ordinary execution boundary, so Docker and
+Vercel workspaces follow the same contract.
 
 ## Workspace plane
 
@@ -87,16 +93,24 @@ The GitHub App installation is both the repository discovery boundary and the cr
 workspaces. Facility issues short-lived installation tokens restricted to repositories connected
 to the active project while retaining the App's configured maintainer-level permission set.
 
-Signed webhooks update the local issue, pull-request, check, and workflow mirror and may activate
-repository-defined agents. Periodic reconciliation repairs missed delivery. Pull-request merge
-transitions a linked story to done and suspends compute without deleting the workspace.
+Signed webhooks update the local issue, branch, pull-request, review, check, and workflow mirror and
+may activate repository-defined agents. Ten-minute reconciliation lists repository branches,
+issues, pull requests, reviews for linked pull requests, statuses, and check runs to repair missed
+delivery. A complete branch scan marks disappeared branches as deleted; an incomplete paginated
+scan does not.
+
+GitHub facts are linked to an exact turn when their SHA matches a recorded final turn SHA. Branch,
+pull-request, and closing-issue identity provide a story-level fallback for changes made outside
+Facility. Pull-request merge transitions a linked story to done and suspends compute without
+deleting the workspace.
 
 ## Durable records
 
-PostgreSQL retains organizations, members, roles, keys, projects, repository bindings, agent
-catalog projections, stories, messages, turns, attention items, artifacts, workspace references,
-events, usage, costs, budgets, observability, analytics summaries, GitHub mirror records,
-idempotency records, preview sessions, and audit events.
+PostgreSQL retains organizations, members, roles, keys, projects, repository bindings, agent and
+skill catalog projections, stories, messages, turns, attention items, artifacts, workspace
+references, per-turn Git evidence, ordered story evidence, usage, costs, budgets, observability,
+analytics summaries, GitHub mirror records, idempotency records, preview sessions, and audit
+events.
 
 Workspace storage retains source and engine-local state. A valid backup strategy therefore covers
 PostgreSQL and the workspace provider. Database recovery alone cannot restore unpushed files; a

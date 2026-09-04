@@ -36,6 +36,28 @@ Only one queued or running turn is permitted per story. Later messages remain pe
 conversation order and are promoted after the active turn settles. Retrying creates another
 attempt; it does not erase the failed turn.
 
+## Turn evidence
+
+After environment preparation and before the engine starts, Facility records the selected agent,
+engine, model, Facility session id, resumable native session id when one exists, workspace and
+provider, branch, and initial Git SHA. The session id is allocated before execution so a failed
+engine start still has a stable identity.
+
+When execution returns, fails, or is canceled, Facility reads the workspace again and records the
+final branch and SHA, commits since the initial SHA, tracked and untracked changed files, and dirty
+worktree state. Evidence capture failure is recorded separately and does not replace the engine's
+own outcome. Limits protect the control plane from unbounded histories: at most 500 commits and
+2,000 changed files are stored for one turn, with truncation marked in the event.
+
+GitHub branches, pull requests, reviews, and checks are observed through webhooks and periodic
+reconciliation. A matching final SHA links the fact to an exact turn. Facts that can be associated
+only through the story's branch, pull request, or closing issue remain story-level external changes
+rather than being attributed to an agent.
+
+The story response orders these facts with turn activity, artifacts, attention, and creation in a
+single timeline. Source time and observation time are both retained because an event discovered by
+reconciliation may be older than the time Facility first saw it.
+
 ## Workspace states
 
 | State | Meaning |

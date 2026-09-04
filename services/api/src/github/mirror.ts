@@ -1,14 +1,21 @@
 import { newId } from "@facility/core";
 import {
   type FacilityDb,
+  githubBranches,
+  githubChecks,
   githubCiEvents,
   githubInstallations,
   githubIssues,
+  githubPullRequestReviews,
   githubPullRequests,
   projectRepositories,
   projects,
+  stories,
+  turnGitEvidence,
 } from "@facility/db";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { appendStoryEvidence } from "../stories/evidence.js";
+import type { StoryWorkspaceService } from "../stories/service.js";
 import { FacilityGithubClient, type GithubClientFactory } from "./client.js";
 
 const BODY_LIMIT = 64 * 1024;
@@ -21,6 +28,7 @@ export class GithubMirrorService {
   constructor(
     private readonly db: FacilityDb,
     private readonly githubFactory: GithubClientFactory,
+    private readonly storiesService?: StoryWorkspaceService,
   ) {}
 
   async handleWebhook(input: {
@@ -30,8 +38,11 @@ export class GithubMirrorService {
     payload: JsonObject;
   }) {
     const repository = await this.repositoryForPayload(input.orgId, input.payload);
-    if (!repository) return { mirrored: 0, ciUpdated: 0 };
+    if (!repository) {
+      return { mirrored: 0, branches: 0, reviews: 0, checks: 0, ciUpdated: 0 };
+    }
     let mirrored = 0;
+    const branches = await this.applyBranchSignal(repository, input.eventType, input.payload);
     const issue = object(input.payload.issue);
     if (Object.keys(issue).length > 0 && Object.keys(object(issue.pull_request)).length === 0) {
       if (await this.upsertIssue(repository, issue)) mirrored += 1;
@@ -40,8 +51,23 @@ export class GithubMirrorService {
     if (Object.keys(pullRequest).length > 0) {
       if (await this.upsertPullRequest(repository, pullRequest)) mirrored += 1;
     }
+    const review = object(input.payload.review);
+    const reviews =
+      Object.keys(review).length > 0
+        ? await this.upsertReview(
+            repository,
+            review,
+            positiveInteger(pullRequest.number),
+            string(object(pullRequest.head).sha),
+          )
+        : 0;
+    const checkRun = object(input.payload.check_run);
+    const checks =
+      Object.keys(checkRun).length > 0
+        ? await this.upsertCheck(repository, checkRun, firstPullNumber(checkRun))
+        : 0;
     const ciUpdated = await this.applyCiSignal(repository, input);
-    return { mirrored, ciUpdated };
+    return { mirrored, branches, reviews, checks, ciUpdated };
   }
 
   async syncProject(orgId: string, projectId: string) {
@@ -54,6 +80,9 @@ export class GithubMirrorService {
       .orderBy(asc(projectRepositories.owner), asc(projectRepositories.name));
     let issues = 0;
     let pullRequests = 0;
+    let branches = 0;
+    let reviews = 0;
+    let checks = 0;
     let ciUpdates = 0;
     for (const repository of repositories) {
       if (!repository.installationId) continue;
@@ -78,26 +107,66 @@ export class GithubMirrorService {
           defaultBranch: repository.defaultBranch,
         },
       );
-      for (const issue of await paginated(client, "GET /repos/{owner}/{repo}/issues", {
+      const branchScan = await paginated(client, "GET /repos/{owner}/{repo}/branches", {});
+      const seenBranches: string[] = [];
+      for (const branch of branchScan.rows) {
+        const name = string(branch.name);
+        const headSha = string(object(branch.commit).sha);
+        if (!name || !headSha) continue;
+        seenBranches.push(name);
+        branches += await this.upsertBranch(repository, {
+          name,
+          headSha,
+          protected: branch.protected === true,
+        });
+      }
+      if (branchScan.complete) {
+        branches += await this.markMissingBranches(repository, seenBranches);
+      }
+      const issueScan = await paginated(client, "GET /repos/{owner}/{repo}/issues", {
         state: "all",
         sort: "updated",
         direction: "desc",
-      })) {
+      });
+      for (const issue of issueScan.rows) {
         if (Object.keys(object(issue.pull_request)).length > 0) continue;
         if (await this.upsertIssue(repository, issue)) issues += 1;
       }
-      for (const pull of await paginated(client, "GET /repos/{owner}/{repo}/pulls", {
+      const pullScan = await paginated(client, "GET /repos/{owner}/{repo}/pulls", {
         state: "all",
         sort: "updated",
         direction: "desc",
-      })) {
+      });
+      for (const pull of pullScan.rows) {
         if (await this.upsertPullRequest(repository, pull)) pullRequests += 1;
-        if (string(object(pull.head).sha)) {
-          ciUpdates += await this.refreshCi(repository, client, pull);
+        const pullNumber = positiveInteger(pull.number);
+        const headSha = string(object(pull.head).sha);
+        if (pullNumber && (await this.linkedStory(repository, { pullNumber, headSha }))) {
+          const reviewScan = await paginated(
+            client,
+            "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+            { pull_number: pullNumber },
+          );
+          for (const review of reviewScan.rows) {
+            reviews += await this.upsertReview(repository, review, pullNumber, headSha);
+          }
+        }
+        if (headSha) {
+          const refreshed = await this.refreshCi(repository, client, pull);
+          ciUpdates += refreshed.ciUpdates;
+          checks += refreshed.checks;
         }
       }
     }
-    return { repositories: repositories.length, issues, pullRequests, ciUpdates };
+    return {
+      repositories: repositories.length,
+      issues,
+      branches,
+      pullRequests,
+      reviews,
+      checks,
+      ciUpdates,
+    };
   }
 
   async syncAll() {
@@ -144,6 +213,152 @@ export class GithubMirrorService {
           .limit(1)
       )[0] ?? null
     );
+  }
+
+  private async applyBranchSignal(
+    repository: RepositoryRow,
+    eventType: string,
+    payload: JsonObject,
+  ) {
+    if (eventType === "push") {
+      const ref = string(payload.ref);
+      const name = ref?.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
+      if (!name) return 0;
+      if (payload.deleted === true) return this.markBranchDeleted(repository, name);
+      const headSha = string(payload.after);
+      return headSha ? this.upsertBranch(repository, { name, headSha }) : 0;
+    }
+    if ((eventType === "create" || eventType === "delete") && payload.ref_type === "branch") {
+      const name = string(payload.ref);
+      if (!name) return 0;
+      if (eventType === "delete") return this.markBranchDeleted(repository, name);
+      const headSha = string(payload.after);
+      return headSha ? this.upsertBranch(repository, { name, headSha }) : 0;
+    }
+    return 0;
+  }
+
+  private async upsertBranch(
+    repository: RepositoryRow,
+    input: { name: string; headSha: string; protected?: boolean },
+  ) {
+    const previous = (
+      await this.db
+        .select()
+        .from(githubBranches)
+        .where(
+          and(eq(githubBranches.repositoryId, repository.id), eq(githubBranches.name, input.name)),
+        )
+        .limit(1)
+    )[0];
+    const now = new Date();
+    await this.db
+      .insert(githubBranches)
+      .values({
+        id: newId("ghb"),
+        orgId: repository.orgId,
+        projectId: repository.projectId,
+        repositoryId: repository.id,
+        name: input.name,
+        headSha: input.headSha,
+        protected: input.protected ?? false,
+        deletedAt: null,
+        syncedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [githubBranches.repositoryId, githubBranches.name],
+        set: {
+          headSha: input.headSha,
+          protected: input.protected ?? previous?.protected ?? false,
+          deletedAt: null,
+          syncedAt: now,
+          updatedAt: now,
+        },
+      });
+    const changed = !(
+      previous?.headSha === input.headSha &&
+      previous.protected === (input.protected ?? previous.protected) &&
+      !previous.deletedAt
+    );
+    const linked = await this.linkedStory(repository, {
+      branch: input.name,
+      headSha: input.headSha,
+    });
+    if (linked) {
+      await appendStoryEvidence(this.db, {
+        orgId: repository.orgId,
+        projectId: repository.projectId,
+        storyId: linked.story.id,
+        turnId: linked.turnId,
+        source: "github",
+        type: "github.branch_observed",
+        externalKey: `branch:${repository.id}:${input.name}:${input.headSha}`,
+        occurredAt: now,
+        data: {
+          repository: `${repository.owner}/${repository.name}`,
+          branch: input.name,
+          headSha: input.headSha,
+          protected: input.protected ?? previous?.protected ?? false,
+          actor: linked.turnId ? "facility-turn" : "external",
+        },
+      });
+    }
+    return changed ? 1 : 0;
+  }
+
+  private async markBranchDeleted(repository: RepositoryRow, name: string) {
+    const previous = (
+      await this.db
+        .select()
+        .from(githubBranches)
+        .where(and(eq(githubBranches.repositoryId, repository.id), eq(githubBranches.name, name)))
+        .limit(1)
+    )[0];
+    if (!previous || previous.deletedAt) return 0;
+    const now = new Date();
+    await this.db
+      .update(githubBranches)
+      .set({ deletedAt: now, syncedAt: now, updatedAt: now })
+      .where(and(eq(githubBranches.repositoryId, repository.id), eq(githubBranches.name, name)));
+    const linked = await this.linkedStory(repository, {
+      branch: name,
+      headSha: previous.headSha,
+    });
+    if (linked) {
+      await appendStoryEvidence(this.db, {
+        orgId: repository.orgId,
+        projectId: repository.projectId,
+        storyId: linked.story.id,
+        turnId: linked.turnId,
+        source: "github",
+        type: "github.branch_deleted",
+        externalKey: `branch:${repository.id}:${name}:deleted:${previous.headSha}`,
+        occurredAt: now,
+        data: {
+          repository: `${repository.owner}/${repository.name}`,
+          branch: name,
+          headSha: previous.headSha,
+          actor: linked.turnId ? "facility-turn" : "external",
+        },
+      });
+    }
+    return 1;
+  }
+
+  private async markMissingBranches(repository: RepositoryRow, seen: string[]) {
+    const active = await this.db
+      .select({ name: githubBranches.name })
+      .from(githubBranches)
+      .where(
+        and(
+          eq(githubBranches.repositoryId, repository.id),
+          isNull(githubBranches.deletedAt),
+          seen.length > 0 ? notInArray(githubBranches.name, seen) : undefined,
+        ),
+      );
+    let deleted = 0;
+    for (const branch of active) deleted += await this.markBranchDeleted(repository, branch.name);
+    return deleted;
   }
 
   private async upsertIssue(repository: RepositoryRow, issue: JsonObject) {
@@ -209,6 +424,7 @@ export class GithubMirrorService {
     const baseRef = string(object(pull.base).ref);
     if (!number || !title || !htmlUrl || !headRef || !headSha || !baseRef) return null;
     const now = new Date();
+    const bodyPresent = Object.hasOwn(pull, "body");
     const mergedAt = date(pull.merged_at);
     const state =
       pull.merged === true || mergedAt ? "merged" : pull.state === "closed" ? "closed" : "open";
@@ -235,7 +451,7 @@ export class GithubMirrorService {
       syncedAt: now,
       updatedAt: now,
     };
-    return (
+    const saved =
       (
         await this.db
           .insert(githubPullRequests)
@@ -244,7 +460,7 @@ export class GithubMirrorService {
             target: [githubPullRequests.repositoryId, githubPullRequests.number],
             set: {
               title: values.title,
-              body: values.body,
+              body: bodyPresent ? values.body : githubPullRequests.body,
               state: values.state,
               draft: values.draft,
               author: values.author,
@@ -252,7 +468,7 @@ export class GithubMirrorService {
               headSha: values.headSha,
               baseRef: values.baseRef,
               htmlUrl: values.htmlUrl,
-              closingIssues: values.closingIssues,
+              closingIssues: bodyPresent ? values.closingIssues : githubPullRequests.closingIssues,
               githubCreatedAt: values.githubCreatedAt,
               githubUpdatedAt: values.githubUpdatedAt,
               closedAt: values.closedAt,
@@ -266,8 +482,365 @@ export class GithubMirrorService {
             },
           })
           .returning()
-      )[0] ?? null
-    );
+      )[0] ?? null;
+    if (!saved) return null;
+    const linked = await this.linkedStory(repository, {
+      pullNumber: number,
+      branch: headRef,
+      headSha,
+      closingIssues: values.closingIssues,
+    });
+    if (linked) {
+      await this.associateStoryPullRequest(linked.story, {
+        number,
+        url: htmlUrl,
+        branch: headRef,
+        state,
+      });
+      await appendStoryEvidence(this.db, {
+        orgId: repository.orgId,
+        projectId: repository.projectId,
+        storyId: linked.story.id,
+        turnId: linked.turnId,
+        source: "github",
+        type: "github.pull_request_observed",
+        externalKey: [
+          "pull",
+          repository.id,
+          number,
+          state,
+          headSha,
+          values.githubUpdatedAt?.toISOString() ?? "unknown",
+        ].join(":"),
+        occurredAt: values.githubUpdatedAt ?? now,
+        data: {
+          repository: `${repository.owner}/${repository.name}`,
+          number,
+          title,
+          state,
+          draft: values.draft,
+          headRef,
+          headSha,
+          baseRef,
+          url: htmlUrl,
+          actor: linked.turnId ? "facility-turn" : "external",
+        },
+      });
+    }
+    return saved;
+  }
+
+  private async associateStoryPullRequest(
+    story: typeof stories.$inferSelect,
+    pull: { number: number; url: string; branch: string; state: "open" | "closed" | "merged" },
+  ) {
+    if (
+      (story.pullRequestNumber !== null && story.pullRequestNumber !== pull.number) ||
+      (story.branch !== null && story.branch !== pull.branch)
+    ) {
+      return;
+    }
+    if (this.storiesService) {
+      if (pull.state === "merged") {
+        if (
+          story.status === "done" &&
+          story.pullRequestNumber === pull.number &&
+          story.pullRequestUrl === pull.url &&
+          story.branch === pull.branch
+        ) {
+          return;
+        }
+        await this.storiesService.markMerged({
+          orgId: story.orgId,
+          projectId: story.projectId,
+          storyId: story.id,
+          pullRequestNumber: pull.number,
+          pullRequestUrl: pull.url,
+          branch: pull.branch,
+        });
+      } else {
+        if (
+          story.pullRequestNumber === pull.number &&
+          story.pullRequestUrl === pull.url &&
+          story.branch === pull.branch
+        ) {
+          return;
+        }
+        await this.storiesService.associatePullRequest({
+          orgId: story.orgId,
+          projectId: story.projectId,
+          storyId: story.id,
+          pullRequestNumber: pull.number,
+          pullRequestUrl: pull.url,
+          branch: pull.branch,
+        });
+      }
+      return;
+    }
+    await this.db
+      .update(stories)
+      .set({
+        branch: story.branch ?? pull.branch,
+        pullRequestNumber: pull.number,
+        pullRequestUrl: pull.url,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(stories.orgId, story.orgId),
+          eq(stories.projectId, story.projectId),
+          eq(stories.id, story.id),
+        ),
+      );
+  }
+
+  private async upsertReview(
+    repository: RepositoryRow,
+    review: JsonObject,
+    pullNumber?: number,
+    pullHeadSha?: string,
+  ) {
+    const reviewId = scalarId(review.id);
+    const state = string(review.state)?.toLowerCase();
+    const number = pullNumber;
+    if (!reviewId || !state || !number) return 0;
+    const now = new Date();
+    const submittedAt = date(review.submitted_at);
+    const commitSha = string(review.commit_id) ?? pullHeadSha ?? null;
+    const values = {
+      id: newId("ghr"),
+      orgId: repository.orgId,
+      projectId: repository.projectId,
+      repositoryId: repository.id,
+      pullNumber: number,
+      reviewId,
+      state,
+      author: string(object(review.user).login) ?? null,
+      body: cappedText(review.body),
+      htmlUrl: string(review.html_url) ?? null,
+      commitSha,
+      submittedAt,
+      syncedAt: now,
+      updatedAt: now,
+    };
+    await this.db
+      .insert(githubPullRequestReviews)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [githubPullRequestReviews.repositoryId, githubPullRequestReviews.reviewId],
+        set: {
+          pullNumber: number,
+          state,
+          author: values.author,
+          body: values.body,
+          htmlUrl: values.htmlUrl,
+          commitSha,
+          submittedAt,
+          syncedAt: now,
+          updatedAt: now,
+        },
+      });
+    const linked = await this.linkedStory(repository, {
+      pullNumber: number,
+      headSha: commitSha ?? undefined,
+    });
+    if (!linked) return 1;
+    await appendStoryEvidence(this.db, {
+      orgId: repository.orgId,
+      projectId: repository.projectId,
+      storyId: linked.story.id,
+      turnId: linked.turnId,
+      source: "github",
+      type: "github.review_observed",
+      externalKey: `review:${repository.id}:${reviewId}:${state}:${submittedAt?.toISOString() ?? "unknown"}`,
+      occurredAt: submittedAt ?? now,
+      data: {
+        repository: `${repository.owner}/${repository.name}`,
+        pullNumber: number,
+        reviewId,
+        state,
+        author: values.author,
+        commitSha,
+        url: values.htmlUrl,
+        actor: "external",
+      },
+    });
+    return 1;
+  }
+
+  private async upsertCheck(repository: RepositoryRow, check: JsonObject, pullNumber?: number) {
+    const checkId = scalarId(check.id);
+    const headSha = string(check.head_sha);
+    const name = string(check.name);
+    const status = string(check.status);
+    if (!checkId || !headSha || !name || !status) return 0;
+    const now = new Date();
+    const completedAt = date(check.completed_at);
+    const conclusion = string(check.conclusion) ?? null;
+    const values = {
+      id: newId("ghc"),
+      orgId: repository.orgId,
+      projectId: repository.projectId,
+      repositoryId: repository.id,
+      pullNumber,
+      checkId,
+      headSha,
+      name: name.slice(0, 240),
+      status: status.slice(0, 64),
+      conclusion: conclusion?.slice(0, 64) ?? null,
+      detailsUrl: string(check.details_url) ?? null,
+      startedAt: date(check.started_at),
+      completedAt,
+      syncedAt: now,
+      updatedAt: now,
+    };
+    await this.db
+      .insert(githubChecks)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [githubChecks.repositoryId, githubChecks.checkId],
+        set: {
+          pullNumber,
+          headSha,
+          name: values.name,
+          status: values.status,
+          conclusion: values.conclusion,
+          detailsUrl: values.detailsUrl,
+          startedAt: values.startedAt,
+          completedAt,
+          syncedAt: now,
+          updatedAt: now,
+        },
+      });
+    const linked = await this.linkedStory(repository, { pullNumber, headSha });
+    if (!linked) return 1;
+    await appendStoryEvidence(this.db, {
+      orgId: repository.orgId,
+      projectId: repository.projectId,
+      storyId: linked.story.id,
+      turnId: linked.turnId,
+      source: "github",
+      type: "github.check_observed",
+      externalKey: `check:${repository.id}:${checkId}:${status}:${conclusion ?? "none"}:${completedAt?.toISOString() ?? "active"}`,
+      occurredAt: completedAt ?? values.startedAt ?? now,
+      data: {
+        repository: `${repository.owner}/${repository.name}`,
+        pullNumber: pullNumber ?? null,
+        checkId,
+        headSha,
+        name: values.name,
+        status: values.status,
+        conclusion: values.conclusion,
+        url: values.detailsUrl,
+        actor: linked.turnId ? "facility-turn" : "external",
+      },
+    });
+    return 1;
+  }
+
+  private async linkedStory(
+    repository: RepositoryRow,
+    input: {
+      pullNumber?: number;
+      branch?: string;
+      headSha?: string;
+      closingIssues?: number[];
+    },
+  ): Promise<{ story: typeof stories.$inferSelect; turnId?: string } | null> {
+    let branch = input.branch;
+    let closingIssues = input.closingIssues ?? [];
+    if (input.headSha) {
+      const exactTurn = (
+        await this.db
+          .select({ story: stories, turnId: turnGitEvidence.turnId })
+          .from(turnGitEvidence)
+          .innerJoin(stories, eq(stories.id, turnGitEvidence.storyId))
+          .where(
+            and(
+              eq(turnGitEvidence.orgId, repository.orgId),
+              eq(turnGitEvidence.projectId, repository.projectId),
+              eq(turnGitEvidence.finalSha, input.headSha),
+              eq(stories.repositoryId, repository.id),
+            ),
+          )
+          .orderBy(desc(turnGitEvidence.completedAt))
+          .limit(1)
+      )[0];
+      if (exactTurn) return exactTurn;
+    }
+    if (input.pullNumber) {
+      const byPull = (
+        await this.db
+          .select()
+          .from(stories)
+          .where(
+            and(
+              eq(stories.orgId, repository.orgId),
+              eq(stories.projectId, repository.projectId),
+              eq(stories.repositoryId, repository.id),
+              eq(stories.pullRequestNumber, input.pullNumber),
+            ),
+          )
+          .orderBy(desc(stories.updatedAt))
+          .limit(1)
+      )[0];
+      if (byPull) return { story: byPull };
+      const mirroredPull = (
+        await this.db
+          .select({
+            headRef: githubPullRequests.headRef,
+            closingIssues: githubPullRequests.closingIssues,
+          })
+          .from(githubPullRequests)
+          .where(
+            and(
+              eq(githubPullRequests.repositoryId, repository.id),
+              eq(githubPullRequests.number, input.pullNumber),
+            ),
+          )
+          .limit(1)
+      )[0];
+      branch ??= mirroredPull?.headRef;
+      if (closingIssues.length === 0) closingIssues = mirroredPull?.closingIssues ?? [];
+    }
+    if (branch) {
+      const byBranch = (
+        await this.db
+          .select()
+          .from(stories)
+          .where(
+            and(
+              eq(stories.orgId, repository.orgId),
+              eq(stories.projectId, repository.projectId),
+              eq(stories.repositoryId, repository.id),
+              eq(stories.branch, branch),
+            ),
+          )
+          .orderBy(desc(stories.updatedAt))
+          .limit(1)
+      )[0];
+      if (byBranch) return { story: byBranch };
+    }
+    for (const issueNumber of closingIssues) {
+      const byIssue = (
+        await this.db
+          .select()
+          .from(stories)
+          .where(
+            and(
+              eq(stories.orgId, repository.orgId),
+              eq(stories.projectId, repository.projectId),
+              eq(stories.repositoryId, repository.id),
+              eq(stories.provider, "github"),
+              eq(stories.externalId, `issue:${issueNumber}`),
+            ),
+          )
+          .orderBy(desc(stories.updatedAt))
+          .limit(1)
+      )[0];
+      if (byIssue) return { story: byIssue };
+    }
+    return null;
   }
 
   private async applyCiSignal(
@@ -291,7 +864,7 @@ export class GithubMirrorService {
         headSha: signal.headSha,
         state: signal.state,
         failureNames: signal.failureNames,
-        sourceEventId: `${input.id}:${pullNumber}:${signal.headSha}:${signal.state}`,
+        sourceEventId: `${repository.id}:${input.id}:${pullNumber}:${signal.headSha}:${signal.state}`,
       });
     }
     return updated;
@@ -304,7 +877,7 @@ export class GithubMirrorService {
   ) {
     const pullNumber = positiveInteger(pull.number);
     const headSha = string(object(pull.head).sha);
-    if (!pullNumber || !headSha) return 0;
+    if (!pullNumber || !headSha) return { ciUpdates: 0, checks: 0 };
     const [statusResponse, checkRunsResponse] = await Promise.all([
       client.request("GET /repos/{owner}/{repo}/commits/{ref}/status", { ref: headSha }),
       client.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
@@ -312,14 +885,18 @@ export class GithubMirrorService {
         per_page: 100,
       }),
     ]);
+    const checkRuns = array(object(checkRunsResponse).check_runs).map(object);
+    let checks = 0;
+    for (const check of checkRuns) checks += await this.upsertCheck(repository, check, pullNumber);
     const signal = restCiSignal(statusResponse, checkRunsResponse);
-    if (!signal) return 0;
-    return this.recordCi(repository, {
+    if (!signal) return { ciUpdates: 0, checks };
+    const ciUpdates = await this.recordCi(repository, {
       pullNumber,
       headSha,
       state: signal.state,
       failureNames: signal.failureNames,
     });
+    return { ciUpdates, checks };
   }
 
   private async recordCi(
@@ -415,12 +992,16 @@ async function paginated(
   query: Record<string, unknown>,
 ) {
   const rows: JsonObject[] = [];
+  let complete = false;
   for (let page = 1; page <= MAX_SYNC_PAGES; page += 1) {
     const result = array(await client.request(route, { ...query, per_page: 100, page }));
     rows.push(...result.map(object));
-    if (result.length < 100) break;
+    if (result.length < 100) {
+      complete = true;
+      break;
+    }
   }
-  return rows;
+  return { rows, complete };
 }
 
 export function webhookCiSignal(
@@ -437,7 +1018,9 @@ export function webhookCiSignal(
       ? object(payload.workflow_run)
       : eventType === "check_suite"
         ? object(payload.check_suite)
-        : null;
+        : eventType === "check_run"
+          ? object(payload.check_run)
+          : null;
   if (!source) return null;
   const headSha = string(source.head_sha);
   if (!headSha) return null;
@@ -552,6 +1135,19 @@ function date(value: unknown) {
 
 function positiveInteger(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function scalarId(value: unknown) {
+  if (typeof value === "string" && value.length > 0) return value;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : undefined;
+}
+
+function firstPullNumber(value: JsonObject) {
+  return array(value.pull_requests)
+    .map((pull) => positiveInteger(object(pull).number))
+    .find((number) => number !== undefined);
 }
 
 function nonNegativeInteger(value: unknown) {

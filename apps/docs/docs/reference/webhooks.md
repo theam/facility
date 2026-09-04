@@ -45,15 +45,18 @@ stable trigger/story identity before dispatch.
 
 ## Delivery mirror
 
-Issue and pull request deliveries also update the project mirror. Workflow run and check suite
-deliveries attach CI state to the matching pull request only when the event's head SHA is current.
-The worker reconciles every connected repository every ten minutes, and maintainers can request an
-immediate sync through MCP, API, or the Pipeline page.
+Push, create, delete, issue, pull request, pull request review, workflow run, check suite, and check
+run deliveries update the project mirror where applicable. CI state attaches to the matching pull
+request only when the event's head SHA is current. The worker reconciles every connected repository
+every ten minutes, and maintainers can request an immediate sync through MCP, API, or the Pipeline
+page.
 
-The mirror is a local operating view, not a replacement for GitHub. Issue and pull-request records
-retain GitHub identity and current state. Check suites and workflow runs attach to the pull request
-whose current head SHA matches the event, preventing stale CI from being shown as the present
-result.
+The mirror is a local operating view, not a replacement for GitHub. Issue, branch, pull-request,
+review, and check records retain GitHub identity and current state. Check suites and workflow runs
+attach to the pull request whose current head SHA matches the event, preventing stale CI from being
+shown as the present result. Reconciliation discovers matching changes that happened outside
+Facility and records them on the story timeline without attributing them to an agent turn unless
+the final SHA proves that relationship.
 
 ## App subscriptions
 
@@ -63,8 +66,12 @@ Subscribe the GitHub App to:
 - Issue comment
 - Pull request
 - Pull request review
+- Push
+- Create
+- Delete
 - Workflow run
 - Check suite
+- Check run
 
 Adding a manifest for an event that the App does not subscribe to cannot activate the agent. After
 changing subscriptions or repository access, send a test delivery and request an immediate sync.

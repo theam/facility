@@ -8,6 +8,7 @@ import {
   stories,
   storyArtifacts,
   storyConversations,
+  storyEvidenceEvents,
   storyMessages,
   turnEvents,
   turns,
@@ -970,45 +971,58 @@ export class StoryWorkspaceService {
 
   async get(orgId: string, projectId: string, storyId: string) {
     const story = await scopedStory(this.db, orgId, projectId, storyId);
-    const [workspace, conversation, recentTurns, artifacts, attention, recentEvents] =
-      await Promise.all([
-        this.db
-          .select()
-          .from(workspaces)
-          .where(and(eq(workspaces.orgId, orgId), eq(workspaces.storyId, storyId)))
-          .orderBy(desc(workspaces.createdAt))
-          .limit(1)
-          .then((rows) => rows[0] ?? null),
-        this.db
-          .select()
-          .from(storyConversations)
-          .where(and(eq(storyConversations.orgId, orgId), eq(storyConversations.storyId, storyId)))
-          .limit(1)
-          .then((rows) => rows[0] ?? null),
-        this.db
-          .select()
-          .from(turns)
-          .where(and(eq(turns.orgId, orgId), eq(turns.storyId, storyId)))
-          .orderBy(desc(turns.createdAt))
-          .limit(20),
-        this.db
-          .select()
-          .from(storyArtifacts)
-          .where(and(eq(storyArtifacts.orgId, orgId), eq(storyArtifacts.storyId, storyId)))
-          .orderBy(desc(storyArtifacts.createdAt)),
-        this.db
-          .select()
-          .from(attentionItems)
-          .where(and(eq(attentionItems.orgId, orgId), eq(attentionItems.storyId, storyId)))
-          .orderBy(desc(attentionItems.createdAt))
-          .limit(50),
-        this.db
-          .select()
-          .from(turnEvents)
-          .where(and(eq(turnEvents.orgId, orgId), eq(turnEvents.storyId, storyId)))
-          .orderBy(desc(turnEvents.createdAt))
-          .limit(100),
-      ]);
+    const [
+      workspace,
+      conversation,
+      recentTurns,
+      artifacts,
+      attention,
+      recentEvents,
+      recentEvidence,
+    ] = await Promise.all([
+      this.db
+        .select()
+        .from(workspaces)
+        .where(and(eq(workspaces.orgId, orgId), eq(workspaces.storyId, storyId)))
+        .orderBy(desc(workspaces.createdAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      this.db
+        .select()
+        .from(storyConversations)
+        .where(and(eq(storyConversations.orgId, orgId), eq(storyConversations.storyId, storyId)))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      this.db
+        .select()
+        .from(turns)
+        .where(and(eq(turns.orgId, orgId), eq(turns.storyId, storyId)))
+        .orderBy(desc(turns.createdAt))
+        .limit(20),
+      this.db
+        .select()
+        .from(storyArtifacts)
+        .where(and(eq(storyArtifacts.orgId, orgId), eq(storyArtifacts.storyId, storyId)))
+        .orderBy(desc(storyArtifacts.createdAt)),
+      this.db
+        .select()
+        .from(attentionItems)
+        .where(and(eq(attentionItems.orgId, orgId), eq(attentionItems.storyId, storyId)))
+        .orderBy(desc(attentionItems.createdAt))
+        .limit(50),
+      this.db
+        .select()
+        .from(turnEvents)
+        .where(and(eq(turnEvents.orgId, orgId), eq(turnEvents.storyId, storyId)))
+        .orderBy(desc(turnEvents.createdAt))
+        .limit(100),
+      this.db
+        .select()
+        .from(storyEvidenceEvents)
+        .where(and(eq(storyEvidenceEvents.orgId, orgId), eq(storyEvidenceEvents.storyId, storyId)))
+        .orderBy(desc(storyEvidenceEvents.occurredAt))
+        .limit(200),
+    ]);
     return {
       story,
       workspace,
@@ -1017,6 +1031,7 @@ export class StoryWorkspaceService {
       artifacts,
       attention,
       events: recentEvents.reverse(),
+      timeline: storyTimeline(story, recentEvents, recentEvidence, artifacts, attention),
     };
   }
 
@@ -1327,6 +1342,76 @@ export class StoryWorkspaceService {
       error: detail.slice(0, 8_000),
     });
   }
+}
+
+function storyTimeline(
+  story: typeof stories.$inferSelect,
+  events: Array<typeof turnEvents.$inferSelect>,
+  evidence: Array<typeof storyEvidenceEvents.$inferSelect>,
+  artifacts: Array<typeof storyArtifacts.$inferSelect>,
+  attention: Array<typeof attentionItems.$inferSelect>,
+) {
+  const rows = [
+    {
+      id: `story:${story.id}:created`,
+      source: "facility",
+      type: "story.created",
+      turnId: null,
+      data: { provider: story.provider, externalId: story.externalId, title: story.title },
+      occurredAt: story.createdAt,
+      observedAt: story.createdAt,
+    },
+    ...events.map((event) => ({
+      id: `turn:${event.turnId}:${event.seq}`,
+      source: "agent",
+      type: event.type,
+      turnId: event.turnId,
+      data: event.data,
+      occurredAt: event.createdAt,
+      observedAt: event.createdAt,
+    })),
+    ...evidence.map((event) => ({
+      id: event.id,
+      source: event.source,
+      type: event.type,
+      turnId: event.turnId,
+      data: event.data,
+      occurredAt: event.occurredAt,
+      observedAt: event.observedAt,
+    })),
+    ...artifacts.map((artifact) => ({
+      id: `artifact:${artifact.id}`,
+      source: "artifact",
+      type: "artifact.recorded",
+      turnId: artifact.turnId,
+      data: {
+        id: artifact.id,
+        kind: artifact.kind,
+        label: artifact.label,
+        uri: artifact.uri,
+      },
+      occurredAt: artifact.createdAt,
+      observedAt: artifact.createdAt,
+    })),
+    ...attention.map((item) => ({
+      id: `attention:${item.id}`,
+      source: "facility",
+      type: item.status === "open" ? "attention.opened" : "attention.resolved",
+      turnId: item.turnId,
+      data: {
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+        status: item.status,
+        resolution: item.resolution,
+      },
+      occurredAt: item.resolvedAt ?? item.createdAt,
+      observedAt: item.updatedAt,
+    })),
+  ];
+  return rows
+    .sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime())
+    .slice(-300);
 }
 
 function validateStartInput(input: StartStoryInput) {
