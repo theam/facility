@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { escapeRegExp, yamlQuotedScalar } from "./escaping.js";
 import { type Manifest, manifestFor } from "./fingerprints.js";
 
 const SETUP_NODE_SHA = "49933ea5288caeca8642d1e84afbd3f7d6820020";
@@ -226,7 +227,7 @@ function boardReviewStep(board?: RenderAnswers["board"]): string {
 
 function doctorWatch(workflowNames: string[]): string {
   const watched = [...new Set([...workflowNames, "facility-review"])];
-  const lines = watched.map((name) => `      - ${name}`);
+  const lines = watched.map((name) => `      - ${yamlQuotedScalar(name)}`);
   if (workflowNames.length === 0) {
     lines.unshift("      # facility: no existing check workflows detected at init time —");
     lines.unshift("      # add your CI workflow names here so the doctor watches them.");
@@ -236,7 +237,7 @@ function doctorWatch(workflowNames: string[]): string {
 
 function checksAllowJson(checks: string[]): string {
   if (!checks.length) return "";
-  return checks.map((check) => `      "Bash(${check})",`).join("\n");
+  return checks.map((check) => `      ${JSON.stringify(`Bash(${check})`)},`).join("\n");
 }
 
 function checksList(checks: string[]): string {
@@ -436,6 +437,8 @@ export async function renderFacilityInit(
   const vars = {
     FACILITY_VERSION: version,
     DEFAULT_BRANCH: answers.defaultBranch,
+    DEFAULT_BRANCH_YAML: yamlQuotedScalar(answers.defaultBranch),
+    DEFAULT_BRANCH_PATTERN: escapeRegExp(answers.defaultBranch),
     BUILD_MODEL: models.build,
     REVIEW_MODEL: models.review,
     PLAN_MODEL: models.plan,
