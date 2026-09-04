@@ -6,7 +6,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { detect } from "./detect.mjs";
 import { render, hasManagedBlock, appendManagedBlock } from "./render.mjs";
 import { ask, confirm, closePrompts } from "./prompts.mjs";
@@ -518,12 +518,26 @@ export async function init(flags, pkgRoot, version) {
     lstatSync(agentsSkillsLink);
     skip(".agents/skills exists — left untouched");
   } catch {
+    mkdirSync(join(dir, ".agents"), { recursive: true });
     try {
-      mkdirSync(join(dir, ".agents"), { recursive: true });
       symlinkSync("../.claude/skills", agentsSkillsLink, "dir");
       ok(".agents/skills → .claude/skills");
-    } catch {
-      warn(".agents/skills symlink could not be created (filesystem without symlink support) — skipped.");
+    } catch (error) {
+      // On Windows, plain symlinks need Developer Mode or elevation (EPERM).
+      // Directory junctions need neither — they just require an absolute
+      // target — so fall back to one instead of misreporting the cause.
+      if (process.platform === "win32" && (error.code === "EPERM" || error.code === "EINVAL")) {
+        try {
+          symlinkSync(resolve(dir, ".claude/skills"), agentsSkillsLink, "junction");
+          ok(".agents/skills → .claude/skills (junction — absolute; recreate after moving the repo)");
+        } catch {
+          warn(
+            ".agents/skills link could not be created: Windows symlinks need Developer Mode or an elevated shell, and the junction fallback also failed — skipped.",
+          );
+        }
+      } else {
+        warn(".agents/skills symlink could not be created (filesystem without symlink support) — skipped.");
+      }
     }
   }
 

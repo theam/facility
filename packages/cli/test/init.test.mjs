@@ -11,7 +11,11 @@ import { parse as parseYaml } from "yaml";
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(pkgRoot, "bin", "facility.mjs");
-const biome = resolve(pkgRoot, "..", "..", "node_modules", ".bin", "biome");
+// Biome's .bin shim is a POSIX script that spawnSync cannot execute on
+// Windows (status null); its JS entry runs through node on every platform.
+const biomeJs = resolve(pkgRoot, "..", "..", "node_modules", "@biomejs", "biome", "bin", "biome");
+const biome = process.execPath;
+const biomeArgs = (args) => [biomeJs, ...args];
 
 function makeTargetRepo() {
   const dir = mkdtempSync(join(tmpdir(), "facility-test-"));
@@ -445,12 +449,12 @@ test("init installs the method end to end", async (t) => {
       2,
     )}\n`,
   );
-  const formatConfig = spawnSync(biome, ["format", "--write", "biome.json"], {
+  const formatConfig = spawnSync(biome, biomeArgs(["format", "--write", "biome.json"]), {
     cwd: dir,
     encoding: "utf8",
   });
   assert.equal(formatConfig.status, 0, formatConfig.stdout + formatConfig.stderr);
-  const strictBiome = spawnSync(biome, ["check", "."], { cwd: dir, encoding: "utf8" });
+  const strictBiome = spawnSync(biome, biomeArgs(["check", "."]), { cwd: dir, encoding: "utf8" });
   assert.equal(strictBiome.status, 0, strictBiome.stdout + strictBiome.stderr);
 
   const doctor = runCli(["doctor", `--dir=${dir}`], dir);
