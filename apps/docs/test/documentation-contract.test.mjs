@@ -39,7 +39,7 @@ test("the published navigation covers user, operator, reference, and contributor
   }
 });
 
-test("the product identity remains a reviewable AI SDLC rather than a workspace utility", () => {
+test("the product identity describes a reviewable AI SDLC", () => {
   const readme = read("README.md");
   assert.match(
     readme,
@@ -47,11 +47,13 @@ test("the product identity remains a reviewable AI SDLC rather than a workspace 
   );
   assert.match(readme, /Status: early software, published early on purpose/);
   assert.match(readme, /Who Facility is for/);
-  assert.match(readme, /0\.12 simplifies Facility's architecture, not its purpose/);
+  assert.match(readme, /What you can do with it/);
+  assert.match(readme, /Take work from an issue to a pull request/);
+  assert.match(readme, /Review what an agent changed/);
 
   const index = read("apps/docs/docs/index.md");
   assert.match(index, /Facility is an AI SDLC system/);
-  assert.match(index, /Persistent story workspaces are the execution core[\s\S]*not a replacement/);
+  assert.match(index, /Persistent story workspaces give Claude Code and Codex one durable place/);
   assert.match(index, /Humans, gates, and evidence/);
 
   const method = read("apps/docs/docs/concepts/method.md");
@@ -59,14 +61,11 @@ test("the product identity remains a reviewable AI SDLC rather than a workspace 
   assert.match(method, /Humans, gates, and evidence/);
 
   const roadmap = read("apps/docs/docs/roadmap.md");
-  assert.match(
-    roadmap,
-    /Persistent story workspaces change its execution foundation, not that[\s\S]*direction/,
-  );
-  assert.match(roadmap, /Beyond 0\.12/);
+  assert.match(roadmap, /Current focus/);
+  assert.match(roadmap, /Planned direction/);
 });
 
-test("the project manifest reference covers every strict 0.12 field", () => {
+test("the project manifest reference covers every strict field", () => {
   const guide = read("apps/docs/docs/reference/project-manifest.md");
   for (const field of [
     "version",
@@ -130,7 +129,7 @@ test("the agent reference covers engines, options, and every trigger", () => {
   assert.match(guide, /full workspace[\s\S]*GitHub/i);
 });
 
-test("project capabilities and delivery evidence remain inspectable", () => {
+test("project capabilities and delivery evidence are inspectable", () => {
   const agents = read("apps/docs/docs/concepts/agents-as-code.md");
   assert.match(agents, /\.agents\/skills/);
   assert.match(agents, /\.claude\/skills/);
@@ -197,7 +196,7 @@ test("operator and contributor runbooks retain essential operating subjects", ()
     "project budget",
     "GitHub mirror",
   ]) {
-    assert.match(production, new RegExp(subject, "i"), `${subject} must remain in production docs`);
+    assert.match(production, new RegExp(subject, "i"), `${subject} must be in production docs`);
   }
 
   const contributing = read("CONTRIBUTING.md");
@@ -209,11 +208,11 @@ test("operator and contributor runbooks retain essential operating subjects", ()
     "pnpm verify",
     "Docker-backed",
   ]) {
-    assert.match(contributing, new RegExp(subject), `${subject} must remain in contributing docs`);
+    assert.match(contributing, new RegExp(subject), `${subject} must be in contributing docs`);
   }
 });
 
-test("the API reference maps every 0.12 resource family", () => {
+test("the API reference maps every resource family", () => {
   const guide = read("apps/docs/docs/reference/api.md");
   for (const path of [
     "/health",

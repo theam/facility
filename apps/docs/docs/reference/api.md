@@ -6,7 +6,7 @@ title: API
 
 The interactive OpenAPI document is served from `/docs` by the API process. It is the authoritative
 source for request bodies, response schemas, operation ids, and current status codes. This page
-maps the supported 0.12 resources and cross-cutting behavior.
+maps the supported resources and cross-cutting behavior.
 
 ## Public and protocol endpoints
 

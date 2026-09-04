@@ -123,7 +123,8 @@ driver is fixed to Vercel, so the full development environment and durable works
 remain Vercel resources.
 
 The local Compose deployment uses the Docker runtime and named volumes on one trusted host. The
-provider interface permits another implementation, but 0.12 documents and tests Docker and Vercel.
+provider interface permits another implementation. Docker and Vercel are the documented and tested
+providers.
 
 See the [story lifecycle](lifecycle.md), [security model](security.md), and [production
 guide](../self-host/production.md) for the operational consequences of these boundaries.

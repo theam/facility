@@ -77,7 +77,7 @@ tenants, credentials, persistent state, and merge boundary.
 - Restore both layers into an isolated environment on a schedule and verify a retained story can
   show its conversation, wake its workspace, inspect Git state, and resume an engine session.
 - Protect migration execution as an administrative job. Take a restorable backup before upgrades
-  and do not point 0.12 at a 0.11 database.
+  and follow the versioned database compatibility guide.
 
 ## Monitoring and response
 

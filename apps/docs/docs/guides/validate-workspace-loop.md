@@ -20,7 +20,7 @@ and relevant logs until another person can inspect the evidence.
 
 ## Acceptance sequence
 
-1. Start Facility with a fresh 0.12 database and build the runner image.
+1. Start Facility with a compatible, migrated database and build the runner image.
 2. Connect the repository and merge its kickstart configuration PR.
 3. Call `facility_start_story` with a stable external id, an agent name, a message, and a new
    idempotency key. Repeat the same call and verify that it returns the same story and workspace.

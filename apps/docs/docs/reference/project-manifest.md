@@ -72,7 +72,7 @@ connected to the Facility project and available through its GitHub App installat
 | `setup` | No | Shell command, 1–4,000 characters. Runs when the setup checksum changes or clean setup is requested. |
 | `start` | Yes | Shell command, 1–4,000 characters. Runs on every environment preparation. |
 | `ready` | No | Shell command polled until it succeeds or readiness times out. |
-| `stop` | No | Accepted stop command. The 0.12 lifecycle suspends provider compute and does not invoke it automatically. |
+| `stop` | No | Accepted stop command. The story lifecycle suspends provider compute and does not invoke it automatically. |
 | `seed` | No | Shell command run after `setup` when setup is due. |
 | `browser_test` | No | Shell command used by the browser-test operation. |
 | `secrets` | No | Array of declared secret names; defaults to `[]`. |

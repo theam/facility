@@ -11,7 +11,7 @@ checklist](../guides/validate-workspace-loop.md) before connecting important cod
 
 ## Required components
 
-The permanent 0.12 services are the control API with embedded MCP and webhooks, one worker with the
+The permanent services are the control API with embedded MCP and webhooks, one worker with the
 generic scheduler and GitHub reconciliation, PostgreSQL, the web UI, and a workspace provider. Cost
 accounting, budgets, observability, audit events, analytics summaries, and pipeline state live in
 those services. They do not require sidecars or separate control-plane applications.
@@ -78,8 +78,8 @@ project cannot request `DATABASE_URL`, `SECRET_MASTER_KEY`, or another project's
 Rotating or removing a value affects the next turn and does not delete the stored worktree or native
 session files.
 
-Apply migrations before starting API or worker replicas. Do not point 0.12 at a 0.11 database; see
-[the upgrade boundary](../reference/upgrade-012.md).
+Apply migrations before starting API or worker replicas. Follow the [versioned upgrade
+guide](../reference/upgrade-012.md) when the existing database is incompatible.
 
 Configure project values on both API and worker because environment inspection and turn dispatch
 cross those process boundaries. In a managed secret store, map each exact environment name to one
@@ -92,7 +92,7 @@ exit status before starting the API or worker. Then run `facility instance boots
 the first organization owner and GitHub App installation. Repeating the exact binding is safe; a
 different binding against a populated instance is refused.
 
-For later 0.12 releases:
+For application upgrades:
 
 1. take a restorable database backup and confirm workspace provider retention;
 2. build immutable API, worker, web, and runner images;

@@ -61,10 +61,9 @@ This is deliberately a maintainer trust model. The structural safety boundary re
 repository workflow: protected branches, required CI, required reviews, and a human decision to
 merge. Agent prompts describe expected conduct; they are not a security sandbox.
 
-0.12 removes Facility-managed receipts and internal write approvals because those implementations
-were not stable enough to justify their complexity. It does not remove humans, gates, or evidence
-from the product. Those outcomes remain visible through the story, GitHub, CI, audit history, and
-the web UI, and richer governance can be added later on top of the persistent lifecycle.
+Facility records agent identity, model and session data, Git changes, GitHub delivery state, costs,
+and runtime activity as story evidence. It relies on repository review and merge controls instead
+of a separate internal approval protocol.
 
 ## Persistence is explicit
 

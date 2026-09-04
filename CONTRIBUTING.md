@@ -1,10 +1,5 @@
 # Contributing
 
-Facility is an AI SDLC system for running coding agents as part of reviewable
-software delivery. Contributions must preserve that product direction even
-when simplifying its implementation: humans, gates, and evidence remain part
-of the system around its persistent workspace core.
-
 Facility uses the same operating rules it applies to other repositories: one
 coherent change, explicit verification, and human review before merge.
 
@@ -104,8 +99,8 @@ the behavior belongs in the existing API, worker, or database.
 - Money-sensitive changes to usage, costs, or budgets have the same unit and
   integration requirement. Missing provider pricing must remain unavailable,
   not become an invented zero.
-- Preserve cost analysis, budgeting, observability, analytics, audit, and the
-  GitHub issue/PR/CI mirror when simplifying implementation boundaries.
+- Treat cost analysis, budgeting, observability, analytics, audit, and the
+  GitHub issue/PR/CI mirror as product behavior with regression coverage.
 - Preserve one shared service path for MCP and UI. A new UI action and its MCP
   counterpart should not create separate lifecycle rules.
 
@@ -133,11 +128,9 @@ Permanent deletion remains a separate confirmed action.
 
 ### Documentation changes
 
-Documentation must remain complete even when architecture becomes simpler.
-Update the relevant concept, guide, reference, self-hosting, or contributor page
-in the same pull request. Cover prerequisites, the successful flow, failure and
-denial paths, persistence, destructive actions, security, operations, and
-verification where they apply.
+Update the relevant concept, guide, reference, self-hosting, or contributor page in the same pull
+request. Cover prerequisites, the successful flow, failure and denial paths, persistence,
+destructive actions, security, operations, and verification where they apply.
 
 Add published pages to `apps/docs/sidebars.ts`. Keep public examples free of
 private deployment details or confidential context. Follow the

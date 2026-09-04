@@ -1,14 +1,14 @@
 # Facility open-source roadmap
 
-Facility is becoming a small control plane for persistent coding workspaces.
-One story owns one workspace, one worktree, and one shared conversation. Codex,
-Claude Code, the MCP server, and the web application all operate that same
-state.
+Facility is an open-source, self-hosted system for running AI coding agents as
+part of a reviewable software delivery process. One story owns one workspace,
+one worktree, and one shared conversation. Codex, Claude Code, the MCP server,
+and the web application operate that same state.
 
-## Facility 0.12
+## Definition of done
 
-The 0.12 release is a clean product and database baseline. It is complete when
-the reference journey below works against a local installation:
+A capability is complete when public automated tests and a reproducible reference installation
+prove its user journey. The reference journey is:
 
 1. A maintainer connects a GitHub repository and opens a kickstart pull
    request containing `.facility.yml` and `.agents/*.md`.
@@ -28,7 +28,7 @@ the reference journey below works against a local installation:
    explicit, confirmed delete destroys workspace state.
 9. The same lifecycle is usable through MCP and the web UI.
 
-## Release boundaries
+## Product contracts
 
 - `.agents/` is the only agent catalog. Prompts, engines, models, options, and
   manual, scheduled, or GitHub triggers are reviewed as repository code.
@@ -38,8 +38,8 @@ the reference journey below works against a local installation:
 - Default-branch protection and pull-request review remain the merge boundary.
 - The public deployment contract is portable. Provider-specific production
   infrastructure belongs in a deployment repository.
-- Databases created by 0.11 and earlier are rejected without modification.
-  Facility 0.12 requires a fresh database.
+- Incompatible database versions are rejected without modification. Upgrade
+  requirements are documented in the versioned upgrade guide.
 
 ## Acceptance evidence
 
@@ -49,5 +49,10 @@ authentication, session persistence, database refusal, MCP parity, and the
 complete story lifecycle. CI also builds the deployable images and runs the
 Docker workspace acceptance path.
 
-After 0.12, work should focus on reliability, provider portability, and clearer
-operation of this model rather than adding a second execution path.
+## Next priorities
+
+- improve workspace recovery, provider portability, and operational diagnosis;
+- make delivery evidence and cost outcomes easier to inspect and compare;
+- strengthen human review and governance without creating a parallel delivery path;
+- improve agent and skill inspection across connected repositories; and
+- expand deployment options when they preserve the same story lifecycle and interfaces.

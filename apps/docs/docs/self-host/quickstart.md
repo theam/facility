@@ -84,7 +84,8 @@ To remove only the local development database, first confirm the exact Compose p
 then use the Compose down-volume operation. This does not safely replace Facility's per-story
 workspace deletion path.
 
-## Version boundary
+## Upgrading an existing installation
 
-0.12 requires an empty database. The migration command refuses a 0.11 schema without changing it.
-See the [0.12 upgrade boundary](../reference/upgrade-012.md) before reusing an older installation.
+Before reusing an older database, read the [0.12 upgrade
+guide](../reference/upgrade-012.md). The migration command refuses an incompatible schema without
+changing it.

@@ -4,7 +4,7 @@ title: Reference fixture and measurements
 
 # Reference fixture and measurements
 
-The Facility 0.12 reference project is in
+The Facility reference project is in
 `services/api/test/fixtures/reference-project`. It contains a browser-facing application, a JSON
 API, a file-backed database service, deterministic seed data, a Compose file, a Chromium flow, and
 sample builder and scheduled-security agents. It has no network or credential dependency.

@@ -147,7 +147,8 @@ aws ecs run-task \
 ```
 
 Wait for the task to stop and require exit code zero before starting the services. A 0.11 database
-is rejected without modification; 0.12 needs a new database.
+is rejected without modification. Follow the [versioned upgrade
+guide](../reference/upgrade-012.md) when the existing database is incompatible.
 
 Inspect the stopped task's container exit code and CloudWatch migration log, not only the
 `run-task` API response. A task accepted by ECS can still fail to pull the image, read the secret,

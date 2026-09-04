@@ -4,20 +4,18 @@ title: FAQ
 
 # Frequently asked questions
 
-## Is Facility now only a persistent workspace manager?
+## What is Facility?
 
-No. Facility remains an AI SDLC system for running coding agents inside a reviewable software
-delivery process. Persistent story workspaces are the 0.12 execution core. The product still joins
-human steering and review, repository gates, GitHub delivery state, costs, audit history,
-observability, and operational evidence around that core.
+Facility is an AI SDLC system for running coding agents inside a reviewable software delivery
+process. It joins persistent story workspaces with human steering and review, repository gates,
+GitHub delivery state, costs, audit history, observability, and operational evidence.
 
-## Did 0.12 remove humans, gates, or evidence?
+## How do humans, gates, and evidence fit into the workflow?
 
-No. It removed unstable implementations of receipts, internal write approvals, and separate
-execution services. Humans still steer work and control repository merge policy. Branch protection,
-required CI, and reviews remain structural gates. Conversations, turns, Git state, pull requests,
-CI, costs, audits, previews, and lifecycle events remain reviewable evidence. Facility can add
-richer governance later without restoring the previous architecture unchanged.
+Humans steer work, inspect previews and pull requests, and control repository merge policy. Branch
+protection, required CI, and reviews provide structural gates. Conversations, turns, Git state,
+pull requests, CI, costs, audits, previews, and lifecycle events provide reviewable evidence in the
+story timeline.
 
 ## Is a workspace deleted after merge?
 
@@ -59,12 +57,11 @@ afterwards; later turns are blocked once the monthly limit is reached. The workt
 and engine sessions remain. Unknown model pricing is rejected while budget enforcement is enabled,
 and unavailable workspace pricing is not reported as zero.
 
-## Are cost, observability, analytics, and pipeline features still available?
+## How does Facility cover cost, observability, analytics, and delivery pipelines?
 
-Yes. The API, worker, and PostgreSQL retain those functions without separate gateway, analytics, or
-pipeline services. Facility stores turn usage and cost, monthly project budgets, audit and
-observability records, product summaries, and a webhook-plus-reconciliation mirror of GitHub
-issues, pull requests, checks, and workflows.
+Facility stores turn usage and cost, monthly project budgets, audit and observability records,
+product summaries, and a webhook-plus-reconciliation mirror of GitHub issues, pull requests,
+checks, and workflows. The API, worker, and PostgreSQL provide these functions.
 
 ## Is MCP the only interface?
 

@@ -13,11 +13,10 @@ implementation, validation, review, and a pull request. The control plane keeps 
 repository gates, conversation, Git state, delivery status, cost, and operational evidence connected
 to that work.
 
-Persistent story workspaces are the execution core introduced in 0.12, not a replacement for that
-mission. Claude Code and Codex receive one durable place to work: a shared conversation, worktree,
-native engine sessions, and complete development environment that Facility keeps until explicit
-deletion. MCP is the primary automation interface, and the web UI remains a first-class human
-surface over the same system.
+Persistent story workspaces give Claude Code and Codex one durable place to work: a shared
+conversation, worktree, native engine sessions, and complete development environment that Facility
+keeps until explicit deletion. MCP is the primary automation interface, and the web UI is a
+first-class human surface over the same system.
 
 The repository defines its environment in `.facility.yml` and every agent in `.agents/*.md`.
 Architects, builders, reviewers, CI repair agents, and scheduled security audits use the same
@@ -36,11 +35,10 @@ protection decide what merges.
 - **Evidence** includes the conversation and turn history, Git branches and pull requests, CI and
   issue state, previews, usage and cost, audit events, and operational telemetry.
 
-0.12 removes unstable implementation layers such as receipts, internal write approvals, and a
-separate model gateway. It does not turn Facility into a workspace utility or abandon reviewable
-delivery. Cost controls, observability, analytics, auditing, scheduled agents, and the GitHub
-delivery mirror remain in the smaller control plane. Future releases can build richer governance
-on the persistent lifecycle without restoring the earlier complexity wholesale.
+Facility records evidence directly from agent turns, Git, GitHub, costs, and runtime activity.
+Repository branch protection, required CI, reviews, and merge controls provide the delivery
+approval boundary. Cost controls, observability, analytics, auditing, scheduled agents, and the
+GitHub delivery mirror run in the same control plane.
 
 ## What Facility keeps
 
@@ -76,4 +74,4 @@ architecture](contributors/architecture.md), [testing guide](contributors/testin
 
 The contract references for [`.facility.yml`](reference/project-manifest.md),
 [`.agents/*.md`](reference/agent-manifest.md), [lifecycle](reference/lifecycle.md),
-[MCP](reference/mcp.md), and [HTTP](reference/api.md) describe the supported 0.12 behavior.
+[MCP](reference/mcp.md), and [HTTP](reference/api.md) describe the supported behavior.

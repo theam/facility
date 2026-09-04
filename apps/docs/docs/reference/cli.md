@@ -4,8 +4,8 @@ title: CLI
 
 # CLI
 
-The 0.12 CLI configures and checks a repository. Runtime automation belongs to MCP; people can also
-use the web UI.
+The CLI configures and checks a repository. Runtime automation belongs to MCP; people can also use
+the web UI.
 
 Install or invoke the published package from a repository root:
 
