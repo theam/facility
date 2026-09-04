@@ -6,6 +6,7 @@ import { MobileNav, Sidebar } from "@/components/shell/nav";
 import { RememberProject } from "@/components/shell/remember-project";
 import { Topbar } from "@/components/shell/topbar";
 import { api } from "@/lib/api";
+import { pipelineStories } from "@/lib/pipeline";
 
 /** The project world: everything under /projects/[projectId] is scoped to it. */
 export default async function ProjectLayout({
@@ -16,11 +17,12 @@ export default async function ProjectLayout({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [me, project, projects, inbox] = await Promise.all([
+  const [me, project, projects, inbox, pipeline] = await Promise.all([
     api.me(),
     api.project(projectId),
     api.projects(),
     api.inboxFull(),
+    api.pipeline(projectId),
   ]);
 
   if (!project.ok) {
@@ -47,6 +49,7 @@ export default async function ProjectLayout({
       inbox.data.issues.filter((item) => item.projectId === p.id).length
     : undefined;
   const navProject = { id: p.id, slug: p.slug, name: p.name };
+  const stories = pipeline.ok ? pipelineStories(pipeline.data) : [];
 
   return (
     // App shell: the viewport is the frame; only the work area (main) scrolls,
@@ -58,7 +61,7 @@ export default async function ProjectLayout({
         {me.ok ? <Topbar me={me.data} projects={projectList} current={p} /> : null}
         <main className="app-main min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
-      <CommandPalette projects={projectList} currentProject={p} />
+      <CommandPalette projects={projectList} currentProject={p} stories={stories} />
       <AskBar projectId={p.id} />
       <RememberProject projectId={p.id} />
     </div>
