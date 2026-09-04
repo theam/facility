@@ -18,7 +18,10 @@ function readPayload() {
 }
 
 const payload = readPayload();
-const filePath = payload?.tool_input?.file_path ?? "";
+// Claude Code on Windows sends tool_input.file_path with backslashes; the
+// guards below are POSIX-style regexes, so normalise once, up front, for
+// this file and every module fragment spliced in below.
+const filePath = String(payload?.tool_input?.file_path ?? "").replace(/\\/g, "/");
 if (!filePath) process.exit(0);
 
 function block(reason) {
