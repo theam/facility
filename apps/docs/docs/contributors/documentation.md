@@ -15,7 +15,6 @@ operator, client author, or contributor cannot discover and operate the resultin
 - **Self-hosting** covers installation, configuration, security, upgrades, backups, monitoring, and
   incidents.
 - **Contributor** pages map code ownership, tests, and documentation maintenance.
-- **Decision records** preserve choices and consequences that future changes must evaluate.
 
 Do not combine all audiences into one large overview. Link from the overview to a stable reference
 instead of duplicating a schema in several guides.

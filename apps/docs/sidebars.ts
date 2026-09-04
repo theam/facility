@@ -57,20 +57,6 @@ const sidebars: SidebarsConfig = {
         "reference/hardening",
         "reference/reference-fixture",
         "reference/upgrade-012",
-        {
-          type: "category",
-          label: "decisions",
-          items: [
-            "reference/decisions/persistent-workspace-provider",
-            "reference/decisions/workspace-runtime",
-            "reference/decisions/mcp-authentication",
-            "reference/decisions/engine-credentials",
-            "reference/decisions/authenticated-preview",
-            "reference/decisions/multi-repository-stories",
-            "reference/decisions/storage-and-deletion",
-            "reference/decisions/agent-edits-use-pull-requests",
-          ],
-        },
       ],
     },
     {
