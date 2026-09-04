@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, existsSync, rmSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -152,6 +152,40 @@ test("local help and leading global flags are side-effect free", () => {
     assert.equal(result.status, 0, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /Usage/);
   }
+});
+
+test("init provisions a nested-only Node root end to end", (t) => {
+  // The #214 review's second half: a repository whose only Node root is
+  // nested (frontend/package.json, nothing at the top) must come out of init
+  // with that root's dependency install rendered into the shipped artifacts,
+  // not just detected in memory.
+  const dir = mkdtempSync(join(tmpdir(), "facility-nested-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+  mkdirSync(join(dir, "frontend"), { recursive: true });
+  writeFileSync(
+    join(dir, "frontend", "package.json"),
+    `${JSON.stringify({ name: "web", private: true, scripts: { test: "vitest run" } }, null, 2)}\n`,
+  );
+  writeFileSync(join(dir, "frontend", "package-lock.json"), "{}\n");
+
+  const result = runCli(["init", "--yes", `--dir=${dir}`, "--org=acme", "--project=7"], dir);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const manifest = JSON.parse(readFileSync(join(dir, ".facility.json"), "utf8"));
+  assert.ok(
+    manifest.provision.includes("(cd 'frontend' && npm ci)"),
+    `manifest provision installs the nested root: ${manifest.provision}`,
+  );
+  assert.ok(
+    manifest.checks.includes("(cd 'frontend' && npm run test)"),
+    `manifest checks run from the nested root: ${JSON.stringify(manifest.checks)}`,
+  );
+  const crew = readFileSync(join(dir, ".github/workflows/facility-crew.yml"), "utf8");
+  assert.ok(
+    crew.includes("(cd 'frontend' && npm ci)"),
+    "the shipped crew workflow provisions the nested root",
+  );
 });
 
 test("init installs the method end to end", async (t) => {

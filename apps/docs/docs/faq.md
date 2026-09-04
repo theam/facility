@@ -59,9 +59,13 @@ the code in your repo.
 ## Does this work for non-Node projects?
 
 Yes. The CLI and the vendored guards need Node on the runner (present on all
-GitHub-hosted runners) — your project doesn't. `init` detects pnpm/yarn/npm
-and otherwise leaves a marked slot for your toolchain steps. The provision
-command is yours: `make db`, `docker compose up -d`, `mix ecto.setup`.
+GitHub-hosted runners) — your project doesn't. `init` detects project roots
+across ecosystems — Node (pnpm/yarn/npm), Python (Poetry/uv/PDM/Hatch/pip),
+PHP (Composer), Go, Ruby, Rust, and Java — including several side by side in
+one repository, and proposes per-root provision and check commands. Anything
+it cannot see still gets a marked slot for your toolchain steps, and the
+provision command stays yours: `make db`, `docker compose up -d`,
+`mix ecto.setup`.
 
 ## Can I use my existing AGENTS.md / CLAUDE.md / .claude setup?
 
