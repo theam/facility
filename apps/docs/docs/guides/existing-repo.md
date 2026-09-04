@@ -13,6 +13,12 @@ Connect the repo to a project. The platform detects vendored facility files
 and records the current state as the fingerprint baseline (**adopt**), so
 integrity checking starts from reality, not from an ideal.
 
+An adopted repository has been running agents without Facility's assumptions
+being checked. Verify the
+[repository settings that back the gates](../reference/security#repository-settings-that-back-the-gates)
+now: fingerprinting records what the repository is, not whether its human gates
+can actually hold.
+
 ## Step 2 — money first
 
 Switch the repo's provider secrets to gateway virtual keys
