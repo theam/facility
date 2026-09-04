@@ -236,4 +236,21 @@ Facility is early software. The 0.x schema and API can change incompatibly. Revi
 [0.12 validation guide](apps/docs/docs/guides/validate-workspace-loop.md) before using it with a
 sensitive repository.
 
+## Documentation and contributing
+
+The documentation site includes paths for [operating a
+story](apps/docs/docs/guides/operate-story.md), [self-hosting in
+production](apps/docs/docs/self-host/production.md), the exact [project
+manifest](apps/docs/docs/reference/project-manifest.md) and [agent
+manifest](apps/docs/docs/reference/agent-manifest.md) contracts, and
+[troubleshooting](apps/docs/docs/guides/troubleshooting.md).
+
+To work on Facility, read [Contributing](CONTRIBUTING.md), the [contributor
+architecture](apps/docs/docs/contributors/architecture.md), [testing
+guide](apps/docs/docs/contributors/testing.md), and [documentation
+guide](apps/docs/docs/contributors/documentation.md). Public issues and pull
+requests should contain enough product-technical context for someone outside
+the maintainer group to understand and verify the change, without private
+deployment or repository details.
+
 Apache-2.0. No warranty.

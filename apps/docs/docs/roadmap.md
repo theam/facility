@@ -11,7 +11,7 @@ The release includes:
 
 - persistent story conversations, worktrees, volumes, and native engine sessions;
 - Claude Code and Codex adapters with model selection in `.agents/`;
-- manual, GitHub, and scheduled agents on one dispatcher;
+- manual, MCP, UI, GitHub, and scheduled agents on one dispatcher;
 - full development environments with Docker, Compose, browser testing, and authenticated previews;
 - direct Git and GitHub maintainer workflows;
 - cost accounting and monthly budget enforcement without a separate model gateway;
