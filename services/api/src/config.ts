@@ -8,13 +8,15 @@ import type { AppConfig } from "./types.js";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 loadDotenv({ path: join(repoRoot, ".env"), quiet: true });
 
-const OptionalUrl = z.preprocess(
-  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
-  z.string().url().optional(),
-);
+// .env templates ship optional keys as blank assignments (KEY=), which dotenv
+// delivers as empty strings; every optional field must read those as unset.
+const blankToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
+const OptionalUrl = z.preprocess(blankToUndefined, z.string().url().optional());
 
 const OptionalGithubOrganization = z.preprocess(
-  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  blankToUndefined,
   z
     .string()
     .trim()
@@ -23,13 +25,8 @@ const OptionalGithubOrganization = z.preprocess(
     .optional(),
 );
 
-// .env templates ship optional keys as blank assignments (KEY=), which dotenv
-// delivers as empty strings — those must parse as unset, while a value that is
-// actually set must still be non-empty.
-const OptionalNonEmpty = z.preprocess(
-  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
-  z.string().trim().min(1).optional(),
-);
+// A value that is actually set must still be non-empty after trimming.
+const OptionalNonEmpty = z.preprocess(blankToUndefined, z.string().trim().min(1).optional());
 
 const EnvSchema = z
   .object({
@@ -40,7 +37,7 @@ const EnvSchema = z
     WEB_URL: z.string().url().optional(),
     FACILITY_PREVIEW_URL: OptionalUrl,
     FACILITY_PREVIEW_SURFACE_TOKEN: z.preprocess(
-      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      blankToUndefined,
       z.string().min(32).max(128).optional(),
     ),
     SANDBOX_API_URL: z.string().url().optional(),
