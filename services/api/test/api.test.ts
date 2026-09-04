@@ -751,6 +751,53 @@ describe("api", async () => {
     expect(duplicate.json().error.code).toBe("conflict");
   });
 
+  it("handles query parameters in idempotency: canonicalizes permutations and rejects key reuse with different query", async () => {
+    const slug = `idempotent-query-proj-${Date.now()}`;
+    const key = `query-key-${Date.now()}`;
+    const payload = { name: "Idempotent Query Project", slug };
+
+    // 1. Initial request with query parameters
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/projects?tag=alpha&mode=test",
+      headers: { cookie, "idempotency-key": key },
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["idempotency-status"]).toBe("created");
+
+    // 2. Replay with permuted query parameters (same key, same body, same query params in different order)
+    const replayedPermuted = await app.inject({
+      method: "POST",
+      url: "/v1/projects?mode=test&tag=alpha",
+      headers: { cookie, "idempotency-key": key },
+      payload,
+    });
+    expect(replayedPermuted.statusCode).toBe(200);
+    expect(replayedPermuted.headers["idempotency-status"]).toBe("replayed");
+    expect(replayedPermuted.json()).toEqual(first.json());
+
+    // 3. Reusing the same key with different query parameters must be rejected with 409 idempotency_key_reused
+    const reusedDifferentQuery = await app.inject({
+      method: "POST",
+      url: "/v1/projects?tag=beta&mode=test",
+      headers: { cookie, "idempotency-key": key },
+      payload,
+    });
+    expect(reusedDifferentQuery.statusCode).toBe(409);
+    expect(reusedDifferentQuery.json().error.code).toBe("idempotency_key_reused");
+
+    // 4. Reusing the same key with query parameters omitted must also be rejected
+    const reusedNoQuery = await app.inject({
+      method: "POST",
+      url: "/v1/projects",
+      headers: { cookie, "idempotency-key": key },
+      payload,
+    });
+    expect(reusedNoQuery.statusCode).toBe(409);
+    expect(reusedNoQuery.json().error.code).toBe("idempotency_key_reused");
+  });
+
   it("replays one-time API-key secrets without creating duplicate credentials", async () => {
     const name = `idempotent-secret-${Date.now()}`;
     const idempotencyKey = `key-create-${Date.now()}`;
@@ -4043,6 +4090,80 @@ describe("api", async () => {
       payload: { type: "E", slug: "experiment", bodyMd: "body", links: [parent.json().id] },
     });
     expect(child.statusCode).toBe(200);
+  });
+
+  it("distinguishes dry-run validation from persistent create in KB entry idempotency (Issue #187 regression)", async () => {
+    const space = await app.inject({
+      method: "PUT",
+      url: `/v1/projects/${projectId}/kb/space`,
+      headers: { cookie },
+      payload: { config: { artifact_types: [{ prefix: "H", name: "Hypothesis" }] } },
+    });
+    expect(space.statusCode).toBe(200);
+
+    const idempotencyKey = `kb-dry-key-${Date.now()}`;
+    const entryPayload = {
+      type: "H",
+      slug: `idempotency-query-${Date.now()}`,
+      frontmatter: {},
+      bodyMd: "Idempotency query reproduction",
+      links: [],
+    };
+
+    // 1. Validation dry run with Idempotency-Key
+    const dryRun = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/kb/entries?dry=1`,
+      headers: { cookie, "idempotency-key": idempotencyKey },
+      payload: entryPayload,
+    });
+    expect(dryRun.statusCode).toBe(200);
+    expect(dryRun.headers["idempotency-status"]).toBe("created");
+    expect(dryRun.json().ok).toBe(true);
+
+    // Verify 0 persistent entries created for this slug
+    const listAfterDry = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/kb/entries`,
+      headers: { cookie },
+    });
+    const foundAfterDry = listAfterDry
+      .json()
+      .find((e: { slug: string }) => e.slug === entryPayload.slug);
+    expect(foundAfterDry).toBeUndefined();
+
+    // 2. Persistent create attempting to reuse the same Idempotency-Key without ?dry=1 must be rejected with 409
+    const liveConflict = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/kb/entries`,
+      headers: { cookie, "idempotency-key": idempotencyKey },
+      payload: entryPayload,
+    });
+    expect(liveConflict.statusCode).toBe(409);
+    expect(liveConflict.json().error.code).toBe("idempotency_key_reused");
+
+    // 3. Persistent create with a fresh Idempotency-Key succeeds and creates the entry
+    const freshKey = `kb-live-key-${Date.now()}`;
+    const liveCreate = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/kb/entries`,
+      headers: { cookie, "idempotency-key": freshKey },
+      payload: entryPayload,
+    });
+    expect(liveCreate.statusCode).toBe(200);
+    expect(liveCreate.headers["idempotency-status"]).toBe("created");
+    expect(liveCreate.json().slug).toBe(entryPayload.slug);
+
+    // 4. Replaying the persistent create with freshKey returns 200 replayed
+    const liveReplay = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/kb/entries`,
+      headers: { cookie, "idempotency-key": freshKey },
+      payload: entryPayload,
+    });
+    expect(liveReplay.statusCode).toBe(200);
+    expect(liveReplay.headers["idempotency-status"]).toBe("replayed");
+    expect(liveReplay.json().id).toBe(liveCreate.json().id);
   });
 
   it("refuses a chain change that would strand stored entries", async () => {

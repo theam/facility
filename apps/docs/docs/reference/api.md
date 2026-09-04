@@ -36,10 +36,12 @@ clients can generate from the committed OpenAPI document until SDK distribution.
   event reads support `afterSeq` and a true `tail`; SSE resumes through
   `Last-Event-ID` or `afterSeq`.
 - Creation routes that advertise `Idempotency-Key` accept 8–200 characters.
-  The same principal/method/path/key and body replays the stored response for
-  24 hours; a changed body is a `409 idempotency_key_reused`. An active first
-  request returns `409 idempotency_in_progress` with `Retry-After`; pending
-  claims older than 15 minutes may be reclaimed after a crashed request.
+  The same principal/method/path/key, query parameters, and body replays the
+  stored response for 24 hours; a changed body or query parameter is a
+  `409 idempotency_key_reused`. Query parameters are canonicalized so ordering
+  differences do not create false conflicts. An active first request returns
+  `409 idempotency_in_progress` with `Retry-After`; pending claims older than 15
+  minutes may be reclaimed after a crashed request.
 
 ## Resource map
 
