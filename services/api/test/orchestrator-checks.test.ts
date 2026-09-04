@@ -1,3 +1,6 @@
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { harnessFragmentForBundle } from "../src/harness.js";
 import {
@@ -186,11 +189,41 @@ describe("platform run repository setup", () => {
 
   it("renders repository setup and gates into platform contracts", () => {
     expect(
-      renderRunContract("Provision: {{PROVISION_CMD}}\nChecks: {{CHECKS_INLINE}}", "pnpm install", [
-        "pnpm test",
-        "pnpm lint",
-      ]),
-    ).toBe("Provision: pnpm install\nChecks: pnpm test && pnpm lint");
+      renderRunContract(
+        "Provision: {{PROVISION_CMD}}\nChecks: {{CHECKS_INLINE}}\nBase: origin/{{DEFAULT_BRANCH}}",
+        "pnpm install",
+        ["pnpm test", "pnpm lint"],
+        "trunk",
+      ),
+    ).toBe("Provision: pnpm install\nChecks: pnpm test && pnpm lint\nBase: origin/trunk");
+  });
+
+  it("falls back to main when the repository has no recorded default branch", () => {
+    expect(renderRunContract("origin/{{DEFAULT_BRANCH}}", null, [], null)).toBe("origin/main");
+  });
+
+  // The repository lane renders these templates through packages/core/src/render.ts,
+  // which understands every placeholder. renderRunContract is a hand-written subset,
+  // so a placeholder added to a shared prompt reaches a platform agent literally
+  // unless this test fails first.
+  it("leaves no placeholder unrendered in any shared prompt template", async () => {
+    const promptsDir = fileURLToPath(
+      new URL("../../../packages/cli/templates/prompts/", import.meta.url),
+    );
+    const names = (await readdir(promptsDir)).filter((name) => name.endsWith(".md"));
+    expect(names.length).toBeGreaterThan(0);
+
+    const leftovers = new Set<string>();
+    for (const name of names) {
+      const rendered = renderRunContract(
+        await readFile(join(promptsDir, name), "utf8"),
+        "pnpm install",
+        ["pnpm test"],
+        "main",
+      );
+      for (const match of rendered.match(/\{\{[A-Z_]+\}\}/g) ?? []) leftovers.add(match);
+    }
+    expect([...leftovers]).toEqual([]);
   });
 });
 

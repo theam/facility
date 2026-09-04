@@ -2748,7 +2748,12 @@ async function buildRunBundle(
   );
   const checkCmds = resolveCheckCmds(profile, repo?.renderAnswers, project?.settings);
   const provisionSummary = [packageInstallCmd, provisionCmd].filter(Boolean).join(" && ") || null;
-  const contract = renderRunContract(rawContract, provisionSummary, checkCmds);
+  const contract = renderRunContract(
+    rawContract,
+    provisionSummary,
+    checkCmds,
+    repo?.defaultBranch ?? null,
+  );
   const githubBranch = typeof runGh.branch === "string" ? runGh.branch : null;
   const checkoutBranch = githubPullRequestMode(run.mode) && githubBranch ? githubBranch : null;
   const planProvenance = objectOrEmpty(objectOrEmpty(run.trigger).planProvenance);
@@ -3626,13 +3631,15 @@ export function renderRunContract(
   contract: string,
   provisionCmd: string | null,
   checkCmds: string[],
+  defaultBranch: string | null,
 ) {
   return contract
     .replaceAll("{{PROVISION_CMD}}", provisionCmd ?? "No provision command is configured.")
     .replaceAll(
       "{{CHECKS_INLINE}}",
       checkCmds.length ? checkCmds.join(" && ") : "No checks configured.",
-    );
+    )
+    .replaceAll("{{DEFAULT_BRANCH}}", defaultBranch || "main");
 }
 
 function command(value: unknown) {
