@@ -190,13 +190,22 @@ export function developmentServiceEnvironment(prepared, base = process.env) {
   return environment;
 }
 
+export function usesWindowsCmdShell(command, platform = process.platform) {
+  return platform === "win32" && /\.(cmd|bat)$/i.test(command);
+}
+
 export function run(
   command,
   args,
   { cwd = repoRoot, label = [command, ...args].join(" "), environment = process.env } = {},
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env: environment, stdio: "inherit" });
+    const child = spawn(command, args, {
+      cwd,
+      env: environment,
+      stdio: "inherit",
+      shell: usesWindowsCmdShell(command),
+    });
     child.once("error", (error) => {
       const hint =
         error.code === "ENOENT"

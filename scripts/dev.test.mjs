@@ -10,6 +10,7 @@ import {
   prepareDevEnv,
   setEnvIfBlank,
   usesLocalStorage,
+  usesWindowsCmdShell,
 } from "./dev.mjs";
 
 const example = [
@@ -287,4 +288,12 @@ test("an exported development origin overrides the env file, and a blank one is 
     environment: { FACILITY_DEV_ORIGINS: "   " },
   });
   assert.equal(blank.devOrigins, "from-file.example.dev");
+});
+
+test("Windows .cmd/.bat spawns use a shell so Node does not throw EINVAL", () => {
+  assert.equal(usesWindowsCmdShell("pnpm.cmd", "win32"), true);
+  assert.equal(usesWindowsCmdShell("pnpm.bat", "win32"), true);
+  assert.equal(usesWindowsCmdShell("pnpm", "win32"), false);
+  assert.equal(usesWindowsCmdShell("docker", "win32"), false);
+  assert.equal(usesWindowsCmdShell("pnpm.cmd", "linux"), false);
 });
