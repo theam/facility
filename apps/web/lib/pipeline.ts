@@ -117,6 +117,80 @@ export function storyHref(
   return `/projects/${projectId}/stories/${story.number}?${storyQuery(story)}`;
 }
 
+export type BoardFilter = {
+  stage?: PipelineStageKey | null;
+  status?: PipelineStageState | null;
+  mine?: boolean;
+};
+
+/** The stories board URL for a given combination of filter chips. */
+export function boardHref(projectId: string, filter: BoardFilter = {}) {
+  const params = new URLSearchParams();
+  if (filter.stage) params.set("stage", filter.stage);
+  if (filter.status) params.set("status", filter.status);
+  if (filter.mine) params.set("mine", "1");
+  const query = params.toString();
+  return `/projects/${projectId}/stories${query ? `?${query}` : ""}`;
+}
+
+/** Whether a story's assignees include the signed-in viewer, by GitHub login. */
+export function ownedBy(assignees: string[], login: string | undefined): boolean {
+  if (!login) return false;
+  const target = login.toLowerCase();
+  return assignees.some((assignee) => assignee.toLowerCase() === target);
+}
+
+/** What the control plane said about the signed-in viewer. */
+export type MeOutcome =
+  | { ok: true; githubLogin: string | undefined }
+  | { ok: false; message: string };
+
+/**
+ * Why the mine filter is or isn't applied:
+ *
+ * - `off` — not requested, or requested by a viewer with no GitHub login to
+ *   match against (a shared link, a bookmark, browser history). Such a viewer
+ *   is never trapped on a board with every story filtered out and no chip
+ *   left to undo it.
+ * - `on` — requested and matchable; `login` is the identity to match.
+ * - `blocked` — requested, but the `/v1/me` request itself failed. This is
+ *   kept distinct from `off` on purpose: silently showing the unfiltered
+ *   board would read as "the filter found nothing", and dropping the
+ *   parameter from every chip URL would erase the reader's intent. The board
+ *   must say the identity check failed instead.
+ */
+export type MineFilterState =
+  | { kind: "off" }
+  | { kind: "on"; login: string }
+  | { kind: "blocked"; reason: string };
+
+export function mineFilterState(requested: string | undefined, me: MeOutcome): MineFilterState {
+  if (requested !== "1") return { kind: "off" };
+  if (!me.ok) return { kind: "blocked", reason: me.message };
+  if (!me.githubLogin) return { kind: "off" };
+  return { kind: "on", login: me.githubLogin };
+}
+
+export type StoryOwner = { login: string; extra: number };
+
+/** The story's lead assignee, GitHub-ordered, with a count of the rest. */
+export function storyOwner(assignees: string[]): StoryOwner | null {
+  const logins = assignees.map((login) => login.trim()).filter(Boolean);
+  const [login] = logins;
+  if (!login) return null;
+  return { login, extra: logins.length - 1 };
+}
+
+/**
+ * The letter an avatar falls back to when there is no image to draw.
+ */
+export function avatarInitial(value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  // Spread, not `[0]`, so an astral first character survives intact.
+  const [first] = [...trimmed];
+  return first ? first.toUpperCase() : "?";
+}
+
 export function pipelineStories(pipeline: Pipeline): PipelineStory[] {
   return pipeline.stages.flatMap((stage) => stage.stories);
 }

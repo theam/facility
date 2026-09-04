@@ -1,4 +1,4 @@
-import { Eyebrow, PillTag, StatusDot } from "@facility/ui";
+import { Avatar, Eyebrow, PillTag, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CiStatusLink } from "@/components/ci-status";
@@ -9,7 +9,8 @@ import { PullRequestLinks } from "@/components/story/pull-request-links";
 import { StoryTimeline } from "@/components/story/timeline";
 import { StoryTriggerButtons } from "@/components/story/trigger-buttons";
 import { api } from "@/lib/api";
-import { pipelineStories } from "@/lib/pipeline";
+import { avatarSrcFor } from "@/lib/avatar-policy";
+import { avatarInitial, pipelineStories, storyOwner } from "@/lib/pipeline";
 import {
   detachablePullRequests,
   linkableIssues,
@@ -103,6 +104,7 @@ export default async function StoryPage({
     stageLabels,
   });
   const stage = story.stage;
+  const owner = storyOwner(story.assignees);
 
   const prLinks = new Map<number, string>();
   for (const pr of story.prs) prLinks.set(pr.number, pr.url);
@@ -167,6 +169,19 @@ export default async function StoryPage({
               {label}
             </span>
           ))}
+          {owner ? (
+            <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-(--dim)">
+              <Avatar
+                size={16}
+                src={avatarSrcFor(owner.login) ?? undefined}
+                initial={avatarInitial(owner.login)}
+              />
+              <span>
+                @{owner.login}
+                {owner.extra > 0 ? ` +${owner.extra}` : ""}
+              </span>
+            </span>
+          ) : null}
           <a
             href={story.htmlUrl}
             target="_blank"

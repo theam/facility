@@ -1,8 +1,9 @@
-import { PillTag } from "@facility/ui";
-import Image from "next/image";
+import { Avatar, PillTag } from "@facility/ui";
 import { SignOutButton } from "@/components/shell/sign-out";
 import { ProjectSwitcher } from "@/components/shell/switcher";
 import type { Me, Project } from "@/lib/api";
+import { principalAvatarSrc } from "@/lib/avatar-policy";
+import { avatarInitial } from "@/lib/pipeline";
 
 export function Topbar({
   me,
@@ -26,17 +27,11 @@ export function Topbar({
           className="flex items-center gap-2 font-mono text-[11px] text-(--dim)"
           title={me.principal.email}
         >
-          {me.principal.avatarUrl ? (
-            <Image
-              src={me.principal.avatarUrl}
-              alt=""
-              width={20}
-              height={20}
-              unoptimized
-              referrerPolicy="no-referrer"
-              className="size-5 rounded-full border border-(--line)"
-            />
-          ) : null}
+          <Avatar
+            size={20}
+            src={principalAvatarSrc(me.principal.avatarUrl, me.principal.githubLogin) ?? undefined}
+            initial={avatarInitial(me.principal.githubLogin ?? me.principal.email)}
+          />
           {me.principal.githubLogin ? `@${me.principal.githubLogin}` : me.principal.email}
         </span>
         <SignOutButton />

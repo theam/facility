@@ -1,3 +1,4 @@
+export { Avatar } from "./avatar";
 export { Button, ButtonLink } from "./button";
 export { cx } from "./cx";
 export { Field, Select, TextArea, TextInput } from "./field";
