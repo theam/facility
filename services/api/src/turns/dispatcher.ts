@@ -13,12 +13,14 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { CostBudgetService } from "../insights/costs.js";
+import { appendStoryEvidence } from "../stories/evidence.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
 } from "../workspaces/project-environment.js";
 import type { WorkspaceLocator } from "../workspaces/runtime.js";
+import { collisionPromptBlock, type StoryCollision, StoryCollisionService } from "./collisions.js";
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
@@ -35,6 +37,7 @@ export class TurnDispatcher {
     private readonly engines: AgentEngineRegistry,
     private readonly evidence: TurnGitEvidenceService,
     private readonly costs = new CostBudgetService(db),
+    private readonly collisions = new StoryCollisionService(db),
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -195,12 +198,13 @@ export class TurnDispatcher {
         engine: manifest.engine,
         model: manifest.model,
       });
+      const collisions = await this.detectCollisions(eventBase);
       const engine = this.engines.get(manifest.engine);
       const engineRequest = {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id, collisions),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,
@@ -350,6 +354,65 @@ export class TurnDispatcher {
     } finally {
       clearInterval(leaseHeartbeat);
     }
+  }
+
+  /**
+   * Advisory only. Records which other open branches changed the same files and hands the list to
+   * the prompt. A detection failure is recorded on the turn and never prevents the engine from
+   * running.
+   */
+  private async detectCollisions(eventBase: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+  }): Promise<StoryCollision[]> {
+    let collisions: StoryCollision[];
+    try {
+      collisions = await this.collisions.detect(eventBase);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await appendTurnEvent(this.db, {
+        ...eventBase,
+        type: "turn.collision_check_failed",
+        data: { error: detail.slice(0, 8_000) },
+      });
+      return [];
+    }
+    if (collisions.length === 0) return [];
+    const occurredAt = new Date();
+    for (const collision of collisions) {
+      await appendStoryEvidence(this.db, {
+        ...eventBase,
+        source: "facility",
+        type: "story.collision_detected",
+        externalKey: `turn:${eventBase.turnId}:collision:${collision.storyId}`,
+        occurredAt,
+        data: {
+          storyId: collision.storyId,
+          title: collision.title,
+          provider: collision.provider,
+          externalId: collision.externalId,
+          branch: collision.branch,
+          status: collision.status,
+          overlappingPaths: collision.overlappingPaths,
+          overlapCount: collision.overlapCount,
+          truncated: collision.overlapCount > collision.overlappingPaths.length,
+        },
+      });
+    }
+    await appendTurnEvent(this.db, {
+      ...eventBase,
+      type: "turn.collisions_detected",
+      data: {
+        stories: collisions.map((collision) => ({
+          storyId: collision.storyId,
+          branch: collision.branch,
+          overlapCount: collision.overlapCount,
+        })),
+      },
+    });
+    return collisions;
   }
 
   private async isCanceled(orgId: string, projectId: string, turnId: string) {
@@ -592,6 +655,7 @@ function buildPrompt(
   summary: string | null,
   messages: Array<typeof storyMessages.$inferSelect>,
   turnId: string,
+  collisions: StoryCollision[] = [],
 ) {
   const currentSequence = messages.find(
     (message) => message.turnId === turnId && message.role === "user",
@@ -607,6 +671,7 @@ function buildPrompt(
   return [
     manifest.prompt,
     `# Story\n${story.title}\nExternal identity: ${story.provider}:${story.externalId}`,
+    collisionPromptBlock(collisions),
     summary ? `# Conversation summary\n${summary}` : "",
     `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
     "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",

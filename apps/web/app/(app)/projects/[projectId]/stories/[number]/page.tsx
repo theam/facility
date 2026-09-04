@@ -365,6 +365,10 @@ function timelineSummary(type: string, data: Record<string, unknown>) {
   if (type === "github.check_observed") {
     return `${text("name") ?? "check"} · ${text("conclusion") ?? text("status") ?? "unknown"}`;
   }
+  if (type === "story.collision_detected") {
+    const extra = Number(data.overlapCount ?? 0) - count("overlappingPaths");
+    return `overlaps "${text("title") ?? "another story"}" on ${String(data.overlapCount ?? "?")} files · ${text("branch") ?? "unknown branch"}${extra > 0 ? ` · ${extra} not listed` : ""}`;
+  }
   if (type === "artifact.recorded") return text("label") ?? "Artifact recorded.";
   if (type.startsWith("attention.")) return text("title") ?? type;
   if (type === "turn.failed") return text("error") ?? "Turn failed.";

@@ -146,6 +146,7 @@ test("project capabilities and delivery evidence are inspectable", () => {
     "commits",
     "changed files",
     "periodic reconciliation",
+    "story.collision_detected",
     "single timeline",
   ]) {
     assert.match(

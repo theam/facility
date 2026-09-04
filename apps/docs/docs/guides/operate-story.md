@@ -44,7 +44,10 @@ session, workspace, branch, and initial SHA started each turn; the final SHA, co
 dirty state; artifacts and attention; and the mirrored branch, pull request, reviews, and checks.
 An entry linked to a `turn_id` has an exact Facility attribution. An `external` GitHub actor means
 Facility associated the event with the story but could not prove that a particular turn produced
-it.
+it. A `story.collision_detected` entry means another open story in the project has changed the
+same files; the agent was told which paths overlap before its turn started, and the two pull
+requests are likely to conflict. Nothing is blocked, but it is worth deciding early which one
+lands first.
 
 When the story needs attention:
 
