@@ -351,6 +351,8 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends sudo \
   && rm -rf /var/lib/apt/lists/* \
   && sudo -n -u node -- sh -c 'test "$(id -un)" = node' \
+  && test -u /usr/bin/sudo \
+  && runuser -u node -- sh -c 'test "$(id -un)" = node' \
   && ! runuser -u node -- sudo -n -u root -- true
 
 # The default image runs interactively as node. DockerWorkspaceRuntime overrides

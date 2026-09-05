@@ -95,9 +95,11 @@ docker buildx build --platform linux/amd64 --file ../../../apps/web/Dockerfile \
 Set `image_tag` to the same value in `production.tfvars`. If the ECS tasks use ARM64, build both
 images for `linux/arm64` and set `task_cpu_architecture = "ARM64"`.
 
-The runner image is separate because Vercel, not ECS, pulls it. Build `runner/Dockerfile`, publish
-it to the registry used by your Vercel project, and put that exact image reference in
-`workspace_image`.
+The runner image is separate because Vercel, not ECS, pulls it. Build `runner/Dockerfile` with
+`--target vercel-runner --platform linux/amd64`, publish it to the registry used by your Vercel
+project, and put that exact image reference in `workspace_image`. This target starts as root for
+trusted initialization and includes the SDK's `sudo` user-switch dependency. The default `runner`
+target is for Docker workspaces.
 
 ## 3. Populate the runtime secret
 

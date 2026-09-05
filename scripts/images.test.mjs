@@ -253,6 +253,8 @@ test("Vercel runner supports SDK user switching without granting node sudo privi
   assert.ok(vercelStage);
   assert.match(vercelStage, /apt-get install -y --no-install-recommends sudo/);
   assert.match(vercelStage, /sudo -n -u node -- sh -c/);
+  assert.match(vercelStage, /test -u \/usr\/bin\/sudo/);
+  assert.match(vercelStage, /runuser -u node -- sh -c/);
   assert.match(vercelStage, /! runuser -u node -- sudo -n -u root -- true/);
   assert.doesNotMatch(vercelStage, /NOPASSWD/);
   assert.match(ciWorkflow, /docker build --target vercel-runner -f runner\/Dockerfile \./);
