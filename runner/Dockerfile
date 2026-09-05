@@ -219,7 +219,7 @@ FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf23286
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20260828
+ARG DEBIAN_SECURITY_REFRESH=20260905
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -347,6 +347,13 @@ CMD ["sleep", "infinity"]
 # Vercel invokes trusted initialization with sudo and agent commands as node.
 FROM runner-base AS vercel-runner
 USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends sudo \
+  && rm -rf /var/lib/apt/lists/* \
+  && sudo -n -u node -- sh -c 'test "$(id -un)" = node' \
+  && test -u /usr/bin/sudo \
+  && runuser -u node -- sh -c 'test "$(id -un)" = node' \
+  && ! runuser -u node -- sudo -n -u root -- true
 
 # The default image runs interactively as node. DockerWorkspaceRuntime overrides
 # the bootstrap process to root only while it starts the nested Docker daemon.

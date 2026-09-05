@@ -191,6 +191,9 @@ jobs:
           SECRET_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
         run: docker compose build --pull
 
+      - name: Verify Vercel runner user switching without live credentials
+        run: docker build --target vercel-runner -f runner/Dockerfile .
+
   workspace-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 25
