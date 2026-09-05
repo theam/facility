@@ -245,3 +245,15 @@ test("runner Go binaries resolve the fixed cryptography and gRPC modules", () =>
     /for binary in \/out\/dockerd \/out\/containerd \/out\/containerd-shim-runc-v2 \/out\/ctr \/out\/docker-buildx \/out\/docker-compose \/out\/gh; do[\s\S]*google\.golang\.org\/grpc" && \$3 == "v1\.83\.1"/,
   );
 });
+
+test("Vercel runner supports SDK user switching without granting node sudo privileges", () => {
+  const vercelStage = runnerDockerfile
+    .split("FROM runner-base AS vercel-runner")[1]
+    ?.split("FROM runner-base AS runner")[0];
+  assert.ok(vercelStage);
+  assert.match(vercelStage, /apt-get install -y --no-install-recommends sudo/);
+  assert.match(vercelStage, /sudo -n -u node -- sh -c/);
+  assert.match(vercelStage, /! runuser -u node -- sudo -n -u root -- true/);
+  assert.doesNotMatch(vercelStage, /NOPASSWD/);
+  assert.match(ciWorkflow, /docker build --target vercel-runner -f runner\/Dockerfile \./);
+});

@@ -49,7 +49,9 @@ without becoming an administrator of every Facility workspace on the host.
 - `runner` is the default Docker workspace image and runs normal commands as
   the `node` user.
 - `vercel-runner` leaves Vercel's trusted initialization path as root; Facility
-  runs agent commands as `node` after initialization.
+  runs agent commands as `node` after initialization. This target includes
+  `sudo` for the Vercel SDK's user switch. Its build verifies that root can
+  switch to `node` and that `node` cannot use sudo to become root.
 
 The default command sleeps because lifecycle and agent commands arrive through
 the workspace provider. The image is not the Facility API or worker image.

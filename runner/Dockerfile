@@ -347,6 +347,11 @@ CMD ["sleep", "infinity"]
 # Vercel invokes trusted initialization with sudo and agent commands as node.
 FROM runner-base AS vercel-runner
 USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends sudo \
+  && rm -rf /var/lib/apt/lists/* \
+  && sudo -n -u node -- sh -c 'test "$(id -un)" = node' \
+  && ! runuser -u node -- sudo -n -u root -- true
 
 # The default image runs interactively as node. DockerWorkspaceRuntime overrides
 # the bootstrap process to root only while it starts the nested Docker daemon.
