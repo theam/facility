@@ -23,6 +23,7 @@ import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
 import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
+import { buildPrompt } from "./prompt.js";
 
 export class TurnDispatcher {
   constructor(
@@ -586,42 +587,6 @@ function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator
   };
 }
 
-function buildPrompt(
-  manifest: AgentManifest,
-  story: typeof stories.$inferSelect,
-  summary: string | null,
-  messages: Array<typeof storyMessages.$inferSelect>,
-  turnId: string,
-) {
-  const currentSequence = messages.find(
-    (message) => message.turnId === turnId && message.role === "user",
-  )?.seq;
-  const relevant = messages.filter(
-    (message) => currentSequence === undefined || message.seq <= currentSequence,
-  );
-  const transcript = relevant
-    .map(
-      (message) => `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`,
-    )
-    .join("\n\n");
-  return [
-    manifest.prompt,
-    `# Story\n${story.title}\nExternal identity: ${story.provider}:${story.externalId}`,
-    summary ? `# Conversation summary\n${summary}` : "",
-    `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
-    "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
-    "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function actorLabel(actor: unknown) {
-  if (!actor || typeof actor !== "object") return "unknown";
-  const value = actor as { type?: unknown; id?: unknown };
-  return `${String(value.type ?? "unknown")}:${String(value.id ?? "unknown")}`;
-}
-
 function storyBranch(title: string, storyId: string) {
   const slug =
     title
@@ -666,10 +631,6 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
   return serialized.length <= 64_000
     ? value
     : { truncated: true, payload: `${serialized.slice(0, 63_900)}…` };
-}
-
-function truncateStart(value: string, limit: number) {
-  return value.length <= limit ? value : `[Earlier transcript omitted]\n${value.slice(-limit)}`;
 }
 
 function agentOutcome(output: string): { output: string; attention?: string } {

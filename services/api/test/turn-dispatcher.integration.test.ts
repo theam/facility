@@ -108,6 +108,7 @@ environment:
     app:
       port: 3000
 `);
+  const reviewer = parseAgentManifest(agentSource("pr-reviewer"), ".agents/pr-reviewer.md");
 
   class FakeCodexEngine implements AgentEngine {
     readonly name = "codex" as const;
@@ -157,7 +158,10 @@ environment:
       const projectSecret = request.environment?.FACILITY_DISPATCH_SECRET ?? "missing";
       const nativeSessionId = this.replacementPending
         ? "codex-replacement-session"
-        : (request.nativeSessionId ?? "codex-native-session");
+        : (request.nativeSessionId ??
+          (request.manifest.name === "builder"
+            ? "codex-native-session"
+            : `codex-${request.manifest.name}-session`));
       this.replacementPending = false;
       return {
         nativeSessionId,
@@ -220,7 +224,10 @@ environment:
     const catalogSource: AgentCatalogSource = {
       load: async () => ({
         commitSha: "a".repeat(40),
-        sources: [{ file: builder.file, source: agentSource(builder.name) }],
+        sources: [builder, reviewer].map((agent) => ({
+          file: agent.file,
+          source: agentSource(agent.name),
+        })),
       }),
     };
     const manifestSource: ProjectManifestSource = { load: async () => projectManifest };
@@ -554,6 +561,83 @@ environment:
         "Continue after the native session was lost",
       ]),
     );
+  });
+
+  it("passes the builder handoff to a queued reviewer without exposing a later request", async () => {
+    const handoff = "Implementation complete; integration tests could not run.";
+    const reviewRequest = "Review the builder result and its verification limitations.";
+    const futureRequest = "FUTURE REQUEST: implement an unrelated feature.";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `queued-review-${suffix}`,
+      title: "Review a queued builder result",
+      agent: builder,
+      message: "Implement the requested change.",
+      messageDedupeKey: `queued-review-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected builder turn");
+
+    const queuedReview = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: reviewRequest,
+      dedupeKey: `queued-review-message-${suffix}`,
+      agent: reviewer,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    expect(queuedReview).toMatchObject({ queued: true, turn: undefined });
+    await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: futureRequest,
+      dedupeKey: `queued-future-message-${suffix}`,
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+
+    engine.outputOverride = handoff;
+    try {
+      await expect(
+        dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+      ).resolves.toMatchObject({ state: "succeeded" });
+    } finally {
+      engine.outputOverride = undefined;
+    }
+    expect(engine.requests.at(-1)?.prompt).not.toContain(reviewRequest);
+    expect(engine.requests.at(-1)?.prompt).not.toContain(futureRequest);
+
+    const afterBuilder = await storiesService.get(orgId, projectId, started.story.id);
+    const next = afterBuilder.turns.find((turn) => turn.state === "queued");
+    if (!next) throw new Error("expected queued reviewer turn");
+    expect(next.agentName).toBe(reviewer.name);
+    await expect(dispatcher.dispatch({ orgId, projectId, turnId: next.id })).resolves.toMatchObject(
+      { state: "succeeded" },
+    );
+
+    const request = engine.requests.at(-1);
+    expect(request?.nativeSessionId).toBeUndefined();
+    expect(request?.manifest.name).toBe(reviewer.name);
+    expect(request?.prompt).toContain(handoff);
+    expect(request?.prompt).toContain(reviewRequest);
+    expect(request?.prompt).not.toContain(futureRequest);
+    expect(request?.prompt.indexOf(handoff)).toBeLessThan(
+      request?.prompt.indexOf(reviewRequest) ?? -1,
+    );
+    const afterReview = await storiesService.get(orgId, projectId, started.story.id);
+    const futureTurn = afterReview.turns.find((turn) => turn.state === "queued");
+    if (!futureTurn) throw new Error("expected future request to remain queued");
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: futureTurn.id }),
+    ).resolves.toMatchObject({ state: "succeeded" });
+    expect(engine.requests.at(-1)?.prompt).toContain(futureRequest);
   });
 
   it("cancels a running agent process while preserving the workspace and future turns", async () => {
