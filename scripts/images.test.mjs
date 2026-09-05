@@ -20,6 +20,7 @@ const imagesWorkflow = readFileSync(
   "utf8",
 );
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const runnerDockerfile = readFileSync(new URL("../runner/Dockerfile", import.meta.url), "utf8");
 
 test("manual publication is SHA-only even when dispatch targets a tag", () => {
   for (const ref of ["refs/heads/main", "refs/heads/feature", "refs/tags/v0.3.0"]) {
@@ -231,4 +232,16 @@ test("workspace CI runs the persistent Docker acceptance path", () => {
   assert.match(workspaceJob, /FACILITY_WORKSPACE_TEST_IMAGE: facility-runner:dev/);
   assert.match(workspaceJob, /run: pnpm test:e2e-workspace/);
   assert.doesNotMatch(workspaceJob, /CodeBuild|run-objective|sandbox\.e2e/);
+});
+
+test("runner Go binaries resolve the fixed cryptography and gRPC modules", () => {
+  assert.doesNotMatch(runnerDockerfile, /golang\.org\/x\/crypto@v0\.55\.0/);
+  assert.match(
+    runnerDockerfile,
+    /for binary in \/out\/dockerd \/out\/containerd \/out\/rootlesskit \/out\/docker-buildx \/out\/docker-compose \/out\/gh; do[\s\S]*golang\.org\/x\/crypto" && \$3 == "v0\.56\.0"/,
+  );
+  assert.match(
+    runnerDockerfile,
+    /for binary in \/out\/dockerd \/out\/containerd \/out\/containerd-shim-runc-v2 \/out\/ctr \/out\/docker-buildx \/out\/docker-compose \/out\/gh; do[\s\S]*google\.golang\.org\/grpc" && \$3 == "v1\.83\.1"/,
+  );
 });
