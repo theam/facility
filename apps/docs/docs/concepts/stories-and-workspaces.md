@@ -65,6 +65,12 @@ Workspace compute may be `creating`, `running`, `sleeping`, `error`, or `destroy
 error workspace can retain its durable volume. `destroyed` means the explicit deletion path has
 removed that durable workspace and it cannot be resumed.
 
+If Vercel workspace initialization fails after this operation allocates or resumes compute,
+Facility stops that compute while preserving the persistent disk. A failed wake of an already
+running workspace leaves its active compute alone. A later start reuses the same workspace identity. If the provider
+also refuses the stop, the `workspace_initialize_cleanup_failed` error names the sandbox that an
+operator must stop before retrying. Failed initialization does not queue an agent turn.
+
 Facility has no age-based deletion rule. Storage continues to accrue until an operator removes a
 workspace. Use budgets and observability to distinguish active compute cost from retained storage,
 then set an organizational retention policy outside the agent prompt.
