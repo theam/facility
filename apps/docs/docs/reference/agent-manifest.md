@@ -104,6 +104,28 @@ Declaring one does not imply the others. A request from an undeclared surface is
 an optional non-empty string array that filters labeled work. Each string is bounded by the schema.
 Only events subscribed on the GitHub App can reach these triggers.
 
+Issue and issue-comment triggers require a human sender with current repository write, maintain, or admin
+access. Facility checks GitHub through the repository's active installation before creating a
+workspace or queuing a turn. Bot senders, missing installations, and revoked access are rejected.
+This admission check does not change the capability available to an admitted agent.
+
+To require explicit acceptance on an issue, add `command`:
+
+```yaml
+- type: github
+  name: build-command
+  event: issue_comment
+  actions: [created]
+  command: /builder
+```
+
+Commands apply to new comments on open issues. They do not activate from issue assignment, comment
+edits, or pull-request comments. Put the command at the start of a line; prose, quoted text, indented
+code, and fenced code examples do not count. A comment containing multiple distinct commands from
+the agent catalog is rejected, so `/architect` and `/builder` can represent separate planning and
+acceptance steps. Command names begin with `/` followed by a lowercase letter and may contain
+lowercase letters, digits, and hyphens.
+
 Duplicate webhook deliveries do not create duplicate turns. Check and workflow events are attached
 to the matching pull request only when their head SHA is current.
 

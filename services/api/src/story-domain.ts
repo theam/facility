@@ -115,6 +115,7 @@ export function createStoryDomain(input: {
     projectManifests,
     input.config.workspaceImage,
     mirror,
+    githubFactory === unavailableGithubFactory ? undefined : githubFactory,
   );
   return {
     runtime,
