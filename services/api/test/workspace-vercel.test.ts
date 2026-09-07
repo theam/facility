@@ -12,15 +12,17 @@ vi.mock("@vercel/sandbox", () => ({
 import { VercelWorkspaceRuntime } from "../src/workspaces/vercel.js";
 
 function fakeSandbox() {
+  const runCommand = vi.fn().mockResolvedValue({
+    exitCode: 0,
+    stderr: vi.fn().mockResolvedValue(""),
+  });
   return {
     name: "ws_0123456789abcdef",
     status: "running",
     currentSnapshotId: "snap_persistent",
     currentSession: () => ({ sessionId: "session_current" }),
-    runCommand: vi.fn().mockResolvedValue({
-      exitCode: 0,
-      stderr: vi.fn().mockResolvedValue(""),
-    }),
+    runCommand,
+    asUser: vi.fn().mockReturnValue({ runCommand }),
     stop: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn(),
     domain: (port: number) => `https://workspace-${port}.example.test`,
@@ -68,6 +70,14 @@ describe("Vercel persistent workspace runtime", () => {
     // The fake invokes the lifecycle hook: a bootstrap in both the hook and runtime would run twice.
     expect(sandboxApi.getOrCreate.mock.calls[0]?.[0].onCreate).toEqual(expect.any(Function));
     expect(sandbox.runCommand).toHaveBeenCalledTimes(1);
+    expect(sandbox.asUser).toHaveBeenCalledExactlyOnceWith("root");
+    expect(sandbox.runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/",
+        env: { FACILITY_PREVIEW_GATEWAY_TOKEN: "x".repeat(32) },
+      }),
+    );
+    expect(sandbox.runCommand.mock.calls[0]?.[0]).not.toHaveProperty("sudo");
     expect(sandbox.stop).not.toHaveBeenCalled();
   });
 

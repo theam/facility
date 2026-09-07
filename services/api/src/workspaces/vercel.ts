@@ -227,7 +227,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     startedCompute: () => boolean,
   ): Promise<WorkspaceHandle> {
     try {
-      await initializeSandbox(sandbox, bootstrapCommand);
+      await initializeSandbox(
+        sandbox,
+        bootstrapCommand,
+        input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN,
+      );
       return this.handle(input, sandbox);
     } catch (initializationError) {
       // Preview and restore may wake an already-running workspace. Leave its active turn alone.
@@ -255,11 +259,17 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
   }
 }
 
-async function initializeSandbox(sandbox: Sandbox, bootstrapCommand: string) {
-  const result = await sandbox.runCommand({
+async function initializeSandbox(
+  sandbox: Sandbox,
+  bootstrapCommand: string,
+  gatewayToken?: string,
+) {
+  // Inject the credential after sudo switches users; sudo: true discards the sandbox environment.
+  const result = await sandbox.asUser("root").runCommand({
     cmd: "sh",
     args: ["-lc", bootstrapCommand],
-    sudo: true,
+    cwd: "/",
+    env: gatewayToken === undefined ? {} : { FACILITY_PREVIEW_GATEWAY_TOKEN: gatewayToken },
     timeoutMs: 180_000,
   });
   if (result.exitCode !== 0) {
@@ -285,7 +295,25 @@ function workspaceBootstrapCommand(input: CreateWorkspace) {
     "chown root:node /var/run/docker.sock",
     "chmod 0660 /var/run/docker.sock",
     ...gatewayPorts.map(({ port, gatewayPort }) => {
-      return `runuser --user node --preserve-environment -- sh -lc 'pid_file=/workspace/.facility/preview-${gatewayPort}.pid; if test -f "$pid_file"; then kill "$(cat "$pid_file")" >/dev/null 2>&1 || true; fi; nohup facility-preview-gateway --listen ${gatewayPort} --target ${port.port} >>/workspace/.facility/preview-${gatewayPort}.log 2>&1 & echo $! > "$pid_file"'`;
+      return `runuser --user node --preserve-environment -- sh -lc '
+set -eu
+pid_file=/workspace/.facility/preview-${gatewayPort}.pid
+if test -f "$pid_file"; then kill "$(cat "$pid_file")" >/dev/null 2>&1 || true; fi
+nohup facility-preview-gateway --listen ${gatewayPort} --target ${port.port} >>/workspace/.facility/preview-${gatewayPort}.log 2>&1 &
+pid=$!
+echo "$pid" > "$pid_file"
+attempt=0
+until test "$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 1 http://127.0.0.1:${gatewayPort}/ || true)" = 401; do
+  if ! kill -0 "$pid" 2>/dev/null || test "$attempt" -ge 50; then
+    echo "Preview gateway on port ${gatewayPort} did not start" >&2
+    kill "$pid" 2>/dev/null || true
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.1
+done
+kill -0 "$pid" 2>/dev/null || { echo "Preview gateway on port ${gatewayPort} exited during startup" >&2; exit 1; }
+'`;
     }),
   ].join("\n");
 }

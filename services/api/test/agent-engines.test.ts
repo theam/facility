@@ -86,6 +86,32 @@ class EngineRuntime implements WorkspaceRuntime {
 }
 
 describe("native agent engines", () => {
+  it.each([
+    [{ OPENAI_API_KEY: "project-key" }, "project-key"],
+    [{ OPENAI_API_KEY: "project-key", CODEX_API_KEY: "explicit-key" }, "explicit-key"],
+    [{ OPENAI_API_KEY: "project-key", CODEX_API_KEY: "" }, ""],
+    [{}, undefined],
+  ])("passes only the current request's Codex credential without mutating it", async (environment, expected) => {
+    const original = { ...environment };
+    const runtime = new EngineRuntime({
+      exitCode: 0,
+      stdout: '{"type":"thread.started","thread_id":"native"}\n',
+      stderr: "",
+      durationMs: 1,
+    });
+    await new CodexEngine(runtime).run({
+      turnId: "turn_credentials",
+      manifest: manifest("codex"),
+      workspace,
+      prompt: "work",
+      cwd: ".",
+      environment,
+    });
+    expect(runtime.command?.env?.CODEX_API_KEY).toBe(expected);
+    expect(environment).toEqual(original);
+    if (expected) expect(JSON.stringify(runtime.command?.args)).not.toContain(expected);
+  });
+
   it("parses chunked Claude stream-json and resumes with full access", async () => {
     const stdout = `${[
       JSON.stringify({ type: "system", subtype: "init", session_id: "claude-session" }),

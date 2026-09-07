@@ -171,7 +171,13 @@ export class CodexEngine extends CliAgentEngine {
     const args = request.nativeSessionId
       ? ["exec", "resume", ...shared, request.nativeSessionId, request.prompt]
       : ["exec", ...shared, request.prompt];
-    return this.execute(request, "codex", args, new CodexEventParser());
+    // codex exec reads CODEX_API_KEY; project manifests conventionally declare OPENAI_API_KEY.
+    // Scope the alias to this invocation and preserve an explicitly supplied Codex credential.
+    const environment = { ...request.environment };
+    if (environment.CODEX_API_KEY === undefined && environment.OPENAI_API_KEY !== undefined) {
+      environment.CODEX_API_KEY = environment.OPENAI_API_KEY;
+    }
+    return this.execute({ ...request, environment }, "codex", args, new CodexEventParser());
   }
 }
 

@@ -45,6 +45,7 @@ function sandboxFixture(name: string) {
     files: new Map([[".facility/plan.md", "Keep this plan across failed starts"]]),
     failNextInitialization: true,
     failStop: false,
+    asUser: (_username: string) => ({ runCommand: sandbox.runCommand }),
     runCommand: vi.fn(async () => {
       const exitCode = sandbox.failNextInitialization ? 1 : 0;
       sandbox.failNextInitialization = false;

@@ -56,6 +56,11 @@ the same workspace, agent name, engine, and model. Choosing another agent or cha
 model starts or resumes that configuration's own session while retaining every prior session and
 the shared worktree.
 
+For API-key authentication, Facility passes the current turn's `OPENAI_API_KEY` to native
+`codex exec` as `CODEX_API_KEY`. An explicitly supplied `CODEX_API_KEY` takes precedence. This
+alias applies only to the Codex invocation; it does not change project variables or Claude Code
+authentication. Without either key, Codex uses its saved native authentication.
+
 ## State and retention
 
 Story states are `ready`, `working`, `attention`, `review`, `done`, and `archived`. Archive is
@@ -70,6 +75,10 @@ Facility stops that compute while preserving the persistent disk. A failed wake 
 running workspace leaves its active compute alone. A later start reuses the same workspace identity. If the provider
 also refuses the stop, the `workspace_initialize_cleanup_failed` error names the sandbox that an
 operator must stop before retrying. Failed initialization does not queue an agent turn.
+
+Vercel initialization also waits for each authenticated preview gateway to listen. A gateway that
+exits or fails to listen causes initialization to fail, even if the application's own port is
+healthy. The project environment's readiness command checks the application separately.
 
 Vercel workspace sessions can last up to 24 hours, but its command API currently accepts at most
 five hours per command. Facility caps longer command timeouts at five hours and preserves shorter
