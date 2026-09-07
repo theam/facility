@@ -46,6 +46,16 @@ Use deterministic fakes or local servers for GitHub, OAuth, Vercel, engine, and
 other external behavior. The default suite must not need network access or live
 credentials.
 
+## Accessibility guard
+
+The web app runs axe-core over server-rendered fragments of the design-system
+primitives and the stateless review components
+(`apps/web/test/a11y.test.tsx`). The guard is fragment-scoped and
+deterministic: no browser, network, or credentials. Color contrast, focus
+order, page-level landmarks, and keyboard flows stay with the manual browser
+pass. Extend the guard when a component gains interactive state instead of
+relaxing it.
+
 ## Docker-backed workspace E2E
 
 Build the durable development image, then run the workspace acceptance tier:
