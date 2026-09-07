@@ -8,6 +8,11 @@ Facility serves Streamable HTTP MCP at `POST /mcp` from the control API. OAuth c
 resource metadata at `/.well-known/oauth-protected-resource/mcp`. API keys use the same endpoint
 with `Authorization: Bearer <key>`.
 
+With OAuth enabled, the resource metadata names the canonical MCP endpoint and its authorization
+server. Authorization-server metadata remains available at `/.well-known/oauth-authorization-server`
+and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
+still require a valid bearer token.
+
 The server exposes twenty task-oriented tools:
 
 | Tool | Result |

@@ -14,6 +14,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
 import {
+  isAuthorizationServerPath,
   oauthBrowserOrigin,
   oauthScopes,
   oidcScopesForConsent,
@@ -78,6 +79,28 @@ async function token(
   if (input.exp !== false) jwt.setExpirationTime(input.exp ?? "15m");
   return jwt.sign(input.key ?? privateKey);
 }
+
+describe("authorization-server route ownership", () => {
+  it.each([
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/register",
+    "/oauth/jwks",
+    "/.well-known/openid-configuration",
+    "/.well-known/oauth-authorization-server",
+  ])("delegates %s to the authorization server", (path) => {
+    expect(isAuthorizationServerPath(path)).toBe(true);
+  });
+  it.each([
+    "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/unknown",
+    "/oauth/interaction/consent",
+    "/mcp",
+    "/v1/projects",
+  ])("leaves %s to the application router", (path) => {
+    expect(isAuthorizationServerPath(path)).toBe(false);
+  });
+});
 
 describe("Facility OAuth access-token verification", () => {
   it("enables OAuth only when issuer, resource, and keys are all configured", () => {
@@ -266,6 +289,48 @@ describe("Facility OAuth resource-server integration", async () => {
   afterAll(async () => {
     await app.close();
     await client.end();
+  });
+
+  it("serves canonical MCP resource discovery alongside the enabled authorization server", async () => {
+    const challenge = await app.inject({ method: "POST", url: "/mcp", payload: {} });
+    expect(challenge.statusCode).toBe(401);
+    const resourceMetadata = String(challenge.headers["www-authenticate"]).match(
+      /resource_metadata="([^"]+)"/,
+    )?.[1];
+    expect(resourceMetadata).toBe(
+      "https://mcp.facility.test/.well-known/oauth-protected-resource/mcp",
+    );
+    const metadata = await app.inject({
+      method: "GET",
+      url: new URL(resourceMetadata as string).pathname,
+      headers: {
+        host: "evil.example",
+        "x-forwarded-host": "evil.example",
+        "x-forwarded-proto": "http",
+      },
+    });
+    expect(metadata.statusCode).toBe(200);
+    expect(metadata.json()).toEqual({
+      resource: audience,
+      authorization_servers: [issuer],
+      bearer_methods_supported: ["header"],
+      scopes_supported: ["facility:mcp"],
+    });
+    for (const authorization of [
+      "Bearer malformed",
+      `Bearer ${await token({ aud: "https://other.example" })}`,
+    ]) {
+      const denied = await app.inject({
+        method: "POST",
+        url: "/mcp",
+        payload: {},
+        headers: { authorization },
+      });
+      expect(denied.statusCode).toBe(401);
+    }
+    const oidc = await app.inject({ method: "GET", url: "/.well-known/openid-configuration" });
+    expect(oidc.statusCode).toBe(200);
+    expect(oidc.json().issuer).toBe(issuer);
   });
 
   it("publishes authorization metadata and registers a public PKCE client", async () => {
