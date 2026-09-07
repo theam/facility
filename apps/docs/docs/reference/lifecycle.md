@@ -77,6 +77,11 @@ retained in the snapshot. It waits for a live daemon, or removes stale PID and s
 starting one. A recycled PID is never signaled. Bootstrap preserves ownership inside Docker layers
 and volumes so container data survives the resume.
 
+New daemons use an execution-state directory tied to the kernel boot ID. Restoring a snapshot
+therefore cannot reuse runc process state from an earlier VM, while Docker's persistent data stays
+in `/workspace/.facility/docker`. Container restart policies still apply: a container deliberately
+stopped with `unless-stopped` remains stopped. A missing or malformed boot ID prevents startup.
+
 Vercel agent commands start once and are tracked by bounded completion requests to the same command
 while their output streams. Each wait is limited to 30 seconds; an expired wait is renewed
 without restarting the command. Tracking does not hold one HTTP request open for the entire
