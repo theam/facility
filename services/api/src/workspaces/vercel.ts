@@ -17,6 +17,8 @@ import {
 } from "./runtime.js";
 
 const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
+// The command API has a five-hour ceiling even for a 24-hour persistent session.
+const MAX_COMMAND_TIMEOUT_MS = 5 * 60 * 60 * 1_000;
 
 export class VercelWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "vercel" as const;
@@ -90,7 +92,10 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       args: command.args,
       cwd: command.cwd ?? "/workspace",
       env: { ...persistentWorkspaceEnvironment(), ...(command.env ?? {}) },
-      timeoutMs: command.timeoutMs,
+      timeoutMs:
+        command.timeoutMs === undefined
+          ? undefined
+          : Math.min(command.timeoutMs, MAX_COMMAND_TIMEOUT_MS),
       detached: true,
     });
     let canceled = command.signal?.aborted ?? false;
@@ -245,7 +250,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     const gatewayPorts = previewGatewayPorts(ports);
     return gatewayPorts.map(({ port, gatewayPort }) => ({
       ...port,
-      url: `https://${sandbox.domain(gatewayPort)}`,
+      url: sandbox.domain(gatewayPort),
     }));
   }
 }

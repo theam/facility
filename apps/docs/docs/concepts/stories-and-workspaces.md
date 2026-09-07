@@ -71,6 +71,11 @@ running workspace leaves its active compute alone. A later start reuses the same
 also refuses the stop, the `workspace_initialize_cleanup_failed` error names the sandbox that an
 operator must stop before retrying. Failed initialization does not queue an agent turn.
 
+Vercel workspace sessions can last up to 24 hours, but its command API currently accepts at most
+five hours per command. Facility caps longer command timeouts at five hours and preserves shorter
+timeouts. A command reaching that limit fails its turn; the persistent workspace and any saved
+native agent session remain available for a later turn.
+
 Facility has no age-based deletion rule. Storage continues to accrue until an operator removes a
 workspace. Use budgets and observability to distinguish active compute cost from retained storage,
 then set an organizational retention policy outside the agent prompt.

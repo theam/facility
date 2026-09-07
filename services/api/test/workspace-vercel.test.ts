@@ -23,7 +23,7 @@ function fakeSandbox() {
     }),
     stop: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn(),
-    domain: (port: number) => `workspace-${port}.example.test`,
+    domain: (port: number) => `https://workspace-${port}.example.test`,
   };
 }
 
@@ -62,6 +62,7 @@ describe("Vercel persistent workspace runtime", () => {
         snapshotExpiration: 0,
         keepLastSnapshots: { count: 1, expiration: 0, deleteEvicted: true },
         resume: true,
+        timeout: 24 * 60 * 60 * 1_000,
       }),
     );
     // The fake invokes the lifecycle hook: a bootstrap in both the hook and runtime would run twice.
@@ -102,6 +103,51 @@ describe("Vercel persistent workspace runtime", () => {
     environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: "x".repeat(32) },
     ports: [{ service: "web", port: 3000 }],
   };
+
+  it.each([
+    [undefined, undefined],
+    [60_000, 60_000],
+    [18_000_000, 18_000_000],
+    [18_000_001, 18_000_000],
+    [86_400_000, 18_000_000],
+  ])("bounds command timeout %s to the provider limit", async (requested, expected) => {
+    const runCommand = vi.fn().mockResolvedValue({
+      logs: async function* () {
+        yield { stream: "stdout", data: "ready" };
+        yield { stream: "stderr", data: "warning" };
+      },
+      wait: async () => ({ exitCode: 0, durationMs: 12 }),
+    });
+    const asUser = vi.fn().mockReturnValue({ runCommand });
+    sandboxApi.get.mockResolvedValue({ ...fakeSandbox(), asUser });
+    const onOutput = vi.fn();
+    await expect(
+      new VercelWorkspaceRuntime().exec(input, {
+        command: "node",
+        args: ["--version"],
+        timeoutMs: requested,
+        onOutput,
+      }),
+    ).resolves.toEqual({ exitCode: 0, stdout: "ready", stderr: "warning", durationMs: 12 });
+    expect(asUser).toHaveBeenCalledWith("node");
+    expect(runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ cmd: "node", timeoutMs: expected, detached: true }),
+    );
+    expect(onOutput.mock.calls).toEqual([
+      [{ stream: "stdout", data: "ready" }],
+      [{ stream: "stderr", data: "warning" }],
+    ]);
+  });
+
+  it("uses the SDK's full HTTPS URL for exposed and inspected preview endpoints", async () => {
+    sandboxApi.get.mockResolvedValue(fakeSandbox());
+    const runtime = new VercelWorkspaceRuntime();
+    const endpoints = await runtime.expose(input, input.ports);
+    expect(endpoints).toHaveLength(1);
+    expect(endpoints[0]?.url).toMatch(/^https:\/\/workspace-\d+\.example\.test$/);
+    const inspected = await runtime.inspect(input);
+    expect(inspected.endpoints).toEqual(endpoints);
+  });
 
   it.each([
     "create",
