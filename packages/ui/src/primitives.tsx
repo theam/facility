@@ -109,6 +109,11 @@ export function toneFor(status: string): Semantic {
   }
 }
 
+/** Text for assistive tech only: visually removed, never `display: none`. */
+export function VisuallyHidden({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cx("sr-only", className)} {...props} />;
+}
+
 /** Section separator — hairline, generous air. */
 export function Divider({ className }: { className?: string }) {
   return <div className={cx("border-t border-(--line)", className)} />;

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { MobileNav, Sidebar } from "@/components/shell/nav";
 import { RememberProject } from "@/components/shell/remember-project";
+import { SkipLink } from "@/components/shell/skip-link";
 import { Topbar } from "@/components/shell/topbar";
 import { api } from "@/lib/api";
 
@@ -44,11 +45,14 @@ export default async function ProjectLayout({
     // App shell: the viewport is the frame; only the work area (main) scrolls,
     // so full-height tabs like Product can fill it edge to edge.
     <div className="flex h-dvh">
+      <SkipLink />
       <Sidebar project={navProject} />
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileNav project={navProject} />
         {me.ok ? <Topbar me={me.data} projects={projectList} current={p} /> : null}
-        <main className="app-main min-h-0 flex-1 overflow-y-auto">{children}</main>
+        <main id="main-content" tabIndex={-1} className="app-main min-h-0 flex-1 overflow-y-auto">
+          {children}
+        </main>
       </div>
       <RememberProject projectId={p.id} />
     </div>
