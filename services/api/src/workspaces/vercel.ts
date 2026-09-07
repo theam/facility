@@ -29,9 +29,16 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     assertWorkspaceId(input.id);
     const ports = validateWorkspacePorts(input.ports);
     const gatewayPorts = previewGatewayPorts(ports);
+    const bootstrapCommand = workspaceBootstrapCommand(input);
+    let startedCompute = false;
+    const onStarted = async () => {
+      startedCompute = true;
+    };
     const sandbox = await Sandbox.getOrCreate({
       ...this.credentials,
       name: input.id,
+      onCreate: onStarted,
+      onResume: onStarted,
       image: input.image,
       persistent: true,
       snapshotExpiration: 0,
@@ -43,14 +50,16 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       tags: { facility: "workspace" },
       resume: true,
     });
-    await initializeSandbox(sandbox, input);
-    return this.handle(input, sandbox);
+    return this.initializeAndHandle(sandbox, input, bootstrapCommand, () => startedCompute);
   }
 
   async wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle> {
-    const sandbox = await this.get(workspace, true);
-    await initializeSandbox(sandbox, workspace);
-    return this.handle(workspace, sandbox);
+    const bootstrapCommand = workspaceBootstrapCommand(workspace);
+    let startedCompute = false;
+    const sandbox = await this.get(workspace, true, async () => {
+      startedCompute = true;
+    });
+    return this.initializeAndHandle(sandbox, workspace, bootstrapCommand, () => startedCompute);
   }
 
   async exec(
@@ -175,7 +184,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     }
   }
 
-  private get(workspace: WorkspaceLocator, resume: boolean) {
+  private get(
+    workspace: WorkspaceLocator,
+    resume: boolean,
+    onResume?: (sandbox: Sandbox) => Promise<void>,
+  ) {
     assertWorkspaceId(workspace.id);
     if (workspace.externalRef !== workspace.id) {
       throw new WorkspaceRuntimeError(
@@ -183,7 +196,12 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
         "Vercel workspace reference does not match its Facility identity",
       );
     }
-    return Sandbox.get({ ...this.credentials, name: workspace.externalRef, resume });
+    return Sandbox.get({
+      ...this.credentials,
+      name: workspace.externalRef,
+      resume,
+      ...(onResume ? { onResume } : {}),
+    });
   }
 
   private handle(input: CreateWorkspace, sandbox: Sandbox): WorkspaceHandle {
@@ -197,6 +215,32 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     };
   }
 
+  private async initializeAndHandle(
+    sandbox: Sandbox,
+    input: CreateWorkspace,
+    bootstrapCommand: string,
+    startedCompute: () => boolean,
+  ): Promise<WorkspaceHandle> {
+    try {
+      await initializeSandbox(sandbox, bootstrapCommand);
+      return this.handle(input, sandbox);
+    } catch (initializationError) {
+      // Preview and restore may wake an already-running workspace. Leave its active turn alone.
+      if (!startedCompute()) throw initializationError;
+      try {
+        // Stop only compute this operation created or resumed; preserve the persistent disk.
+        if (sandbox.status !== "stopped") await sandbox.stop();
+      } catch (cleanupError) {
+        throw new WorkspaceRuntimeError(
+          "workspace_initialize_cleanup_failed",
+          `Workspace ${input.id} initialization failed and compute could not be stopped; stop this sandbox by its workspace name before retrying`,
+          { cause: new AggregateError([initializationError, cleanupError]) },
+        );
+      }
+      throw initializationError;
+    }
+  }
+
   private endpoints(sandbox: Sandbox, ports: CreateWorkspace["ports"] = []): PreviewEndpoint[] {
     const gatewayPorts = previewGatewayPorts(ports);
     return gatewayPorts.map(({ port, gatewayPort }) => ({
@@ -206,10 +250,10 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
   }
 }
 
-async function initializeSandbox(sandbox: Sandbox, input: CreateWorkspace) {
+async function initializeSandbox(sandbox: Sandbox, bootstrapCommand: string) {
   const result = await sandbox.runCommand({
     cmd: "sh",
-    args: ["-lc", workspaceBootstrapCommand(input)],
+    args: ["-lc", bootstrapCommand],
     sudo: true,
     timeoutMs: 180_000,
   });
