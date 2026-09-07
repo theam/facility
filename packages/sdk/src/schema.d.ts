@@ -6328,6 +6328,7 @@ export interface operations {
                         event: "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "check_suite" | "workflow_run";
                         actions?: string[];
                         labels?: string[];
+                        command?: string;
                     })[];
                     prompt: string;
                 };

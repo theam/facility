@@ -1,16 +1,20 @@
 import type { AgentTrigger } from "@facility/agents";
 import {
+  auditEvents,
   type FacilityDb,
+  githubInstallations,
   githubWebhookEvents,
   projectRepositories,
   projects,
   stories,
 } from "@facility/db";
 import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type { ProjectManifest, ProjectManifestSource } from "../workspaces/project-environment.js";
 import { type AgentCatalogService, manifestFromProjection } from "./catalog.js";
+import { githubIssueCommandMatches, githubSenderCanStartAgent } from "./github-command-policy.js";
 
 const SUPPORTED_EVENTS = new Set([
   "issues",
@@ -38,6 +42,7 @@ export class GithubAgentTriggerService {
     private readonly projectManifests: ProjectManifestSource,
     private readonly defaultImage: string,
     private readonly mirror?: GithubMirrorService,
+    private readonly githubFactory?: GithubClientFactory,
   ) {}
 
   async handleInbound(inboundEventId: string) {
@@ -49,23 +54,32 @@ export class GithubAgentTriggerService {
         .limit(1)
     )[0];
     if (!event?.verified) return { matched: 0, queued: 0, merged: 0 };
-    await this.mirror?.handleWebhook({
-      id: event.id,
-      orgId: event.orgId,
-      eventType: event.eventType,
-      payload: event.payload as Record<string, unknown>,
-    });
-    const result = await this.handle({
-      id: event.id,
-      orgId: event.orgId,
-      eventType: event.eventType,
-      payload: event.payload as Record<string, unknown>,
-    });
-    await this.db
-      .update(githubWebhookEvents)
-      .set({ processedAt: new Date(), error: null })
-      .where(eq(githubWebhookEvents.id, inboundEventId));
-    return result;
+    try {
+      await this.mirror?.handleWebhook({
+        id: event.id,
+        orgId: event.orgId,
+        eventType: event.eventType,
+        payload: event.payload as Record<string, unknown>,
+      });
+      const result = await this.handle({
+        id: event.id,
+        orgId: event.orgId,
+        eventType: event.eventType,
+        payload: event.payload as Record<string, unknown>,
+      });
+      await this.db
+        .update(githubWebhookEvents)
+        .set({ processedAt: new Date(), error: null })
+        .where(eq(githubWebhookEvents.id, inboundEventId));
+      return result;
+    } catch (error) {
+      // Provider errors may contain credential-bearing request headers; persist only a safe code.
+      await this.db
+        .update(githubWebhookEvents)
+        .set({ processedAt: null, error: "github_webhook_processing_failed" })
+        .where(eq(githubWebhookEvents.id, inboundEventId));
+      throw error;
+    }
   }
 
   async handle(event: GithubEvent) {
@@ -82,6 +96,7 @@ export class GithubAgentTriggerService {
           id: projects.id,
           orgId: projects.orgId,
           repositoryId: projectRepositories.id,
+          installationId: projectRepositories.installationId,
         })
         .from(projectRepositories)
         .innerJoin(
@@ -128,6 +143,67 @@ export class GithubAgentTriggerService {
         branch: safeEventBranch,
       });
     }
+    const requiresHumanPermission =
+      event.eventType === "issues" || event.eventType === "issue_comment";
+    if (requiresHumanPermission && !this.githubFactory) {
+      return this.deny(event, project.id, "github_credentials_unavailable");
+    }
+    const installation =
+      requiresHumanPermission && project.installationId
+        ? (
+            await this.db
+              .select()
+              .from(githubInstallations)
+              .where(
+                and(
+                  eq(githubInstallations.orgId, event.orgId),
+                  eq(githubInstallations.id, project.installationId),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : undefined;
+    if (requiresHumanPermission && (!installation || installation.suspendedAt)) {
+      return this.deny(event, project.id, "github_installation_unavailable");
+    }
+    const projections = await this.catalog.list(event.orgId, project.id);
+    const manifests = projections.map(manifestFromProjection);
+    const configuredCommands = new Set(
+      manifests.flatMap((manifest) =>
+        manifest.triggers.flatMap((trigger) =>
+          trigger.type === "github" && trigger.command ? [trigger.command] : [],
+        ),
+      ),
+    );
+    const matches = manifests
+      .filter((manifest) => manifest.enabled)
+      .flatMap((manifest) =>
+        manifest.triggers
+          .filter(
+            (trigger): trigger is Extract<AgentTrigger, { type: "github" }> =>
+              trigger.type === "github" && triggerMatches(trigger, event, configuredCommands),
+          )
+          .map((trigger) => ({ manifest, trigger })),
+      );
+    if (matches.length === 0) {
+      return { matched: 0, queued: 0, merged: 0 };
+    }
+    if (requiresHumanPermission) {
+      if (
+        !installation ||
+        !this.githubFactory ||
+        !(await githubSenderCanStartAgent({
+          factory: this.githubFactory,
+          installationId: installation.installationId,
+          owner,
+          repo: name,
+          sender: event.payload.sender,
+        }))
+      ) {
+        return this.deny(event, project.id, "github_sender_not_authorized");
+      }
+    }
+
     const identity = linkedStory
       ? {
           provider: linkedStory.provider as "github" | "manual" | "schedule",
@@ -141,20 +217,6 @@ export class GithubAgentTriggerService {
           title: eventIdentity.title,
           branch: safeEventBranch,
         };
-    const projections = await this.catalog.list(event.orgId, project.id);
-    const matches = projections
-      .map(manifestFromProjection)
-      .filter((manifest) => manifest.enabled)
-      .flatMap((manifest) =>
-        manifest.triggers
-          .filter(
-            (trigger): trigger is Extract<AgentTrigger, { type: "github" }> =>
-              trigger.type === "github" && triggerMatches(trigger, event),
-          )
-          .map((trigger) => ({ manifest, trigger })),
-      );
-    if (matches.length === 0) return { matched: 0, queued: 0, merged: 0 };
-
     const projectManifest = await this.projectManifests.load(event.orgId, project.id);
     let queued = 0;
     for (const { manifest, trigger } of matches) {
@@ -186,6 +248,22 @@ export class GithubAgentTriggerService {
       if (result.queued.created) queued += 1;
     }
     return { matched: matches.length, queued, merged: 0 };
+  }
+
+  private async deny(event: GithubEvent, projectId: string, reason: string) {
+    await this.db
+      .insert(auditEvents)
+      .values({
+        id: `github-trigger-denied:${event.orgId}:${event.id}`,
+        orgId: event.orgId,
+        projectId,
+        actor: { type: "service", id: `github:${sender(event.payload)}` },
+        action: "github.agent_trigger.denied",
+        target: { type: "github_webhook", id: event.id },
+        payload: { reason, eventType: event.eventType },
+      })
+      .onConflictDoNothing();
+    return { matched: 0, queued: 0, merged: 0 };
   }
 
   private async markMerged(projectId: string, repositoryId: string, event: GithubEvent) {
@@ -260,10 +338,19 @@ export class GithubAgentTriggerService {
   }
 }
 
-function triggerMatches(trigger: Extract<AgentTrigger, { type: "github" }>, event: GithubEvent) {
+function triggerMatches(
+  trigger: Extract<AgentTrigger, { type: "github" }>,
+  event: GithubEvent,
+  configuredCommands: ReadonlySet<string>,
+) {
   if (trigger.event !== event.eventType) return false;
   const action = string(event.payload.action);
   if (trigger.actions && (!action || !trigger.actions.includes(action))) return false;
+  if (
+    trigger.command &&
+    !githubIssueCommandMatches(trigger.command, configuredCommands, event.eventType, event.payload)
+  )
+    return false;
   if (trigger.labels) {
     const labels = eventLabels(event.payload);
     if (!trigger.labels.every((label) => labels.has(label.toLowerCase()))) return false;
