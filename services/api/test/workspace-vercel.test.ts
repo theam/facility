@@ -111,6 +111,9 @@ describe("Vercel persistent workspace runtime", () => {
     expect(bootstrap).not.toMatch(/chown\s+-R/);
     expect(bootstrap).toContain('cat "/proc/$docker_pid/comm"');
     expect(bootstrap).not.toContain('kill "$docker_pid"');
+    expect(bootstrap).toContain("cat /proc/sys/kernel/random/boot_id");
+    expect(bootstrap).toContain('--exec-root="/var/run/facility-docker-$docker_boot_id"');
+    expect(bootstrap).toContain("--data-root=/workspace/.facility/docker");
   });
 
   const input = {

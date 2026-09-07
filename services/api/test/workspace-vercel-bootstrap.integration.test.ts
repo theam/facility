@@ -16,6 +16,7 @@ vi.mock("@vercel/sandbox", async (original) => ({
 import { VercelWorkspaceRuntime } from "../src/workspaces/vercel.js";
 
 const cleanups: (() => Promise<void>)[] = [];
+const bootId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
@@ -23,11 +24,15 @@ afterEach(async () => {
 async function localProvider(
   brokenGateway: boolean,
   dockerState: "ready" | "stale-pid" | "starting" = "ready",
+  kernelBootId: string | null = bootId,
 ) {
   const root = await mkdtemp(join(tmpdir(), "facility-vercel-bootstrap-"));
   const bin = join(root, "bin");
   await mkdir(bin);
   await mkdir(join(root, "run"));
+  await mkdir(join(root, "proc/sys/kernel/random"), { recursive: true });
+  if (kernelBootId !== null)
+    await writeFile(join(root, "proc/sys/kernel/random/boot_id"), `${kernelBootId}\n`);
   // Own the colliding PID, so even a regression that signals it cannot touch
   // an unrelated host process. /proc itself remains a deterministic fake.
   const colliding = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -74,7 +79,21 @@ async function localProvider(
         : dockerState === "stale-pid"
           ? `test -f '${root}/docker-ready'`
           : `if test -f '${root}/docker-waited'; then exit 0; fi; touch '${root}/docker-waited'; exit 1`,
-    dockerd: `test ! -d '${root}/run/docker/containerd' || exit 8\ntest ! -f '${root}/run/docker.pid' || { echo 'stale daemon PID' >&2; exit 1; }\necho started > '${root}/docker-started'\ntouch '${root}/docker-ready'`,
+    dockerd: `test ! -d '${root}/run/docker/containerd' || exit 8
+test ! -f '${root}/run/docker.pid' || { echo 'stale daemon PID' >&2; exit 1; }
+exec_root='${root}/run/docker'
+for arg in "$@"; do
+  case "$arg" in --exec-root=*) exec_root="\${arg#--exec-root=}" ;; esac
+done
+if test -e "$exec_root/runtime-runc/moby/retained"; then
+  echo 'container with given ID already exists' >&2
+  exit 1
+fi
+mkdir -p "$exec_root/runtime-runc/moby"
+echo 'transient container state' > "$exec_root/runtime-runc/moby/retained"
+echo "$exec_root" >> '${root}/docker-exec-roots'
+echo started > '${root}/docker-started'
+touch '${root}/docker-ready'`,
     // Model the ownership boundary: recursively reassigning a persisted Docker
     // tree would corrupt container UIDs, even when daemon startup succeeds.
     chown: 'test "$1" != -R || { echo "recursive ownership reset" >&2; exit 1; }',
@@ -204,8 +223,64 @@ it("starts Docker after a restored PID collides with an unrelated process, prese
   expect(fixture.stop).not.toHaveBeenCalled();
 });
 
+it("restores containers with fresh execution state on each boot, preserving old state and data", async () => {
+  const { fixture, root } = await localProvider(false, "stale-pid");
+  const priorRoot = join(root, "run/docker/runtime-runc/moby");
+  const volume = join(root, ".facility/docker/volumes/database");
+  await mkdir(priorRoot, { recursive: true });
+  await writeFile(join(priorRoot, "retained"), "snapshot process state");
+  await mkdir(volume, { recursive: true });
+  await writeFile(join(volume, "retained"), "seeded database");
+  const runtime = new VercelWorkspaceRuntime();
+  const input = { id: fixture.name, image: "runner:test" };
+  await runtime.create(input);
+  // A second acquire in this boot must keep the already-running daemon.
+  await runtime.create(input);
+  const firstRoot = join(root, `run/facility-docker-${bootId}`);
+  expect(await readFile(join(root, "docker-exec-roots"), "utf8")).toBe(`${firstRoot}\n`);
+
+  // Model a snapshot restore: all disk files survive, but readiness and boot ID change.
+  const nextBootId = "11111111-2222-4333-8444-555555555555";
+  await rm(join(root, "docker-ready"));
+  await writeFile(join(root, "proc/sys/kernel/random/boot_id"), `${nextBootId}\n`);
+  await runtime.create(input);
+  expect(await readFile(join(root, "docker-exec-roots"), "utf8")).toBe(
+    `${firstRoot}\n${join(root, `run/facility-docker-${nextBootId}`)}\n`,
+  );
+  expect(await readFile(join(priorRoot, "retained"), "utf8")).toBe("snapshot process state");
+  expect(await readFile(join(firstRoot, "runtime-runc/moby/retained"), "utf8")).toBe(
+    "transient container state\n",
+  );
+  expect(await readFile(join(volume, "retained"), "utf8")).toBe("seeded database");
+  expect(fixture.stop).not.toHaveBeenCalled();
+});
+
+it.each([
+  null,
+  "",
+  "../../workspace",
+  "a".repeat(36),
+  `${bootId}\nanother-line`,
+])("refuses Docker startup with missing or malformed kernel boot ID %s", async (kernelBootId) => {
+  const { fixture, root, dockerPid, colliding } = await localProvider(
+    false,
+    "stale-pid",
+    kernelBootId,
+  );
+  await expect(
+    new VercelWorkspaceRuntime().create({ id: fixture.name, image: "runner:test" }),
+  ).rejects.toMatchObject({ code: "workspace_initialize_failed" });
+  expect(await readFile(join(root, "run/docker.pid"), "utf8")).toBe(String(dockerPid));
+  expect(await readFile(join(root, "run/docker.sock"), "utf8")).toBe("existing socket");
+  await expect(readFile(join(root, "docker-started"), "utf8")).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(colliding.signalCode).toBeNull();
+  expect(fixture.stop).toHaveBeenCalledOnce();
+});
+
 it("waits for an existing Docker daemon without removing its PID or launching another", async () => {
-  const { fixture, appPort, root, dockerPid } = await localProvider(false, "starting");
+  const { fixture, appPort, root, dockerPid } = await localProvider(false, "starting", null);
   await new VercelWorkspaceRuntime().create({
     id: fixture.name,
     image: "runner:test",

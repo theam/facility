@@ -323,11 +323,18 @@ function workspaceBootstrapCommand(input: CreateWorkspace) {
     esac
   fi
   if test "$docker_running" = 0; then
+    # Snapshots retain runc/containerd process state, but the resumed VM has no
+    # corresponding processes. Keep execution state per boot and data persistent.
+    docker_boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+    if test "\${#docker_boot_id}" -ne 36 || ! printf '%s\\n' "$docker_boot_id" | grep -Eq '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'; then
+      echo "Cannot start Docker without a valid kernel boot ID" >&2
+      exit 1
+    fi
     # A restored disk can contain a PID now owned by an unrelated process.
     # Remove only stale daemon artifacts; never signal that recycled PID.
     rm -f /var/run/docker.pid /var/run/docker.sock
     rm -rf /var/run/docker/containerd
-    nohup dockerd --host=unix:///var/run/docker.sock --data-root=/workspace/.facility/docker --storage-driver=vfs >/workspace/.facility/dockerd.log 2>&1 &
+    nohup dockerd --host=unix:///var/run/docker.sock --exec-root="/var/run/facility-docker-$docker_boot_id" --data-root=/workspace/.facility/docker --storage-driver=vfs >/workspace/.facility/dockerd.log 2>&1 &
   fi
 fi`,
     `attempt=0
