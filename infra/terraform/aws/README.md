@@ -60,6 +60,20 @@ After deployment, wait for ECS stability, check `application_url/readyz`,
 inspect worker logs, configure the GitHub webhook from the output, connect MCP
 at `mcp_url`, and run the disposable workspace acceptance guide.
 
+## Image retention
+
+ECR expires only untagged images older than 30 days. Immutable tagged releases
+remain available for ECS restarts, scaling, and rollback even after newer images
+are published. Tagged images have no automatic age or count limit: operators
+must monitor ECR storage and image quotas and explicitly reclaim unused releases.
+A count-based expiration rule cannot know whether ECS still needs an old image.
+Remove a release tag only after confirming that no service, task definition, or
+retained rollback procedure still needs its image digest.
+
+ECR also preserves child images referenced by a retained manifest list. See the
+[AWS lifecycle evaluation rules](https://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html)
+before changing retention for multi-platform images or attached artifacts.
+
 ## Recovery
 
 RDS backup and Vercel workspace snapshots are separate recovery layers. Preserve

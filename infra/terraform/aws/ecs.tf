@@ -21,11 +21,12 @@ resource "aws_ecr_lifecycle_policy" "service" {
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Keep the latest 25 releases"
+      description  = "Expire untagged images after 30 days; preserve tagged deployments"
       selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 25
+        tagStatus   = "untagged"
+        countType   = "sinceImagePushed"
+        countUnit   = "days"
+        countNumber = 30
       }
       action = { type = "expire" }
     }]

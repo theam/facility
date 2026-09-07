@@ -47,6 +47,19 @@ run "vercel_workspace_control_plane" {
   }
 
   assert {
+    condition = length(aws_ecr_lifecycle_policy.service) == 2 && alltrue([
+      for policy in aws_ecr_lifecycle_policy.service : length(jsondecode(policy.policy).rules) > 0 && alltrue([
+        for rule in jsondecode(policy.policy).rules :
+        rule.selection.tagStatus == "untagged" &&
+        rule.selection.countType == "sinceImagePushed" &&
+        rule.selection.countUnit == "days" &&
+        rule.selection.countNumber >= 30
+      ])
+    ])
+    error_message = "Image expiration must preserve tagged deployments and rollback images, removing only untagged images at least 30 days old."
+  }
+
+  assert {
     condition     = aws_db_instance.facility.skip_final_snapshot && aws_db_instance.facility.final_snapshot_identifier == null
     error_message = "Disposable deployments must skip the final snapshot without setting an incompatible identifier."
   }
