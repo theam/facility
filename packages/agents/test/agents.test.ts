@@ -79,6 +79,26 @@ Implement the requested story in the persistent workspace.
 }
 
 describe("agent manifests", () => {
+  it("accepts explicit issue commands and rejects incompatible event actions", () => {
+    const command = manifest()
+      .replace("event: issues", "event: issue_comment")
+      .replace("actions: [assigned]", "actions: [created]\n    command: /builder");
+    expect(parseAgentManifest(command, "builder.md").triggers[3]).toMatchObject({
+      type: "github",
+      event: "issue_comment",
+      actions: ["created"],
+      command: "/builder",
+    });
+    for (const source of [
+      command.replace("event: issue_comment", "event: issues"),
+      command.replace("actions: [created]", "actions: [edited]"),
+      command.replace("actions: [created]", "actions: [created, edited]"),
+      command.replace("command: /builder", "command: builder"),
+    ]) {
+      expect(() => parseAgentManifest(source, "builder.md")).toThrow();
+    }
+  });
+
   it("parses the engine, model, triggers, prompt, and stable content hash", () => {
     const first = parseAgentManifest(manifest(), "builder.md");
     const second = parseAgentManifest(manifest().replace(/\n/g, "\r\n"), "builder.md");

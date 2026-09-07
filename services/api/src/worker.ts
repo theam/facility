@@ -4,6 +4,7 @@ import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
+import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import { createStoryDomain } from "./story-domain.js";
 
@@ -46,27 +47,10 @@ export async function startWorker() {
   }
   for (const queue of queues) {
     if (queue === "github.webhook") {
-      await boss.work<{ inboundEventId?: string }>(
-        queue,
-        { batchSize: 1_000, includeMetadata: true, pollingIntervalSeconds: 0.5 },
-        async (jobs) => {
-          const startedAt = Date.now();
-          for (const job of jobs) {
-            if (job.data.inboundEventId) {
-              await storyDomain.githubTriggers.handleInbound(job.data.inboundEventId);
-            }
-          }
-          const oldestCreatedAt = Math.min(...jobs.map((job) => job.createdOn.getTime()));
-          logger.info(
-            {
-              queue,
-              batchSize: jobs.length,
-              queueWaitMs: Math.max(0, startedAt - oldestCreatedAt),
-              handlerMs: Date.now() - startedAt,
-            },
-            "worker completed GitHub webhook batch",
-          );
-        },
+      await registerGithubWebhookWorker(
+        boss,
+        (inboundEventId) => storyDomain.githubTriggers.handleInbound(inboundEventId),
+        logger,
       );
       continue;
     }

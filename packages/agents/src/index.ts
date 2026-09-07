@@ -49,8 +49,26 @@ const GithubTrigger = z
     ]),
     actions: z.array(z.string().min(1).max(64)).min(1).optional(),
     labels: z.array(z.string().min(1).max(128)).min(1).optional(),
+    command: z
+      .string()
+      .regex(/^\/[a-z][a-z0-9-]{0,63}$/)
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((trigger, context) => {
+    if (
+      trigger.command &&
+      (trigger.event !== "issue_comment" ||
+        trigger.actions?.length !== 1 ||
+        trigger.actions[0] !== "created")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["command"],
+        message: "commands require issue_comment with actions: [created]",
+      });
+    }
+  });
 
 export const AgentTriggerSchema = z.union([InteractiveTrigger, ScheduleTrigger, GithubTrigger]);
 
