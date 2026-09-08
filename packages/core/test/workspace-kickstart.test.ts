@@ -61,4 +61,73 @@ describe("Facility 0.12 workspace kickstart", () => {
       renderWorkspaceKickstart({ repository: "acme/app", start: "pnpm dev", servicePort: 0 }),
     ).toThrow(/between 1 and 65535/);
   });
+
+  it("quotes untrusted model ids and commands so they cannot inject YAML", () => {
+    const hostileModel = "gpt-5.6-sol\nenabled: false";
+    const hostileStart = 'docker compose up -d && echo "$(id)" && echo "db: ready"';
+    const result = renderWorkspaceKickstart({
+      repository: "acme/payments",
+      setup: "pnpm install --frozen-lockfile && echo 'setup: done'",
+      start: hostileStart,
+      ready: "curl --fail 'http://localhost:3000/health'",
+      models: {
+        build: "claude-fable-5 # not-a-comment",
+        review: 'foo"bar # pwned',
+        plan: "$(id)",
+        codexBuild: hostileModel,
+        codexPlan: "|",
+      },
+    });
+
+    const manifest = fileContent(result, ".facility.yml");
+    expect(manifest).toContain(
+      `setup: ${JSON.stringify("pnpm install --frozen-lockfile && echo 'setup: done'")}`,
+    );
+    expect(manifest).toContain(`start: ${JSON.stringify(hostileStart)}`);
+    expect(manifest).toContain(
+      `ready: ${JSON.stringify("curl --fail 'http://localhost:3000/health'")}`,
+    );
+    expect(manifest).not.toMatch(/^ {2}start: docker compose/m);
+
+    const builder = fileContent(result, ".agents/builder.md");
+    expect(builder).toContain(`model: ${JSON.stringify(hostileModel)}`);
+    expect(builder).toMatch(/^enabled: true$/m);
+    expect(builder).not.toMatch(/^enabled: false$/m);
+
+    expect(fileContent(result, ".agents/architect.md")).toContain(
+      `model: ${JSON.stringify("$(id)")}`,
+    );
+    expect(fileContent(result, ".agents/security-audit.md")).toContain(
+      `model: ${JSON.stringify("$(id)")}`,
+    );
+    expect(fileContent(result, ".agents/pr-reviewer.md")).toContain(
+      `model: ${JSON.stringify('foo"bar # pwned')}`,
+    );
+    expect(fileContent(result, ".agents/architect.md")).not.toContain("model: $(id)");
+
+    const doctor = fileContent(result, ".agents/ci-doctor.md");
+    expect(doctor).toContain(`model: ${JSON.stringify("|")}`);
+    expect(doctor).toMatch(/^options:$/m);
+    expect(doctor).toMatch(/^ {2}reasoning_effort: high$/m);
+  });
+
+  it("keeps ordinary model ids as quoted YAML scalars", () => {
+    const result = renderWorkspaceKickstart({
+      repository: "acme/payments",
+      start: "pnpm dev",
+      models: { codexBuild: "gpt-5.6-sol", plan: "claude-opus-4-8-20260101" },
+    });
+    expect(fileContent(result, ".agents/builder.md")).toContain(
+      `model: ${JSON.stringify("gpt-5.6-sol")}`,
+    );
+    expect(fileContent(result, ".agents/architect.md")).toContain(
+      `model: ${JSON.stringify("claude-opus-4-8-20260101")}`,
+    );
+  });
 });
+
+function fileContent(result: { files: Array<{ path: string; content: string }> }, path: string) {
+  const file = result.files.find((candidate) => candidate.path === path);
+  if (!file) throw new Error(`missing ${path}`);
+  return file.content;
+}
