@@ -198,6 +198,69 @@ test("local doctor validates the 0.12 contract and preserves its JSON output", (
   assert.match(invalidPort.stdout, /between 1 and 65535/);
 });
 
+test("doctor inspects agent frontmatter only and accepts quoted models and mcp/ui triggers", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const init = runCli(
+    ["init", "--yes", `--dir=${dir}`, "--repo=acme/demo-app", "--start=npm run dev"],
+    dir,
+  );
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+
+  const builderPath = join(dir, ".agents/builder.md");
+  const original = readFileSync(builderPath, "utf8");
+
+  writeFileSync(
+    builderPath,
+    `${original.trimEnd()}\n\npermissions:\n  contents: read\n`,
+  );
+  const promptPermissions = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(promptPermissions.status, 0, promptPermissions.stdout + promptPermissions.stderr);
+
+  writeFileSync(
+    builderPath,
+    original.replace(/^name: builder$/m, "name: not-builder") + "\nname: builder\n",
+  );
+  const hiddenName = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(hiddenName.status, 1);
+  assert.match(hiddenName.stdout, /name must be builder/);
+
+  writeFileSync(
+    builderPath,
+    original.replace(/^model: .+$/m, 'model: "gpt-5.6-sol with spaces"'),
+  );
+  const quotedModel = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(quotedModel.status, 0, quotedModel.stdout + quotedModel.stderr);
+
+  writeFileSync(
+    builderPath,
+    [
+      "---",
+      "name: builder",
+      "description: Implements a complete story.",
+      "engine: codex",
+      "model: gpt-5.6-sol",
+      "enabled: true",
+      "triggers:",
+      "  - type: mcp",
+      "  - type: ui",
+      "---",
+      "",
+      "# Builder",
+      "",
+      "Complete the story.",
+      "",
+    ].join("\n"),
+  );
+  const interactiveOnly = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(interactiveOnly.status, 0, interactiveOnly.stdout + interactiveOnly.stderr);
+
+  writeFileSync(builderPath, original.replace(/^enabled: true$/m, "permissions: {}\nenabled: true"));
+  const frontmatterPermissions = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(frontmatterPermissions.status, 1);
+  assert.match(frontmatterPermissions.stdout, /per-agent access controls are not supported/);
+});
+
 test("local commands reject unknown and valueless flags and legacy commands", () => {
   const unknown = runCli(["doctor", "--jsoon"]);
   assert.equal(unknown.status, 1);

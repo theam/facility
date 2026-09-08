@@ -53,15 +53,32 @@ function checkAgent(dir, name) {
   const path = join(dir, relative);
   if (!existsSync(path)) return failed(relative, "missing");
   const source = readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
-  if (!source.startsWith("---\n") || !/\n---\n[\s\S]*\S/.test(source)) return failed(relative, "invalid frontmatter or empty prompt");
-  if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(source)) return failed(relative, `name must be ${name}`);
-  if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(source)) return failed(relative, "engine must be claude_code or codex");
-  if (!/^model:\s*\S+\s*$/m.test(source)) return failed(relative, "model is missing");
-  if (!/^triggers:\s*$/m.test(source) || !/^\s{2}- type:\s*(?:manual|schedule|github)\s*$/m.test(source)) {
+  const parsed = splitFrontmatter(source);
+  if (!parsed || !parsed.prompt.trim()) return failed(relative, "invalid frontmatter or empty prompt");
+  const { frontmatter } = parsed;
+  if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(frontmatter)) {
+    return failed(relative, `name must be ${name}`);
+  }
+  if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(frontmatter)) {
+    return failed(relative, "engine must be claude_code or codex");
+  }
+  if (!/^model:\s*\S/m.test(frontmatter)) return failed(relative, "model is missing");
+  if (
+    !/^triggers:\s*$/m.test(frontmatter) ||
+    !/^\s{2}- type:\s*(?:manual|schedule|github|mcp|ui)\s*$/m.test(frontmatter)
+  ) {
     return failed(relative, "at least one supported trigger is required");
   }
-  if (/^(?:permissions|sandbox|tools):/m.test(source)) return failed(relative, "per-agent access controls are not supported");
+  if (/^(?:permissions|sandbox|tools):/m.test(frontmatter)) {
+    return failed(relative, "per-agent access controls are not supported");
+  }
   return passed(relative, "valid agent manifest");
+}
+
+function splitFrontmatter(source) {
+  const match = /^---\n([\s\S]*?)\n---(?:\n|$)([\s\S]*)$/.exec(source);
+  if (!match) return null;
+  return { frontmatter: match[1] ?? "", prompt: match[2] ?? "" };
 }
 
 function passed(label, detail) {
