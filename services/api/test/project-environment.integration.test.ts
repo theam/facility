@@ -690,6 +690,27 @@ environment:
       return !serialized.includes(secret) && serialized.includes("[REDACTED]");
     });
   });
+
+  it("rejects a repository default branch that is git revision syntax", async () => {
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    await expect(
+      environment.prepare({
+        orgId,
+        projectId,
+        workspace,
+        manifest,
+        credentials: {
+          ...credentials,
+          repositories: credentials.repositories.map((repository) =>
+            repository.role === "primary"
+              ? { ...repository, defaultBranch: "main..evil" }
+              : repository,
+          ),
+        },
+        branch: "facility/story-environment",
+      }),
+    ).rejects.toMatchObject({ code: "repository_branch_invalid" });
+  });
 });
 
 async function createBareRepository(root: string, owner: string, name: string) {
