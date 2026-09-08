@@ -1,3 +1,8 @@
+import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse as parseEnvFile } from "dotenv";
 import { describe, expect, it } from "vitest";
 import { readConfig } from "../src/config.js";
 
@@ -169,3 +174,53 @@ describe("Facility 0.12 configuration", () => {
     });
   });
 });
+
+// `pnpm dev` creates .env from .env.example and generates only the two values the
+// template cannot publish. Every other key reaches readConfig exactly as shipped, so
+// a key added to the template blank, or a schema field that stops tolerating a blank,
+// breaks a first run before a contributor has changed anything. The cases above build
+// their own environment objects and scripts/dev.test.mjs writes its own template, so
+// nothing else pairs the published template with the schema that has to accept it.
+describe("the development environment generated from .env.example", () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const template = parseEnvFile(readFileSync(join(repoRoot, ".env.example"), "utf8"));
+  const generatedByDev = {
+    SECRET_MASTER_KEY: validEnv.SECRET_MASTER_KEY,
+    FACILITY_OAUTH_JWKS: developmentOauthJwks(),
+  };
+  const firstRun = { ...template, ...generatedByDev };
+
+  it("still publishes blank optional keys, so this case cannot go vacuous", () => {
+    const blank = Object.entries(template)
+      .filter(([key, value]) => value.trim() === "" && !(key in generatedByDev))
+      .map(([key]) => key);
+    expect(blank).toContain("VERCEL_TOKEN");
+    expect(blank).toContain("GITHUB_APP_ID");
+  });
+
+  it("boots with only the generated secrets filled in", () => {
+    expect(() => readConfig(firstRun)).not.toThrow();
+    expect(readConfig(firstRun)).toMatchObject({
+      workspaceDriver: "docker",
+      publicUrl: "http://localhost:4400",
+      webUrl: "http://localhost:3400",
+    });
+  });
+
+  it("resolves every blank published key as unset rather than an empty string", () => {
+    const blankValued = Object.entries(readConfig(firstRun))
+      .filter(([, value]) => value === "")
+      .map(([field]) => field);
+    expect(blankValued).toEqual([]);
+  });
+});
+
+// The shape scripts/dev.mjs generates for a first run.
+function developmentOauthJwks() {
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  return JSON.stringify({
+    keys: [
+      { ...privateKey.export({ format: "jwk" }), alg: "ES256", use: "sig", kid: randomUUID() },
+    ],
+  });
+}
