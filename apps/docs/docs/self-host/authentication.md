@@ -97,9 +97,15 @@ the API from the deployment secret store.
 
 ## Authorization behavior
 
-Any active project maintainer can read and continue the same story. Every project operation checks
-organization and project scope. Cross-project lookups return 404 so scoped credentials cannot use
-the API as an enumeration oracle.
+Human authorization is organization-wide. A role grants its permissions across every project in the
+organization, so any active member holding `workspaces:execute` can read and continue any story in
+it. There is no project membership and no project dimension on a role: "maintainer on one
+repository" cannot be expressed.
+
+The project dimension exists for API keys. A project-scoped key is pinned to one project, and a
+cross-project lookup returns 404 rather than 403 so a key cannot use the API as an enumeration
+oracle. Reach for a scoped key when automation should be contained to one project, and note the
+trade-off: audit events then record the key rather than a person.
 
 Roles and route permissions govern humans and API keys. They do not change an agent manifest into
 a restricted workspace profile: once a principal is allowed to execute an agent in a project, the
@@ -111,13 +117,13 @@ requests remain available in structured service logs and can be correlated with 
 ## Preview authentication
 
 Preview cookies are separate from control-plane sessions. A one-time handoff issues an expiring
-preview cookie; each proxied request revalidates the user, project membership, workspace, service,
-expiry, and revocation status.
+preview cookie; each proxied request revalidates the user, organization membership, workspace,
+service, expiry, and revocation status.
 
 The preview origin must be on a different registered site from Facility control origins. Opening a
 service creates a one-time handoff; consuming it sets a host-only preview cookie. The preview proxy
-rechecks membership on each HTTP request and WebSocket upgrade, so revoking membership, the
-session, or the workspace stops continued access.
+rechecks organization membership on each HTTP request and WebSocket upgrade, so removing the member,
+revoking the session, or deleting the workspace stops continued access.
 
 Never send a Facility API key, OAuth token, or control-plane session cookie to the application
 running inside a preview.
