@@ -23,6 +23,7 @@ import {
   ProjectEnvironmentService,
 } from "./workspaces/project-environment.js";
 import type { WorkspaceRuntime } from "./workspaces/runtime.js";
+import { WorkspaceVariablesService } from "./workspaces/variables.js";
 import { VercelWorkspaceRuntime } from "./workspaces/vercel.js";
 
 export type StoryDomain = {
@@ -32,6 +33,7 @@ export type StoryDomain = {
   credentials: GithubWorkspaceCredentialBroker;
   projectManifests: GithubProjectManifestSource;
   environment: ProjectEnvironmentService;
+  variables: WorkspaceVariablesService;
   engines: AgentEngineRegistry;
   dispatcher: TurnDispatcher;
   previews: WorkspacePreviewService;
@@ -68,7 +70,14 @@ export function createStoryDomain(input: {
   const credentials = new GithubWorkspaceCredentialBroker(input.db, tokenFactory);
   const costs = new CostBudgetService(input.db);
   const projectManifests = new GithubProjectManifestSource(input.db, githubFactory);
-  const environment = new ProjectEnvironmentService(input.db, runtime);
+  const variables = new WorkspaceVariablesService(input.db, input.config.secretMasterKey);
+  const environment = new ProjectEnvironmentService(
+    input.db,
+    runtime,
+    undefined,
+    undefined,
+    (scope) => variables.values(scope),
+  );
   const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
     await input.enqueue("turns.dispatch", {
       orgId: turn.orgId,
@@ -124,6 +133,7 @@ export function createStoryDomain(input: {
     credentials,
     projectManifests,
     environment,
+    variables,
     engines,
     dispatcher,
     previews,

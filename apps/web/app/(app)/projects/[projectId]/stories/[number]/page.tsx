@@ -10,6 +10,7 @@ import {
   StoryComposer,
   WorkspaceControls,
 } from "@/components/story/workspace-story-controls";
+import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment, type StoryMessage, type WorkspaceStory } from "@/lib/api";
 import { can } from "@/lib/permissions";
 
@@ -165,6 +166,16 @@ export default async function StoryPage({
           canExecute={canExecute}
           canWrite={canWrite}
         />
+        {bundle.workspace && bundle.workspace.state !== "destroyed" && !story.deletedAt ? (
+          <div className="min-w-0 lg:col-span-2">
+            <WorkspaceVariables
+              key={bundle.workspace.id}
+              projectId={projectId}
+              storyId={story.id}
+              canExecute={canExecute}
+            />
+          </div>
+        ) : null}
       </section>
 
       <section className="flex flex-col gap-4">

@@ -74,6 +74,30 @@ Use an authenticated preview to interact with a
 declared service from your own browser. Preview sessions are expiring and revocable; they do not
 make the workspace port public.
 
+## Update workspace environment variables
+
+Open **environment variables** in the story's workspace controls. You can add or replace a
+value, remove an override, or paste a `.env` file to import several names. Imports preserve names
+that are not included. Values are encrypted in Facility's database and never returned to the
+browser; the list shows only configured names. Reading requires `workspaces:read`; changes
+require `workspaces:execute` in the workspace's project. Runtime and agent credential names are
+reserved.
+
+Overrides belong to the retained workspace, survive suspend/resume, and are delivered to new
+agent runs, app service starts, and browser tests. They take precedence over operator-declared
+project variables, including names not declared in `.facility.yml`. Removing an override restores
+the operator or application default. Saving does not rewrite repository files, run setup, reseed
+data, or interrupt a running agent. Existing processes retain their environment: after the active
+turn has finished, use **suspend compute** followed by **open app** to start the app with new values
+in the same retained workspace.
+
+The equivalent API is `GET` or `PATCH`
+`/v1/projects/{projectId}/workspace-stories/{storyId}/environment/variables`.
+Read the current `revision`, then PATCH `{ revision, variables: { NAME: "value", OLD_NAME: null } }`
+or `{ revision, dotenv: "NAME=value" }`. An outdated revision returns 409 to prevent overwriting
+another editor's changes. Use an idempotency key to retry an uncertain write. Responses, audit
+records, and environment command logs do not contain the saved values.
+
 ## Work with GitHub
 
 Agents use Git and `gh` inside the workspace. A normal delivery leaves a reviewable branch and pull

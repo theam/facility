@@ -160,7 +160,7 @@ export class TurnDispatcher {
         branch,
         previousSetupChecksum: workspace.setupChecksum,
       });
-      secrets = credentialSecrets(prepared.processEnvironment, projectManifest.environment.secrets);
+      secrets = credentialSecrets(prepared.processEnvironment, prepared.secretNames);
       const session = (
         await this.db
           .select()

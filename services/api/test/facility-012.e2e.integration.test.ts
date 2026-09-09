@@ -48,6 +48,7 @@ import {
   type ProjectManifestSource,
   parseProjectManifest,
 } from "../src/workspaces/project-environment.js";
+import { WorkspaceVariablesService } from "../src/workspaces/variables.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_ws";
@@ -242,6 +243,7 @@ environment:
       environment,
     );
     const domain: StoryDomain = {
+      variables: new WorkspaceVariablesService(db, config.secretMasterKey),
       runtime,
       stories,
       catalog,

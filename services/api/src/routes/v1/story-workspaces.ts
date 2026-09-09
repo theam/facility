@@ -11,6 +11,11 @@ import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
 import type { AppConfig } from "../../types.js";
+import {
+  parseWorkspaceVariables,
+  WorkspaceVariablesInput,
+  WorkspaceVariablesMetadata,
+} from "../../workspaces/variables.js";
 import { principal } from "./shared.js";
 
 const ProjectParams = z.object({ projectId: z.string() });
@@ -69,6 +74,37 @@ const DeleteBody = z.object({
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+
+  for (const method of ["GET", "PATCH"] as const) {
+    app.route({
+      method,
+      url: "/v1/projects/:projectId/workspace-stories/:storyId/environment/variables",
+      config: {
+        permission: method === "GET" ? "workspaces:read" : "workspaces:execute",
+        ...(method === "PATCH" ? { auditAction: "workspace.variables.updated" } : {}),
+      },
+      schema: {
+        params: StoryParams,
+        ...(method === "PATCH" ? { body: WorkspaceVariablesInput } : {}),
+        operationId: method === "GET" ? "listWorkspaceVariables" : "updateWorkspaceVariables",
+        response: { 200: WorkspaceVariablesMetadata },
+      },
+      handler: async (request, reply) => {
+        const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+        const actor = principal(request);
+        const { workspace } = await domain.stories.get(actor.orgId, projectId, storyId);
+        if (!workspace) throw new ApiError(404, "not_found", "Workspace not found");
+        const scope = { orgId: actor.orgId, projectId, workspaceId: workspace.id };
+        reply.header("cache-control", "no-store");
+        return method === "GET"
+          ? domain.variables.metadata(scope)
+          : domain.variables.update(
+              scope,
+              parseWorkspaceVariables(request.body as z.infer<typeof WorkspaceVariablesInput>),
+            );
+      },
+    });
+  }
 
   app.get(
     "/v1/projects/:projectId/story-agents",
