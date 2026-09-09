@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { getDomain } from "tldts";
 import { ApiError } from "./errors.js";
 import type { AppConfig } from "./types.js";
+import { isSiteSurface, SITE_PREFIX } from "./workspaces/preview-sites.js";
 
 export function registeredSite(hostname: string) {
   return getDomain(hostname, { allowPrivateDomains: true });
@@ -37,6 +38,22 @@ export function assertPreviewOriginSurface(
   rawPath: string,
   rawSurfaceToken?: string | string[],
 ) {
+  if (rawPath.startsWith(SITE_PREFIX)) {
+    if (!isSiteSurface(config, rawPath, rawSurfaceToken)) {
+      throw new ApiError(404, "not_found", "Route not found");
+    }
+    return;
+  }
+  // A dedicated proxy credential can never reach control-plane or legacy routes.
+  if (
+    config.previewSites?.some(
+      (site) =>
+        rawSurfaceToken === site.surfaceToken ||
+        hostname(rawHost) === new URL(site.origin).hostname,
+    )
+  ) {
+    throw new ApiError(404, "not_found", "Route not found");
+  }
   if (!isolatedPreviewOrigin(config) || !config.previewUrl) return;
   const requestHost = hostname(rawHost);
   const previewHost = new URL(config.previewUrl).hostname.toLowerCase();

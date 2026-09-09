@@ -6,6 +6,7 @@ import { ApiError } from "../../errors.js";
 import type { AppConfig } from "../../types.js";
 import { previewCookieName, previewCookieOptions } from "../../workspaces/preview.js";
 import { principal as authenticatedPrincipal } from "./shared.js";
+import { registerWorkspacePreviewSiteRoutes } from "./workspace-preview-sites.js";
 
 const OpenParams = z.object({ projectId: z.string(), storyId: z.string(), service: z.string() });
 const SessionParams = z.object({ sessionId: z.string() });
@@ -14,6 +15,7 @@ const ExchangeQuery = z.object({ token: z.string() });
 
 export async function registerWorkspacePreviewRoutes(app: FastifyInstance, config: AppConfig) {
   const previews = app.storyDomain.previews;
+  await registerWorkspacePreviewSiteRoutes(app, config);
 
   app.post(
     "/v1/projects/:projectId/workspace-stories/:storyId/preview/:service/open",

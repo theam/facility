@@ -4,6 +4,7 @@ import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { registeredSite } from "./origin-isolation.js";
 import type { AppConfig } from "./types.js";
+import { parsePreviewSites } from "./workspaces/preview-sites.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 loadDotenv({ path: join(repoRoot, ".env"), quiet: true });
@@ -39,6 +40,7 @@ const EnvSchema = z
     PUBLIC_URL: z.string().url().default("http://localhost:4400"),
     WEB_URL: z.string().url().optional(),
     FACILITY_PREVIEW_URL: OptionalUrl,
+    FACILITY_PREVIEW_SITES: z.string().optional(),
     FACILITY_PREVIEW_SURFACE_TOKEN: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
       z.string().min(32).max(128).optional(),
@@ -260,6 +262,13 @@ export function readConfig(env = process.env): AppConfig {
     webUrl,
     previewUrl: parsed.FACILITY_PREVIEW_URL?.replace(/\/$/, ""),
     previewSurfaceToken: parsed.FACILITY_PREVIEW_SURFACE_TOKEN,
+    previewSites: parsePreviewSites(parsed.FACILITY_PREVIEW_SITES, {
+      publicUrl: parsed.PUBLIC_URL,
+      webUrl,
+      mcpPublicUrl: parsed.MCP_PUBLIC_URL,
+      previewUrl: parsed.FACILITY_PREVIEW_URL,
+      facilityInsecureDev: parsed.FACILITY_INSECURE_DEV === "1",
+    }),
     workspaceImage: parsed.FACILITY_WORKSPACE_IMAGE,
     workspaceDriver: parsed.FACILITY_WORKSPACE_DRIVER,
     authIdentityProvider: parsed.AUTH_IDENTITY_PROVIDER,

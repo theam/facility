@@ -39,6 +39,7 @@ import {
   type OpenApiRouteRecord,
 } from "./openapi-contract.js";
 import { assertPreviewOriginSurface } from "./origin-isolation.js";
+import { safeRequestLog } from "./request-log.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGithubRoutes } from "./routes/github.js";
 import { registerMcpRoutes } from "./routes/mcp.js";
@@ -66,7 +67,7 @@ export async function buildApp(
 ): Promise<FastifyInstance> {
   const oauthConfig = oauthConfigFromApp(config);
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: { level: config.logLevel, serializers: { req: safeRequestLog } },
     genReqId: () => uuidv7(),
   });
   const routeRecords: OpenApiRouteRecord[] = [];
@@ -239,6 +240,7 @@ export async function buildApp(
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
+    if ((request.raw.url ?? request.url).startsWith("/workspace-preview-site/")) return;
     request.principal = await resolvePrincipal(request, db, config, oauthConfig, deps.oauthJwks);
     const permission = request.routeOptions.config?.permission as string | string[] | undefined;
     const isPublic = request.routeOptions.config?.public === true;
