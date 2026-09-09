@@ -219,14 +219,15 @@ Bearer header.
 
 Running Facility locally takes one command for the stack, a runner image for story workspaces, and
 a GitHub App when you want to use a real repository. You need Docker, Node.js 24 LTS, and the
-repository-pinned pnpm 11.20.0. Node.js 22 is supported from 22.13.0.
+repository-pinned pnpm 11.20.0. Node.js 22 is supported from 22.13.0. Node.js 25 and later are
+outside the supported range and no longer bundle Corepack; `.nvmrc` selects a supported line.
 
 ### 1. Clone and boot the stack
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack install --global pnpm@11.20.0
+npm install --global pnpm@11.20.0
 pnpm dev
 ```
 
@@ -467,7 +468,7 @@ behavior and boundaries can be agreed on.
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack install --global pnpm@11.20.0
+npm install --global pnpm@11.20.0
 pnpm install --frozen-lockfile
 pnpm verify
 ```
