@@ -9,7 +9,10 @@ ENV PATH=/pnpm:$PATH
 # Keep a digest-pinned base while still making a reviewed Debian security
 # refresh invalidate BuildKit's cached package layer.
 ARG DEBIAN_SECURITY_REFRESH=20260828
-RUN test -n "$DEBIAN_SECURITY_REFRESH" \
+# The slim base has Node's bundled trust roots but not the system CA package.
+# Bootstrap HTTPS with those roots; apt then installs the maintained OS bundle.
+RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recursive:true}); fs.writeFileSync('/etc/ssl/certs/ca-certificates.crt', require('node:tls').rootCertificates.join('\\n'))" \
+  && test -n "$DEBIAN_SECURITY_REFRESH" \
   && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
   && apt-get -o APT::Update::Error-Mode=any update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
