@@ -4,23 +4,39 @@ import postgres from "postgres";
 export async function bootstrapInstance(flags, options = {}) {
   if (flags.help) {
     console.log("facility instance bootstrap --org-name <name> --org-slug <slug> --owner-email <email> --owner-name <name> --github-user-id <id> --github-login <login> --github-account-id <id> --github-account-login <login> --github-installation-id <id> [--github-account-type <organization|user>] [--json]");
+    console.log("Each option also reads its FACILITY_<OPTION> environment variable, so a container task needs no command line. An option given on the command line wins.");
     return 0;
   }
-  const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
+  const environment = options.environment ?? process.env;
+  const databaseUrl = options.databaseUrl ?? environment.DATABASE_URL;
   if (!databaseUrl) return failure(flags, "DATABASE_URL is required");
-  const input = {
-    orgName: stringFlag(flags, "org-name"),
-    orgSlug: stringFlag(flags, "org-slug"),
-    ownerEmail: stringFlag(flags, "owner-email")?.toLowerCase(),
-    ownerName: stringFlag(flags, "owner-name"),
-    githubUserId: positiveInteger(flags, "github-user-id"),
-    githubLogin: stringFlag(flags, "github-login"),
-    githubAccountId: positiveInteger(flags, "github-account-id"),
-    githubInstallationId: positiveInteger(flags, "github-installation-id"),
-    githubAccountLogin: stringFlag(flags, "github-account-login"),
-    githubAccountType: (stringFlag(flags, "github-account-type") ?? "organization").toLowerCase(),
+  // Resolve every option to its raw string before parsing, so a malformed
+  // command line fails instead of being rescued by an ambient variable.
+  const option = (name) => stringFlag(flags, name) ?? trimmed(environment[environmentName(name)]);
+  const fields = {
+    orgName: ["org-name", option("org-name")],
+    orgSlug: ["org-slug", option("org-slug")],
+    ownerEmail: ["owner-email", option("owner-email")?.toLowerCase()],
+    ownerName: ["owner-name", option("owner-name")],
+    githubUserId: ["github-user-id", positiveInteger(option("github-user-id"))],
+    githubLogin: ["github-login", option("github-login")],
+    githubAccountId: ["github-account-id", positiveInteger(option("github-account-id"))],
+    githubInstallationId: [
+      "github-installation-id",
+      positiveInteger(option("github-installation-id")),
+    ],
+    githubAccountLogin: ["github-account-login", option("github-account-login")],
+    githubAccountType: [
+      "github-account-type",
+      (option("github-account-type") ?? "organization").toLowerCase(),
+    ],
   };
-  const missing = Object.entries(input).filter(([, value]) => value === undefined).map(([key]) => key);
+  const input = Object.fromEntries(Object.entries(fields).map(([key, [, value]]) => [key, value]));
+  // Name both spellings: this command runs as often from a container task, where
+  // only the variable exists, as from a shell.
+  const missing = Object.values(fields)
+    .filter(([, value]) => value === undefined)
+    .map(([name]) => `--${name} (${environmentName(name)})`);
   if (missing.length) return failure(flags, `Missing required bootstrap values: ${missing.join(", ")}`);
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.orgSlug)) return failure(flags, "--org-slug must be a lowercase URL slug");
   if (!/^\S+@\S+\.\S+$/.test(input.ownerEmail)) return failure(flags, "--owner-email must be valid");
@@ -94,13 +110,20 @@ export async function bootstrapInstance(flags, options = {}) {
 }
 
 function stringFlag(flags, name) {
-  const value = flags[name];
+  return trimmed(flags[name]);
+}
+
+function trimmed(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function positiveInteger(flags, name) {
-  const value = Number(stringFlag(flags, name));
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+function environmentName(option) {
+  return `FACILITY_${option.replaceAll("-", "_").toUpperCase()}`;
+}
+
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return value !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function id(prefix) {
