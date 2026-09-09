@@ -16,6 +16,9 @@ concurrency:
   group: ci-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 jobs:
   # What the commit subjects since the last release add up to. Runs first so
   # every publishing job can gate on one answer instead of recomputing it.
