@@ -129,10 +129,71 @@ test("init configures Claude and Codex models in the same agent catalog", (t) =>
     dir,
   );
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(readFileSync(join(dir, ".agents/architect.md"), "utf8"), /model: claude-plan-custom/);
-  assert.match(readFileSync(join(dir, ".agents/pr-reviewer.md"), "utf8"), /model: claude-review-custom/);
-  assert.match(readFileSync(join(dir, ".agents/builder.md"), "utf8"), /model: codex-build-custom/);
-  assert.match(readFileSync(join(dir, ".agents/ci-doctor.md"), "utf8"), /model: codex-plan-custom/);
+  assert.match(readFileSync(join(dir, ".agents/architect.md"), "utf8"), /model: "claude-plan-custom"/);
+  assert.match(readFileSync(join(dir, ".agents/pr-reviewer.md"), "utf8"), /model: "claude-review-custom"/);
+  assert.match(readFileSync(join(dir, ".agents/builder.md"), "utf8"), /model: "codex-build-custom"/);
+  assert.match(readFileSync(join(dir, ".agents/ci-doctor.md"), "utf8"), /model: "codex-plan-custom"/);
+});
+
+test("init quotes hostile model ids and commands so they cannot inject YAML", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const hostileModel = "gpt-5.6-sol\nenabled: false";
+  const hostileStart = 'docker compose up -d && echo "$(id)" && echo "db: ready"';
+  const result = runCli(
+    [
+      "init",
+      "--yes",
+      `--dir=${dir}`,
+      "--repo=acme/demo-app",
+      `--provision=pnpm install --frozen-lockfile && echo 'setup: done'`,
+      `--start=${hostileStart}`,
+      "--preview-readiness-command=curl --fail 'http://localhost:3000/health'",
+      `--review-model=foo"bar # pwned`,
+      "--plan-model=$(id)",
+      `--codex-build-model=${hostileModel}`,
+      "--codex-plan-model=|",
+      "--build-model=claude-fable-5 # not-a-comment",
+    ],
+    dir,
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const environment = readFileSync(join(dir, ".facility.yml"), "utf8");
+  assert.match(environment, /setup: "pnpm install --frozen-lockfile && echo 'setup: done'"/);
+  assert.equal(environment.includes(`start: ${JSON.stringify(hostileStart)}`), true);
+  assert.equal(
+    environment.includes(`ready: ${JSON.stringify("curl --fail 'http://localhost:3000/health'")}`),
+    true,
+  );
+
+  const builder = readFileSync(join(dir, ".agents/builder.md"), "utf8");
+  assert.equal(builder.includes(`model: ${JSON.stringify(hostileModel)}`), true);
+  assert.match(builder, /^enabled: true$/m);
+  assert.doesNotMatch(builder, /^enabled: false$/m);
+
+  assert.equal(
+    readFileSync(join(dir, ".agents/architect.md"), "utf8").includes(`model: ${JSON.stringify("$(id)")}`),
+    true,
+  );
+  assert.equal(
+    readFileSync(join(dir, ".agents/security-audit.md"), "utf8").includes(`model: ${JSON.stringify("$(id)")}`),
+    true,
+  );
+  assert.equal(
+    readFileSync(join(dir, ".agents/pr-reviewer.md"), "utf8").includes(
+      `model: ${JSON.stringify('foo"bar # pwned')}`,
+    ),
+    true,
+  );
+
+  const doctor = readFileSync(join(dir, ".agents/ci-doctor.md"), "utf8");
+  assert.equal(doctor.includes(`model: ${JSON.stringify("|")}`), true);
+  assert.match(doctor, /^options:$/m);
+  assert.match(doctor, /^  reasoning_effort: high$/m);
+
+  const check = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(check.status, 0, check.stdout + check.stderr);
 });
 
 test("init preserves repository-owned files unless force is explicit", (t) => {

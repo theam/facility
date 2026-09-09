@@ -56,7 +56,7 @@ function checkAgent(dir, name) {
   if (!source.startsWith("---\n") || !/\n---\n[\s\S]*\S/.test(source)) return failed(relative, "invalid frontmatter or empty prompt");
   if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(source)) return failed(relative, `name must be ${name}`);
   if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(source)) return failed(relative, "engine must be claude_code or codex");
-  if (!/^model:\s*\S+\s*$/m.test(source)) return failed(relative, "model is missing");
+  if (!/^model:\s*\S/m.test(source)) return failed(relative, "model is missing");
   if (!/^triggers:\s*$/m.test(source) || !/^\s{2}- type:\s*(?:manual|schedule|github)\s*$/m.test(source)) {
     return failed(relative, "at least one supported trigger is required");
   }
