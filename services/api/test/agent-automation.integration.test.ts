@@ -924,6 +924,60 @@ describe("agent automations use persistent story workspaces", async () => {
       await db.select().from(storyMessages).where(eq(storyMessages.storyId, scheduledStory.id)),
     ).toHaveLength(1);
   });
+
+  it("runs a schedule that fell behind once, not once per missed occurrence", async () => {
+    // security-audit:nightly is `0 2 * * *` UTC. Put it a week in arrears, the
+    // shape of a worker that was down: seven occurrences have come due.
+    const dueAt = new Date("2026-01-03T02:00:00.000Z");
+    const now = new Date("2026-01-10T02:00:00.000Z");
+    const scheduleRow = and(
+      eq(agentSchedules.projectId, projectId),
+      eq(agentSchedules.agentName, "security-audit"),
+      eq(agentSchedules.triggerName, "nightly"),
+    );
+    await db
+      .update(agentSchedules)
+      .set({ nextRunAt: dueAt, lastScheduledAt: null })
+      .where(scheduleRow);
+
+    const scheduledStory = (
+      await db
+        .select()
+        .from(stories)
+        .where(
+          and(
+            eq(stories.projectId, projectId),
+            eq(stories.provider, "schedule"),
+            eq(stories.externalId, "security-audit:nightly"),
+          ),
+        )
+    )[0];
+    if (!scheduledStory) throw new Error("expected scheduled story");
+    const messagesBefore = (
+      await db.select().from(storyMessages).where(eq(storyMessages.storyId, scheduledStory.id))
+    ).length;
+
+    // Three ticks at the same instant: the worker runs `* * * * *`, so the
+    // backlog would drain a turn per minute until it caught up.
+    const results = [];
+    for (let tick = 0; tick < 3; tick += 1) results.push(await scheduler.tick(now));
+
+    // `scheduled` is attributable to this fixture: the catalog and manifest
+    // sources throw for any project but this one, so a schedule left in the
+    // shared test database by another suite becomes a failure, never a run.
+    // The tick counters are global for the same reason, so the rest of the
+    // assertions read this project's own rows.
+    expect(results.reduce((sum, result) => sum + result.scheduled, 0)).toBe(1);
+    expect(
+      await db.select().from(storyMessages).where(eq(storyMessages.storyId, scheduledStory.id)),
+    ).toHaveLength(messagesBefore + 1);
+
+    // The claim satisfies the occurrence it observed and leaves the schedule
+    // ahead of the clock, so the catch-up cannot restart on the next tick.
+    const [after] = await db.select().from(agentSchedules).where(scheduleRow);
+    expect(after?.lastScheduledAt).toEqual(dueAt);
+    expect(after?.nextRunAt).toEqual(new Date("2026-01-11T02:00:00.000Z"));
+  });
 });
 
 function render(agent: ReturnType<typeof manifest>) {
