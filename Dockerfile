@@ -10,7 +10,8 @@ ENV PATH=/pnpm:$PATH
 # refresh invalidate BuildKit's cached package layer.
 ARG DEBIAN_SECURITY_REFRESH=20260828
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
-  && apt-get update \
+  && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+  && apt-get -o APT::Update::Error-Mode=any update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && curl --fail --silent --show-error --location --retry 3 \
