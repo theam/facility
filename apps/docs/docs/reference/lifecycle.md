@@ -54,6 +54,15 @@ reconciliation. A matching final SHA links the fact to an exact turn. Facts that
 only through the story's branch, pull request, or closing issue remain story-level external changes
 rather than being attributed to an agent.
 
+Before the engine starts, Facility also compares the changed files recorded for this story with
+the changed files of every other active story in the project that has an open branch. Stories that
+are done, archived, deleted, or whose branch belongs to a merged pull request are ignored. When two
+stories touched the same paths, a `story.collision_detected` fact is recorded on the timeline for
+each overlapping story, with up to 20 overlapping paths and the total count, and the prompt tells
+the agent which paths other open branches are changing. The check is advisory: it never blocks or
+fails a turn, does not create attention, and a story with no completed evidence yet cannot collide
+because its files are not known. A detection failure is recorded as `turn.collision_check_failed`.
+
 The story response orders these facts with turn activity, artifacts, attention, and creation in a
 single timeline. Source time and observation time are both retained because an event discovered by
 reconciliation may be older than the time Facility first saw it.
