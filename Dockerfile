@@ -14,9 +14,9 @@ ARG DEBIAN_SECURITY_REFRESH=20260828
 RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recursive:true}); fs.writeFileSync('/etc/ssl/certs/ca-certificates.crt', require('node:tls').rootCertificates.join('\\n'))" \
   && test -n "$DEBIAN_SECURITY_REFRESH" \
   && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
-  && apt-get -o APT::Update::Error-Mode=any update \
-  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update \
+  && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt upgrade -y \
+  && apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends ca-certificates curl \
   && curl --fail --silent --show-error --location --retry 3 \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
     --output /etc/ssl/certs/aws-rds-global.pem \
