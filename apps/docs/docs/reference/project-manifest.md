@@ -132,6 +132,6 @@ returns their identifiers and URIs with the operation result.
 
 ## Validation
 
-Run `facility doctor` for local feedback. The server parser is authoritative and loads the merged
-file from the primary repository. A changed manifest affects future environment preparation; it
-does not mutate historical turn records or delete an existing workspace.
+Run `facility doctor` for local feedback. It uses the same parser and schema as the server, which
+loads the merged file from the primary repository. A changed manifest affects future environment
+preparation; it does not mutate historical turn records or delete an existing workspace.

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { ProjectManifestError, parseProjectManifest } from "./project-manifest.mjs";
 import { banner, heading, item, ok, warn } from "./ui.mjs";
 
 const AGENTS = [
@@ -36,16 +37,15 @@ function checkProjectManifest(dir) {
   const path = join(dir, ".facility.yml");
   if (!existsSync(path)) return failed("start command", ".facility.yml is missing");
   const source = readFileSync(path, "utf8");
-  if (!/^version:\s*1\s*$/m.test(source)) return failed("start command", "version must be 1");
-  if (!/^\s{2}primary:\s*["']?github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+["']?\s*$/m.test(source)) {
-    return failed("start command", "repositories.primary must be github.com/owner/repository");
+  try {
+    parseProjectManifest(source);
+    return passed("start command", ".facility.yml declares the repository and development environment");
+  } catch (error) {
+    return failed(
+      "start command",
+      error instanceof ProjectManifestError ? error.message : "could not parse .facility.yml",
+    );
   }
-  if (!/^\s{2}start:\s*["']?.+$/m.test(source)) return failed("start command", "environment.start is missing");
-  const servicePort = /^\s{6}port:\s*([1-9]\d{0,4})\s*$/m.exec(source);
-  if (!servicePort || Number(servicePort[1]) > 65_535) {
-    return failed("start command", "a service port between 1 and 65535 is required");
-  }
-  return passed("start command", ".facility.yml declares the repository and development environment");
 }
 
 function checkAgent(dir, name) {

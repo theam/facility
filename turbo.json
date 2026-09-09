@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["packages/cli/src/project-manifest.mjs"],
   "globalPassThroughEnv": ["FACILITY_GITHUB_CREDENTIALS", "FACILITY_PREVIEW_GATEWAY_TOKEN"],
   "tasks": {
     "build": {
