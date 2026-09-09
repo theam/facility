@@ -74,29 +74,36 @@ Use an authenticated preview to interact with a
 declared service from your own browser. Preview sessions are expiring and revocable; they do not
 make the workspace port public.
 
-## Update workspace environment variables
+## Share development environment variables
 
-Open **environment variables** in the story's workspace controls. You can add or replace a
-value, remove an override, or paste a `.env` file to import several names. Imports preserve names
-that are not included. Values are encrypted in Facility's database and never returned to the
-browser; the list shows only configured names. Reading requires `workspaces:read`; changes
-require `workspaces:execute` in the workspace's project. Runtime and agent credential names are
-reserved.
+Open **project settings → project environment variables** to add or replace a value, remove a
+variable, or paste a `.env` file. These defaults apply to every current and future workspace in
+that project, for both agents and app services. Keep workspace-specific database addresses and
+credentials in each workspace instead of sharing them across projects.
 
-Overrides belong to the retained workspace, survive suspend/resume, and are delivered to new
-agent runs, app service starts, and browser tests. They take precedence over operator-declared
-project variables, including names not declared in `.facility.yml`. Removing an override restores
-the operator or application default. Saving does not rewrite repository files, run setup, reseed
-data, or interrupt a running agent. Existing processes retain their environment: after the active
-turn has finished, use **suspend compute** followed by **open app** to start the app with new values
-in the same retained workspace.
+Open **environment variables** in a story to configure workspace overrides. An override takes
+priority over its project default; removing it restores the inherited value. The editor lists the
+inherited names and links to project settings. Imports replace only the provided names.
 
-The equivalent API is `GET` or `PATCH`
-`/v1/projects/{projectId}/workspace-stories/{storyId}/environment/variables`.
+Values are encrypted in Facility's database and never returned to the browser. Reading requires
+`workspaces:read`; changes require `workspaces:execute` in the project. Runtime and agent
+credential names are reserved. Ordinary project settings cannot read or replace this secret store.
+
+Defaults and overrides are delivered to new agent runs, app service starts, and browser tests,
+including names not declared in `.facility.yml`. They take precedence over operator-declared
+project variables. Saving does not rewrite repository files, run setup, reseed data, or interrupt
+a running agent. Existing processes retain their environment: after the active turn has finished,
+use **suspend compute** followed by **open app** to start the app with new values in the same
+retained workspace.
+
+The API supports `GET` and `PATCH` at:
+
+- `/v1/projects/{projectId}/environment/variables` for project defaults.
+- `/v1/projects/{projectId}/workspace-stories/{storyId}/environment/variables` for overrides.
+
 Read the current `revision`, then PATCH `{ revision, variables: { NAME: "value", OLD_NAME: null } }`
 or `{ revision, dotenv: "NAME=value" }`. An outdated revision returns 409 to prevent overwriting
-another editor's changes. Use an idempotency key to retry an uncertain write. Responses, audit
-records, and environment command logs do not contain the saved values.
+another editor's changes. Responses contain names and revision metadata only.
 
 ## Work with GitHub
 

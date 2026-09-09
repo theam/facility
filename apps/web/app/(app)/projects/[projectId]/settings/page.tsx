@@ -1,7 +1,9 @@
 import { Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api } from "@/lib/api";
+import { can } from "@/lib/permissions";
 
 export const metadata = { title: "project settings" };
 
@@ -11,7 +13,11 @@ export default async function ProjectSettingsPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [project, repos] = await Promise.all([api.project(projectId), api.projectRepos(projectId)]);
+  const [project, repos, me] = await Promise.all([
+    api.project(projectId),
+    api.projectRepos(projectId),
+    api.me(),
+  ]);
   if (!project.ok) {
     return project.offline ? (
       <Offline />
@@ -32,6 +38,11 @@ export default async function ProjectSettingsPage({
           models and triggers are configured together under <code>.agents/</code>.
         </p>
       </div>
+
+      <WorkspaceVariables
+        projectId={projectId}
+        canExecute={can(me.ok ? me.data.permissions : [], "workspaces:execute")}
+      />
 
       <section className="flex flex-col gap-4">
         <Eyebrow>repositories</Eyebrow>

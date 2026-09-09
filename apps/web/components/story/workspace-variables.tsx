@@ -8,6 +8,7 @@ type Variables = {
   revision: string;
   variables: Array<{ name: string; configured: boolean }>;
   updated_at: string | null;
+  inherited_variables: Array<{ name: string; configured: boolean }>;
 };
 
 export function WorkspaceVariables({
@@ -16,7 +17,7 @@ export function WorkspaceVariables({
   canExecute,
 }: {
   projectId: string;
-  storyId: string;
+  storyId?: string;
   canExecute: boolean;
 }) {
   const [opened, setOpened] = useState(false);
@@ -27,7 +28,8 @@ export function WorkspaceVariables({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const path = `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/environment/variables`;
+  const projectDefaults = !storyId;
+  const path = `/v1/projects/${encodeURIComponent(projectId)}${storyId ? `/workspace-stories/${encodeURIComponent(storyId)}` : ""}/environment/variables`;
 
   async function load() {
     setOpened(true);
@@ -65,16 +67,20 @@ export function WorkspaceVariables({
   if (!opened)
     return (
       <Button size="sm" onClick={load}>
-        environment variables
+        {projectDefaults ? "project environment variables" : "environment variables"}
       </Button>
     );
   return (
     <section
-      aria-label="Workspace environment variables"
+      aria-label={
+        projectDefaults ? "Project environment variables" : "Workspace environment variables"
+      }
       className="grid gap-4 border border-(--line) bg-(--bg-subtle) p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold">Environment variables</h3>
+        <h3 className="font-semibold">
+          {projectDefaults ? "Project environment variables" : "Workspace overrides"}
+        </h3>
         <div className="flex gap-2">
           <Button size="sm" onClick={load} disabled={pending}>
             reload
@@ -93,8 +99,10 @@ export function WorkspaceVariables({
         </div>
       </div>
       <p className="text-sm">
-        Values are encrypted and cannot be read back. Changes belong to this workspace and are
-        shared by its agents and app services.
+        Values are encrypted and cannot be read back.{" "}
+        {projectDefaults
+          ? "These defaults apply to every current and future workspace in this project, for both agents and app services. Workspace overrides take priority."
+          : "This workspace inherits the project defaults. Add an override here only when this workspace needs a different value."}
       </p>
       {error ? <p role="alert">{error}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
@@ -121,14 +129,34 @@ export function WorkspaceVariables({
                     disabled={pending}
                     onClick={() => save({ variables: { [name]: null } })}
                   >
-                    remove override
+                    {projectDefaults ? "remove variable" : "remove override"}
                   </Button>
                 </div>
               ) : null}
             </li>
           ))}
-          {!state.variables.length ? <li>No workspace overrides configured.</li> : null}
+          {!state.variables.length ? (
+            <li>
+              {projectDefaults
+                ? "No project defaults configured."
+                : "No workspace overrides configured."}
+            </li>
+          ) : null}
         </ul>
+      ) : null}
+      {!projectDefaults && state ? (
+        <div className="grid gap-2 text-sm">
+          <a className="underline" href={`/projects/${encodeURIComponent(projectId)}/settings`}>
+            Manage shared project variables
+          </a>
+          <p>
+            Project defaults:{" "}
+            {state.inherited_variables.length
+              ? state.inherited_variables.map(({ name }) => name).join(", ")
+              : "none configured"}
+            .
+          </p>
+        </div>
       ) : null}
       {canExecute && state ? (
         <>
@@ -181,8 +209,10 @@ export function WorkspaceVariables({
                 />
               </Field>
               <p className="text-sm">
-                Replaces the names provided and keeps other overrides. Use this workspace’s database
-                and service addresses.
+                Replaces the names provided and keeps the rest.{" "}
+                {projectDefaults
+                  ? "Use development credentials shared by this project. Keep workspace-specific database addresses in each workspace."
+                  : "Use this workspace’s database and service addresses."}
               </p>
               <Button type="submit" disabled={pending || !dotenv.trim()}>
                 import variables
@@ -190,7 +220,9 @@ export function WorkspaceVariables({
             </form>
           </details>
           <p className="text-sm">
-            Removing an override restores the project or application default for new processes.
+            {projectDefaults
+              ? "Removing a project default leaves workspace overrides in place."
+              : "Removing an override restores the project or application default for new processes."}{" "}
             Saving never runs setup or resets workspace data.
           </p>
         </>

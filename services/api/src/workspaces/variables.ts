@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { open, seal } from "@facility/core";
-import { type FacilityDb, workspaces } from "@facility/db";
+import { type FacilityDb, projects, workspaces } from "@facility/db";
 import { parse as parseDotenv } from "dotenv";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -52,6 +52,7 @@ export const WorkspaceVariablesMetadata = z.object({
   revision: z.string(),
   updated_at: z.string().nullable(),
   variables: z.array(z.object({ name: z.string(), configured: z.literal(true) })),
+  inherited_variables: z.array(z.object({ name: z.string(), configured: z.literal(true) })),
   applies_to: z.literal("new_processes"),
 });
 export function parseWorkspaceVariables(input: z.infer<typeof WorkspaceVariablesInput>) {
@@ -66,18 +67,19 @@ export function parseWorkspaceVariables(input: z.infer<typeof WorkspaceVariables
     );
   return result.data;
 }
-type Scope = { orgId: string; projectId: string; workspaceId: string };
+type ProjectScope = { orgId: string; projectId: string };
+type Scope = ProjectScope & { workspaceId: string };
 type Stored = { revision: string; sealed: string; updatedAt: string };
 const Payload = z
   .object({
     orgId: z.string(),
     projectId: z.string(),
-    workspaceId: z.string(),
+    workspaceId: z.string().optional(),
     values: z.record(WorkspaceVariableName, z.string()),
   })
   .strict();
 
-/** Values are write-only at the API boundary and bound to their tenant and workspace. */
+/** Values are write-only at the API boundary and bound to their tenant, project, and optional workspace. */
 export class WorkspaceVariablesService {
   constructor(
     private readonly db: FacilityDb,
@@ -88,7 +90,10 @@ export class WorkspaceVariablesService {
     const row = (await this.db.select().from(workspaces).where(scopeWhere(scope)).limit(1))[0];
     if (!row || row.state === "destroyed" || row.state === "deleting")
       throw new ApiError(404, "not_found", "Workspace not found");
-    return this.decode(scope, stored(row.environment));
+    return {
+      ...(await this.projectValues(scope)),
+      ...(await this.decode(scope, stored(row.environment))),
+    };
   }
 
   async metadata(scope: Scope) {
@@ -97,38 +102,21 @@ export class WorkspaceVariablesService {
       throw new ApiError(404, "not_found", "Workspace not found");
     const record = stored(row.environment);
     const values = await this.decode(scope, record);
-    return metadata(record, values);
+    return {
+      ...metadata(record, values),
+      inherited_variables: metadata(undefined, await this.projectValues(scope)).variables,
+    };
   }
 
   async update(scope: Scope, input: z.infer<typeof WorkspaceVariablesPatch>) {
     const patch = WorkspaceVariablesPatch.parse(input);
+    const inherited = metadata(undefined, await this.projectValues(scope)).variables;
     return this.db.transaction(async (tx) => {
       const row = (await tx.select().from(workspaces).where(scopeWhere(scope)).for("update"))[0];
       if (!row || row.state === "destroyed" || row.state === "deleting")
         throw new ApiError(404, "not_found", "Workspace not found");
       const previous = stored(row.environment);
-      if ((previous?.revision ?? "") !== patch.revision)
-        throw new ApiError(
-          409,
-          "environment_revision_conflict",
-          "Variables changed. Reload before saving your changes.",
-        );
-      const values = await this.decode(scope, previous);
-      for (const [name, value] of Object.entries(patch.variables)) {
-        if (value === null) delete values[name];
-        else values[name] = value;
-      }
-      if (Object.keys(values).length > 200 || Buffer.byteLength(JSON.stringify(values)) > 131072)
-        throw new ApiError(
-          400,
-          "environment_too_large",
-          "Workspace variables exceed the size limit",
-        );
-      const record = {
-        revision: randomUUID(),
-        updatedAt: new Date().toISOString(),
-        sealed: await seal(JSON.stringify({ ...scope, values }), this.masterKey),
-      };
+      const { record, values } = await this.apply(scope, previous, patch);
       await tx
         .update(workspaces)
         .set({
@@ -139,11 +127,92 @@ export class WorkspaceVariablesService {
           updatedAt: new Date(),
         })
         .where(scopeWhere(scope));
+      return {
+        ...metadata(record, values),
+        inherited_variables: inherited,
+      };
+    });
+  }
+
+  async projectValues(scope: ProjectScope): Promise<Record<string, string>> {
+    const row = (
+      await this.db
+        .select({ environment: projects.environmentSecrets })
+        .from(projects)
+        .where(projectWhere(scope))
+        .limit(1)
+    )[0];
+    if (!row) throw new ApiError(404, "not_found", "Project not found");
+    return this.decode({ orgId: scope.orgId, projectId: scope.projectId }, stored(row.environment));
+  }
+
+  async projectMetadata(scope: ProjectScope) {
+    const row = (
+      await this.db
+        .select({ environment: projects.environmentSecrets })
+        .from(projects)
+        .where(projectWhere(scope))
+        .limit(1)
+    )[0];
+    if (!row) throw new ApiError(404, "not_found", "Project not found");
+    const record = stored(row.environment);
+    return metadata(record, await this.decode(scope, record));
+  }
+
+  async updateProject(scope: ProjectScope, input: z.infer<typeof WorkspaceVariablesPatch>) {
+    const patch = WorkspaceVariablesPatch.parse(input);
+    return this.db.transaction(async (tx) => {
+      const row = (
+        await tx
+          .select({ environment: projects.environmentSecrets })
+          .from(projects)
+          .where(projectWhere(scope))
+          .for("update")
+      )[0];
+      if (!row) throw new ApiError(404, "not_found", "Project not found");
+      const { record, values } = await this.apply(scope, stored(row.environment), patch);
+      await tx
+        .update(projects)
+        .set({ environmentSecrets: { managedVariables: record }, updatedAt: new Date() })
+        .where(projectWhere(scope));
       return metadata(record, values);
     });
   }
 
-  private async decode(scope: Scope, record: Stored | undefined): Promise<Record<string, string>> {
+  private async apply(
+    scope: ProjectScope & { workspaceId?: string },
+    previous: Stored | undefined,
+    patch: z.infer<typeof WorkspaceVariablesPatch>,
+  ) {
+    if ((previous?.revision ?? "") !== patch.revision)
+      throw new ApiError(
+        409,
+        "environment_revision_conflict",
+        "Variables changed. Reload before saving your changes.",
+      );
+    const values = await this.decode(scope, previous);
+    for (const [name, value] of Object.entries(patch.variables)) {
+      if (value === null) delete values[name];
+      else values[name] = value;
+    }
+    if (Object.keys(values).length > 200 || Buffer.byteLength(JSON.stringify(values)) > 131072)
+      throw new ApiError(
+        400,
+        "environment_too_large",
+        "Environment variables exceed the size limit",
+      );
+    const record = {
+      revision: randomUUID(),
+      updatedAt: new Date().toISOString(),
+      sealed: await seal(JSON.stringify({ ...scope, values }), this.masterKey),
+    };
+    return { record, values };
+  }
+
+  private async decode(
+    scope: ProjectScope & { workspaceId?: string },
+    record: Stored | undefined,
+  ): Promise<Record<string, string>> {
     if (!record) return {};
     try {
       const decoded = Payload.parse(JSON.parse(await open(record.sealed, this.masterKey)));
@@ -158,12 +227,15 @@ export class WorkspaceVariablesService {
       throw new ApiError(
         409,
         "environment_unavailable",
-        "Stored workspace variables could not be read",
+        "Stored environment variables could not be read",
       );
     }
   }
 }
 
+function projectWhere(scope: ProjectScope) {
+  return and(eq(projects.orgId, scope.orgId), eq(projects.id, scope.projectId));
+}
 function scopeWhere(scope: Scope) {
   return and(
     eq(workspaces.orgId, scope.orgId),
@@ -181,6 +253,7 @@ function metadata(record: Stored | undefined, values: Record<string, string>) {
     variables: Object.keys(values)
       .sort()
       .map((name) => ({ name, configured: true })),
+    inherited_variables: [] as Array<{ name: string; configured: boolean }>,
     applies_to: "new_processes" as const,
   };
 }

@@ -78,6 +78,34 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
   for (const method of ["GET", "PATCH"] as const) {
     app.route({
       method,
+      url: "/v1/projects/:projectId/environment/variables",
+      config: {
+        permission: method === "GET" ? "workspaces:read" : "workspaces:execute",
+        ...(method === "PATCH" ? { auditAction: "project.variables.updated" } : {}),
+      },
+      schema: {
+        params: ProjectParams,
+        ...(method === "PATCH" ? { body: WorkspaceVariablesInput } : {}),
+        operationId: method === "GET" ? "listProjectVariables" : "updateProjectVariables",
+        response: { 200: WorkspaceVariablesMetadata },
+      },
+      handler: async (request, reply) => {
+        const { projectId } = request.params as z.infer<typeof ProjectParams>;
+        const scope = { orgId: principal(request).orgId, projectId };
+        reply.header("cache-control", "no-store");
+        return method === "GET"
+          ? domain.variables.projectMetadata(scope)
+          : domain.variables.updateProject(
+              scope,
+              parseWorkspaceVariables(request.body as z.infer<typeof WorkspaceVariablesInput>),
+            );
+      },
+    });
+  }
+
+  for (const method of ["GET", "PATCH"] as const) {
+    app.route({
+      method,
       url: "/v1/projects/:projectId/workspace-stories/:storyId/environment/variables",
       config: {
         permission: method === "GET" ? "workspaces:read" : "workspaces:execute",

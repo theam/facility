@@ -255,6 +255,10 @@ describe("workspace variables: authenticated API, encryption, and process delive
   });
 
   it("delivers overrides to app starts and browser tests, redacts logs and never repeats setup", async () => {
+    const shared = await service.updateProject(
+      { orgId: scope.orgId, projectId },
+      { revision: "", variables: { SHARED_PROCESS_KEY: "shared-process-secret" } },
+    );
     const runtime = new FakeWorkspaceRuntime(root);
     const workspace = await runtime.create({ id: workspaceId, image: "runner:test" });
     await mkdir(join(workspace.volumeRef, "repos/acme/app"), { recursive: true });
@@ -289,6 +293,8 @@ describe("workspace variables: authenticated API, encryption, and process delive
     });
     expect(prepared.processEnvironment.WORKOS_API_KEY).toBe(secret);
     expect(prepared.processEnvironment.PUBLIC_LABEL).toBe("example");
+    expect(prepared.processEnvironment.SHARED_PROCESS_KEY).toBe("shared-process-secret");
+    expect(prepared.secretNames).toContain("SHARED_PROCESS_KEY");
     expect(prepared.secretNames).toContain("PUBLIC_LABEL");
     const tested = await environment.runBrowserTest({ ...input, storyId });
     expect(JSON.stringify(tested)).not.toContain(secret);
@@ -301,6 +307,158 @@ describe("workspace variables: authenticated API, encryption, and process delive
     expect(await readFile(join(workspace.volumeRef, "repos/acme/app/retained-data"), "utf8")).toBe(
       "unchanged",
     );
+    await service.updateProject(
+      { orgId: scope.orgId, projectId },
+      { revision: shared.revision, variables: { SHARED_PROCESS_KEY: null } },
+    );
+  });
+
+  it("shares encrypted project defaults with existing and future workspaces and preserves overrides", async () => {
+    const projectPath = `/v1/projects/${projectId}/environment/variables`;
+    const defaults = {
+      revision: (await service.projectMetadata({ orgId: scope.orgId, projectId })).revision,
+      variables: { SHARED_KEY: "project-secret", WORKOS_API_KEY: "project-workos" },
+    };
+    const request = {
+      method: "PATCH" as const,
+      url: projectPath,
+      headers: { cookie, "idempotency-key": `project-vars-${suffix}` },
+      payload: defaults,
+    };
+    const response = await app.inject(request);
+    expect(response.statusCode).toBe(200);
+    expect((await app.inject(request)).json()).toEqual(response.json());
+    expect(response.body).not.toContain("project-secret");
+    expect(await service.values(scope)).toMatchObject({
+      SHARED_KEY: "project-secret",
+      WORKOS_API_KEY: secret,
+    });
+    expect((await service.metadata(scope)).inherited_variables.map((v) => v.name)).toContain(
+      "SHARED_KEY",
+    );
+    const futureId = newId("ws");
+    const futureStory = newId("story");
+    await db.insert(stories).values({
+      id: futureStory,
+      orgId: "org_local",
+      projectId,
+      provider: "manual",
+      externalId: `future-${suffix}`,
+      title: "Future workspace",
+      createdBy: {},
+    });
+    await db.insert(workspaces).values({
+      id: futureId,
+      storyId: futureStory,
+      orgId: "org_local",
+      projectId,
+      provider: "fake",
+      volumeRef: "future",
+      state: "running",
+      environment: {},
+    });
+    const future = { ...scope, workspaceId: futureId };
+    expect(await service.values(future)).toEqual(defaults.variables);
+    const update = await service.updateProject(
+      { orgId: scope.orgId, projectId },
+      { revision: response.json().revision, variables: { SHARED_KEY: "rotated-project" } },
+    );
+    expect((await service.values(scope)).SHARED_KEY).toBe("rotated-project");
+    expect((await service.values(future)).SHARED_KEY).toBe("rotated-project");
+    const override = await service.update(future, {
+      revision: "",
+      variables: { SHARED_KEY: "workspace-only" },
+    });
+    expect((await service.values(future)).SHARED_KEY).toBe("workspace-only");
+    await service.update(future, { revision: override.revision, variables: { SHARED_KEY: null } });
+    expect((await service.values(future)).SHARED_KEY).toBe("rotated-project");
+    const [storedProject] = await db.select().from(projects).where(eq(projects.id, projectId));
+    expect(JSON.stringify(storedProject?.environmentSecrets)).not.toContain("rotated-project");
+    for (const url of [`/v1/projects/${projectId}`, "/v1/projects"]) {
+      const read = await app.inject({ method: "GET", url, headers: { cookie } });
+      expect(read.statusCode).toBe(200);
+      const details = Array.isArray(read.json())
+        ? read.json().find((p: { id: string }) => p.id === projectId)
+        : read.json();
+      expect(details).toBeDefined();
+      expect(details).not.toHaveProperty("environmentSecrets");
+      expect(read.body).not.toContain("managedVariables");
+      expect(read.body).not.toContain("rotated-project");
+    }
+    const settings = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}`,
+      headers: { cookie },
+      payload: { settings: { environmentSecrets: {} } },
+    });
+    expect(settings.statusCode).toBe(200);
+    expect((await service.values(future)).SHARED_KEY).toBe("rotated-project");
+    const read = await app.inject({
+      method: "GET",
+      url: projectPath,
+      headers: { authorization: `Bearer ${viewer}` },
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.body).not.toContain("rotated-project");
+    for (const [headers, expected] of [
+      [{}, 401],
+      [{ authorization: `Bearer ${viewer}` }, 403],
+      [{ cookie: expired }, 401],
+      [{ authorization: `Bearer ${revoked}` }, 401],
+    ] as const) {
+      expect(
+        (await app.inject({ method: "PATCH", url: projectPath, headers, payload: defaults }))
+          .statusCode,
+      ).toBe(expected);
+    }
+    for (const headers of [{ cookie }, { authorization: `Bearer ${scoped}` }]) {
+      expect(
+        (
+          await app.inject({
+            method: "PATCH",
+            url: `/v1/projects/${otherProject}/environment/variables`,
+            headers,
+            payload: defaults,
+          })
+        ).statusCode,
+      ).toBe(404);
+    }
+    for (const [payload, expected] of [
+      [defaults, 409],
+      [{ revision: update.revision, variables: { GITHUB_TOKEN: "denied" } }, 400],
+    ] as const) {
+      expect(
+        (await app.inject({ method: "PATCH", url: projectPath, headers: { cookie }, payload }))
+          .statusCode,
+      ).toBe(expected);
+    }
+    await db
+      .update(projects)
+      .set({ environmentSecrets: storedProject?.environmentSecrets })
+      .where(eq(projects.id, otherProject));
+    await expect(
+      service.projectValues({ orgId: otherOrg, projectId: otherProject }),
+    ).rejects.toMatchObject({ code: "environment_unavailable" });
+    await db
+      .update(workspaces)
+      .set({ environment: storedProject?.environmentSecrets })
+      .where(eq(workspaces.id, futureId));
+    await expect(service.values(future)).rejects.toMatchObject({ code: "environment_unavailable" });
+    await db.update(workspaces).set({ environment: {} }).where(eq(workspaces.id, futureId));
+    await db.update(projects).set({ environmentSecrets: {} }).where(eq(projects.id, otherProject));
+    const races = await Promise.allSettled([
+      service.updateProject(
+        { orgId: scope.orgId, projectId },
+        { revision: update.revision, variables: { SHARED_KEY: null, WORKOS_API_KEY: null } },
+      ),
+      service.updateProject(
+        { orgId: scope.orgId, projectId },
+        { revision: update.revision, variables: { SHARED_KEY: null, WORKOS_API_KEY: null } },
+      ),
+    ]);
+    expect(races.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await service.values(future)).toEqual({});
+    expect((await service.values(scope)).WORKOS_API_KEY).toBe(secret);
   });
 
   it("serializes simultaneous edits and rejects modified ciphertext", async () => {

@@ -105,6 +105,7 @@ export const projects = pgTable(
     slug: text("slug").notNull(),
     description: text("description"),
     settings: jsonb("settings").notNull().default(sql`'{}'::jsonb`),
+    environmentSecrets: jsonb("environment_secrets").notNull().default(sql`'{}'::jsonb`),
     status: text("status").notNull().default("active"),
     ...timestamps,
   },
