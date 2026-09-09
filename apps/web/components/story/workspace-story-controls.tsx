@@ -92,7 +92,7 @@ export function WorkspaceControls({
   const router = useRouter();
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
-  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewService, setPreviewService] = useState("");
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const services = workspace?.environment.ports ?? [];
   const workspaceDeleted = isWorkspaceDeleted(story, workspace);
@@ -130,7 +130,7 @@ export function WorkspaceControls({
       setError(result.message);
       return;
     }
-    setPreviewUrl(result.data.url);
+    setPreviewService(service);
     window.open(result.data.url, "_blank", "noopener,noreferrer");
   }
 
@@ -211,15 +211,15 @@ export function WorkspaceControls({
           This workspace was permanently deleted. Its conversation and metadata remain as history.
         </p>
       ) : null}
-      {previewUrl ? (
-        <a
-          href={previewUrl}
-          target="_blank"
-          rel="noreferrer"
+      {previewService && canExecute && !workspaceDeleted ? (
+        <button
+          type="button"
+          onClick={() => openPreview(previewService)}
+          disabled={Boolean(pending)}
           className="break-all font-mono text-[11px] text-(--info) underline-offset-4 hover:underline"
         >
-          Open authenticated preview ↗
-        </a>
+          Open a new authenticated preview ↗
+        </button>
       ) : null}
       {error ? (
         <p role="alert" className="text-[12px] text-(--bad)">
