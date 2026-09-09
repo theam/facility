@@ -4,6 +4,7 @@ import { cx } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Project } from "@/lib/api";
+import { projectNav } from "./nav";
 
 type PaletteProject = Pick<Project, "id" | "slug" | "name">;
 
@@ -28,43 +29,15 @@ export function CommandPalette({
 
   const entries = useMemo<Entry[]>(() => {
     const scoped: Entry[] = currentProject
-      ? [
-          {
-            id: "p-overview",
-            label: `${currentProject.slug} · overview`,
-            hint: "project",
-            href: `/projects/${currentProject.id}`,
-          },
-          {
-            id: "p-stories",
-            label: `${currentProject.slug} · stories`,
-            hint: "project",
-            href: `/projects/${currentProject.id}/stories`,
-          },
-          {
-            id: "p-sessions",
-            label: `${currentProject.slug} · sessions`,
-            hint: "project",
-            href: `/projects/${currentProject.id}/sessions`,
-          },
-          {
-            id: "p-approvals",
-            label: `${currentProject.slug} · approvals`,
-            hint: "project",
-            href: `/projects/${currentProject.id}/approvals`,
-          },
-          {
-            id: "p-settings",
-            label: `${currentProject.slug} · settings`,
-            hint: "project",
-            href: `/projects/${currentProject.id}/settings`,
-          },
-        ]
+      ? projectNav(currentProject.id).map(({ href, label }) => ({
+          id: href,
+          label: `${currentProject.slug} · ${label.toLowerCase()}`,
+          hint: "project",
+          href,
+        }))
       : [];
     const org: Entry[] = [
       { id: "o-projects", label: "projects", hint: "org", href: "/projects" },
-      { id: "o-harness", label: "harness", hint: "org", href: "/harness" },
-      { id: "o-audit", label: "audit", hint: "org", href: "/audit" },
       { id: "o-settings", label: "org settings", hint: "org", href: "/settings" },
       { id: "o-kickstart", label: "kickstart a project", hint: "org", href: "/projects/new" },
     ];

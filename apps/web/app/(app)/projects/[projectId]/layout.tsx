@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { CommandPalette } from "@/components/shell/cmdk";
 import { MobileNav, Sidebar } from "@/components/shell/nav";
 import { RememberProject } from "@/components/shell/remember-project";
 import { Topbar } from "@/components/shell/topbar";
@@ -44,6 +45,7 @@ export default async function ProjectLayout({
     // App shell: the viewport is the frame; only the work area (main) scrolls,
     // so full-height tabs like Product can fill it edge to edge.
     <div className="flex h-dvh">
+      <CommandPalette projects={projectList} currentProject={p} />
       <Sidebar project={navProject} />
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileNav project={navProject} />
