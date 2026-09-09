@@ -685,8 +685,8 @@ function redactCredentials(
   const secrets = new Set<string>();
   for (const [name, candidate] of Object.entries(environment)) {
     if (
-      (sensitiveNames.includes(name) || name.includes("TOKEN") || name.includes("CREDENTIAL")) &&
-      candidate.length >= 4
+      (sensitiveNames.includes(name) && candidate.length > 0) ||
+      ((name.includes("TOKEN") || name.includes("CREDENTIAL")) && candidate.length >= 4)
     ) {
       secrets.add(candidate);
     }

@@ -257,14 +257,17 @@ describe("workspace variables: authenticated API, encryption, and process delive
   it("delivers overrides to app starts and browser tests, redacts logs and never repeats setup", async () => {
     const shared = await service.updateProject(
       { orgId: scope.orgId, projectId },
-      { revision: "", variables: { SHARED_PROCESS_KEY: "shared-process-secret" } },
+      {
+        revision: "",
+        variables: { SHARED_PROCESS_KEY: "shared-process-secret", SHORT_KEY: "xyz" },
+      },
     );
     const runtime = new FakeWorkspaceRuntime(root);
     const workspace = await runtime.create({ id: workspaceId, image: "runner:test" });
     await mkdir(join(workspace.volumeRef, "repos/acme/app"), { recursive: true });
     await writeFile(join(workspace.volumeRef, "repos/acme/app/retained-data"), "unchanged");
     const manifest = parseProjectManifest(
-      `version: 1\nrepositories:\n  primary: github.com/acme/app\nenvironment:\n  setup: exit 99\n  start: printf '%s' "$WORKOS_API_KEY"\n  browser_test: printf '%s' "$WORKOS_API_KEY"\n  secrets: [WORKOS_API_KEY]\n  services: {}\n`,
+      `version: 1\nrepositories:\n  primary: github.com/acme/app\nenvironment:\n  setup: exit 99\n  start: printf '%s' "$WORKOS_API_KEY $SHORT_KEY"\n  browser_test: printf '%s' "$WORKOS_API_KEY $SHORT_KEY"\n  secrets: [WORKOS_API_KEY]\n  services: {}\n`,
     );
     const environment = new ProjectEnvironmentService(
       db,
@@ -303,13 +306,14 @@ describe("workspace variables: authenticated API, encryption, and process delive
       .from(workspaceEvents)
       .where(eq(workspaceEvents.workspaceId, workspaceId));
     expect(JSON.stringify(events)).not.toContain(secret);
+    expect(JSON.stringify(events)).not.toContain("xyz");
     expect(events.some((e) => e.type === "environment.setup")).toBe(false);
     expect(await readFile(join(workspace.volumeRef, "repos/acme/app/retained-data"), "utf8")).toBe(
       "unchanged",
     );
     await service.updateProject(
       { orgId: scope.orgId, projectId },
-      { revision: shared.revision, variables: { SHARED_PROCESS_KEY: null } },
+      { revision: shared.revision, variables: { SHARED_PROCESS_KEY: null, SHORT_KEY: null } },
     );
   });
 

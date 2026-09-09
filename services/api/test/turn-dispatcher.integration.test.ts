@@ -174,7 +174,17 @@ environment:
         nativeSessionId,
         output: this.outputOverride ?? `completed with ${secret} and ${projectSecret}`,
         events: [
-          { engine: "codex", type: "item.completed", data: { output: secret, projectSecret } },
+          {
+            engine: "codex",
+            type: "item.completed",
+            data: {
+              output: secret,
+              projectSecret,
+              exitCode: 0,
+              ok: true,
+              configured: `0 true a"b`,
+            },
+          },
         ],
         exitCode: 0,
         stderr: "",
@@ -245,8 +255,12 @@ environment:
         expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
       })),
       manifestSource,
-      new ProjectEnvironmentService(db, runtime, `file://${remotes}`, (_projectId, name) =>
-        name === "FACILITY_DISPATCH_SECRET" ? "project-secret" : undefined,
+      new ProjectEnvironmentService(
+        db,
+        runtime,
+        `file://${remotes}`,
+        (_projectId, name) => (name === "FACILITY_DISPATCH_SECRET" ? "project-secret" : undefined),
+        async () => ({ SHORT_VALUE: "0", FLAG_VALUE: "true", QUOTED_VALUE: 'a"b' }),
       ),
       new AgentEngineRegistry([engine]),
       new TurnGitEvidenceService(db, runtime),
@@ -333,6 +347,17 @@ environment:
       .orderBy(asc(turnEvents.seq));
     expect(JSON.stringify(events)).not.toContain("secret-installation-token");
     expect(JSON.stringify(events)).not.toContain("project-secret");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            exitCode: 0,
+            ok: true,
+            configured: "[REDACTED] [REDACTED] [REDACTED]",
+          }),
+        }),
+      ]),
+    );
 
     const followUp = await storiesService.queueMessage({
       orgId,

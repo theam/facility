@@ -24,6 +24,8 @@ import { AgentEngineError } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
 import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
 
+import { redactEvent as redact, redactString } from "./redaction.js";
+
 export class TurnDispatcher {
   constructor(
     private readonly db: FacilityDb,
@@ -651,14 +653,6 @@ function credentialSecrets(environment: Record<string, string>, sensitiveNames: 
     // The credential broker validates this value before dispatch.
   }
   return [...secrets].filter(Boolean);
-}
-
-function redact(value: unknown, secrets: string[]): Record<string, unknown> {
-  return JSON.parse(redactString(JSON.stringify(value), secrets)) as Record<string, unknown>;
-}
-
-function redactString(value: string, secrets: string[]) {
-  return secrets.reduce((current, secret) => current.replaceAll(secret, "[REDACTED]"), value);
 }
 
 function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
