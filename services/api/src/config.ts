@@ -131,10 +131,24 @@ const EnvSchema = z
       } else {
         const preview = new URL(env.FACILITY_PREVIEW_URL);
         const previewSite = registeredSite(preview.hostname);
-        const controlSites = [env.PUBLIC_URL, env.WEB_URL ?? env.PUBLIC_URL, env.MCP_PUBLIC_URL]
+        const controlOrigins = [env.PUBLIC_URL, env.WEB_URL ?? env.PUBLIC_URL, env.MCP_PUBLIC_URL]
           .filter((value): value is string => Boolean(value))
-          .map((value) => registeredSite(new URL(value).hostname));
-        if (preview.protocol !== "https:") {
+          .map((value) => new URL(value));
+        const controlSites = controlOrigins.map((url) => registeredSite(url.hostname));
+        // The single-host bundle serves the whole instance over loopback, where
+        // there is no name to obtain a certificate for and nothing is reachable
+        // off the machine. Requiring HTTPS there refuses a configuration that
+        // has no transport to protect, so exempt an instance whose every origin
+        // — preview included — is loopback HTTP. Any origin that leaves the
+        // machine puts the whole set back under the HTTPS requirement. This is
+        // the carve-out the interactive OAuth block below already makes.
+        const loopbackInstance =
+          preview.protocol === "http:" &&
+          isLoopbackHostname(preview.hostname) &&
+          controlOrigins.every(
+            (url) => url.protocol === "http:" && isLoopbackHostname(url.hostname),
+          );
+        if (preview.protocol !== "https:" && !loopbackInstance) {
           ctx.addIssue({
             code: "custom",
             path: ["FACILITY_PREVIEW_URL"],
@@ -393,7 +407,13 @@ function isExactAuthCallbackUrl(url: URL, webOrigin: string) {
   );
 }
 
+// RFC 6761 section 6.3 reserves `localhost` and every name under `.localhost`
+// for the loopback interface. Facility needs more than the bare name because
+// the preview origin must stay a registered site of its own; `preview.localhost`
+// satisfies both, and resolvers are required not to send it to the network.
 function isLoopbackHostname(hostname: string) {
   const normalized = hostname.toLowerCase();
-  return ["localhost", "127.0.0.1", "[::1]"].includes(normalized);
+  return (
+    ["localhost", "127.0.0.1", "[::1]"].includes(normalized) || normalized.endsWith(".localhost")
+  );
 }

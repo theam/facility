@@ -1,5 +1,11 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse as parseDotenv } from "dotenv";
 import { describe, expect, it } from "vitest";
 import { readConfig } from "../src/config.js";
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const validEnv = {
   DATABASE_URL: "postgres://facility:facility@localhost:5432/facility",
@@ -59,6 +65,77 @@ describe("Facility 0.12 configuration", () => {
         FACILITY_PREVIEW_URL: "https://preview.example.net",
       }),
     ).toMatchObject({ previewUrl: "https://preview.example.net" });
+  });
+
+  it("boots from the shipped .env.example once the master key is supplied", () => {
+    // dotenv delivers a bare `KEY=` as an empty string rather than omitting the
+    // key, so every blank line in the template reaches validation as a present
+    // value. The template is the documented first step of self-hosting: it has
+    // to parse as written, with only the master key it tells the operator to
+    // generate filled in.
+    const template = parseDotenv(readFileSync(join(repoRoot, ".env.example"), "utf8"));
+    expect(template.SECRET_MASTER_KEY).toBe("");
+    expect(() =>
+      readConfig({ ...template, SECRET_MASTER_KEY: validEnv.SECRET_MASTER_KEY }),
+    ).not.toThrow();
+  });
+
+  it("boots the single-host bundle on loopback origins", () => {
+    // The defaults docker-compose.yml hands the api container, which runs the
+    // `api` image and therefore NODE_ENV=production. Keep this aligned with the
+    // Compose file: it is the configuration the bundle actually starts with.
+    const bundleEnv = {
+      ...validEnv,
+      NODE_ENV: "production",
+      PUBLIC_URL: "http://localhost:4400",
+      WEB_URL: "http://localhost:3400",
+      FACILITY_PREVIEW_URL: "http://preview.localhost:4400",
+      MCP_PUBLIC_URL: "http://localhost:4400/mcp",
+    };
+    expect(readConfig(bundleEnv)).toMatchObject({
+      previewUrl: "http://preview.localhost:4400",
+    });
+
+    // The preview origin stays a separate registered site even on loopback, so
+    // the bare control hostname is still refused as a preview origin.
+    expect(() =>
+      readConfig({ ...bundleEnv, FACILITY_PREVIEW_URL: "http://localhost:4400" }),
+    ).toThrow("must use a registered site separate");
+  });
+
+  it("keeps the production HTTPS requirement for any origin that leaves the machine", () => {
+    const loopbackControl = {
+      ...validEnv,
+      NODE_ENV: "production",
+      PUBLIC_URL: "http://localhost:4400",
+      WEB_URL: "http://localhost:3400",
+    };
+    // A preview origin off the machine is not covered by the loopback carve-out.
+    expect(() =>
+      readConfig({ ...loopbackControl, FACILITY_PREVIEW_URL: "http://preview.example.net" }),
+    ).toThrow("FACILITY_PREVIEW_URL must use HTTPS in production");
+
+    // Neither is a loopback preview whose control plane is published.
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        NODE_ENV: "production",
+        PUBLIC_URL: "https://api.example.com",
+        WEB_URL: "https://app.example.com",
+        FACILITY_PREVIEW_URL: "http://preview.localhost:4400",
+      }),
+    ).toThrow("FACILITY_PREVIEW_URL must use HTTPS in production");
+
+    // A published deployment keeps the requirement it always had.
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        NODE_ENV: "production",
+        PUBLIC_URL: "https://api.example.com",
+        WEB_URL: "https://app.example.com",
+        FACILITY_PREVIEW_URL: "http://preview.example.net",
+      }),
+    ).toThrow("FACILITY_PREVIEW_URL must use HTTPS in production");
   });
 
   it("rejects preview URLs with credentials, paths, queries, or fragments", () => {

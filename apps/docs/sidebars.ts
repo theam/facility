@@ -21,6 +21,7 @@ const sidebars: SidebarsConfig = {
       label: "self-hosting",
       collapsed: false,
       items: [
+        "self-host/bundle",
         "self-host/quickstart",
         "self-host/local-development",
         "self-host/production",
