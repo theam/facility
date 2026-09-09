@@ -1,6 +1,7 @@
 import { renderWorkspaceKickstart, sha256Hex } from "@facility/core";
 import { type FacilityDb, githubInstallations } from "@facility/db";
 import { eq } from "drizzle-orm";
+import { ApiError } from "../errors.js";
 import type { AppConfig, Principal } from "../types.js";
 import { FacilityGithubClient, type GithubClientFactory, type TreeItem } from "./client.js";
 import { readRepoFiles } from "./repo-files.js";
@@ -35,7 +36,13 @@ export async function createGithubClientForRepo(
   factory: GithubClientFactory,
   repository: GithubRepositoryRow,
 ): Promise<FacilityGithubClient> {
-  if (!repository.installationId) throw new Error("Repository has no GitHub installation");
+  if (!repository.installationId) {
+    throw new ApiError(
+      409,
+      "github_installation_missing",
+      `${slug(repository)} is not connected to a GitHub App installation. Reconnect the repository before running kickstart.`,
+    );
+  }
   const installation = (
     await db
       .select()
@@ -44,7 +51,11 @@ export async function createGithubClientForRepo(
       .limit(1)
   )[0];
   if (!installation || installation.orgId !== repository.orgId || installation.suspendedAt) {
-    throw new Error("GitHub installation is unavailable");
+    throw new ApiError(
+      409,
+      "github_installation_unavailable",
+      `The GitHub App installation for ${slug(repository)} is suspended or belongs to another organization.`,
+    );
   }
   return new FacilityGithubClient(await factory(installation.installationId), {
     owner: repository.owner,
@@ -59,9 +70,12 @@ export async function kickstartPreview(
   repository: GithubRepositoryRow,
   answers: KickstartAnswers,
 ) {
+  const ref = answers.defaultBranch ?? repository.defaultBranch;
   const client = await createGithubClientForRepo(db, factory, repository);
-  const existing = await readRepoFiles(client, repository.defaultBranch);
-  const detection = detectWorkspace(existing, answers.defaultBranch ?? repository.defaultBranch);
+  const existing = await readRepoFiles(client, repository.defaultBranch).catch((error) => {
+    throw kickstartFailure(error, repository, ref);
+  });
+  const detection = detectWorkspace(existing, ref);
   const workspaceAnswers = workspaceKickstartAnswers(
     repository,
     answers,
@@ -97,18 +111,32 @@ export async function kickstartRepo(args: {
   repo: GithubRepositoryRow;
   answers: KickstartAnswers;
 }) {
+  const ref = args.answers.defaultBranch ?? args.repo.defaultBranch;
   const client = await createGithubClientForRepo(args.db, args.factory, args.repo);
+  try {
+    return await applyKickstart(args, client, ref);
+  } catch (error) {
+    throw kickstartFailure(error, args.repo, ref);
+  }
+}
+
+async function applyKickstart(
+  args: Parameters<typeof kickstartRepo>[0],
+  client: FacilityGithubClient,
+  ref: string,
+) {
   const existing = await readRepoFiles(client, args.repo.defaultBranch);
-  const detection = detectWorkspace(
-    existing,
-    args.answers.defaultBranch ?? args.repo.defaultBranch,
-  );
+  const detection = detectWorkspace(existing, ref);
   const rendered = renderWorkspaceKickstart(
     workspaceKickstartAnswers(args.repo, args.answers, existing, detection.packageManager),
     existing,
   );
   if (rendered.files.length === 0) {
-    throw new Error("Repository already contains the Facility 0.12 kickstart files");
+    throw new ApiError(
+      409,
+      "kickstart_already_applied",
+      `${slug(args.repo)} already contains the Facility 0.12 kickstart files. Remove or update them in a normal pull request instead.`,
+    );
   }
 
   const branch = "facility/kickstart-0.12";
@@ -146,6 +174,53 @@ export async function kickstartRepo(args: {
     files: rendered.files,
     manifest: rendered.manifest,
   };
+}
+
+function slug(repository: GithubRepositoryRow) {
+  return `${repository.owner}/${repository.name}`;
+}
+
+/**
+ * Octokit reports HTTP failures on `status`, while the API error handler reads
+ * `statusCode`. Every refusal GitHub returned therefore reached the operator as
+ * "Internal server error", which is the least useful answer possible for the
+ * first flow a new installation runs. Name the condition and the remedy.
+ *
+ * Statuses that are genuinely ours — or that we have no advice for — are passed
+ * through untouched so they keep being masked and logged as server errors.
+ */
+function kickstartFailure(error: unknown, repository: GithubRepositoryRow, ref: string): unknown {
+  if (error instanceof ApiError) return error;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status !== "number") return error;
+  switch (status) {
+    case 404:
+      return new ApiError(
+        404,
+        "kickstart_repository_unreachable",
+        `Facility cannot read ${slug(repository)} at ${ref}. The repository may have no commits yet, the branch may not exist, or the GitHub App installation may no longer include this repository.`,
+      );
+    case 409:
+      return new ApiError(
+        409,
+        "kickstart_repository_empty",
+        `${slug(repository)} has no commits on ${ref}. Push an initial commit before running kickstart.`,
+      );
+    case 403:
+      return new ApiError(
+        403,
+        "kickstart_repository_forbidden",
+        `The GitHub App installation for ${slug(repository)} refused the request. Confirm it still grants contents and pull request write access, and that no organization policy blocks it.`,
+      );
+    case 429:
+      return new ApiError(
+        429,
+        "kickstart_github_rate_limited",
+        `GitHub is rate limiting Facility's installation for ${slug(repository)}. Retry once the installation's rate limit resets.`,
+      );
+    default:
+      return error;
+  }
 }
 
 function workspaceKickstartAnswers(
