@@ -386,42 +386,57 @@ export class ProjectEnvironmentService {
       preparedInput.credentials.environment,
       preparedInput.manifest.environment.secrets,
     );
-    if (result.exitCode !== 0) throw commandFailure("environment.browser_test", script, safeResult);
-    const files = await this.runtime.exec(input.workspace, {
-      command: "find",
-      args: [artifactDirectory, "-type", "f", "-maxdepth", "2", "-print"],
-      cwd: primaryPath(preparedInput.credentials),
-      env: preparedInput.credentials.environment,
+    const failure =
+      result.exitCode === 0
+        ? undefined
+        : commandFailure("environment.browser_test", script, safeResult);
+    const collectArtifacts = async () => {
+      const files = await this.runtime.exec(input.workspace, {
+        command: "find",
+        args: [artifactDirectory, "-type", "f", "-maxdepth", "2", "-print"],
+        cwd: primaryPath(preparedInput.credentials),
+        env: preparedInput.credentials.environment,
+      });
+      const collected = files.stdout
+        .split("\n")
+        .map((path) => path.trim())
+        .filter(Boolean)
+        .map((path) => ({
+          id: newId("art"),
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: input.storyId,
+          turnId: input.turnId,
+          kind: path.endsWith(".png") ? "screenshot" : path.includes("trace") ? "trace" : "report",
+          label: path.split("/").at(-1) ?? "browser artifact",
+          uri: `workspace://${input.workspace.id}/${primaryPath(preparedInput.credentials)}/${path}`,
+          metadata: { path },
+        }));
+      if (collected.length > 0) await this.db.insert(storyArtifacts).values(collected);
+      return collected;
+    };
+    const artifacts = await collectArtifacts().catch((error) => {
+      if (!failure) throw error;
+      return [];
     });
-    const artifacts = files.stdout
-      .split("\n")
-      .map((path) => path.trim())
-      .filter(Boolean)
-      .map((path) => ({
-        id: newId("art"),
-        orgId: input.orgId,
-        projectId: input.projectId,
-        storyId: input.storyId,
-        turnId: input.turnId,
-        kind: path.endsWith(".png") ? "screenshot" : path.includes("trace") ? "trace" : "report",
-        label: path.split("/").at(-1) ?? "browser artifact",
-        uri: `workspace://${input.workspace.id}/${primaryPath(preparedInput.credentials)}/${path}`,
-        metadata: { path },
-      }));
-    if (artifacts.length > 0) await this.db.insert(storyArtifacts).values(artifacts);
-    await appendWorkspaceEvent(
-      this.db,
-      input.workspace.id,
-      input.orgId,
-      "environment.browser_test",
-      {
-        exitCode: result.exitCode,
-        stdout: tail(safeResult.stdout),
-        stderr: tail(safeResult.stderr),
-        durationMs: result.durationMs,
-        artifacts: artifacts.map((artifact) => artifact.uri),
-      },
-    );
+    try {
+      await appendWorkspaceEvent(
+        this.db,
+        input.workspace.id,
+        input.orgId,
+        "environment.browser_test",
+        {
+          exitCode: result.exitCode,
+          stdout: tail(safeResult.stdout),
+          stderr: tail(safeResult.stderr),
+          durationMs: result.durationMs,
+          artifacts: artifacts.map((artifact) => artifact.uri),
+        },
+      );
+    } catch (error) {
+      if (!failure) throw error;
+    }
+    if (failure) throw failure;
     return { result: safeResult, artifacts };
   }
 
