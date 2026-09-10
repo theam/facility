@@ -294,7 +294,7 @@ describe("story overview integration", () => {
     expect(actions?.textContent).toContain("send a task");
     expect(actions?.textContent).toContain("open app ↗");
     expect(actions?.textContent).toContain("maintenance");
-    expect(actions?.textContent).not.toContain("cancel run");
+    expect(actions?.textContent).not.toContain("cancel turn");
     expect(root.querySelector("#story-composer")).toBeNull();
     expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("send a task");
   });

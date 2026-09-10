@@ -280,7 +280,7 @@ export function CancelTurnButton({
       className={inline ? "inline-flex items-center gap-2" : "mt-3 flex flex-col items-end gap-1"}
     >
       <Button size="sm" variant="danger" disabled={pending} onClick={cancel}>
-        {pending ? "canceling…" : "cancel run"}
+        {pending ? "canceling…" : "cancel turn"}
       </Button>
       {error ? (
         <span role="alert" className="text-[10px] text-(--bad)">
