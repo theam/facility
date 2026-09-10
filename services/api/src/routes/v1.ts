@@ -3,6 +3,7 @@ import type { AppConfig } from "../types.js";
 import { registerGithubInstallationRoutes } from "./v1/github-installations.js";
 import { registerInsightsPipelineRoutes } from "./v1/insights-pipeline.js";
 import { registerMeMembersRolesRoutes } from "./v1/me-members-roles.js";
+import { registerProjectOverviewRoutes } from "./v1/project-overview.js";
 import { registerProjectRoutes } from "./v1/projects.js";
 import { assertProjectInOrg } from "./v1/shared.js";
 import { registerStoryWorkspaceRoutes } from "./v1/story-workspaces.js";
@@ -22,6 +23,7 @@ export async function registerV1Routes(app: FastifyInstance, config: AppConfig) 
   await registerProjectRoutes(app, context);
   await registerGithubInstallationRoutes(app, context);
   await registerInsightsPipelineRoutes(app, context);
+  await registerProjectOverviewRoutes(app, context);
   await registerStoryWorkspaceRoutes(app, config);
   await registerWorkspacePreviewRoutes(app, config);
 }

@@ -308,5 +308,11 @@ export type ProjectObservability = FacilityGeneratedResponse<
 >;
 export type UsageSummary = ProjectObservability["usage"];
 export type ProjectPipeline = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/pipeline">;
+export type ProjectOverview = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/overview">;
+export type OverviewActiveTurn = ArrayItem<ProjectOverview["activity"]["running"]>;
+export type OverviewAttentionItem = ArrayItem<ProjectOverview["attention"]["items"]>;
+export type OverviewReviewItem = ArrayItem<ProjectOverview["review"]["items"]>;
+export type OverviewRecentTurn = ArrayItem<ProjectOverview["recent"]["items"]>;
+export type OverviewBacklogStory = ArrayItem<ProjectOverview["backlog"]["ready"]>;
 export type PipelineItem = ArrayItem<ProjectPipeline["stages"]["backlog"]>;
 export type PipelinePullRequest = ArrayItem<PipelineItem["pullRequests"]>;

@@ -124,6 +124,10 @@ in another client.
 
 - `/v1/projects/:projectId/costs` returns cost and usage analysis.
 - `/v1/projects/:projectId/budget` reads or updates the monthly project budget.
+- `/v1/projects/:projectId/overview` returns the operator entry point: running and queued turns,
+  open attention with the action each accepts, pull requests waiting for review, recent results,
+  backlog counts, recorded workspace states, and permission-gated agent spend and budget. It reads
+  persisted state only and never wakes a workspace. See [Read the project overview](../guides/project-overview.md).
 - `/v1/projects/:projectId/observability` returns operational events and summaries.
 - `/v1/projects/:projectId/pipeline` returns the issue, pull-request, check, and workflow view.
 - `/v1/projects/:projectId/github/sync` requests immediate mirror reconciliation.
