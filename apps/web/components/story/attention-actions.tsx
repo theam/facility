@@ -14,11 +14,15 @@ export function AttentionActions({
   storyId,
   item,
   agentName,
+  replyAnchor = true,
 }: {
   projectId: string;
   storyId: string;
   item: AttentionItem;
+  /** The agent that asked, so the composer opens addressed to it. */
   agentName?: string | null;
+  /** The story page has the composer on the same page; other surfaces link to it themselves. */
+  replyAnchor?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState("");
@@ -43,9 +47,11 @@ export function AttentionActions({
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       {item.kind === "agent_waiting" ? (
-        <Button size="sm" onClick={() => requestCompose(agentName ?? undefined)}>
-          reply
-        </Button>
+        replyAnchor ? (
+          <Button size="sm" onClick={() => requestCompose(agentName ?? undefined)}>
+            reply
+          </Button>
+        ) : null
       ) : item.turnId ? (
         <Button size="sm" onClick={() => act("retry")} disabled={Boolean(pending)}>
           {pending === "retry" ? "retrying…" : "retry"}

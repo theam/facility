@@ -14859,6 +14859,1003 @@
         ],
         "x-facility-permission": "workspaces:execute"
       }
+    },
+    "/v1/projects/{projectId}/overview": {
+      "get": {
+        "operationId": "getProjectOverview",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "activity": {
+                      "type": "object",
+                      "properties": {
+                        "running": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "storyId": {
+                                "type": "string"
+                              },
+                              "storyTitle": {
+                                "type": "string"
+                              },
+                              "storyStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "ready",
+                                  "working",
+                                  "attention",
+                                  "review",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "turnId": {
+                                "type": "string"
+                              },
+                              "agentName": {
+                                "type": "string"
+                              },
+                              "engine": {
+                                "type": "string"
+                              },
+                              "model": {
+                                "type": "string"
+                              },
+                              "triggerType": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "queued",
+                                  "running"
+                                ]
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "startedAt": {
+                                "nullable": true,
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "scheduledFor": {
+                                "nullable": true,
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "storyId",
+                              "storyTitle",
+                              "storyStatus",
+                              "turnId",
+                              "agentName",
+                              "engine",
+                              "model",
+                              "triggerType",
+                              "state",
+                              "createdAt",
+                              "startedAt",
+                              "scheduledFor"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "queued": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "storyId": {
+                                "type": "string"
+                              },
+                              "storyTitle": {
+                                "type": "string"
+                              },
+                              "storyStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "ready",
+                                  "working",
+                                  "attention",
+                                  "review",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "turnId": {
+                                "type": "string"
+                              },
+                              "agentName": {
+                                "type": "string"
+                              },
+                              "engine": {
+                                "type": "string"
+                              },
+                              "model": {
+                                "type": "string"
+                              },
+                              "triggerType": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "queued",
+                                  "running"
+                                ]
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "startedAt": {
+                                "nullable": true,
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "scheduledFor": {
+                                "nullable": true,
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "storyId",
+                              "storyTitle",
+                              "storyStatus",
+                              "turnId",
+                              "agentName",
+                              "engine",
+                              "model",
+                              "triggerType",
+                              "state",
+                              "createdAt",
+                              "startedAt",
+                              "scheduledFor"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "running",
+                        "queued"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "attention": {
+                      "type": "object",
+                      "properties": {
+                        "openCount": {
+                          "type": "number"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "storyId": {
+                                "type": "string"
+                              },
+                              "storyTitle": {
+                                "type": "string"
+                              },
+                              "storyStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "ready",
+                                  "working",
+                                  "attention",
+                                  "review",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "turnId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "detail": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "reply",
+                                  "retry",
+                                  "dismiss"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "storyId",
+                              "storyTitle",
+                              "storyStatus",
+                              "id",
+                              "turnId",
+                              "kind",
+                              "title",
+                              "detail",
+                              "createdAt",
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "openCount",
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "review": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "source": {
+                                "type": "string",
+                                "enum": [
+                                  "mirror",
+                                  "story"
+                                ]
+                              },
+                              "storyId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "storyTitle": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "storyStatus": {
+                                "nullable": true,
+                                "type": "string",
+                                "enum": [
+                                  "ready",
+                                  "working",
+                                  "attention",
+                                  "review",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "activeAgentName": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "pullRequest": {
+                                "type": "object",
+                                "properties": {
+                                  "number": {
+                                    "type": "number"
+                                  },
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "url": {
+                                    "type": "string"
+                                  },
+                                  "repository": {
+                                    "type": "string"
+                                  },
+                                  "draft": {
+                                    "type": "boolean"
+                                  },
+                                  "ciState": {
+                                    "nullable": true,
+                                    "type": "string",
+                                    "enum": [
+                                      "pending",
+                                      "success",
+                                      "failure"
+                                    ]
+                                  },
+                                  "ciFailureNames": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "updatedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                },
+                                "required": [
+                                  "number",
+                                  "title",
+                                  "url",
+                                  "repository",
+                                  "draft",
+                                  "ciState",
+                                  "ciFailureNames",
+                                  "updatedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "source",
+                              "storyId",
+                              "storyTitle",
+                              "storyStatus",
+                              "activeAgentName",
+                              "pullRequest"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "total"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "recent": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "storyId": {
+                                "type": "string"
+                              },
+                              "storyTitle": {
+                                "type": "string"
+                              },
+                              "storyStatus": {
+                                "type": "string",
+                                "enum": [
+                                  "ready",
+                                  "working",
+                                  "attention",
+                                  "review",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "turnId": {
+                                "type": "string"
+                              },
+                              "agentName": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "succeeded",
+                                  "failed",
+                                  "canceled"
+                                ]
+                              },
+                              "triggerType": {
+                                "type": "string"
+                              },
+                              "endedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "durationMs": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "error": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "pullRequest": {
+                                "nullable": true,
+                                "type": "object",
+                                "properties": {
+                                  "number": {
+                                    "type": "number"
+                                  },
+                                  "url": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "number",
+                                  "url"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "storyId",
+                              "storyTitle",
+                              "storyStatus",
+                              "turnId",
+                              "agentName",
+                              "state",
+                              "triggerType",
+                              "endedAt",
+                              "durationMs",
+                              "error",
+                              "pullRequest"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "items"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "backlog": {
+                      "type": "object",
+                      "properties": {
+                        "ready": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "storyId": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "ready",
+                                  "working",
+                                  "attention",
+                                  "review",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "provider": {
+                                "type": "string",
+                                "enum": [
+                                  "github",
+                                  "manual",
+                                  "schedule"
+                                ]
+                              },
+                              "externalId": {
+                                "type": "string"
+                              },
+                              "branch": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "activeAgentName": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "pullRequestNumber": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "pullRequestUrl": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "storyId",
+                              "title",
+                              "status",
+                              "provider",
+                              "externalId",
+                              "branch",
+                              "activeAgentName",
+                              "pullRequestNumber",
+                              "pullRequestUrl",
+                              "updatedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "counts": {
+                          "type": "object",
+                          "properties": {
+                            "ready": {
+                              "type": "number"
+                            },
+                            "working": {
+                              "type": "number"
+                            },
+                            "attention": {
+                              "type": "number"
+                            },
+                            "review": {
+                              "type": "number"
+                            },
+                            "done": {
+                              "type": "number"
+                            },
+                            "archived": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "ready",
+                            "working",
+                            "attention",
+                            "review",
+                            "done",
+                            "archived"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "openIssues": {
+                          "type": "number"
+                        },
+                        "openIssuesWithoutStory": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "ready",
+                        "counts",
+                        "openIssues",
+                        "openIssuesWithoutStory"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "environments": {
+                      "type": "object",
+                      "properties": {
+                        "retained": {
+                          "type": "number"
+                        },
+                        "recorded": {
+                          "type": "object",
+                          "properties": {
+                            "creating": {
+                              "type": "number"
+                            },
+                            "running": {
+                              "type": "number"
+                            },
+                            "sleeping": {
+                              "type": "number"
+                            },
+                            "error": {
+                              "type": "number"
+                            },
+                            "deleting": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "creating",
+                            "running",
+                            "sleeping",
+                            "error",
+                            "deleting"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "lastActivityAt": {
+                          "nullable": true,
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "retained",
+                        "recorded",
+                        "lastActivityAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "spend": {
+                      "type": "object",
+                      "properties": {
+                        "agents": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "available": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ]
+                                },
+                                "month": {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "to": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "turns": {
+                                      "type": "number"
+                                    },
+                                    "pricedTurns": {
+                                      "type": "number"
+                                    },
+                                    "unpricedTurns": {
+                                      "type": "number"
+                                    },
+                                    "unmeasuredTurns": {
+                                      "type": "number"
+                                    },
+                                    "costCents": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to",
+                                    "turns",
+                                    "pricedTurns",
+                                    "unpricedTurns",
+                                    "unmeasuredTurns",
+                                    "costCents"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "lastSevenDays": {
+                                  "type": "object",
+                                  "properties": {
+                                    "from": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "to": {
+                                      "type": "string",
+                                      "format": "date-time"
+                                    },
+                                    "turns": {
+                                      "type": "number"
+                                    },
+                                    "pricedTurns": {
+                                      "type": "number"
+                                    },
+                                    "unpricedTurns": {
+                                      "type": "number"
+                                    },
+                                    "unmeasuredTurns": {
+                                      "type": "number"
+                                    },
+                                    "costCents": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "from",
+                                    "to",
+                                    "turns",
+                                    "pricedTurns",
+                                    "unpricedTurns",
+                                    "unmeasuredTurns",
+                                    "costCents"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "byAgent": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "agentName": {
+                                        "type": "string"
+                                      },
+                                      "turns": {
+                                        "type": "number"
+                                      },
+                                      "unpricedTurns": {
+                                        "type": "number"
+                                      },
+                                      "costCents": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "agentName",
+                                      "turns",
+                                      "unpricedTurns",
+                                      "costCents"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "available",
+                                "month",
+                                "lastSevenDays",
+                                "byAgent"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "available": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    false
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "permission"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "available",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "budget": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "available": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ]
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "not_configured",
+                                    "disabled",
+                                    "ok",
+                                    "warning",
+                                    "exceeded"
+                                  ]
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                },
+                                "monthlyLimitCents": {
+                                  "nullable": true,
+                                  "type": "number"
+                                },
+                                "warningPercent": {
+                                  "nullable": true,
+                                  "type": "number"
+                                },
+                                "windowStart": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "windowEnd": {
+                                  "type": "string",
+                                  "format": "date-time"
+                                },
+                                "spentCents": {
+                                  "type": "number"
+                                },
+                                "remainingCents": {
+                                  "nullable": true,
+                                  "type": "number"
+                                },
+                                "percentUsed": {
+                                  "nullable": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "available",
+                                "state",
+                                "enabled",
+                                "monthlyLimitCents",
+                                "warningPercent",
+                                "windowStart",
+                                "windowEnd",
+                                "spentCents",
+                                "remainingCents",
+                                "percentUsed"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "available": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    false
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "permission"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "available",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "agents",
+                        "budget"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "activity",
+                    "attention",
+                    "review",
+                    "recent",
+                    "backlog",
+                    "environments",
+                    "spend"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get overview",
+        "tags": [
+          "Projects"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:read"
+      }
     }
   },
   "servers": [

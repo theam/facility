@@ -1016,6 +1016,23 @@ export interface paths {
         patch: operations["updateProjectVariables"];
         trace?: never;
     };
+    "/v1/projects/{projectId}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get overview */
+        get: operations["getProjectOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -10016,6 +10033,305 @@ export interface operations {
                         }[];
                         /** @enum {string} */
                         applies_to: "new_processes";
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getProjectOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        generatedAt: string;
+                        activity: {
+                            running: {
+                                storyId: string;
+                                storyTitle: string;
+                                /** @enum {string} */
+                                storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                                turnId: string;
+                                agentName: string;
+                                engine: string;
+                                model: string;
+                                triggerType: string;
+                                /** @enum {string} */
+                                state: "queued" | "running";
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                startedAt: string | null;
+                                /** Format: date-time */
+                                scheduledFor: string | null;
+                            }[];
+                            queued: {
+                                storyId: string;
+                                storyTitle: string;
+                                /** @enum {string} */
+                                storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                                turnId: string;
+                                agentName: string;
+                                engine: string;
+                                model: string;
+                                triggerType: string;
+                                /** @enum {string} */
+                                state: "queued" | "running";
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                startedAt: string | null;
+                                /** Format: date-time */
+                                scheduledFor: string | null;
+                            }[];
+                        };
+                        attention: {
+                            openCount: number;
+                            items: {
+                                storyId: string;
+                                storyTitle: string;
+                                /** @enum {string} */
+                                storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                                id: string;
+                                turnId: string | null;
+                                kind: string;
+                                title: string;
+                                detail: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** @enum {string} */
+                                action: "reply" | "retry" | "dismiss";
+                            }[];
+                        };
+                        review: {
+                            items: {
+                                /** @enum {string} */
+                                source: "mirror" | "story";
+                                storyId: string | null;
+                                storyTitle: string | null;
+                                /** @enum {string|null} */
+                                storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived" | null;
+                                activeAgentName: string | null;
+                                pullRequest: {
+                                    number: number;
+                                    title: string;
+                                    url: string;
+                                    repository: string;
+                                    draft: boolean;
+                                    /** @enum {string|null} */
+                                    ciState: "pending" | "success" | "failure" | null;
+                                    ciFailureNames: string[];
+                                    /** Format: date-time */
+                                    updatedAt: string;
+                                };
+                            }[];
+                            total: number;
+                        };
+                        recent: {
+                            items: {
+                                storyId: string;
+                                storyTitle: string;
+                                /** @enum {string} */
+                                storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                                turnId: string;
+                                agentName: string;
+                                /** @enum {string} */
+                                state: "succeeded" | "failed" | "canceled";
+                                triggerType: string;
+                                /** Format: date-time */
+                                endedAt: string;
+                                durationMs: number | null;
+                                error: string | null;
+                                pullRequest: {
+                                    number: number;
+                                    url: string;
+                                } | null;
+                            }[];
+                        };
+                        backlog: {
+                            ready: {
+                                storyId: string;
+                                title: string;
+                                /** @enum {string} */
+                                status: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                                /** @enum {string} */
+                                provider: "github" | "manual" | "schedule";
+                                externalId: string;
+                                branch: string | null;
+                                activeAgentName: string | null;
+                                pullRequestNumber: number | null;
+                                pullRequestUrl: string | null;
+                                /** Format: date-time */
+                                updatedAt: string;
+                            }[];
+                            counts: {
+                                ready: number;
+                                working: number;
+                                attention: number;
+                                review: number;
+                                done: number;
+                                archived: number;
+                            };
+                            openIssues: number;
+                            openIssuesWithoutStory: number;
+                        };
+                        environments: {
+                            retained: number;
+                            recorded: {
+                                creating: number;
+                                running: number;
+                                sleeping: number;
+                                error: number;
+                                deleting: number;
+                            };
+                            /** Format: date-time */
+                            lastActivityAt: string | null;
+                        };
+                        spend: {
+                            agents: {
+                                /** @enum {boolean} */
+                                available: true;
+                                month: {
+                                    /** Format: date-time */
+                                    from: string;
+                                    /** Format: date-time */
+                                    to: string;
+                                    turns: number;
+                                    pricedTurns: number;
+                                    unpricedTurns: number;
+                                    unmeasuredTurns: number;
+                                    costCents: number;
+                                };
+                                lastSevenDays: {
+                                    /** Format: date-time */
+                                    from: string;
+                                    /** Format: date-time */
+                                    to: string;
+                                    turns: number;
+                                    pricedTurns: number;
+                                    unpricedTurns: number;
+                                    unmeasuredTurns: number;
+                                    costCents: number;
+                                };
+                                byAgent: {
+                                    agentName: string;
+                                    turns: number;
+                                    unpricedTurns: number;
+                                    costCents: number;
+                                }[];
+                            } | {
+                                /** @enum {boolean} */
+                                available: false;
+                                /** @enum {string} */
+                                reason: "permission";
+                            };
+                            budget: {
+                                /** @enum {boolean} */
+                                available: true;
+                                /** @enum {string} */
+                                state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded";
+                                enabled: boolean;
+                                monthlyLimitCents: number | null;
+                                warningPercent: number | null;
+                                /** Format: date-time */
+                                windowStart: string;
+                                /** Format: date-time */
+                                windowEnd: string;
+                                spentCents: number;
+                                remainingCents: number | null;
+                                percentUsed: number | null;
+                            } | {
+                                /** @enum {boolean} */
+                                available: false;
+                                /** @enum {string} */
+                                reason: "permission";
+                            };
+                        };
                     };
                 };
             };
