@@ -82,12 +82,14 @@ export function WorkspaceControls({
   workspace,
   canExecute,
   canWrite,
+  computeState,
 }: {
   projectId: string;
   story: WorkspaceStory;
   workspace: StoryWorkspace | null;
   canExecute: boolean;
   canWrite: boolean;
+  computeState?: StoryWorkspace["state"];
 }) {
   const router = useRouter();
   const [pending, setPending] = useState("");
@@ -152,25 +154,8 @@ export function WorkspaceControls({
 
   return (
     <div className="flex flex-col gap-5">
+      <p className="text-sm font-medium">Preview and verification</p>
       <div className="flex flex-wrap gap-2">
-        {story.status === "archived" && canWrite && !workspaceDeleted ? (
-          <Button size="sm" onClick={() => lifecycle("restore")} disabled={Boolean(pending)}>
-            {pending === "restore" ? "restoring…" : "restore"}
-          </Button>
-        ) : story.status !== "archived" ? (
-          <>
-            {canExecute ? (
-              <Button size="sm" onClick={() => lifecycle("suspend")} disabled={Boolean(pending)}>
-                {pending === "suspend" ? "suspending…" : "suspend compute"}
-              </Button>
-            ) : null}
-            {canWrite ? (
-              <Button size="sm" onClick={() => lifecycle("archive")} disabled={Boolean(pending)}>
-                {pending === "archive" ? "archiving…" : "archive"}
-              </Button>
-            ) : null}
-          </>
-        ) : null}
         {canExecute
           ? services.map((service) => (
               <Button
@@ -196,16 +181,43 @@ export function WorkspaceControls({
             {pending === "browser-test" ? "testing…" : "run browser test"}
           </Button>
         ) : null}
-        {canWrite && !workspaceDeleted ? (
-          <Button
-            size="sm"
-            onClick={() => environmentAction("clean-setup")}
-            disabled={Boolean(pending)}
-          >
-            {pending === "clean-setup" ? "setting up…" : "clean setup"}
-          </Button>
-        ) : null}
       </div>
+      <details className="border-t border-(--line) pt-3">
+        <summary className="cursor-pointer text-sm text-(--mut)">Workspace maintenance</summary>
+        <p className="my-3 text-xs leading-relaxed text-(--dim)">
+          Suspend stops compute and preserves files. Archive keeps the workspace as history. Clean
+          setup reruns project setup and can reset development data.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {story.status === "archived" && canWrite && !workspaceDeleted ? (
+            <Button size="sm" onClick={() => lifecycle("restore")} disabled={Boolean(pending)}>
+              {pending === "restore" ? "restoring…" : "restore"}
+            </Button>
+          ) : story.status !== "archived" && !workspaceDeleted ? (
+            <>
+              {canExecute && computeState === "running" ? (
+                <Button size="sm" onClick={() => lifecycle("suspend")} disabled={Boolean(pending)}>
+                  {pending === "suspend" ? "suspending…" : "suspend compute"}
+                </Button>
+              ) : null}
+              {canWrite ? (
+                <Button size="sm" onClick={() => lifecycle("archive")} disabled={Boolean(pending)}>
+                  {pending === "archive" ? "archiving…" : "archive"}
+                </Button>
+              ) : null}
+            </>
+          ) : null}
+          {canWrite && !workspaceDeleted ? (
+            <Button
+              size="sm"
+              onClick={() => environmentAction("clean-setup")}
+              disabled={Boolean(pending)}
+            >
+              {pending === "clean-setup" ? "setting up…" : "clean setup"}
+            </Button>
+          ) : null}
+        </div>
+      </details>
       {workspaceDeleted ? (
         <p className="text-[12px] leading-relaxed text-(--dim)">
           This workspace was permanently deleted. Its conversation and metadata remain as history.
