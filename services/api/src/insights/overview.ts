@@ -11,8 +11,30 @@ import {
   turnUsage,
   workspaces,
 } from "@facility/db";
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import type { CostBudgetService } from "./costs.js";
+
+// Insights only reads metric dimensions. Large webhook bodies, issue text, workspace
+// setup output and agent manifests must never be materialized for this overview.
+type TurnRow = Pick<typeof turns.$inferSelect, "state" | "createdAt">;
+type UsageRow = Pick<
+  typeof turnUsage.$inferSelect,
+  | "createdAt"
+  | "agentName"
+  | "model"
+  | "inputTokens"
+  | "outputTokens"
+  | "cacheReadTokens"
+  | "cacheWriteTokens"
+  | "costCents"
+  | "priced"
+  | "durationMs"
+>;
+type PullRow = Pick<
+  typeof githubPullRequests.$inferSelect,
+  "state" | "ciState" | "mergedAt" | "githubCreatedAt" | "repositoryId" | "number"
+>;
+type CiRow = Pick<typeof githubCiEvents.$inferSelect, "state" | "repositoryId" | "pullNumber">;
 
 export class InsightsService {
   constructor(
@@ -36,13 +58,24 @@ export class InsightsService {
       recentAudit,
     ] = await Promise.all([
       this.db
-        .select()
+        .select({ state: turns.state, createdAt: turns.createdAt })
         .from(turns)
         .where(
           and(eq(turns.orgId, orgId), eq(turns.projectId, projectId), gte(turns.createdAt, from)),
         ),
       this.db
-        .select()
+        .select({
+          createdAt: turnUsage.createdAt,
+          agentName: turnUsage.agentName,
+          model: turnUsage.model,
+          inputTokens: turnUsage.inputTokens,
+          outputTokens: turnUsage.outputTokens,
+          cacheReadTokens: turnUsage.cacheReadTokens,
+          cacheWriteTokens: turnUsage.cacheWriteTokens,
+          costCents: turnUsage.costCents,
+          priced: turnUsage.priced,
+          durationMs: turnUsage.durationMs,
+        })
         .from(turnUsage)
         .where(
           and(
@@ -52,11 +85,11 @@ export class InsightsService {
           ),
         ),
       this.db
-        .select()
+        .select({ state: workspaces.state })
         .from(workspaces)
         .where(and(eq(workspaces.orgId, orgId), eq(workspaces.projectId, projectId))),
       this.db
-        .select()
+        .select({ id: attentionItems.id })
         .from(attentionItems)
         .where(
           and(
@@ -66,7 +99,10 @@ export class InsightsService {
           ),
         ),
       this.db
-        .select()
+        .select({
+          total: sql<number>`count(*)::int`,
+          failed: sql<number>`count(*) filter (where ${githubWebhookEvents.error} is not null and ${githubWebhookEvents.error} <> '')::int`,
+        })
         .from(githubWebhookEvents)
         .where(
           and(
@@ -76,17 +112,28 @@ export class InsightsService {
           ),
         ),
       this.db
-        .select()
+        .select({ state: githubIssues.state })
         .from(githubIssues)
         .where(and(eq(githubIssues.orgId, orgId), eq(githubIssues.projectId, projectId))),
       this.db
-        .select()
+        .select({
+          state: githubPullRequests.state,
+          ciState: githubPullRequests.ciState,
+          mergedAt: githubPullRequests.mergedAt,
+          githubCreatedAt: githubPullRequests.githubCreatedAt,
+          repositoryId: githubPullRequests.repositoryId,
+          number: githubPullRequests.number,
+        })
         .from(githubPullRequests)
         .where(
           and(eq(githubPullRequests.orgId, orgId), eq(githubPullRequests.projectId, projectId)),
         ),
       this.db
-        .select()
+        .select({
+          state: githubCiEvents.state,
+          repositoryId: githubCiEvents.repositoryId,
+          pullNumber: githubCiEvents.pullNumber,
+        })
         .from(githubCiEvents)
         .where(
           and(
@@ -96,7 +143,9 @@ export class InsightsService {
           ),
         ),
       this.db
-        .select()
+        .select({
+          enabled: sql<boolean>`coalesce(${agentManifests.manifest}->'enabled', 'true'::jsonb) <> 'false'::jsonb`,
+        })
         .from(agentManifests)
         .where(and(eq(agentManifests.orgId, orgId), eq(agentManifests.projectId, projectId))),
       this.costs.budgetState(orgId, projectId, now),
@@ -112,7 +161,7 @@ export class InsightsService {
     const usage = usageSummary(usageRows);
     const daily = dailySeries(turnRows, usageRows, pullRows, from, now);
     const delivery = deliverySummary(pullRows, ciRows, from);
-    const failedWebhooks = webhooks.filter((event) => event.error).length;
+    const failedWebhooks = webhooks[0]?.failed ?? 0;
     const failedChecks = pullRows.filter(
       (pull) => pull.state === "open" && pull.ciState === "failure",
     ).length;
@@ -149,13 +198,11 @@ export class InsightsService {
         openIssues: issueRows.filter((issue) => issue.state === "open").length,
         openPullRequests: pullRows.filter((pull) => pull.state === "open").length,
         failedChecks,
-        webhookEvents: webhooks.length,
+        webhookEvents: webhooks[0]?.total ?? 0,
         failedWebhooks,
       },
       analytics: {
-        activeAgents: manifestRows.filter(
-          (row) => (row.manifest as { enabled?: unknown }).enabled !== false,
-        ).length,
+        activeAgents: manifestRows.filter((row) => row.enabled !== false).length,
         ...delivery,
       },
       attention: { open: openAttention.length },
@@ -167,7 +214,7 @@ export class InsightsService {
   }
 }
 
-function usageSummary(rows: Array<typeof turnUsage.$inferSelect>) {
+function usageSummary(rows: UsageRow[]) {
   return rows.reduce(
     (summary, row) => {
       summary.turns += 1;
@@ -194,9 +241,9 @@ function usageSummary(rows: Array<typeof turnUsage.$inferSelect>) {
 }
 
 function dailySeries(
-  turnRows: Array<typeof turns.$inferSelect>,
-  usageRows: Array<typeof turnUsage.$inferSelect>,
-  pullRows: Array<typeof githubPullRequests.$inferSelect>,
+  turnRows: TurnRow[],
+  usageRows: UsageRow[],
+  pullRows: PullRow[],
   from: Date,
   to: Date,
 ) {
@@ -250,11 +297,7 @@ function dailySeries(
   return [...days.values()];
 }
 
-function deliverySummary(
-  pullRows: Array<typeof githubPullRequests.$inferSelect>,
-  ciRows: Array<typeof githubCiEvents.$inferSelect>,
-  from: Date,
-) {
+function deliverySummary(pullRows: PullRow[], ciRows: CiRow[], from: Date) {
   const merged = pullRows.filter((pull) => pull.mergedAt && pull.mergedAt >= from);
   const observed = new Set(ciRows.map((event) => `${event.repositoryId}:${event.pullNumber}`));
   const failed = new Set(
@@ -284,10 +327,7 @@ function deliverySummary(
   };
 }
 
-function groupedUsage(
-  rows: Array<typeof turnUsage.$inferSelect>,
-  key: (row: typeof turnUsage.$inferSelect) => string,
-) {
+function groupedUsage(rows: UsageRow[], key: (row: UsageRow) => string) {
   return [...new Set(rows.map(key))].map((name) => ({
     name,
     ...usageSummary(rows.filter((row) => key(row) === name)),
