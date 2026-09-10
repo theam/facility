@@ -11,7 +11,9 @@ import {
 import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
 import { CostBudgetService } from "./insights/costs.js";
+import { ProjectBacklogService } from "./stories/backlog.js";
 import { StoryWorkspaceService } from "./stories/service.js";
+import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
 import { AgentEngineRegistry, ClaudeCodeEngine, CodexEngine } from "./turns/engines.js";
 import { TurnGitEvidenceService } from "./turns/git-evidence.js";
@@ -42,6 +44,8 @@ export type StoryDomain = {
   mirror: GithubMirrorService;
   costs: CostBudgetService;
   evidence: TurnGitEvidenceService;
+  titles: StoryTitleService;
+  backlog: ProjectBacklogService;
 };
 
 export function createStoryDomain(input: {
@@ -91,6 +95,13 @@ export function createStoryDomain(input: {
     new CodexEngine(runtime),
   ]);
   const evidence = new TurnGitEvidenceService(input.db, runtime);
+  const titles = new StoryTitleService(input.db, {
+    credentials: async (orgId, projectId) =>
+      titleCredentials(projectId, await variables.projectValues({ orgId, projectId })),
+    budget: costs,
+    enqueue: (data) => input.enqueue("stories.title", data),
+  });
+  const backlog = new ProjectBacklogService(input.db);
   const dispatcher = new TurnDispatcher(
     input.db,
     stories,
@@ -142,6 +153,8 @@ export function createStoryDomain(input: {
     mirror,
     costs,
     evidence,
+    titles,
+    backlog,
   };
 }
 

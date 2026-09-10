@@ -10,6 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
+import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
 import type { AppConfig } from "../../types.js";
 import {
   parseWorkspaceVariables,
@@ -47,13 +48,17 @@ const UpdateAgentBody = z.object({
 const StartStoryBody = z.object({
   provider: z.enum(["github", "manual"]).default("manual"),
   external_id: z.string().min(1).max(240).optional(),
-  title: z.string().min(1).max(500),
-  agent: z.string().min(1).max(64).default("builder"),
+  /** Repository the GitHub identity belongs to; defaults to the primary repository. */
+  repository_id: z.string().min(1).max(200).optional(),
+  /** Optional. Omitted titles start provisional and are generated from the request. */
+  title: z.string().trim().min(1).max(500).optional(),
+  /** Optional. Omitted agents resolve to the project's default for this surface. */
+  agent: z.string().min(1).max(64).optional(),
   message: z.string().min(1).max(200_000),
   idempotency_key: z.string().min(1).max(200),
 });
 const SendMessageBody = z.object({
-  agent: z.string().min(1).max(64).default("builder"),
+  agent: z.string().min(1).max(64).optional(),
   message: z.string().min(1).max(200_000),
   idempotency_key: z.string().min(1).max(200),
 });
@@ -167,6 +172,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           domain.scheduler.status(actor.orgId, projectId),
         ]),
       );
+      const manifests = rows.map(manifestFromProjection);
       return {
         agents: rows.map((row) => ({
           ...manifestFromProjection(row),
@@ -174,6 +180,12 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           synced_at: row.syncedAt,
           schedule_status: presentScheduleStatus(scheduleStatus.get(row.name)),
         })),
+        defaults: {
+          ui: resolveDefaultAgent(manifests, "ui")?.name ?? null,
+          mcp: resolveDefaultAgent(manifests, "mcp")?.name ?? null,
+          manual: resolveDefaultAgent(manifests, "manual")?.name ?? null,
+        },
+        title_generation: await domain.titles.available(actor.orgId, projectId),
       };
     },
   );
@@ -330,13 +342,13 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       const body = request.body as z.infer<typeof StartStoryBody>;
       const actor = principal(request);
       const orgId = actor.orgId;
-      const [projection, projectManifest] = await translate(() =>
+      const surface = requestSurface(request.headers["x-facility-surface"]);
+      const [manifest, projectManifest] = await translate(() =>
         Promise.all([
-          domain.catalog.get(orgId, projectId, body.agent),
+          selectAgent(domain, orgId, projectId, body.agent, surface),
           domain.projectManifests.load(orgId, projectId),
         ]),
       );
-      const manifest = manifestFromProjection(projection);
       const repositoryId =
         body.provider === "github"
           ? (
@@ -347,14 +359,22 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
                   and(
                     eq(projectRepositories.orgId, orgId),
                     eq(projectRepositories.projectId, projectId),
-                    eq(projectRepositories.role, "primary"),
+                    body.repository_id
+                      ? eq(projectRepositories.id, body.repository_id)
+                      : eq(projectRepositories.role, "primary"),
                   ),
                 )
                 .limit(1)
             )[0]?.id
           : undefined;
-      const surface = requestSurface(request.headers["x-facility-surface"]);
+      if (body.provider === "github" && !repositoryId) {
+        throw new ApiError(404, "repository_not_found", "Repository not found in this project");
+      }
       requireAgentSurface(manifest, surface);
+      // A request without a title is stored at once under a provisional title.
+      // The AI title arrives asynchronously; the request is never held for it.
+      const titled = body.title !== undefined;
+      const generation = titled ? false : await domain.titles.available(orgId, projectId);
       const result = await translate(() =>
         domain.stories.start({
           orgId,
@@ -362,7 +382,14 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           repositoryId,
           provider: body.provider,
           externalId: body.external_id ?? `manual:${body.idempotency_key}`,
-          title: body.title,
+          title: body.title ?? provisionalTitle(body.message),
+          titleSource: titled
+            ? body.provider === "github"
+              ? "github"
+              : "user"
+            : generation
+              ? "pending"
+              : "fallback",
           agent: manifest,
           message: body.message,
           messageDedupeKey: body.idempotency_key,
@@ -379,6 +406,14 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           },
         }),
       );
+      if (result.story.titleSource === "pending") {
+        try {
+          await domain.titles.request({ orgId, projectId, storyId: result.story.id });
+        } catch (error) {
+          // The worker re-queues pending titles on its own; the story is already durable.
+          request.log.warn({ err: error, storyId: result.story.id }, "title job enqueue failed");
+        }
+      }
       reply.status(202);
       return storyResponse(result);
     },
@@ -532,9 +567,10 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       const body = request.body as z.infer<typeof SendMessageBody>;
       const actor = principal(request);
       const orgId = actor.orgId;
-      const projection = await translate(() => domain.catalog.get(orgId, projectId, body.agent));
-      const manifest = manifestFromProjection(projection);
       const surface = requestSurface(request.headers["x-facility-surface"]);
+      const manifest = await translate(() =>
+        selectAgent(domain, orgId, projectId, body.agent, surface),
+      );
       requireAgentSurface(manifest, surface);
       const queued = await translate(() =>
         domain.stories.queueMessage({
@@ -1022,6 +1058,31 @@ async function translate<T>(operation: () => Promise<T>): Promise<T> {
     }
     throw error;
   }
+}
+
+/**
+ * A named agent is looked up directly. Without a name, the project's catalog
+ * decides through the same rule the UI shows, so "no selection" is predictable
+ * and honours the agents the repository enables for this surface.
+ */
+async function selectAgent(
+  domain: FastifyInstance["storyDomain"],
+  orgId: string,
+  projectId: string,
+  name: string | undefined,
+  surface: "manual" | "mcp" | "ui",
+): Promise<AgentManifest> {
+  if (name) return manifestFromProjection(await domain.catalog.get(orgId, projectId, name));
+  const rows = await domain.catalog.list(orgId, projectId);
+  const manifest = resolveDefaultAgent(rows.map(manifestFromProjection), surface);
+  if (!manifest) {
+    throw new ApiError(
+      409,
+      "agent_unavailable",
+      `No enabled agent in .agents/ accepts ${surface} requests; choose an agent or enable one`,
+    );
+  }
+  return manifest;
 }
 
 function requestSurface(value: string | string[] | undefined): "manual" | "mcp" | "ui" {

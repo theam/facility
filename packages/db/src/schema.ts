@@ -470,6 +470,8 @@ export const stories = pgTable(
     branch: text("branch"),
     pullRequestNumber: integer("pull_request_number"),
     pullRequestUrl: text("pull_request_url"),
+    titleSource: text("title_source").notNull().default("user"),
+    titleGeneration: jsonb("title_generation"),
     createdBy: jsonb("created_by").notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
@@ -491,6 +493,10 @@ export const stories = pgTable(
       sql`${table.status} in ('ready', 'working', 'attention', 'review', 'done', 'archived')`,
     ),
     check("stories_provider_check", sql`${table.provider} in ('github', 'manual', 'schedule')`),
+    check(
+      "stories_title_source_check",
+      sql`${table.titleSource} in ('user', 'github', 'schedule', 'pending', 'generated', 'fallback')`,
+    ),
     foreignKey({
       name: "stories_project_scope_fk",
       columns: [table.orgId, table.projectId],
@@ -504,6 +510,43 @@ export const stories = pgTable(
         projectRepositories.projectId,
         projectRepositories.id,
       ],
+    }),
+  ],
+);
+
+export const storyAssignees = pgTable(
+  "story_assignees",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    kind: text("kind").notNull(),
+    subject: text("subject").notNull(),
+    source: text("source").notNull().default("facility"),
+    addedBy: jsonb("added_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("story_assignees_story_subject_uidx").on(table.storyId, table.kind, table.subject),
+    index("story_assignees_org_project_subject_idx").on(
+      table.orgId,
+      table.projectId,
+      table.kind,
+      table.subject,
+    ),
+    check("story_assignees_kind_check", sql`${table.kind} in ('user', 'github')`),
+    check("story_assignees_source_check", sql`${table.source} in ('facility', 'github')`),
+    foreignKey({
+      name: "story_assignees_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
     }),
   ],
 );

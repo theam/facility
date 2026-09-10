@@ -7,11 +7,13 @@ import {
   previewSessions,
   stories,
   storyArtifacts,
+  storyAssignees,
   storyConversations,
   storyEvidenceEvents,
   storyMessages,
   turnEvents,
   turns,
+  userIdentities,
   users,
   workspaces,
 } from "@facility/db";
@@ -30,6 +32,8 @@ import { reconcileTurnBranch } from "./branch.js";
 
 export type StoryActor = { type: "user" | "service" | "system"; id: string };
 
+export type StoryTitleSource = "user" | "github" | "schedule" | "pending" | "fallback";
+
 export type StartStoryInput = {
   orgId: string;
   projectId: string;
@@ -37,6 +41,8 @@ export type StartStoryInput = {
   provider: "github" | "manual" | "schedule";
   externalId: string;
   title: string;
+  /** Where the title came from; `pending` means an AI title is still being generated. */
+  titleSource?: StoryTitleSource;
   branch?: string;
   agent: AgentManifest;
   message: string;
@@ -144,6 +150,7 @@ export class StoryWorkspaceService {
               provider: input.provider,
               externalId: input.externalId,
               title: input.title,
+              titleSource: input.titleSource ?? defaultTitleSource(input.provider),
               status: "ready",
               branch: input.branch,
               createdBy: input.actor,
@@ -159,6 +166,7 @@ export class StoryWorkspaceService {
           "this story's workspace was explicitly deleted; start a new story identity",
         );
       }
+      await recordParticipation(tx, story, input.actor);
 
       let conversation = (
         await tx
@@ -363,6 +371,7 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
+      await recordParticipation(tx, story, input.actor);
       const sequence = await allocateMessageSequence(tx, conversation.id);
       let turn: typeof turns.$inferSelect | undefined;
       if (!active) {
@@ -1034,6 +1043,7 @@ export class StoryWorkspaceService {
       attention,
       recentEvents,
       recentEvidence,
+      assignees,
     ] = await Promise.all([
       this.db
         .select()
@@ -1083,6 +1093,7 @@ export class StoryWorkspaceService {
             .orderBy(desc(storyEvidenceEvents.occurredAt))
             .limit(200)
         : Promise.resolve(undefined),
+      this.assignees(orgId, projectId, [storyId]).then((rows) => rows.get(storyId) ?? []),
     ]);
     return {
       story,
@@ -1091,6 +1102,7 @@ export class StoryWorkspaceService {
       turns: recentTurns,
       artifacts,
       attention,
+      assignees,
       events: recentEvents ? recentEvents.reverse() : undefined,
       timeline:
         recentEvents && recentEvidence
@@ -1384,7 +1396,7 @@ export class StoryWorkspaceService {
   }
 
   async list(orgId: string, projectId: string, status?: string) {
-    return this.db
+    const rows = await this.db
       .select()
       .from(stories)
       .where(
@@ -1395,6 +1407,58 @@ export class StoryWorkspaceService {
         ),
       )
       .orderBy(desc(stories.updatedAt));
+    const assignees = await this.assignees(
+      orgId,
+      projectId,
+      rows.map((row) => row.id),
+    );
+    return rows.map((row) => ({ ...row, assignees: assignees.get(row.id) ?? [] }));
+  }
+
+  /** Facility-side assignees with the display identity of each member. */
+  async assignees(orgId: string, projectId: string, storyIds: string[]) {
+    const result = new Map<string, StoryAssignee[]>();
+    if (storyIds.length === 0) return result;
+    const rows = await this.db
+      .select({
+        storyId: storyAssignees.storyId,
+        kind: storyAssignees.kind,
+        subject: storyAssignees.subject,
+        source: storyAssignees.source,
+        createdAt: storyAssignees.createdAt,
+        name: users.name,
+        email: users.email,
+        avatarUrl: users.avatarUrl,
+        login: userIdentities.login,
+      })
+      .from(storyAssignees)
+      .leftJoin(users, and(eq(storyAssignees.kind, "user"), eq(users.id, storyAssignees.subject)))
+      .leftJoin(
+        userIdentities,
+        and(eq(userIdentities.userId, users.id), eq(userIdentities.provider, "github")),
+      )
+      .where(
+        and(
+          eq(storyAssignees.orgId, orgId),
+          eq(storyAssignees.projectId, projectId),
+          inArray(storyAssignees.storyId, storyIds),
+        ),
+      )
+      .orderBy(asc(storyAssignees.createdAt));
+    for (const row of rows) {
+      const entry: StoryAssignee = {
+        kind: row.kind as "user" | "github",
+        subject: row.subject,
+        source: row.source as "facility" | "github",
+        login: row.kind === "github" ? row.subject : (row.login ?? null),
+        name: row.name ?? null,
+        email: row.email ?? null,
+        avatarUrl: row.avatarUrl ?? null,
+        createdAt: row.createdAt,
+      };
+      result.set(row.storyId, [...(result.get(row.storyId) ?? []), entry]);
+    }
+    return result;
   }
 
   async suspend(orgId: string, projectId: string, storyId: string) {
@@ -1866,6 +1930,48 @@ function conversationAuthor(
     handle: null,
     avatarUrl: null,
   };
+}
+
+export type StoryAssignee = {
+  kind: "user" | "github";
+  subject: string;
+  source: "facility" | "github";
+  login: string | null;
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  createdAt: Date;
+};
+
+function defaultTitleSource(provider: StartStoryInput["provider"]): StoryTitleSource {
+  return provider === "github" ? "github" : provider === "schedule" ? "schedule" : "user";
+}
+
+/**
+ * Starting or continuing a story from Facility is an explicit act of taking
+ * part in it. Only humans are recorded; service and system actors (GitHub
+ * deliveries, schedules, retries on behalf of the system) never reassign work,
+ * and an existing assignee is never removed here.
+ */
+async function recordParticipation(
+  db: FacilityDb,
+  story: Pick<typeof stories.$inferSelect, "id" | "orgId" | "projectId">,
+  actor: StoryActor,
+) {
+  if (actor.type !== "user" || !actor.id) return;
+  await db
+    .insert(storyAssignees)
+    .values({
+      id: newId("asg"),
+      orgId: story.orgId,
+      projectId: story.projectId,
+      storyId: story.id,
+      kind: "user",
+      subject: actor.id,
+      source: "facility",
+      addedBy: actor,
+    })
+    .onConflictDoNothing();
 }
 
 function validateStartInput(input: StartStoryInput) {

@@ -183,19 +183,39 @@ export type ProjectSkill = {
   commit_sha: string;
   synced_at: string;
 };
+export type StoryTitleSource =
+  | "user"
+  | "github"
+  | "schedule"
+  | "pending"
+  | "generated"
+  | "fallback";
+export type StoryAssignee = {
+  kind: "user" | "github";
+  subject: string;
+  source: "facility" | "github";
+  login: string | null;
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  createdAt: string;
+};
 export type WorkspaceStory = {
   id: string;
   provider: "github" | "manual" | "schedule";
   externalId: string;
   title: string;
+  titleSource: StoryTitleSource;
   status: "ready" | "working" | "attention" | "review" | "done" | "archived";
   activeAgentName: string | null;
   branch: string | null;
   pullRequestNumber: number | null;
   pullRequestUrl: string | null;
+  createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
   deletedAt: string | null;
+  assignees?: StoryAssignee[];
 };
 export type StoryWorkspace = {
   id: string;
@@ -220,6 +240,7 @@ export type StoryWorkspace = {
 };
 export type WorkspaceStoryBundle = {
   story: WorkspaceStory;
+  assignees: StoryAssignee[];
   workspace: StoryWorkspace | null;
   conversation: { id: string; summary: string | null } | null;
   turns: Array<{
@@ -394,12 +415,14 @@ export type ProjectObservability = FacilityGeneratedResponse<
   "/v1/projects/{projectId}/observability"
 >;
 export type UsageSummary = ProjectObservability["usage"];
-export type ProjectPipeline = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/pipeline">;
 export type ProjectOverview = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/overview">;
 export type OverviewActiveTurn = ArrayItem<ProjectOverview["activity"]["running"]>;
 export type OverviewAttentionItem = ArrayItem<ProjectOverview["attention"]["items"]>;
 export type OverviewReviewItem = ArrayItem<ProjectOverview["review"]["items"]>;
 export type OverviewRecentTurn = ArrayItem<ProjectOverview["recent"]["items"]>;
 export type OverviewBacklogStory = ArrayItem<ProjectOverview["backlog"]["ready"]>;
-export type PipelineItem = ArrayItem<ProjectPipeline["stages"]["backlog"]>;
-export type PipelinePullRequest = ArrayItem<PipelineItem["pullRequests"]>;
+export type ProjectBacklog = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/backlog">;
+export type BacklogItem = ArrayItem<ProjectBacklog["items"]>;
+export type BacklogPhase = BacklogItem["phase"];
+export type BacklogPerson = ArrayItem<BacklogItem["assignees"]>;
+export type BacklogQuery = FacilityGeneratedQuery<"GET", "/v1/projects/{projectId}/backlog">;

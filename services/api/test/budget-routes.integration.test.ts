@@ -154,8 +154,8 @@ describe("project budget API", async () => {
     expect(crossProject.statusCode).toBe(404);
   });
 
-  it("exposes project-scoped cost, observability, pipeline, and audit reads", async () => {
-    for (const path of ["costs", "observability", "pipeline", "audit"]) {
+  it("exposes project-scoped cost, observability, backlog, and audit reads", async () => {
+    for (const path of ["costs", "observability", "backlog", "audit"]) {
       const response = await app.inject({
         method: "GET",
         url: `/v1/projects/${projectId}/${path}`,
