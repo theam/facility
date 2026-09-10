@@ -219,7 +219,8 @@ FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf23286
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20260905
+ARG DEBIAN_SECURITY_REFRESH=20260910
+ARG CHROMIUM_MIN_VERSION=152.0.7977.82-1~deb13u1
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -272,6 +273,8 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     util-linux \
     xfonts-scalable \
     xvfb \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium)" ge "$CHROMIUM_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium-common)" ge "$CHROMIUM_MIN_VERSION" \
   && rm -rf /var/lib/apt/lists/*
 
 # npm is a runtime capability for repositories that use package-lock.json, so

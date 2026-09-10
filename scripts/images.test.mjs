@@ -260,3 +260,14 @@ test("Vercel runner supports SDK user switching without granting node sudo privi
   assert.doesNotMatch(vercelStage, /NOPASSWD/);
   assert.match(ciWorkflow, /docker build --target vercel-runner -f runner\/Dockerfile \./);
 });
+
+test("runner rejects Chromium packages older than the reviewed security fix", () => {
+  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=152\.0\.7977\.82-1~deb13u1/);
+  for (const name of ["chromium", "chromium-common"]) {
+    assert.ok(
+      runnerDockerfile.includes(
+        `dpkg --compare-versions "$(dpkg-query -W -f='\${Version}' ${name})" ge "$CHROMIUM_MIN_VERSION"`,
+      ),
+    );
+  }
+});
