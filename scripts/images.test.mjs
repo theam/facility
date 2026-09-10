@@ -235,6 +235,7 @@ test("workspace CI runs the persistent Docker acceptance path", () => {
 });
 
 test("runner Go binaries resolve the fixed cryptography and gRPC modules", () => {
+  assert.doesNotMatch(runnerDockerfile, /google\.golang\.org\/grpc@v1\.83\.1/);
   assert.doesNotMatch(runnerDockerfile, /golang\.org\/x\/crypto@v0\.55\.0/);
   assert.match(
     runnerDockerfile,
@@ -242,7 +243,7 @@ test("runner Go binaries resolve the fixed cryptography and gRPC modules", () =>
   );
   assert.match(
     runnerDockerfile,
-    /for binary in \/out\/dockerd \/out\/containerd \/out\/containerd-shim-runc-v2 \/out\/ctr \/out\/docker-buildx \/out\/docker-compose \/out\/gh; do[\s\S]*google\.golang\.org\/grpc" && \$3 == "v1\.83\.1"/,
+    /for binary in \/out\/dockerd \/out\/containerd \/out\/containerd-shim-runc-v2 \/out\/ctr \/out\/docker-buildx \/out\/docker-compose \/out\/gh; do[\s\S]*google\.golang\.org\/grpc" && \$3 == "v1\.83\.2"/,
   );
 });
 
