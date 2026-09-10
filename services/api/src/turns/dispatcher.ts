@@ -1,6 +1,7 @@
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
+  attentionItems,
   engineSessions,
   type FacilityDb,
   stories,
@@ -108,7 +109,7 @@ export class TurnDispatcher {
         });
       }
       await appendTurnEvent(this.db, { ...eventBase, type: "turn.started", data: {} });
-      const [story, workspace, conversation, messages] = await Promise.all([
+      const [story, workspace, conversation, messages, attention] = await Promise.all([
         this.scopedStory(input.orgId, input.projectId, turn.storyId),
         this.activeWorkspace(input.orgId, input.projectId, turn.storyId),
         this.db
@@ -134,6 +135,17 @@ export class TurnDispatcher {
             ),
           )
           .orderBy(asc(storyMessages.seq)),
+        this.db
+          .select()
+          .from(attentionItems)
+          .where(
+            and(
+              eq(attentionItems.orgId, input.orgId),
+              eq(attentionItems.projectId, input.projectId),
+              eq(attentionItems.storyId, turn.storyId),
+            ),
+          )
+          .orderBy(asc(attentionItems.createdAt)),
       ]);
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
@@ -202,7 +214,7 @@ export class TurnDispatcher {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: buildPrompt(manifest, story, conversation.summary, messages, attention, turn.id),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,
@@ -593,6 +605,7 @@ function buildPrompt(
   story: typeof stories.$inferSelect,
   summary: string | null,
   messages: Array<typeof storyMessages.$inferSelect>,
+  attention: Array<typeof attentionItems.$inferSelect>,
   turnId: string,
 ) {
   const currentSequence = messages.find(
@@ -601,10 +614,16 @@ function buildPrompt(
   const relevant = messages.filter(
     (message) => currentSequence === undefined || message.seq <= currentSequence,
   );
+  const questions = askedQuestions(attention);
   const transcript = relevant
-    .map(
-      (message) => `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`,
-    )
+    .map((message) => {
+      const body = `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`;
+      // Both the user and the agent message of a turn carry its `turnId`, so the
+      // question is placed on the agent message that actually asked it.
+      const asked =
+        message.role === "agent" && message.turnId ? questions.get(message.turnId) : undefined;
+      return asked ? `${body}\n\n${QUESTION_HEADING}\n${asked.join("\n")}` : body;
+    })
     .join("\n\n");
   return [
     manifest.prompt,
@@ -616,6 +635,27 @@ function buildPrompt(
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+const QUESTION_HEADING = "Question this turn asked the human:";
+
+// `agentOutcome` strips the <facility-needs-attention> question out of the agent's
+// message before it is persisted, so the question survives only on the attention
+// item. An engine resuming its own native session still holds it in context, but a
+// prompt rebuilt for a session that does not exist — a reply routed to a different
+// agent, or a replaced session — would otherwise show the human's answer with
+// nothing it answers. Status is deliberately not filtered: dispatch resolves the
+// item as `replied` before the prompt is built, so an open-only filter would drop
+// exactly the question being answered.
+function askedQuestions(attention: Array<typeof attentionItems.$inferSelect>) {
+  const questions = new Map<string, string[]>();
+  for (const item of attention) {
+    if (item.kind !== "agent_waiting" || !item.turnId || !item.detail) continue;
+    const asked = questions.get(item.turnId);
+    if (asked) asked.push(item.detail);
+    else questions.set(item.turnId, [item.detail]);
+  }
+  return questions;
 }
 
 function actorLabel(actor: unknown) {
