@@ -167,7 +167,7 @@ describe("stories backlog page", () => {
           phase: "attention",
           reason: "checks_failing",
           activity: { state: "idle", agentName: null, engine: null, turnId: null, since: null },
-          story: { ...item({}).story!, id: "s2" },
+          story: { ...(item({}).story as NonNullable<ReturnType<typeof item>["story"]>), id: "s2" },
           pullRequest: {
             number: 7,
             title: "PR",
@@ -193,7 +193,11 @@ describe("stories backlog page", () => {
           title: "Nobody started this",
           activity: { state: "idle", agentName: null, engine: null, turnId: null, since: null },
           story: null,
-          issue: { ...item({}).issue!, number: 43, url: "https://github.com/acme/app/issues/43" },
+          issue: {
+            ...(item({}).issue as NonNullable<ReturnType<typeof item>["issue"]>),
+            number: 43,
+            url: "https://github.com/acme/app/issues/43",
+          },
           assignees: [],
         }),
       ]),
