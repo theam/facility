@@ -50,7 +50,9 @@ export function BacklogFilters({
         const data = new FormData(event.currentTarget);
         const params = new URLSearchParams();
         for (const [key, value] of data.entries()) {
-          if (typeof value === "string" && value) params.append(key, value);
+          if (typeof value !== "string" || !value) continue;
+          if (key === "sort" && value === "priority") continue;
+          params.append(key, value);
         }
         router.push(
           `/projects/${encodeURIComponent(projectId)}/stories${params.size ? `?${params}` : ""}`,
