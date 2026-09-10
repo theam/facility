@@ -114,7 +114,7 @@ Before production use:
 
 1. list installations and repositories from the Facility project setup flow;
 2. open and merge a kickstart configuration PR through normal review;
-3. create an issue and confirm the Pipeline mirror updates;
+3. create an issue and confirm it appears as not-started work on the Stories page;
 4. send a signed webhook twice and confirm one activation;
 5. have a disposable story clone, commit, push, and open a pull request;
 6. run a workflow and confirm only the current pull-request head receives its status; and

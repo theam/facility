@@ -13,6 +13,8 @@ const story: WorkspaceStory = {
   provider: "manual",
   externalId: "preview",
   title: "Preview",
+  titleSource: "user",
+  createdAt: "2026-09-09T00:00:00Z",
   status: "working",
   activeAgentName: null,
   branch: "main",

@@ -72,6 +72,17 @@ authentication. Without either key, Codex uses its saved native authentication.
 Story states are `ready`, `working`, `attention`, `review`, `done`, and `archived`. Archive is
 reversible. Merge and archive never call workspace destruction.
 
+The backlog derives a work phase from that state together with the mirrored issue and pull
+request, the active turn, and open attention items: an open issue without a story is not started;
+a queued or running turn is in progress; open attention, failing checks, or requested changes need
+attention; an open, non-draft pull request is in review, even when its workspace is suspended; a
+merged pull request, a completed story, or a closed issue is done. A closed, unmerged pull request
+does not finish the story, and a retained workspace or an open story does not by itself mean an
+agent is executing. Agent activity and the recorded workspace state are reported separately.
+
+A story keeps its title's provenance: written by a person, taken from GitHub, generated from the
+request, or the request's first line when generation was unavailable.
+
 Workspace compute may be `creating`, `running`, `sleeping`, `error`, or `destroyed`. A sleeping or
 error workspace can retain its durable volume. `destroyed` means the explicit deletion path has
 removed that durable workspace and it cannot be resumed.

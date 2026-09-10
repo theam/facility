@@ -81,6 +81,8 @@ function setUp(permissions: string[] = []) {
       provider: "manual",
       externalId: "1",
       title: "Example story",
+      titleSource: "user",
+      createdAt: at,
       status: "review",
       activeAgentName: null,
       branch: "facility/example",
@@ -102,6 +104,7 @@ function setUp(permissions: string[] = []) {
       lastActivityAt: at,
       destroyedAt: null,
     },
+    assignees: [],
     conversation: null,
     turns: [
       {

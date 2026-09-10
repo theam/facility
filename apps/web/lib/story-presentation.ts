@@ -34,7 +34,7 @@ export function computeLabel(environment: StoryEnvironment | null) {
 
 export function phaseLabel(status: WorkspaceStoryBundle["story"]["status"]) {
   const labels = {
-    ready: "Ready",
+    ready: "Not started",
     working: "In progress",
     attention: "Needs attention",
     review: "In review",

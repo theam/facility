@@ -219,7 +219,7 @@ changing the AWS services.
 
 ECS Container Insights and the four CloudWatch log groups cover infrastructure health and logs.
 Facility's Insights page covers turn outcomes, token use, cost, budget state, workspace state,
-GitHub delivery health, open attention, and audit activity. The Pipeline page is backed by webhook
+GitHub delivery health, open attention, and audit activity. The Stories backlog is backed by webhook
 updates plus ten-minute reconciliation.
 
 Back up RDS and retain Vercel workspace snapshots according to your policy. Facility never deletes

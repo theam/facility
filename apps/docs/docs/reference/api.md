@@ -141,7 +141,14 @@ in another client.
   backlog counts, recorded workspace states, and permission-gated agent spend and budget. It reads
   persisted state only and never wakes a workspace. See [Read the project overview](../guides/project-overview.md).
 - `/v1/projects/:projectId/observability` returns operational events and summaries.
-- `/v1/projects/:projectId/pipeline` returns the issue, pull-request, check, and workflow view.
+- `/v1/projects/:projectId/backlog` returns the unified backlog: mirrored issues that nobody has
+  started, stories, and open pull requests, one item per unit of work, each with its derived work
+  phase (`not_started`, `in_progress`, `attention`, `review`, `done`, `archived`), the reason for
+  that phase, live agent activity, the recorded workspace state, open attention, assignees from
+  GitHub and Facility, and links. It accepts `q` (a ticket number such as `#42` or words), repeatable
+  `phase`, `label`, `assignee` (`me`, `unassigned`, `user:<id>`, `github:<login>`) and
+  `repository` filters, `sort` (`priority`, `updated`, `created`), and `limit`/`offset` pagination
+  over the whole filtered set. Reading it never inspects a workspace provider.
 - `/v1/projects/:projectId/github/sync` requests immediate mirror reconciliation.
 - `/v1/projects/:projectId/audit` returns project audit events.
 

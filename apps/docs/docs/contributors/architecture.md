@@ -11,7 +11,7 @@ monorepo, but the durable behavior crosses a small number of explicit packages a
 
 | Path | Package | Responsibility |
 | --- | --- | --- |
-| `apps/web` | `@facility/web` | Next.js UI, browser sessions, projects, stories, agents, pipeline, insights, and administration. |
+| `apps/web` | `@facility/web` | Next.js UI, browser sessions, projects, the stories backlog, agents, insights, and administration. |
 | `apps/docs` | `@facility/docs` | Docusaurus user, operator, reference, and contributor documentation. |
 | `services/api` | `@facility/api` | HTTP API, embedded MCP transport, OAuth, webhooks, preview proxy, worker, domain services, and workspace providers. |
 

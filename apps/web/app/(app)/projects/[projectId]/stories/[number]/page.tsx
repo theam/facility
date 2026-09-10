@@ -10,6 +10,7 @@ import { StoryConversation } from "@/components/story/story-conversation";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
+import { titleStatus } from "@/lib/backlog-presentation";
 import { can } from "@/lib/permissions";
 import {
   computeLabel,
@@ -78,7 +79,11 @@ export default async function StoryPage({
       <header className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Eyebrow>
-            {story.provider}:{story.externalId}
+            {story.provider === "manual"
+              ? "Started in Facility"
+              : story.provider === "schedule"
+                ? `Scheduled · ${story.externalId}`
+                : `GitHub · ${story.externalId.replace(":", " #")}`}
           </Eyebrow>
           <Link
             href={`/projects/${encodeURIComponent(projectId)}/stories`}
@@ -106,6 +111,24 @@ export default async function StoryPage({
             <div className="inline-flex gap-1.5">
               <dt className="sr-only">Branch</dt>
               <dd className="font-mono text-(--mut)">{story.branch}</dd>
+            </div>
+          ) : null}
+          {bundle.assignees.length > 0 ? (
+            <div className="inline-flex gap-1.5">
+              <dt>Working on it:</dt>
+              <dd className="text-(--ink)">
+                {bundle.assignees
+                  .map(
+                    (person) => person.name ?? (person.login ? `@${person.login}` : person.subject),
+                  )
+                  .join(", ")}
+              </dd>
+            </div>
+          ) : null}
+          {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt }) ? (
+            <div className="inline-flex gap-1.5 text-(--dim)">
+              <dt className="sr-only">Title</dt>
+              <dd>{titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt })}</dd>
             </div>
           ) : null}
         </dl>

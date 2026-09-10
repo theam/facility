@@ -205,7 +205,7 @@ facility_archive_story       facility_restore_story
 facility_delete_workspace
 facility_get_costs           facility_get_budget
 facility_set_budget          facility_get_observability
-facility_get_pipeline        facility_sync_github
+facility_list_backlog        facility_sync_github
 ```
 
 `facility_delete_workspace` is the only operation that destroys durable state. It requires an
@@ -434,7 +434,7 @@ guide](apps/docs/docs/self-host/production.md) cover these practices in detail.
 
 Facility is pre-1.0 software. The schema, APIs, manifests, and deployment shape may change between
 `0.x` releases. The current web application covers projects, repository-defined agents and skills,
-stories and shared conversations, persistent environments and previews, delivery pipelines, costs
+stories and shared conversations, the unified backlog, persistent environments and previews, costs
 and budgets, insights, settings, and members. MCP is the primary automation interface; the REST API
 and web application expose the same domain operations for their respective clients.
 

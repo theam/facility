@@ -1,4 +1,5 @@
 import type {
+  BacklogQuery,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
   FacilityGeneratedQuery,
@@ -21,6 +22,10 @@ import { cookies } from "next/headers";
 
 export type {
   ApiKey,
+  BacklogItem,
+  BacklogPerson,
+  BacklogPhase,
+  BacklogQuery,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
   KickstartAnswers,
@@ -36,14 +41,15 @@ export type {
   OverviewReviewItem,
   Project,
   ProjectBudget,
+  ProjectBacklog,
   ProjectObservability,
   ProjectOverview,
-  ProjectPipeline,
   ProjectRepo,
   ProjectSkill,
   Role,
   StoryActivityItem,
   StoryAgent,
+  StoryAssignee,
   StoryConversationPage,
   StoryEnvironment,
   StoryMessage,
@@ -63,6 +69,13 @@ export { STORY_PAGE_SIZE } from "./story-paths";
 import { STORY_PAGE_SIZE } from "./story-paths";
 
 export const SESSION_COOKIE = "facility_session";
+
+/** The agent catalog plus the defaults the server applies when no agent is named. */
+export type StoryAgentsResponse = {
+  agents: StoryAgent[];
+  defaults: { ui: string | null; mcp: string | null; manual: string | null };
+  title_generation: boolean;
+};
 
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -121,9 +134,11 @@ export const api = {
   connectProjectRepo: (projectId: string, body: ConnectProjectRepoRequest) =>
     apiFetch("POST", `/v1/projects/${projectId}/repos`, { body }),
   storyAgents: (projectId: string) =>
-    typed<{ agents: StoryAgent[] }>(
+    typed<StoryAgentsResponse>(
       apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/story-agents`),
     ),
+  projectBacklog: (projectId: string, query: BacklogQuery = {}) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/backlog`, { query }),
   projectSkills: (projectId: string) =>
     typed<{ skills: ProjectSkill[] }>(
       apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/project-skills`),
@@ -190,8 +205,6 @@ export const api = {
     apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/observability`, {
       query: { days },
     }),
-  projectPipeline: (projectId: string) =>
-    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/pipeline`),
   projectOverview: (projectId: string) =>
     apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/overview`),
   members: () => apiFetch("GET", "/v1/members"),

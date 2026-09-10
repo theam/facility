@@ -64,7 +64,7 @@ or kickstart behavior against a real repository.
 
 After the configuration PR is merged:
 
-1. sync the project in the Pipeline page;
+1. sync the project from the Stories page;
 2. confirm the selected agent includes a `ui` or `mcp` trigger;
 3. start a small disposable story;
 4. watch its conversation and environment become ready;

@@ -20,7 +20,7 @@ pipeline service is required.
 
 The deployable processes are:
 
-- **web**, the human UI for projects, stories, agents, environments, pipeline, budget, and
+- **web**, the human UI for projects, the stories backlog, agents, environments, budget, and
   administration;
 - **api**, the HTTP API, MCP server, authorization server, GitHub webhook receiver, and preview
   proxy;
