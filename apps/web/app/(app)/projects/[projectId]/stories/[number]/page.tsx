@@ -29,13 +29,18 @@ export async function generateMetadata({ params }: { params: Promise<{ number: s
 
 export default async function StoryPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ projectId: string; number: string }>;
+  searchParams?: Promise<{ before?: string }>;
 }) {
   const { projectId, number: storyId } = await params;
+  const cursor = Number((await searchParams)?.before);
+  const before = Number.isSafeInteger(cursor) && cursor > 0 ? cursor : undefined;
+  const storyUrl = `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`;
   const [detail, conversation, environment, agents, me] = await Promise.all([
     api.workspaceStory(projectId, storyId),
-    api.workspaceStoryConversation(projectId, storyId),
+    api.workspaceStoryConversation(projectId, storyId, before),
     api.workspaceStoryEnvironment(projectId, storyId),
     api.storyAgents(projectId),
     api.me(),
@@ -160,6 +165,14 @@ export default async function StoryPage({
             ))}
           </div>
         )}
+        <nav aria-label="Conversation pages" className="flex gap-4 text-sm text-(--info)">
+          {before ? <Link href={`${storyUrl}#conversation`}>Back to latest messages ↑</Link> : null}
+          {messages.length === 200 ? (
+            <Link href={`${storyUrl}?before=${messages[messages.length - 1]?.seq}#conversation`}>
+              Older messages ↓
+            </Link>
+          ) : null}
+        </nav>
         {canExecute && story.deletedAt === null && agentRows.length > 0 ? (
           <StoryComposer projectId={projectId} storyId={story.id} agents={agentRows} />
         ) : null}

@@ -1044,7 +1044,7 @@ export class StoryWorkspaceService {
     orgId: string,
     projectId: string,
     storyId: string,
-    options: { after?: number; limit?: number } = {},
+    options: { after?: number; before?: number; order?: "asc" | "desc"; limit?: number } = {},
   ) {
     await scopedStory(this.db, orgId, projectId, storyId);
     const after = Math.max(0, options.after ?? 0);
@@ -1058,9 +1058,10 @@ export class StoryWorkspaceService {
           eq(storyMessages.projectId, projectId),
           eq(storyMessages.storyId, storyId),
           sql`${storyMessages.seq} > ${after}`,
+          options.before === undefined ? undefined : sql`${storyMessages.seq} < ${options.before}`,
         ),
       )
-      .orderBy(asc(storyMessages.seq))
+      .orderBy(options.order === "desc" ? desc(storyMessages.seq) : asc(storyMessages.seq))
       .limit(limit);
   }
 

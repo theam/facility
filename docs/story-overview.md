@@ -6,7 +6,7 @@ The story overview separates three states:
 - **Task phase:** ready, in progress, attention, review, done or archived. This persists between agent runs.
 - **Environment:** the provider's current inspection. The previously recorded workspace state is available under Environment details, but does not override the current inspection. Unavailable inspection is shown as unavailable.
 
-The header links to the pull request, latest conversation, message composer, environment and agent run history. Messages are newest first by conversation sequence. Long messages expand in place. GitHub-triggered messages show the human comment or event subject and a source link; the original agent prompt stays under technical details. This is a presentation projection, not a rewrite of the stored transcript or the agent's instructions. Truncated legacy events retain their original text in details.
+The header links to the pull request, latest conversation, message composer, environment and agent run history. Messages are newest first by conversation sequence, fetched from the server in pages of 200. Older messages opens the previous page; Back to latest messages returns to the current conversation. The API defaults to ascending order for existing clients. Long messages expand in place. GitHub-triggered messages show the human comment or event subject and a source link; the original agent prompt stays under technical details. This is a presentation projection, not a rewrite of the stored transcript or the agent's instructions. Truncated legacy events retain their original text in details.
 
 Only open attention items appear above the conversation. Resolved and dismissed notices remain in a collapsed history. Dismissing a notice does not erase its evidence.
 

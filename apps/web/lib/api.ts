@@ -120,12 +120,12 @@ export const api = {
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}`,
       ),
     ),
-  workspaceStoryConversation: (projectId: string, storyId: string) =>
+  workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>
     typed<{ messages: StoryMessage[] }>(
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/conversation`,
-        { query: { limit: 200 } },
+        { query: { limit: 200, order: "desc", ...(before ? { before } : {}) } },
       ),
     ),
   workspaceStoryEnvironment: (projectId: string, storyId: string) =>

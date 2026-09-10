@@ -6955,6 +6955,8 @@ export interface operations {
     getWorkspaceStoryConversation: {
         parameters: {
             query?: {
+                order?: "asc" | "desc";
+                before?: number;
                 after?: number;
                 limit?: number;
             };

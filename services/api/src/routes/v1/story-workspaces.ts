@@ -60,6 +60,8 @@ const ListStoriesQuery = z.object({
   status: z.enum(["ready", "working", "attention", "review", "done", "archived"]).optional(),
 });
 const ConversationQuery = z.object({
+  order: z.enum(["asc", "desc"]).default("asc"),
+  before: z.coerce.number().int().min(1).optional(),
   after: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });

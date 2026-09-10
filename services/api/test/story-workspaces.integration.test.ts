@@ -337,6 +337,48 @@ describe("persistent story workspace lifecycle", async () => {
     expect(await service.conversation(orgId, projectId, first.story.id)).toHaveLength(2);
   });
 
+  it("pages newest conversation messages without losing older history or crossing scope", async () => {
+    const result = await service.start(startInput(`pagination-${randomUUID()}`));
+    const first = result.queued.message;
+    await db.insert(storyMessages).values(
+      Array.from({ length: 205 }, (_, i) => ({
+        id: newId("msg"),
+        orgId,
+        projectId,
+        storyId: result.story.id,
+        conversationId: first.conversationId,
+        seq: i + 2,
+        role: "user",
+        body: `Message ${i + 2}`,
+        actor: { type: "user", id: "test" },
+      })),
+    );
+    const latest = await service.conversation(orgId, projectId, result.story.id, {
+      order: "desc",
+      limit: 200,
+    });
+    expect(latest).toHaveLength(200);
+    expect(latest[0]?.seq).toBe(206);
+    expect(latest[199]?.seq).toBe(7);
+    const older = await service.conversation(orgId, projectId, result.story.id, {
+      order: "desc",
+      before: 7,
+      limit: 200,
+    });
+    expect(older.map((message) => message.seq)).toEqual([6, 5, 4, 3, 2, 1]);
+    expect(
+      (await service.conversation(orgId, projectId, result.story.id, { after: 200 })).map(
+        (message) => message.seq,
+      ),
+    ).toEqual([201, 202, 203, 204, 205, 206]);
+    await expect(
+      service.conversation(otherOrgId, otherProjectId, result.story.id, { order: "desc" }),
+    ).rejects.toThrow();
+    await expect(
+      service.conversation(orgId, otherProjectId, result.story.id, { order: "desc" }),
+    ).rejects.toThrow();
+  });
+
   it("keeps the worktree and native session state across archive, compute replacement, restore, and merge", async () => {
     const result = await service.start(startInput(`issue-${randomUUID()}`));
     const workspace = result.workspace;
