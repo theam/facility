@@ -3,6 +3,7 @@
 import { Button } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { requestCompose } from "@/components/story/story-conversation";
 import type { WorkspaceStoryBundle } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 
@@ -12,10 +13,12 @@ export function AttentionActions({
   projectId,
   storyId,
   item,
+  agentName,
 }: {
   projectId: string;
   storyId: string;
   item: AttentionItem;
+  agentName?: string | null;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState("");
@@ -40,12 +43,9 @@ export function AttentionActions({
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       {item.kind === "agent_waiting" ? (
-        <a
-          href="#story-composer"
-          className="text-[11.5px] text-(--info) underline-offset-4 hover:underline"
-        >
-          Reply below
-        </a>
+        <Button size="sm" onClick={() => requestCompose(agentName ?? undefined)}>
+          reply
+        </Button>
       ) : item.turnId ? (
         <Button size="sm" onClick={() => act("retry")} disabled={Boolean(pending)}>
           {pending === "retry" ? "retrying…" : "retry"}

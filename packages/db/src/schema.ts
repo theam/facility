@@ -613,6 +613,7 @@ export const storyMessages = pgTable(
     requestedAgentName: text("requested_agent_name"),
     requestedTrigger: jsonb("requested_trigger"),
     dedupeKey: text("dedupe_key"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [

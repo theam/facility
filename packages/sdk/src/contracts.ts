@@ -244,25 +244,63 @@ export type WorkspaceStoryBundle = {
     resolvedAt: string | null;
     createdAt: string;
   }>;
-  events: Array<{
+  /** Recent turn events; omitted when the bundle is requested with `evidence=none`. */
+  events?: Array<{
     turn_id: string;
     seq: number;
     type: string;
     data: Record<string, unknown>;
     created_at: string;
   }>;
-  timeline: Array<{
-    id: string;
-    source: "facility" | "workspace" | "github" | "agent" | "artifact";
-    type: string;
-    turn_id: string | null;
-    data: Record<string, unknown>;
-    occurred_at: string;
-    observed_at: string;
-  }>;
+  /** Composed recent timeline; omitted when the bundle is requested with `evidence=none`. */
+  timeline?: Array<StoryTimelineEntry>;
   status: WorkspaceStory["status"];
   needs_attention: boolean;
   next_operations: string[];
+};
+export type StoryTimelineEntry = {
+  id: string;
+  source: "facility" | "workspace" | "github" | "agent" | "artifact";
+  type: string;
+  turn_id: string | null;
+  data: Record<string, unknown>;
+  occurred_at: string;
+  observed_at: string;
+};
+export type StoryTimelinePage = {
+  entries: StoryTimelineEntry[];
+  has_more: boolean;
+  next_cursor: string | null;
+};
+export type StoryMessageAuthor = {
+  kind: "user" | "github" | "service" | "schedule" | "system" | "agent";
+  id: string;
+  name: string;
+  handle: string | null;
+  avatarUrl: string | null;
+};
+export type StoryTurnSummary = {
+  id: string;
+  agentName: string;
+  engine: string;
+  model: string;
+  state: "queued" | "running" | "succeeded" | "failed" | "canceled" | (string & {});
+  error: string | null;
+  triggerType: string;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+};
+export type StoryMessageContent = {
+  /**
+   * `final_response`: the agent's final response recorded separately from its
+   * progress messages. `combined_transcript`: an older agent message recorded
+   * before that separation existed; progress and response may be mixed and are
+   * shown as stored. `text`: a human or system message.
+   */
+  kind: "final_response" | "combined_transcript" | "text";
+  progressMessages: number | null;
+  reportedModel: string | null;
 };
 export type StoryMessage = {
   id: string;
@@ -273,6 +311,55 @@ export type StoryMessage = {
   turnId: string | null;
   requestedAgentName: string | null;
   createdAt: string;
+  author: StoryMessageAuthor;
+  turn: StoryTurnSummary | null;
+  content: StoryMessageContent;
+};
+export type StoryConversationPage = {
+  /** The contiguous page in the requested order. */
+  messages: StoryMessage[];
+  /**
+   * Older messages that complete a run present on this page (newest-first
+   * pages only). They appear again on the page that reaches them; merge by id.
+   */
+  related: StoryMessage[];
+  has_more: boolean;
+  /** Pass as `before` (newest-first pages) or `after` (oldest-first pages). */
+  next_cursor: number | null;
+};
+export type StoryActivityItem = {
+  seq: number;
+  turn_id: string;
+  type: string;
+  kind:
+    | "message"
+    | "reasoning"
+    | "tool"
+    | "command"
+    | "file_change"
+    | "result"
+    | "lifecycle"
+    | "error"
+    | "session"
+    | "other";
+  title: string;
+  text: string | null;
+  truncated: boolean;
+  size_bytes: number;
+  created_at: string;
+};
+export type StoryTurnActivityPage = {
+  turn: StoryTurnSummary;
+  items: StoryActivityItem[];
+  has_more: boolean;
+  next_cursor: number | null;
+};
+export type StoryTurnEvent = {
+  turn_id: string;
+  seq: number;
+  type: string;
+  data: Record<string, unknown>;
+  created_at: string;
 };
 export type StoryEnvironment = {
   workspace: StoryWorkspace;

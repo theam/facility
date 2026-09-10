@@ -92,10 +92,22 @@ credential revocation remains a separate operator action.
   commit. It is inventory only; it does not install or upgrade skills.
 - `/v1/projects/:projectId/workspace-stories` lists or starts stories.
 - `/v1/projects/:projectId/workspace-stories/:storyId` returns the story bundle and ordered
-  timeline of turn, Git, artifact, attention, and GitHub evidence.
+  timeline of turn, Git, artifact, attention, and GitHub evidence. `?evidence=none` omits the
+  bounded `events` and `timeline` for readers that page evidence separately.
 - `/v1/projects/:projectId/workspace-stories/:storyId/messages` queues a shared-conversation
   message.
 - `/v1/projects/:projectId/workspace-stories/:storyId/conversation` pages durable messages.
+  Each message carries `author` (person, GitHub login, schedule, API client, or agent), the
+  `turn` it belongs to (agent, engine, model, state), and `content.kind`: `final_response` for
+  agent responses recorded separately from progress, `combined_transcript` for older agent
+  messages stored before that separation, `text` otherwise. Newest-first pages add `related`
+  (older messages completing a run present on the page), `has_more` and `next_cursor`.
+- `/v1/projects/:projectId/workspace-stories/:storyId/timeline` pages the evidence timeline
+  newest first with an opaque `before` cursor; agent events are summarized, not raw.
+- `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/activity` pages one run's
+  readable activity (progress messages, tools, commands, results, lifecycle) with bounded text.
+- `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/events/:seq` returns one
+  stored engine event in full.
 - `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/cancel` cancels active work.
 - `/v1/projects/:projectId/workspace-stories/:storyId/attention/:attentionId/retry` retries an
   attention item.

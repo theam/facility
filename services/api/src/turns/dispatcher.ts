@@ -277,6 +277,12 @@ export class TurnDispatcher {
           secrets,
         ),
         actor: { type: "system", id: `${manifest.engine}:${result.nativeSessionId}` },
+        metadata: {
+          content: "final_response",
+          engine: manifest.engine,
+          model: result.model ?? manifest.model,
+          progressMessages: result.progress.length,
+        },
       });
       if (outcome.attention) {
         await this.storiesService.flagAttention({

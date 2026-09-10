@@ -8,8 +8,11 @@ import type {
   FacilityRouteResponse,
   ProjectSkill,
   StoryAgent,
+  StoryConversationPage,
   StoryEnvironment,
-  StoryMessage,
+  StoryTimelinePage,
+  StoryTurnActivityPage,
+  StoryTurnEvent,
   WorkspaceStory,
   WorkspaceStoryBundle,
 } from "@facility/sdk";
@@ -33,13 +36,25 @@ export type {
   ProjectRepo,
   ProjectSkill,
   Role,
+  StoryActivityItem,
   StoryAgent,
+  StoryConversationPage,
   StoryEnvironment,
   StoryMessage,
+  StoryMessageAuthor,
+  StoryTimelineEntry,
+  StoryTimelinePage,
+  StoryTurnActivityPage,
+  StoryTurnEvent,
+  StoryTurnSummary,
   StoryWorkspace,
   WorkspaceStory,
   WorkspaceStoryBundle,
 } from "@facility/sdk";
+
+export { STORY_PAGE_SIZE } from "./story-paths";
+
+import { STORY_PAGE_SIZE } from "./story-paths";
 
 export const SESSION_COOKIE = "facility_session";
 
@@ -113,19 +128,23 @@ export const api = {
         query: status ? { status } : {},
       }),
     ),
+  /** The story bundle without its bounded evidence; the page loads evidence on demand. */
   workspaceStory: (projectId: string, storyId: string) =>
     typed<WorkspaceStoryBundle>(
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}`,
+        { query: { evidence: "none" } },
       ),
     ),
   workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>
-    typed<{ messages: StoryMessage[] }>(
+    typed<StoryConversationPage>(
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/conversation`,
-        { query: { limit: 200, order: "desc", ...(before ? { before } : {}) } },
+        {
+          query: { limit: STORY_PAGE_SIZE, order: "desc", ...(before ? { before } : {}) },
+        },
       ),
     ),
   workspaceStoryEnvironment: (projectId: string, storyId: string) =>
@@ -133,6 +152,30 @@ export const api = {
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/environment`,
+        { query: { limit: STORY_PAGE_SIZE } },
+      ),
+    ),
+  workspaceStoryActivity: (projectId: string, storyId: string, turnId: string) =>
+    typed<StoryTurnActivityPage>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/turns/${encodeURIComponent(turnId)}/activity`,
+        { query: { limit: STORY_PAGE_SIZE } },
+      ),
+    ),
+  workspaceStoryTimeline: (projectId: string, storyId: string) =>
+    typed<StoryTimelinePage>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/timeline`,
+        { query: { limit: STORY_PAGE_SIZE } },
+      ),
+    ),
+  workspaceStoryTurnEvent: (projectId: string, storyId: string, turnId: string, seq: number) =>
+    typed<StoryTurnEvent>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/turns/${encodeURIComponent(turnId)}/events/${seq}`,
       ),
     ),
   projectBudget: (projectId: string) =>

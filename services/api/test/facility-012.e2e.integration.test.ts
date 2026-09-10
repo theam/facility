@@ -142,6 +142,7 @@ describe("Facility 0.12 reference journey", async () => {
       return {
         nativeSessionId,
         output: `completed turn ${sequence} with ${request.environment?.GH_TOKEN}`,
+        progress: [],
         events: [
           {
             engine: this.name,

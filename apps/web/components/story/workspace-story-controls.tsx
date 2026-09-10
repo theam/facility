@@ -1,81 +1,17 @@
 "use client";
 
-import { Button, Field, Select, TextArea } from "@facility/ui";
+import { Button } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import type { StoryAgent, StoryWorkspace, WorkspaceStory } from "@/lib/api";
+import type { StoryWorkspace, WorkspaceStory } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 
-export function StoryComposer({
-  projectId,
-  storyId,
-  agents,
-}: {
-  projectId: string;
-  storyId: string;
-  agents: StoryAgent[];
-}) {
-  const router = useRouter();
-  const enabled = agents.filter((candidate) => candidate.enabled);
-  const [agent, setAgent] = useState(
-    enabled.find((candidate) => candidate.name === "builder")?.name ?? enabled[0]?.name ?? "",
-  );
-  const [message, setMessage] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setPending(true);
-    setError("");
-    const key = `ui-message-${crypto.randomUUID()}`;
-    const result = await clientApi("POST", storyPath(projectId, storyId, "/messages"), {
-      agent,
-      message,
-      idempotency_key: key,
-    });
-    setPending(false);
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    setMessage("");
-    router.refresh();
-  }
-
-  return (
-    <form
-      id="story-composer"
-      onSubmit={submit}
-      className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
-    >
-      <Field label="Message" error={error || undefined}>
-        <TextArea
-          required
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          placeholder="Ask for the next change, review, diagnosis, or verification."
-          rows={4}
-        />
-      </Field>
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <Field label="Run as" className="min-w-56">
-          <Select value={agent} onChange={(event) => setAgent(event.target.value)}>
-            {enabled.map((candidate) => (
-              <option key={candidate.name} value={candidate.name}>
-                {candidate.name} · {candidate.model}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Button type="submit" variant="primary" tone="agent" disabled={pending || !agent}>
-          {pending ? "queueing…" : "send to agent"}
-        </Button>
-      </div>
-    </form>
-  );
-}
-
+/**
+ * Environment actions from the top of the story: previews and browser checks
+ * for everyday work, maintenance and deletion set apart so they never compete
+ * with it. Permissions, confirmations and the one-time preview grant behave
+ * exactly as before; only the arrangement changed.
+ */
 export function WorkspaceControls({
   projectId,
   story,
@@ -152,10 +88,53 @@ export function WorkspaceControls({
     router.refresh();
   }
 
+  const maintenance = [
+    story.status === "archived" && canWrite && !workspaceDeleted ? (
+      <Button
+        key="restore"
+        size="sm"
+        onClick={() => lifecycle("restore")}
+        disabled={Boolean(pending)}
+      >
+        {pending === "restore" ? "restoring…" : "restore"}
+      </Button>
+    ) : null,
+    story.status !== "archived" && !workspaceDeleted && canExecute && computeState === "running" ? (
+      <Button
+        key="suspend"
+        size="sm"
+        onClick={() => lifecycle("suspend")}
+        disabled={Boolean(pending)}
+      >
+        {pending === "suspend" ? "suspending…" : "suspend compute"}
+      </Button>
+    ) : null,
+    story.status !== "archived" && !workspaceDeleted && canWrite ? (
+      <Button
+        key="archive"
+        size="sm"
+        onClick={() => lifecycle("archive")}
+        disabled={Boolean(pending)}
+      >
+        {pending === "archive" ? "archiving…" : "archive"}
+      </Button>
+    ) : null,
+    canWrite && !workspaceDeleted ? (
+      <Button
+        key="clean-setup"
+        size="sm"
+        onClick={() => environmentAction("clean-setup")}
+        disabled={Boolean(pending)}
+      >
+        {pending === "clean-setup" ? "setting up…" : "clean setup"}
+      </Button>
+    ) : null,
+  ].filter(Boolean);
+  const canDelete = canWrite && workspace && !workspaceDeleted;
+
   return (
-    <div className="flex flex-col gap-5">
-      <p className="text-sm font-medium">Preview and verification</p>
-      <div className="flex flex-wrap gap-2">
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         {canExecute
           ? services.map((service) => (
               <Button
@@ -181,43 +160,63 @@ export function WorkspaceControls({
             {pending === "browser-test" ? "testing…" : "run browser test"}
           </Button>
         ) : null}
+        {maintenance.length > 0 || canDelete ? (
+          <details className="group relative">
+            <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-2 border border-(--line) px-3.5 text-[12.5px] font-medium text-(--mut) hover:border-(--line-strong) hover:text-(--ink)">
+              maintenance
+              <span aria-hidden="true" className="transition-transform group-open:rotate-180">
+                ▾
+              </span>
+            </summary>
+            <div className="absolute left-0 z-20 mt-2 flex w-[min(92vw,26rem)] flex-col gap-4 border border-(--line) bg-(--bg) p-4 shadow-(--shadow-lift)">
+              <p className="text-xs leading-relaxed text-(--dim)">
+                Suspend stops compute and preserves files. Archive keeps the workspace as history.
+                Clean setup reruns project setup and can reset development data.
+              </p>
+              {maintenance.length > 0 ? (
+                <div className="flex flex-wrap gap-2">{maintenance}</div>
+              ) : null}
+              {canDelete ? (
+                <details className="border border-(--bad)/40 p-4">
+                  <summary className="cursor-pointer text-[12px] font-medium text-(--bad)">
+                    Permanently delete workspace
+                  </summary>
+                  <div className="mt-4 flex flex-col gap-4 text-[12px] leading-relaxed text-(--mut)">
+                    <p>This permanently deletes:</p>
+                    <ul className="list-disc space-y-1 pl-5">
+                      <li>the durable volume {workspace.volumeRef}</li>
+                      <li>all repository worktrees and unpushed local changes in that volume</li>
+                      <li>persisted Claude Code and Codex native sessions</li>
+                    </ul>
+                    <p>
+                      The story transcript remains as a tombstone. Merge, archive, and suspend never
+                      do this.
+                    </p>
+                    <label className="flex items-start gap-2 text-(--ink)">
+                      <input
+                        type="checkbox"
+                        checked={deleteConfirmed}
+                        onChange={(event) => setDeleteConfirmed(event.target.checked)}
+                        className="mt-0.5"
+                      />
+                      I understand this workspace state cannot be recovered.
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      className="w-fit"
+                      disabled={!deleteConfirmed || Boolean(pending)}
+                      onClick={deleteWorkspace}
+                    >
+                      {pending === "delete" ? "deleting…" : "delete workspace"}
+                    </Button>
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          </details>
+        ) : null}
       </div>
-      <details className="border-t border-(--line) pt-3">
-        <summary className="cursor-pointer text-sm text-(--mut)">Workspace maintenance</summary>
-        <p className="my-3 text-xs leading-relaxed text-(--dim)">
-          Suspend stops compute and preserves files. Archive keeps the workspace as history. Clean
-          setup reruns project setup and can reset development data.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {story.status === "archived" && canWrite && !workspaceDeleted ? (
-            <Button size="sm" onClick={() => lifecycle("restore")} disabled={Boolean(pending)}>
-              {pending === "restore" ? "restoring…" : "restore"}
-            </Button>
-          ) : story.status !== "archived" && !workspaceDeleted ? (
-            <>
-              {canExecute && computeState === "running" ? (
-                <Button size="sm" onClick={() => lifecycle("suspend")} disabled={Boolean(pending)}>
-                  {pending === "suspend" ? "suspending…" : "suspend compute"}
-                </Button>
-              ) : null}
-              {canWrite ? (
-                <Button size="sm" onClick={() => lifecycle("archive")} disabled={Boolean(pending)}>
-                  {pending === "archive" ? "archiving…" : "archive"}
-                </Button>
-              ) : null}
-            </>
-          ) : null}
-          {canWrite && !workspaceDeleted ? (
-            <Button
-              size="sm"
-              onClick={() => environmentAction("clean-setup")}
-              disabled={Boolean(pending)}
-            >
-              {pending === "clean-setup" ? "setting up…" : "clean setup"}
-            </Button>
-          ) : null}
-        </div>
-      </details>
       {workspaceDeleted ? (
         <p className="text-[12px] leading-relaxed text-(--dim)">
           This workspace was permanently deleted. Its conversation and metadata remain as history.
@@ -228,7 +227,7 @@ export function WorkspaceControls({
           type="button"
           onClick={() => openPreview(previewService)}
           disabled={Boolean(pending)}
-          className="break-all font-mono text-[11px] text-(--info) underline-offset-4 hover:underline"
+          className="w-fit break-all text-left font-mono text-[11px] text-(--info) underline-offset-4 hover:underline"
         >
           Open a new authenticated preview ↗
         </button>
@@ -237,44 +236,6 @@ export function WorkspaceControls({
         <p role="alert" className="text-[12px] text-(--bad)">
           {error}
         </p>
-      ) : null}
-
-      {canWrite && workspace && !workspaceDeleted ? (
-        <details className="border border-(--bad)/40 p-4">
-          <summary className="cursor-pointer text-[12px] font-medium text-(--bad)">
-            Permanently delete workspace
-          </summary>
-          <div className="mt-4 flex flex-col gap-4 text-[12px] leading-relaxed text-(--mut)">
-            <p>This permanently deletes:</p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>the durable volume {workspace.volumeRef}</li>
-              <li>all repository worktrees and unpushed local changes in that volume</li>
-              <li>persisted Claude Code and Codex native sessions</li>
-            </ul>
-            <p>
-              The story transcript remains as a tombstone. Merge, archive, and suspend never do
-              this.
-            </p>
-            <label className="flex items-start gap-2 text-(--ink)">
-              <input
-                type="checkbox"
-                checked={deleteConfirmed}
-                onChange={(event) => setDeleteConfirmed(event.target.checked)}
-                className="mt-0.5"
-              />
-              I understand this workspace state cannot be recovered.
-            </label>
-            <Button
-              size="sm"
-              variant="danger"
-              className="w-fit"
-              disabled={!deleteConfirmed || Boolean(pending)}
-              onClick={deleteWorkspace}
-            >
-              {pending === "delete" ? "deleting…" : "delete workspace"}
-            </Button>
-          </div>
-        </details>
       ) : null}
     </div>
   );
@@ -291,10 +252,12 @@ export function CancelTurnButton({
   projectId,
   storyId,
   turnId,
+  inline = false,
 }: {
   projectId: string;
   storyId: string;
   turnId: string;
+  inline?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -313,15 +276,21 @@ export function CancelTurnButton({
   }
 
   return (
-    <div className="mt-3 flex flex-col items-end gap-1">
+    <span
+      className={inline ? "inline-flex items-center gap-2" : "mt-3 flex flex-col items-end gap-1"}
+    >
       <Button size="sm" variant="danger" disabled={pending} onClick={cancel}>
-        {pending ? "canceling…" : "cancel turn"}
+        {pending ? "canceling…" : "cancel run"}
       </Button>
-      {error ? <p className="text-[10px] text-(--bad)">{error}</p> : null}
-    </div>
+      {error ? (
+        <span role="alert" className="text-[10px] text-(--bad)">
+          {error}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
-function storyPath(projectId: string, storyId: string, suffix = "") {
+export function storyPath(projectId: string, storyId: string, suffix = "") {
   return `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}${suffix}`;
 }
