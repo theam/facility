@@ -492,6 +492,70 @@ environment:
     ]);
   });
 
+  it("carries the asked question into a prompt rebuilt for a different agent", async () => {
+    const reviewer = parseAgentManifest(
+      `---
+name: reviewer
+description: Reviews stories.
+engine: codex
+model: gpt-5.5-codex
+enabled: true
+triggers:
+  - type: manual
+---
+Review the request.
+`,
+      ".agents/reviewer.md",
+    );
+    engine.outputOverride =
+      "Blocked on one decision.\n\n<facility-needs-attention>Should existing JSON exports remain available?</facility-needs-attention>";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "github",
+      externalId: `handoff-${suffix}`,
+      title: "Decide the export policy",
+      agent: builder,
+      message: "Plan the export change",
+      messageDedupeKey: `handoff-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    const askingTurn = started.queued.turn;
+    if (!askingTurn) throw new Error("expected the asking turn");
+    await dispatcher.dispatch({ orgId, projectId, turnId: askingTurn.id });
+
+    engine.outputOverride = undefined;
+    // A different agent has no engine session of its own, so the engine is handed a
+    // rebuilt prompt rather than resuming native context.
+    const reply = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "No, continue.",
+      dedupeKey: `handoff-reply-${suffix}`,
+      agent: reviewer,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    if (!reply.turn) throw new Error("expected the reply turn");
+    await dispatcher.dispatch({ orgId, projectId, turnId: reply.turn.id });
+
+    const rebuilt = engine.requests.at(-1);
+    expect(rebuilt?.nativeSessionId).toBeUndefined();
+    expect(rebuilt?.prompt).toContain("Should existing JSON exports remain available?");
+    expect(rebuilt?.prompt).toContain("No, continue.");
+    // The question belongs to the agent turn that asked it, once.
+    expect(rebuilt?.prompt.match(/Should existing JSON exports remain available\?/g)?.length).toBe(
+      1,
+    );
+    const askedIndex =
+      rebuilt?.prompt.indexOf("Should existing JSON exports remain available?") ?? -1;
+    const repliedIndex = rebuilt?.prompt.indexOf("No, continue.") ?? -1;
+    expect(askedIndex).toBeGreaterThan(-1);
+    expect(repliedIndex).toBeGreaterThan(askedIndex);
+  });
+
   it("claims a turn once even when dispatch is repeated", async () => {
     const rows = await db
       .select()
