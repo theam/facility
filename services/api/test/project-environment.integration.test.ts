@@ -242,6 +242,39 @@ environment:
     ).toContain("shared");
   });
 
+  it("bounds a hanging readiness probe without resetting prepared workspace data", async () => {
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    const prepared = await environment.prepare({
+      orgId,
+      projectId,
+      workspace,
+      manifest,
+      credentials,
+      branch: "facility/story-environment",
+    });
+    const setupCount = await readFile(
+      join(workspace.volumeRef, "repos/acme/app/.setup-count"),
+      "utf8",
+    );
+    await expect(
+      environment.startPrepared({
+        orgId,
+        projectId,
+        workspace,
+        credentials,
+        manifest: { ...manifest, environment: { ...manifest.environment, ready: "exec sleep 2" } },
+        setupChecksum: prepared.setupChecksum,
+        readinessTimeoutMs: 50,
+      }),
+    ).rejects.toMatchObject({ code: "environment_not_ready" });
+    expect(await readFile(join(workspace.volumeRef, "repos/acme/app/.setup-count"), "utf8")).toBe(
+      setupCount,
+    );
+    expect(
+      await readFile(join(workspace.volumeRef, "repos/acme/app/.facility-test/seed"), "utf8"),
+    ).toBe("seeded");
+  });
+
   it("opens previews on the agent's changed workspace without checkout, setup, or reseeding", async () => {
     const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
     const prepared = await environment.prepare({

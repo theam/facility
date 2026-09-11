@@ -89,7 +89,9 @@ setup so a normal wake does not repeatedly seed the environment.
 
 Make `start` safe to repeat. It should return after bringing services up; use a detached Compose
 command, process manager, or equivalent. Make `ready` fail quickly while the service is unavailable
-and succeed only when a user can exercise it.
+and succeed only when a user can exercise it. Readiness checks share a two-minute deadline,
+including time spent inside each check. Reopening a prepared workspace also bounds its initial
+readiness probe; a timed-out probe does not restart or reseed the application.
 
 ## Secrets and variables
 

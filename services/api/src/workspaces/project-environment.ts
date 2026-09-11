@@ -19,6 +19,7 @@ import type {
   WorkspaceLocator,
   WorkspaceRuntime,
 } from "./runtime.js";
+import { WorkspaceRuntimeError } from "./runtime.js";
 
 const RepositoryName = z
   .string()
@@ -288,7 +289,7 @@ export class ProjectEnvironmentService {
     const preparedInput = await this.withDeclaredEnvironment(input);
     const ready = preparedInput.manifest.environment.ready;
     const alreadyReady = ready
-      ? (await this.command(preparedInput, ready, primaryPath(preparedInput.credentials)))
+      ? (await this.checkReady(preparedInput, Date.now() + (input.readinessTimeoutMs ?? 120_000)))
           .exitCode === 0
       : false;
     return this.startServices(preparedInput, input.setupChecksum, alreadyReady);
@@ -529,9 +530,11 @@ export class ProjectEnvironmentService {
     const deadline = Date.now() + (input.readinessTimeoutMs ?? 120_000);
     let last: WorkspaceCommandResult | undefined;
     while (Date.now() < deadline) {
-      last = await this.command(input, ready, primaryPath(input.credentials));
+      last = await this.checkReady(input, deadline);
       if (last.exitCode === 0) return;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(500, Math.max(0, deadline - Date.now()))),
+      );
     }
     throw new ProjectEnvironmentError("environment_not_ready", "environment readiness timed out", {
       command: input.manifest.environment.ready,
@@ -544,6 +547,30 @@ export class ProjectEnvironmentService {
         ),
       ),
     });
+  }
+
+  private async checkReady(input: EnvironmentInput, deadline: number) {
+    const timeout = () =>
+      new ProjectEnvironmentError("environment_not_ready", "environment readiness timed out", {
+        command: input.manifest.environment.ready,
+      });
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw timeout();
+    try {
+      const result = await this.command(
+        input,
+        input.manifest.environment.ready ?? "",
+        primaryPath(input.credentials),
+        remaining,
+      );
+      if (Date.now() >= deadline) throw timeout();
+      return result;
+    } catch (error) {
+      if (error instanceof WorkspaceRuntimeError && error.code === "workspace_command_timeout") {
+        throw timeout();
+      }
+      throw error;
+    }
   }
 
   private async run(input: EnvironmentInput, script: string, cwd: string, phase: string) {
@@ -564,13 +591,18 @@ export class ProjectEnvironmentService {
     return result;
   }
 
-  private command(input: EnvironmentInput, script: string, cwd: string) {
+  private command(
+    input: EnvironmentInput,
+    script: string,
+    cwd: string,
+    timeoutMs = 30 * 60 * 1_000,
+  ) {
     return this.runtime.exec(input.workspace, {
       command: "sh",
       args: ["-lc", script],
       cwd,
       env: input.credentials.environment,
-      timeoutMs: 30 * 60 * 1_000,
+      timeoutMs,
     });
   }
 
