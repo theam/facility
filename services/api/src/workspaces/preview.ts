@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { newId } from "@facility/core";
+import { can, newId } from "@facility/core";
 import {
   type FacilityDb,
   orgMembers,
@@ -18,6 +18,9 @@ import type { ProjectEnvironmentService, ProjectManifestSource } from "./project
 import type { WorkspaceLocator, WorkspaceRuntime } from "./runtime.js";
 
 const SESSION_TTL_MS = 60 * 60 * 1_000;
+
+/** The permission the open route requires; a live session must keep holding it. */
+const PREVIEW_PERMISSION = "workspaces:execute";
 
 export class WorkspacePreviewError extends Error {
   constructor(
@@ -135,7 +138,7 @@ export class WorkspacePreviewService {
         .returning()
     )[0];
     if (!consumed) throw invalidAccess();
-    await this.assertMembership(consumed.orgId, consumed.userId);
+    await this.assertPreviewAccess(consumed.orgId, consumed.userId);
     return consumed;
   }
 
@@ -156,7 +159,7 @@ export class WorkspacePreviewService {
         .limit(1)
     )[0];
     if (!session) throw invalidAccess();
-    await this.assertMembership(session.orgId, session.userId);
+    await this.assertPreviewAccess(session.orgId, session.userId);
     return session;
   }
 
@@ -230,7 +233,11 @@ export class WorkspacePreviewService {
     return { story, workspace };
   }
 
-  private async assertMembership(orgId: string, userId: string) {
+  /**
+   * A preview session outlives the request that opened it, so the permission
+   * that opened it is re-read on every use: membership alone is not access.
+   */
+  private async assertPreviewAccess(orgId: string, userId: string) {
     const member = (
       await this.db
         .select({ permissions: roles.permissions })
@@ -246,7 +253,7 @@ export class WorkspacePreviewService {
         )
         .limit(1)
     )[0];
-    if (!member) throw invalidAccess();
+    if (!member || !can(member.permissions, PREVIEW_PERMISSION)) throw invalidAccess();
   }
 }
 

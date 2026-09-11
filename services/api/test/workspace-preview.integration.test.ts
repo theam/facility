@@ -250,6 +250,37 @@ describe("workspace preview session security", async () => {
     });
   });
 
+  it("stops proxying as soon as the member loses workspace execution", async () => {
+    const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+    const token = new URL(opened.url).searchParams.get("token");
+    if (!token) throw new Error("expected preview access token");
+    await service.exchange(opened.sessionId, token);
+    await expect(service.authorize(opened.sessionId, token)).resolves.toMatchObject({ storyId });
+
+    // The role keeps a read permission, so the membership row and the user stay
+    // active: the only thing revoked is the permission that opened the preview.
+    await db
+      .update(roles)
+      .set({ permissions: ["previews:read"] })
+      .where(eq(roles.id, roleId));
+    await expect(service.authorize(opened.sessionId, token)).rejects.toMatchObject({
+      code: "preview_access_invalid",
+    });
+
+    const reopened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+    const reopenedToken = new URL(reopened.url).searchParams.get("token");
+    if (!reopenedToken) throw new Error("expected preview access token");
+    await expect(service.exchange(reopened.sessionId, reopenedToken)).rejects.toMatchObject({
+      code: "preview_access_invalid",
+    });
+
+    await db
+      .update(roles)
+      .set({ permissions: ["workspaces:execute"] })
+      .where(eq(roles.id, roleId));
+    await expect(service.authorize(opened.sessionId, token)).resolves.toMatchObject({ storyId });
+  });
+
   it("rejects expired and malformed access tokens", async () => {
     const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
     const token = new URL(opened.url).searchParams.get("token");
