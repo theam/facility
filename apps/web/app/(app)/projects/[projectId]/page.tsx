@@ -189,8 +189,8 @@ export default async function ProjectOverviewPage({
               title="Waiting for review"
               count={overview.review.total}
               aside={
-                <Link href={`${base}/pipeline`} className={linkClass}>
-                  Pipeline →
+                <Link href={`${base}/stories?phase=review`} className={linkClass}>
+                  In review →
                 </Link>
               }
             >
@@ -228,8 +228,8 @@ export default async function ProjectOverviewPage({
                   <Link href={`${base}/stories`} className={linkClass}>
                     All stories →
                   </Link>
-                  <Link href={`${base}/pipeline`} className={linkClass}>
-                    Issues →
+                  <Link href={`${base}/stories?phase=not_started`} className={linkClass}>
+                    Not started →
                   </Link>
                 </span>
               }
