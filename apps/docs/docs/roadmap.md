@@ -4,28 +4,31 @@ title: Roadmap
 
 # Roadmap
 
-This page separates capabilities that exist from direction that is planned.
-Roadmap items have no committed date until they move into a release plan.
+Facility is a self-hosted AI SDLC system for reviewable delivery with humans, gates, and evidence
+in one place.
 
-## Native preview environments
+## Current focus
 
-**Status: available with rough edges.** Facility provisions an isolated Docker
-or AWS sandbox from a project-defined immutable image, waits for an optional
-readiness path, and exposes the private origin only through its SSO-authenticated
-proxy. Production creation fails closed until interactive GitHub/OIDC login is configured.
+Facility is building a dependable issue-to-pull-request loop around:
 
-The native preview system now:
+- persistent story conversations, worktrees, volumes, and native engine sessions;
+- Claude Code and Codex adapters with model selection in `.agents/`;
+- manual, MCP, UI, GitHub, and scheduled agents on one dispatcher;
+- full development environments with Docker, Compose, browser testing, and authenticated previews;
+- direct Git and GitHub maintainer workflows;
+- cost accounting and monthly budget enforcement without a separate model gateway;
+- operational observability, audit history, and product usage summaries;
+- a webhook-backed GitHub issue, pull request, and CI mirror with a delivery pipeline;
+- an MCP server embedded in the control plane;
+- a web UI over the same domain operations; and
+- a compact AWS reference control plane whose story workspaces remain on Vercel.
 
-- creates an isolated live environment for every implementation pull request;
-- supports provider adapters rather than binding the control plane to one cloud;
-- attaches the URL, deployment status, and expiry to the Facility run and PR;
-- runs a project-defined command, which can seed non-production data before
-  starting the service;
-- makes preview readiness part of Gate 2 evidence; and
-- destroys the environment when the PR closes or its retention window expires.
+## Planned direction
 
-Current rough edges are explicit: the project must publish the review image
-before requesting a preview; the proxy supports browser-safe `GET` and `HEAD`
-traffic; and Facility does not inject project secrets. External provider
-previews remain a supported adapter path. GitHub review and branch protection
-remain the Gate 2 merge boundary in either mode.
+Facility will continue iterating towards stronger human governance, reusable organizational
+configuration and upgrades, richer delivery evidence, deeper cost and outcome analysis, and
+additional execution and deployment options where they improve the AI SDLC.
+
+Future work should earn its place on top of the persistent story lifecycle. New policy or
+orchestration layers should remain reviewable, share state across MCP and the UI, and preserve the
+normal GitHub delivery boundary.

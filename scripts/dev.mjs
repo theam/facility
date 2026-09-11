@@ -14,11 +14,9 @@ function escapeRegex(value) {
 }
 
 function envLine(content, key) {
-  const pattern = new RegExp(
-    `^(\\s*(?:export\\s+)?${escapeRegex(key)}\\s*=)([^\\r\\n]*)(\\r?)$`,
-    "m",
+  return new RegExp(`^(\\s*(?:export\\s+)?${escapeRegex(key)}\\s*=)([^\\r\\n]*)(\\r?)$`, "m").exec(
+    content,
   );
-  return pattern.exec(content);
 }
 
 function isBlankEnvValue(rawValue) {
@@ -42,7 +40,6 @@ export function envValue(content, key) {
 export function setEnvIfBlank(content, key, value) {
   const match = envLine(content, key);
   if (match && !isBlankEnvValue(match[2])) return { content, changed: false };
-
   if (match) {
     const comment = match[2].trim().startsWith("#") ? ` ${match[2].trim()}` : "";
     const replacement = `${match[1]}${value}${comment}${match[3]}`;
@@ -51,7 +48,6 @@ export function setEnvIfBlank(content, key, value) {
       changed: true,
     };
   }
-
   const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
   return { content: `${content}${separator}${key}=${value}\n`, changed: true };
 }
@@ -73,25 +69,6 @@ export function assertLocalDatabaseUrl(value) {
   }
 }
 
-// The bundled MinIO uses port 9000 on loopback or the compose service name.
-// Any other host/port pair is an external S3-compatible endpoint the operator runs.
-const LOCAL_S3_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "minio"]);
-
-// Does the effective S3 endpoint resolve to the bundled local MinIO? A blank or
-// unset endpoint keeps the local default; an unparseable value is treated as
-// external so we never auto-start MinIO against an endpoint we cannot classify.
-export function usesLocalStorage(s3Endpoint) {
-  const value = s3Endpoint?.trim();
-  if (!value) return true;
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  return LOCAL_S3_HOSTS.has(url.hostname.toLowerCase()) && url.port === "9000";
-}
-
 export async function prepareDevEnv(
   root = repoRoot,
   {
@@ -104,7 +81,6 @@ export async function prepareDevEnv(
   const example = await readFile(join(root, ".env.example"), "utf8");
   let content;
   let created = false;
-
   try {
     content = await readFile(envPath, "utf8");
   } catch (error) {
@@ -113,43 +89,30 @@ export async function prepareDevEnv(
     created = true;
   }
 
-  const filled = [];
   const databaseUrl = envValue(example, "DATABASE_URL");
   if (!databaseUrl) throw new Error(".env.example must define DATABASE_URL");
-
   const required = [["DATABASE_URL", databaseUrl]];
-  if (!envValue(content, "SECRET_MASTER_KEY")) {
+  if (!envValue(content, "SECRET_MASTER_KEY"))
     required.push(["SECRET_MASTER_KEY", generateSecret()]);
-  }
   if (!envValue(content, "FACILITY_OAUTH_JWKS")) {
     required.push(["FACILITY_OAUTH_JWKS", generateOauthJwks()]);
   }
-
+  const filled = [];
   for (const [key, value] of required) {
     const next = setEnvIfBlank(content, key, value);
     if (next.changed) filled.push(key);
     content = next.content;
   }
 
-  const exportedDatabaseUrl = environment.DATABASE_URL?.trim();
-  const effectiveDatabaseUrl = exportedDatabaseUrl || envValue(content, "DATABASE_URL");
+  const effectiveDatabaseUrl =
+    environment.DATABASE_URL?.trim() || envValue(content, "DATABASE_URL");
   assertLocalDatabaseUrl(effectiveDatabaseUrl);
-  // Exported env overrides .env, consistent with DATABASE_URL above.
-  const s3Endpoint = environment.S3_ENDPOINT?.trim() || envValue(content, "S3_ENDPOINT");
-  if (created || filled.length > 0) {
-    await writeFile(envPath, content, { mode: 0o600 });
-  }
-  // Keep a pre-existing secrets file owner-only too; a no-op rerun must not
-  // preserve accidentally broad permissions.
+  if (created || filled.length > 0) await writeFile(envPath, content, { mode: 0o600 });
   await chmod(envPath, 0o600);
   return {
     created,
     filled,
     databaseUrl: effectiveDatabaseUrl,
-    s3Endpoint,
-    localStorage: usesLocalStorage(s3Endpoint),
-    // Next reads this from its own process env: it is spawned from apps/web
-    // and never loads the repository-root .env itself.
     devOrigins:
       environment.FACILITY_DEV_ORIGINS?.trim() || envValue(content, "FACILITY_DEV_ORIGINS"),
   };
@@ -168,8 +131,7 @@ export function assertSupportedNode(version = process.versions.node) {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
   const major = Number.parseInt(match?.[1] ?? "", 10);
   const minor = Number.parseInt(match?.[2] ?? "", 10);
-  const supported = (major === 22 && minor >= 13) || major === 24;
-  if (!supported) {
+  if (!((major === 22 && minor >= 13) || major === 24)) {
     throw new Error(
       `Node.js 24 LTS is recommended; supported versions are ^22.13.0 or ^24.0.0 (found ${version})`,
     );
@@ -179,14 +141,6 @@ export function assertSupportedNode(version = process.versions.node) {
 export function developmentServiceEnvironment(prepared, base = process.env) {
   const environment = { ...base, DATABASE_URL: prepared.databaseUrl };
   if (prepared.devOrigins) environment.FACILITY_DEV_ORIGINS = prepared.devOrigins;
-  // docker-compose.dev.yml has the stable project name `facility-dev`. The
-  // seeded runner profiles are fail-closed (`egress=restricted`), so leaving
-  // this blank gives sandboxes NetworkMode=none and they cannot complete their
-  // authenticated API/gateway handshake. Preserve an explicit operator
-  // network, but make the normal `pnpm dev` path work without hidden setup.
-  if (!environment.FACILITY_SANDBOX_DOCKER_NETWORK?.trim()) {
-    environment.FACILITY_SANDBOX_DOCKER_NETWORK = "facility-dev_default";
-  }
   return environment;
 }
 
@@ -215,65 +169,42 @@ export function run(
 export async function startDevelopment(root = repoRoot) {
   assertSupportedNode();
   console.log("\nFacility development\n");
-
   const prepared = await prepareDevEnv(root);
   const environment = developmentServiceEnvironment(prepared);
   if (prepared.created) console.log("✓ Created .env from .env.example");
-  if (prepared.filled.includes("DATABASE_URL"))
-    console.log("✓ Added the local development database URL");
   if (prepared.filled.includes("SECRET_MASTER_KEY")) {
     console.log("✓ Generated SECRET_MASTER_KEY (stored only in .env)");
   }
   if (prepared.filled.includes("FACILITY_OAUTH_JWKS")) {
     console.log("✓ Generated FACILITY_OAUTH_JWKS (stored only in .env)");
   }
-  if (!prepared.created && prepared.filled.length === 0)
-    console.log("✓ Preserved the existing .env");
 
-  const compose = ["compose", "-f", "docker-compose.dev.yml"];
-  if (prepared.localStorage) {
-    console.log("→ Starting Postgres and MinIO (local-storage profile)");
-    const local = [...compose, "--profile", "local-storage"];
-    await run("docker", [...local, "up", "-d", "--wait", "postgres", "minio"], {
+  await run(
+    "docker",
+    ["compose", "-f", "docker-compose.dev.yml", "up", "-d", "--wait", "postgres"],
+    {
       cwd: root,
-      label: "Docker development infrastructure",
-    });
-    await run("docker", [...local, "run", "--rm", "--no-deps", "createbuckets"], {
-      cwd: root,
-      label: "MinIO bucket setup",
-    });
-  } else {
-    console.log(`→ Starting Postgres (external S3 endpoint ${prepared.s3Endpoint})`);
-    await run("docker", [...compose, "up", "-d", "--wait", "postgres"], {
-      cwd: root,
-      label: "Docker development infrastructure",
-    });
-  }
-
-  console.log("→ Installing workspace dependencies");
-  await run(pnpm, ["install"], {
-    cwd: root,
-    label: "pnpm install",
-  });
-
-  console.log("→ Building shared workspace packages");
+      label: "PostgreSQL development service",
+    },
+  );
+  await run(pnpm, ["install"], { cwd: root, label: "pnpm install" });
   await run(
     pnpm,
     [
       "--filter",
       "@facility/core",
       "--filter",
+      "@facility/agents",
+      "--filter",
       "@facility/db",
       "--filter",
       "@facility/sdk",
       "--filter",
-      "@facility/harness",
+      "@facility/mcp",
       "build",
     ],
     { cwd: root, label: "shared package build" },
   );
-
-  console.log("→ Migrating and seeding the database");
   await run(pnpm, ["--filter", "@facility/db", "migrate"], {
     cwd: root,
     environment,
@@ -281,16 +212,13 @@ export async function startDevelopment(root = repoRoot) {
   });
   await run(pnpm, ["--filter", "@facility/db", "seed"], {
     cwd: root,
-    environment: { ...environment, FACILITY_SEED_DEMO: "0" },
+    environment: { ...environment, FACILITY_SEED_DEMO: "1" },
     label: "database seed",
   });
-
-  console.log("\n✓ Setup complete. Starting all development processes, including the worker.");
-  console.log("  Web      http://localhost:3400");
-  console.log("  API      http://localhost:4400");
-  console.log("  Gateway  http://localhost:4410");
-  console.log("  Docs     http://localhost:3500");
-  console.log("\nCtrl-C stops the development processes; Docker infrastructure stays running.\n");
+  console.log("\n✓ Setup complete. Starting the UI, API, worker, and docs.");
+  console.log("  Web   http://localhost:3400");
+  console.log("  API   http://localhost:4400 (includes MCP)");
+  console.log("  Docs  http://localhost:3500\n");
   await run(pnpm, ["run", "dev:services"], {
     cwd: root,
     environment,

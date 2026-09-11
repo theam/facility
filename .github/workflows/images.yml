@@ -3,15 +3,15 @@
 # passes; a manual run publishes a commit-SHA tag and never a version tag. The
 # version comes from the commits on main, not from a tag someone pushed.
 #
-# One Bake graph first pushes five addressable digests without deployable tags.
-# Only after the complete graph succeeds does the promote job point the six
+# One Bake graph first pushes three addressable digests without deployable tags.
+# Only after the complete graph succeeds does the promote job point the four
 # service tags at those digests (worker intentionally reuses api). Existing
 # tags are inspected through the GitHub Packages API: an exact digest is
 # idempotent, while a conflicting replay fails closed before promotion.
 #
 # A package is created PRIVATE regardless of the repository's visibility: what
 # it inherits from the linked repository is access permissions, not visibility.
-# Making each of the six public is a one-time manual step in the package
+# Making each of the four public is a one-time manual step in the package
 # settings, after which anyone — including ECS — can pull without authenticating.
 # Until then, deployments keep building into their own registry (see the AWS
 # runbook), which also stays the right answer for private forks.
@@ -104,7 +104,7 @@ jobs:
 
       # linux/amd64 only, matching the module's default task_cpu_architecture.
       # A single graph shares base, dependency, and workspace stages across the
-      # five thin security-boundary images. The overlay pushes only canonical
+      # three thin security-boundary images. The overlay pushes only canonical
       # digests; release tags remain gated by the promote job.
       - name: Build and push the addressable image set
         env:
@@ -184,7 +184,7 @@ jobs:
           chmod 0755 "$directory/grype"
           printf 'cmd=%s\n' "$directory/grype" >> "$GITHUB_OUTPUT"
 
-      # Download the vulnerability database once. The five scans below then
+      # Download the vulnerability database once. The three scans below then
       # reuse it and the runner's container-layer cache.
       - name: Refresh the Grype vulnerability database once
         env:
@@ -203,7 +203,7 @@ jobs:
         run: |
           set -euo pipefail
           scan_failed=0
-          for image in api gateway mcp web runner; do
+          for image in api web runner; do
             digest="$(node -e '
               const fs = require("node:fs");
               const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));

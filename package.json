@@ -1,8 +1,8 @@
 {
   "name": "facility-monorepo",
   "private": true,
-  "version": "0.3.0",
-  "description": "Facility — the self-hostable platform that governs your AI SDLC. Monorepo: control plane, gateway, web, docs, CLI, MCP, harnesses.",
+  "version": "0.12.0",
+  "description": "Facility — open-source, self-hosted tooling for running AI coding agents in a reviewable software delivery process.",
   "license": "Apache-2.0",
   "author": "The Agile Monkeys (https://theagilemonkeys.com)",
   "type": "module",
@@ -15,24 +15,23 @@
     "clean:outputs": "node scripts/clean-outputs.mjs",
     "build:clean": "pnpm clean:outputs && turbo run build --force",
     "dev": "node scripts/dev.mjs",
-    "deploy:aws": "node scripts/deploy-aws.mjs deploy",
     "dev:services": "turbo run dev dev:worker",
     "test": "pnpm test:dev && turbo run test",
     "test:dev": "node --test scripts/*.test.mjs",
     "test:critical": "node scripts/test-critical.mjs",
-    "test:uncached": "pnpm test:dev && turbo run test --force --filter='!@facility/db' --filter='!@facility/api' --filter='!@facility/gateway' --filter='!@theagilemonkeys/facility'",
-    "test:e2e-sandbox": "turbo run build --filter='@facility/api^...' && pnpm --filter @facility/api test:e2e-sandbox",
+    "test:uncached": "pnpm test:dev && turbo run test --force --filter='!@facility/db' --filter='!@facility/api' --filter='!@theagilemonkeys/facility'",
+    "test:e2e-workspace": "turbo run build --filter='@facility/api^...' && pnpm --filter @facility/api test:e2e-workspace",
     "typecheck": "turbo run typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
     "guards": "node guards/run.mjs",
+    "check:unused": "node scripts/check-unused.mjs",
     "migrations:check": "node scripts/migrations.mjs check",
     "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
     "turbo": "^2.5.8",
-    "typescript": "^5.9.3",
-    "yaml": "^2.9.0"
+    "typescript": "^5.9.3"
   }
 }

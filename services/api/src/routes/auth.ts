@@ -1,15 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { newId, open, seal } from "@facility/core";
-import {
-  githubInstallations,
-  insertAuditEvent,
-  orgMembers,
-  orgs,
-  roles,
-  seedBundledRegistryForOrg,
-  userIdentities,
-  users,
-} from "@facility/db";
+import { githubInstallations, orgMembers, orgs, roles, userIdentities, users } from "@facility/db";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -101,15 +92,15 @@ export async function registerAuthRoutes(
         await mintSessionCookie(config, session.userId, session.orgId),
         cookieOptions(config, 7 * 24 * 60 * 60),
       );
-      await insertAuditEvent(app.facilityDb, {
-        orgId: session.orgId,
-        actor: { type: "user", id: session.userId },
-        action: "auth.login",
-        target: { type: "user", id: session.userId },
-        payload: { via: config.authIdentityProvider ?? "github" },
-        ip: request.ip,
-        userAgent: request.headers["user-agent"],
-      });
+      request.log.info(
+        {
+          action: "auth.login",
+          actor: { type: "user", id: session.userId },
+          orgId: session.orgId,
+          via: config.authIdentityProvider ?? "github",
+        },
+        "facility access event",
+      );
       return reply.redirect(
         new URL(transaction.returnTo, config.webUrl ?? config.publicUrl).toString(),
       );
@@ -271,7 +262,6 @@ async function ensureGithubUserTransaction(
         eq(userIdentities.providerSubject, identity.githubUserId),
       ),
     );
-  await seedBundledRegistryForOrg(db, admitted.member.orgId);
   return { userId: invited.id, orgId: admitted.member.orgId };
 }
 

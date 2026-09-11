@@ -1,15 +1,3 @@
-FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS bind-broker-build
-
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc libc6-dev \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY runner/bind-broker.c /src/bind-broker.c
-RUN gcc -std=c11 -O2 -Wall -Wextra -Werror \
-      -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE \
-      /src/bind-broker.c -Wl,-z,relro,-z,now -pie \
-      -o /facility-bind-broker
-
 # Docker's official rootless image publishes a coherent, multi-platform static
 # daemon/client/runtime set built with a current Go toolchain. Copying from one
 # digest-pinned source avoids Debian's lagging docker.io binaries and a second
@@ -45,7 +33,9 @@ RUN archive=/tmp/moby.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && VERSION="$MOBY_VERSION" DOCKER_GITCOMMIT="$MOBY_COMMIT" \
     EXCLUDE_AUTO_BUILDTAG_JOURNALD=1 SOURCE_DATE_EPOCH=1785456000 \
     GOFLAGS=-mod=mod ./hack/make.sh binary-daemon binary-proxy \
@@ -85,9 +75,10 @@ RUN archive=/tmp/containerd.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
-  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.55.0 \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && make VERSION="v${CONTAINERD_VERSION}" REVISION="$CONTAINERD_COMMIT" STATIC=1 \
     GO_BUILD_FLAGS='-mod=mod -trimpath' \
     bin/containerd bin/containerd-shim-runc-v2 bin/ctr \
@@ -106,7 +97,7 @@ RUN archive=/tmp/rootlesskit.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
-  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.55.0 \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags='-s -w' -o /out/rootlesskit ./cmd/rootlesskit \
   && test "$(/out/rootlesskit --version | awk '{print $3}')" = "3.0.2" \
@@ -124,7 +115,9 @@ RUN archive=/tmp/buildx.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=github.com/moby/go-archive=github.com/moby/go-archive@v0.3.0 \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/docker/buildx/version.Version=${BUILDX_VERSION} \
       -X github.com/docker/buildx/version.Revision=${BUILDX_COMMIT} \
@@ -144,8 +137,9 @@ RUN archive=/tmp/compose.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
-  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.55.0 \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 GOMAXPROCS=1 go build -p=1 -mod=mod -trimpath -tags=e2e \
     -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
     -o /out/docker-compose ./cmd \
@@ -178,7 +172,9 @@ RUN archive=/tmp/gh.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} \
       -X github.com/cli/cli/v2/internal/build.Date=2026-07-31" \
@@ -197,9 +193,13 @@ RUN for binary in /out/*; do \
     go version -m "$binary" | awk \
       '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.56.0" { found = 1 } END { exit !found }' || exit 1; \
   done \
-  && for binary in /out/containerd /out/rootlesskit /out/docker-compose; do \
+  && for binary in /out/dockerd /out/containerd /out/rootlesskit /out/docker-buildx /out/docker-compose /out/gh; do \
     go version -m "$binary" | awk \
-      '$1 == "=>" && $2 == "golang.org/x/crypto" && $3 == "v0.55.0" { found = 1 } END { exit !found }' || exit 1; \
+      '$1 == "=>" && $2 == "golang.org/x/crypto" && $3 == "v0.56.0" { found = 1 } END { exit !found }' || exit 1; \
+  done \
+  && for binary in /out/dockerd /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/docker-buildx /out/docker-compose /out/gh; do \
+    go version -m "$binary" | awk \
+      '$1 == "=>" && $2 == "google.golang.org/grpc" && $3 == "v1.83.2" { found = 1 } END { exit !found }' || exit 1; \
   done \
   && for binary in /out/dockerd /out/containerd /out/ctr /out/docker-buildx /out/docker-compose /out/gh; do \
     go version -m "$binary" | awk \
@@ -219,7 +219,8 @@ FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf23286
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20260828
+ARG DEBIAN_SECURITY_REFRESH=20260910
+ARG CHROMIUM_MIN_VERSION=152.0.7977.82-1~deb13u1
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -227,6 +228,7 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     build-essential \
     busybox-static \
     ca-certificates \
+    chromium \
     curl \
     fonts-noto-color-emoji \
     fonts-freefont-ttf \
@@ -271,6 +273,8 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     util-linux \
     xfonts-scalable \
     xvfb \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium)" ge "$CHROMIUM_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium-common)" ge "$CHROMIUM_MIN_VERSION" \
   && rm -rf /var/lib/apt/lists/*
 
 # npm is a runtime capability for repositories that use package-lock.json, so
@@ -311,18 +315,7 @@ RUN docker --version \
   && docker buildx version \
   && gh --version
 
-# Keep the Docker daemon and its socket proxy on identities that the untrusted
-# agent user cannot impersonate. The daemon itself is rootless; the proxy is the
-# only process allowed to reach its raw socket.
-RUN useradd --system --uid 1001 --create-home --home-dir /var/lib/facility-docker facility-docker \
-  && useradd --system --uid 1002 --no-create-home --home-dir /nonexistent facility-proxy \
-  && usermod --append --groups node facility-docker \
-  && usermod --append --groups node,facility-docker facility-proxy \
-  && usermod --add-subuids 100000-165535 --add-subgids 100000-165535 facility-docker
-
-# Keep the privileged agent toolchain in its own locked, cacheable layer. The
-# runner application changes more frequently and must not re-resolve CLI
-# transitives or invalidate this install.
+# Keep the agent toolchain in its own locked, cacheable layer.
 COPY runner/agent-clis/package.json runner/agent-clis/package-lock.json /opt/facility-agent-clis/
 # npm's download cache duplicates the large native Claude/Codex packages in
 # the final layer. It is not used at runtime, would push this layer above VCR's
@@ -336,63 +329,36 @@ RUN cd /opt/facility-agent-clis \
   && claude --version \
   && codex --version
 
-# Create the package-manager shims while the image is still writable. Runtime
-# sandboxes mount /work as a writable, per-run volume and keep the image root read-only;
-# baking the shims makes a later `corepack enable` idempotent instead of trying
-# (and failing) to write /usr/local/bin. Package downloads still use $HOME in
-# writable /work.
+# Create the package-manager shims while the image is still writable.
 RUN corepack enable
 
-# Seed the repository's pinned package-manager release into an immutable image
-# layer. The entrypoint copies this trusted seed into each sandbox's ephemeral
-# workspace; repositories pinning another release can still download it for that run,
-# but no executable Corepack cache persists into the next run.
+# Seed the repository's pinned package-manager release into an immutable layer.
 COPY package.json /tmp/facility-root-package.json
 RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packageManager")" \
   && COREPACK_HOME=/opt/facility-corepack corepack install --global --cache-only "$package_manager" \
   && chmod -R a-w /opt/facility-corepack \
   && rm -f /tmp/facility-root-package.json
 
-WORKDIR /app
-COPY --from=bind-broker-build /facility-bind-broker /usr/local/bin/facility-bind-broker
-COPY runner/package.json runner/package-lock.json runner/tsconfig.json ./
-COPY packages/run-objective/package.json /packages/run-objective/
-COPY packages/run-objective/src /packages/run-objective/src
-# Repository-runner source changes are frequent and do not change the locked
-# runtime dependency graph. Keep npm ci in its own cacheable layer so an agent
-# telemetry or lifecycle edit rebuilds the small bundle instead of reinstalling
-# and auditing the same dependencies.
-RUN npm ci
-COPY runner/src ./src
-# The runtime image consumes JavaScript only. Declaration generation remains in
-# the workspace build/typecheck gates and previously added about a minute to
-# every cache-miss runner image build without changing runtime bytes.
-RUN npm run build:runtime && npm prune --omit=dev
+COPY --chown=root:root --chmod=0555 runner/facility-git-credential.mjs /usr/local/bin/facility-git-credential
+COPY --chown=root:root --chmod=0555 runner/facility-preview-gateway.mjs /usr/local/bin/facility-preview-gateway
+RUN mkdir -p /workspace \
+  && chown -R node:node /workspace
+ENV HOME=/workspace/.facility/home
+WORKDIR /workspace
+CMD ["sleep", "infinity"]
 
-# Run non-root: agent CLIs (Claude Code) refuse bypass-permissions as root, and
-# a rogue agent process should never hold uid 0.
-RUN mkdir -p /work/.facility-package-cache \
-  && chown -R node:node /work \
-  && chown -R root:root /app \
-  && chmod -R a-w /app
-# Shell bootstrap changes must not invalidate the dependency install, bundle,
-# or recursive application hardening layer.
-COPY --chown=root:root --chmod=0555 \
-  runner/runner-entrypoint.sh runner/codebuild-runner.sh runner/find-descendant.awk /app/
-COPY --chown=root:root --chmod=0555 runner/facility-delivery.sh /usr/local/bin/facility-delivery
-ENV HOME=/work
-WORKDIR /work
-ENTRYPOINT ["/app/runner-entrypoint.sh"]
-CMD ["node", "/app/dist/index.js"]
-
-# Vercel custom-image commands start as the image's declared user and its SDK
-# implements `sudo` by invoking a binary. Keep sudo out of the image: start only
-# the trusted bootstrap as root, then codebuild-runner.sh demotes every custom
-# command and repository/model child to UID 1000 before execution.
+# Vercel invokes trusted initialization with sudo and agent commands as node.
 FROM runner-base AS vercel-runner
 USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends sudo \
+  && rm -rf /var/lib/apt/lists/* \
+  && sudo -n -u node -- sh -c 'test "$(id -un)" = node' \
+  && test -u /usr/bin/sudo \
+  && runuser -u node -- sh -c 'test "$(id -un)" = node' \
+  && ! runuser -u node -- sudo -n -u root -- true
 
-# The default/local image retains the existing non-root boundary. Keep this as
-# the last stage so ordinary `docker build` and ECR publishing remain unchanged.
+# The default image runs interactively as node. DockerWorkspaceRuntime overrides
+# the bootstrap process to root only while it starts the nested Docker daemon.
 FROM runner-base AS runner
 USER node

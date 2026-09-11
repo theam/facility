@@ -6,60 +6,38 @@ const validEnv = {
   SECRET_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
 };
 
-const validOauthJwks = JSON.stringify({
-  keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "oauth-key" }],
-});
-
-const enabledOauthEnv = {
-  FACILITY_OAUTH_JWKS: validOauthJwks,
-  MCP_PUBLIC_URL: "https://mcp.example.org/mcp",
-};
-
-const validProductionOauthEnv = {
-  ...validEnv,
-  NODE_ENV: "production",
-  PUBLIC_URL: "https://api.example.com",
-  WEB_URL: "https://app.example.com",
-  FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
-  AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
-  FACILITY_OAUTH_ISSUER: "https://app.example.com",
-  ...enabledOauthEnv,
-};
-
-describe("API configuration", () => {
-  it("keeps governed Builder retry promotion fail-closed until explicitly enabled", () => {
-    expect(readConfig(validEnv).governedBuilderRetryPromotionEnabled).toBe(false);
-    expect(
-      readConfig({
-        ...validEnv,
-        FACILITY_GOVERNED_BUILDER_RETRY_PROMOTION: "1",
-      }).governedBuilderRetryPromotionEnabled,
-    ).toBe(true);
-  });
-
-  it("accepts a master key that decodes to exactly 32 bytes", () => {
+describe("Facility 0.12 configuration", () => {
+  it("requires an exact 32-byte base64 master key", () => {
     expect(readConfig(validEnv).secretMasterKey).toBe(validEnv.SECRET_MASTER_KEY);
+    for (const value of ["bad", `${validEnv.SECRET_MASTER_KEY}!`]) {
+      expect(() => readConfig({ ...validEnv, SECRET_MASTER_KEY: value })).toThrow(
+        "SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes",
+      );
+    }
   });
 
-  it("fails at startup for a malformed master key", () => {
-    expect(() => readConfig({ ...validEnv, SECRET_MASTER_KEY: "not-a-32-byte-key" })).toThrow(
-      "SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes",
-    );
-  });
-
-  it("rejects malformed base64 even when Node can permissively decode 32 bytes", () => {
-    expect(() =>
-      readConfig({ ...validEnv, SECRET_MASTER_KEY: `${validEnv.SECRET_MASTER_KEY}!` }),
-    ).toThrow("SECRET_MASTER_KEY must be base64 that decodes to exactly 32 bytes");
+  it("supports only Docker and Vercel workspace runtimes", () => {
+    expect(readConfig(validEnv).workspaceDriver).toBe("docker");
+    expect(readConfig({ ...validEnv, FACILITY_WORKSPACE_DRIVER: "vercel" })).toMatchObject({
+      workspaceDriver: "vercel",
+    });
+    expect(() => readConfig({ ...validEnv, FACILITY_WORKSPACE_DRIVER: "aws" })).toThrow();
   });
 
   it("refuses insecure development login in production", () => {
     expect(() =>
       readConfig({ ...validEnv, NODE_ENV: "production", FACILITY_INSECURE_DEV: "1" }),
     ).toThrow("FACILITY_INSECURE_DEV is refused in production");
+    expect(() =>
+      readConfig({
+        ...validEnv,
+        FACILITY_INSECURE_DEV: "1",
+        PUBLIC_URL: "http://facility.internal:4400",
+      }),
+    ).toThrow("FACILITY_INSECURE_DEV requires loopback PUBLIC_URL and WEB_URL");
   });
 
-  it("requires an isolated HTTPS preview origin in production", () => {
+  it("requires a separate HTTPS preview site in production", () => {
     expect(() => readConfig({ ...validEnv, NODE_ENV: "production" })).toThrow(
       "FACILITY_PREVIEW_URL is required in production",
     );
@@ -67,84 +45,32 @@ describe("API configuration", () => {
       readConfig({
         ...validEnv,
         NODE_ENV: "production",
-        FACILITY_PREVIEW_URL: "http://previews.example.net",
-      }),
-    ).toThrow("FACILITY_PREVIEW_URL must use HTTPS in production");
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        NODE_ENV: "production",
         PUBLIC_URL: "https://api.example.com",
         WEB_URL: "https://app.example.com",
-        FACILITY_PREVIEW_URL: "https://previews.example.com",
+        FACILITY_PREVIEW_URL: "https://preview.example.com",
       }),
-    ).toThrow(
-      "FACILITY_PREVIEW_URL must use a registered site separate from other Facility origins",
-    );
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        NODE_ENV: "production",
-        PUBLIC_URL: "https://api.example.com",
-        MCP_PUBLIC_URL: "https://facility-previews.example.net",
-        FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
-      }),
-    ).toThrow(
-      "FACILITY_PREVIEW_URL must use a registered site separate from other Facility origins",
-    );
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        NODE_ENV: "production",
-        PUBLIC_URL: "https://api.example.com",
-        FACILITY_PREVIEW_URL: "https://127.0.0.1",
-      }),
-    ).toThrow(
-      "FACILITY_PREVIEW_URL must use a registered site separate from other Facility origins",
-    );
+    ).toThrow("must use a registered site separate");
     expect(
       readConfig({
         ...validEnv,
         NODE_ENV: "production",
         PUBLIC_URL: "https://api.example.com",
         WEB_URL: "https://app.example.com",
-        FACILITY_PREVIEW_URL: "https://facility-previews.example.net/",
+        FACILITY_PREVIEW_URL: "https://preview.example.net",
       }),
-    ).toMatchObject({ previewUrl: "https://facility-previews.example.net" });
-    expect(
-      readConfig({
-        ...validEnv,
-        NODE_ENV: "production",
-        PUBLIC_URL: "https://d111111abcdef8.cloudfront.net",
-        WEB_URL: "https://app.example.com",
-        FACILITY_PREVIEW_URL: "https://d222222abcdef8.cloudfront.net",
-      }),
-    ).toMatchObject({ previewUrl: "https://d222222abcdef8.cloudfront.net" });
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        FACILITY_PREVIEW_URL: "https://user:secret@facility-previews.example.net/base?x=1",
-      }),
-    ).toThrow(
-      "FACILITY_PREVIEW_URL must be an origin without credentials, path, query, or fragment",
-    );
+    ).toMatchObject({ previewUrl: "https://preview.example.net" });
   });
 
-  it("accepts only a bounded preview proxy surface token", () => {
-    const token = "p".repeat(64);
-    expect(readConfig({ ...validEnv, FACILITY_PREVIEW_SURFACE_TOKEN: token })).toMatchObject({
-      previewSurfaceToken: token,
-    });
-    expect(
-      readConfig({ ...validEnv, FACILITY_PREVIEW_SURFACE_TOKEN: "" }).previewSurfaceToken,
-    ).toBeUndefined();
-    expect(() => readConfig({ ...validEnv, FACILITY_PREVIEW_SURFACE_TOKEN: "short" })).toThrow();
+  it("rejects preview URLs with credentials, paths, queries, or fragments", () => {
     expect(() =>
-      readConfig({ ...validEnv, FACILITY_PREVIEW_SURFACE_TOKEN: "p".repeat(129) }),
-    ).toThrow();
+      readConfig({
+        ...validEnv,
+        FACILITY_PREVIEW_URL: "https://user:secret@preview.example.net/path?x=1",
+      }),
+    ).toThrow("FACILITY_PREVIEW_URL must be an origin");
   });
 
-  it("requires direct GitHub client credentials as a pair", () => {
+  it("requires GitHub OAuth client credentials as a pair", () => {
     expect(() => readConfig({ ...validEnv, GITHUB_OAUTH_CLIENT_ID: "client" })).toThrow(
       "GitHub OAuth client id and secret must be configured together",
     );
@@ -152,147 +78,37 @@ describe("API configuration", () => {
 
   it("normalizes an optional GitHub organization restriction", () => {
     expect(
-      readConfig({ ...validEnv, GITHUB_OAUTH_ALLOWED_ORGANIZATION: "  TheAM  " }),
-    ).toMatchObject({ githubOauthAllowedOrganization: "theam" });
-    expect(
-      readConfig({ ...validEnv, GITHUB_OAUTH_ALLOWED_ORGANIZATION: "" })
-        .githubOauthAllowedOrganization,
-    ).toBeUndefined();
+      readConfig({ ...validEnv, GITHUB_OAUTH_ALLOWED_ORGANIZATION: "  Facility  " }),
+    ).toMatchObject({ githubOauthAllowedOrganization: "facility" });
     expect(() =>
       readConfig({
         ...validEnv,
-        GITHUB_OAUTH_ALLOWED_ORGANIZATION: "https://github.com/theam",
+        GITHUB_OAUTH_ALLOWED_ORGANIZATION: "https://github.com/facility",
       }),
-    ).toThrow("GitHub organization must be a login, not a URL");
+    ).toThrow("GitHub organization must be a login");
   });
 
-  it("trims the optional package registry credential for scoped runner handoff", () => {
-    expect(readConfig({ ...validEnv, PACKAGE_REGISTRY_TOKEN: "  package-token\n" })).toMatchObject({
-      packageRegistryToken: "package-token",
-    });
-  });
-
-  it("surfaces the AWS CodeBuild runner project to the production doctor", () => {
-    expect(
-      readConfig({
-        ...validEnv,
-        FACILITY_AWS_CODEBUILD_PROJECT: "  facility-prod-runner  ",
-        FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: "  facility-prod-objects/codebuild-cache  ",
-      }),
-    ).toMatchObject({
-      awsCodeBuildProject: "facility-prod-runner",
-      awsCodeBuildCacheBaseLocation: "facility-prod-objects/codebuild-cache",
-    });
-  });
-
-  it("accepts a Vercel sandbox project binding without exposing a token fallback", () => {
-    expect(
-      readConfig({
-        ...validEnv,
-        FACILITY_SANDBOX_DRIVER: "vercel",
-        VERCEL_TOKEN: "  personal-token  ",
-        VERCEL_OIDC_TOKEN: "  workload-token  ",
-        VERCEL_TEAM_ID: "  team_facility  ",
-        VERCEL_PROJECT_ID: "  prj_facility  ",
-      }),
-    ).toMatchObject({
-      sandboxDriver: "vercel",
-      vercelToken: "workload-token",
-      vercelTeamId: "team_facility",
-      vercelProjectId: "prj_facility",
-    });
-  });
-
-  it("boots when .env-template blanks leave optional non-empty vars empty", () => {
-    // .env.example ships these as `KEY=`, which dotenv delivers as empty
-    // strings — a fresh `pnpm dev` copies them verbatim, so blank must mean
-    // unset or the first boot crashes.
-    const config = readConfig({
-      ...validEnv,
-      VERCEL_TOKEN: "",
-      VERCEL_OIDC_TOKEN: "",
-      VERCEL_TEAM_ID: "",
-      VERCEL_PROJECT_ID: "",
-      PACKAGE_REGISTRY_TOKEN: "",
-      FACILITY_AWS_CODEBUILD_PROJECT: "",
-      FACILITY_AWS_CODEBUILD_CACHE_BASE_LOCATION: "",
-    });
-    expect(config.vercelToken).toBeUndefined();
-    expect(config.vercelTeamId).toBeUndefined();
-    expect(config.vercelProjectId).toBeUndefined();
-    expect(config.packageRegistryToken).toBeUndefined();
-    expect(config.awsCodeBuildProject).toBeUndefined();
-    expect(config.awsCodeBuildCacheBaseLocation).toBeUndefined();
-  });
-
-  it("treats whitespace-only optional non-empty vars as unset, matching absence", () => {
-    expect(readConfig({ ...validEnv, VERCEL_TOKEN: "   " }).vercelToken).toBe(
-      readConfig(validEnv).vercelToken,
-    );
-  });
-
-  it("rejects the direct GitHub organization restriction in broker mode", () => {
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        AUTH_IDENTITY_PROVIDER: "oidc",
-        OIDC_ISSUER: "https://broker.example.com",
-        OIDC_CLIENT_ID: "client",
-        FACILITY_INSTANCE_ID: "instance_1",
-        GITHUB_OAUTH_ALLOWED_ORGANIZATION: "theam",
-      }),
-    ).toThrow("GitHub organization restriction is only supported in github mode");
-  });
-
-  it("requires the issuer, client, and instance binding in broker mode", () => {
+  it("requires complete broker identity configuration", () => {
     expect(() => readConfig({ ...validEnv, AUTH_IDENTITY_PROVIDER: "oidc" })).toThrow(
-      "OIDC issuer, client id, and Facility instance id are required in oidc mode",
+      "OIDC issuer, client id, and Facility instance id are required",
     );
   });
 
-  it("accepts only private P-256 signing keys with unique key ids", () => {
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        FACILITY_OAUTH_JWKS: JSON.stringify({
-          keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", kid: "public-only" }],
-        }),
-      }),
-    ).toThrow("FACILITY_OAUTH_JWKS keys must be private ES256 JWKs with unique kid values");
-
-    const privateKey = { kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1" };
-    expect(
-      readConfig({
-        ...validEnv,
-        PUBLIC_URL: "https://api.example.com/",
-        WEB_URL: "https://app.example.com/",
-        AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
-        FACILITY_OAUTH_ISSUER: "https://app.example.com/",
-        MCP_PUBLIC_URL: "https://mcp.example.com/",
-        FACILITY_OAUTH_JWKS: JSON.stringify({ keys: [privateKey] }),
-      }),
-    ).toMatchObject({
-      oauthIssuer: "https://app.example.com",
-      mcpPublicUrl: "https://mcp.example.com/mcp",
-      oauthJwks: { keys: [privateKey] },
+  it("normalizes the MCP resource to the single /mcp endpoint", () => {
+    expect(readConfig({ ...validEnv, MCP_PUBLIC_URL: "http://localhost:4400" })).toMatchObject({
+      mcpPublicUrl: "http://localhost:4400/mcp",
     });
+    expect(() =>
+      readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://facility.example/v1/mcp" }),
+    ).toThrow("MCP_PUBLIC_URL path must be /mcp");
   });
 
   it.each([
     ["a WebCrypto signing export", ["sign"], true],
     ["a set that also permits verification", ["sign", "verify"], undefined],
   ])("loads %s without its key_ops or ext members", (_label, key_ops, ext) => {
-    // `["sign"]` plus `ext` is what `crypto.subtle.exportKey("jwk", signingKey)`
-    // hands an operator. Neither member may survive into the loaded set: the
-    // verification keys are derived from these objects, and jose skips a
-    // candidate whose key_ops omits "verify".
     const loaded = readConfig({
       ...validEnv,
-      PUBLIC_URL: "https://api.example.com",
-      WEB_URL: "https://app.example.com",
-      AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
-      FACILITY_OAUTH_ISSUER: "https://app.example.com",
-      MCP_PUBLIC_URL: "https://mcp.example.com/mcp",
       FACILITY_OAUTH_JWKS: JSON.stringify({
         keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1", key_ops, ext }],
       }),
@@ -309,17 +125,9 @@ describe("API configuration", () => {
     ["a non-array value", "sign"],
     ["a non-string entry", [1]],
   ])("refuses a signing key whose key_ops declares %s", (_label, key_ops) => {
-    // Dropping key_ops must never widen what the operator permitted: a signing
-    // key set that forbids signing is a contradiction, and startup is where it
-    // gets a name instead of an unexplained "no signing key" at issuance.
     expect(() =>
       readConfig({
         ...validEnv,
-        PUBLIC_URL: "https://api.example.com",
-        WEB_URL: "https://app.example.com",
-        AUTH_CALLBACK_URL: "https://app.example.com/api/auth/callback",
-        FACILITY_OAUTH_ISSUER: "https://app.example.com",
-        MCP_PUBLIC_URL: "https://mcp.example.com/mcp",
         FACILITY_OAUTH_JWKS: JSON.stringify({
           keys: [{ kty: "EC", crv: "P-256", x: "x", y: "y", d: "d", kid: "key-1", key_ops }],
         }),
@@ -327,159 +135,37 @@ describe("API configuration", () => {
     ).toThrow('FACILITY_OAUTH_JWKS keys with key_ops must permit "sign"');
   });
 
-  it("canonicalizes the MCP resource and rejects an unrelated path", () => {
-    expect(readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com" })).toMatchObject({
-      mcpPublicUrl: "https://mcp.example.com/mcp",
-    });
-    expect(
-      readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com/mcp/" }),
-    ).toMatchObject({ mcpPublicUrl: "https://mcp.example.com/mcp" });
-    expect(() =>
-      readConfig({ ...validEnv, MCP_PUBLIC_URL: "https://mcp.example.com/other" }),
-    ).toThrow("MCP_PUBLIC_URL path must be /mcp");
-    expect(() => readConfig({ ...validEnv, MCP_PUBLIC_URL: "http://mcp.facility.test" })).toThrow(
-      "MCP_PUBLIC_URL must use HTTPS unless it is a loopback URL",
-    );
-  });
-
-  it("preserves an exact same-origin HTTP OAuth flow outside production", () => {
+  it("uses Vercel workload identity ahead of a personal token", () => {
     expect(
       readConfig({
         ...validEnv,
-        PUBLIC_URL: "http://localhost:4400",
-        WEB_URL: "http://localhost:3400",
-        FACILITY_OAUTH_ISSUER: "http://localhost:3400",
-        AUTH_CALLBACK_URL: "http://localhost:3400/api/auth/callback",
-        MCP_PUBLIC_URL: "http://localhost:4420",
-        FACILITY_OAUTH_JWKS: validOauthJwks,
+        FACILITY_WORKSPACE_DRIVER: "vercel",
+        VERCEL_TOKEN: "personal",
+        VERCEL_OIDC_TOKEN: "workload",
+        VERCEL_TEAM_ID: "team",
+        VERCEL_PROJECT_ID: "project",
       }),
     ).toMatchObject({
-      webUrl: "http://localhost:3400",
-      oauthIssuer: "http://localhost:3400",
-      authCallbackUrl: "http://localhost:3400/api/auth/callback",
-      mcpPublicUrl: "http://localhost:4420/mcp",
+      vercelToken: "workload",
+      vercelTeamId: "team",
+      vercelProjectId: "project",
     });
   });
 
-  it("allows all-loopback HTTP OAuth URLs when the Compose image sets production", () => {
+  it("treats blank optional values as unset", () => {
     expect(
       readConfig({
         ...validEnv,
-        NODE_ENV: "production",
-        PUBLIC_URL: "http://localhost:4400",
-        WEB_URL: "http://localhost:3400",
-        FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
-        FACILITY_OAUTH_ISSUER: "http://localhost:3400",
-        AUTH_CALLBACK_URL: "http://localhost:3400/api/auth/callback",
-        MCP_PUBLIC_URL: "http://127.0.0.1:4420",
-        FACILITY_OAUTH_JWKS: validOauthJwks,
+        VERCEL_TOKEN: "",
+        VERCEL_TEAM_ID: "",
+        VERCEL_PROJECT_ID: "",
+        FACILITY_PREVIEW_URL: "",
       }),
     ).toMatchObject({
-      oauthIssuer: "http://localhost:3400",
-      mcpPublicUrl: "http://127.0.0.1:4420/mcp",
+      vercelToken: undefined,
+      vercelTeamId: undefined,
+      vercelProjectId: undefined,
+      previewUrl: undefined,
     });
-  });
-
-  it("does not apply Facility OAuth transport policy to an incomplete configuration", () => {
-    expect(
-      readConfig({
-        ...validEnv,
-        NODE_ENV: "production",
-        PUBLIC_URL: "http://api.example.com",
-        WEB_URL: "http://app.example.com",
-        FACILITY_PREVIEW_URL: "https://facility-previews.example.net",
-        FACILITY_OAUTH_ISSUER: "http://app.example.com",
-        AUTH_CALLBACK_URL: "http://app.example.com/api/auth/callback",
-        MCP_PUBLIC_URL: "https://mcp.example.org",
-        FACILITY_OAUTH_JWKS: "",
-      }),
-    ).toMatchObject({ oauthJwks: undefined, mcpPublicUrl: "https://mcp.example.org/mcp" });
-  });
-
-  it.each([
-    [
-      "WEB_URL",
-      {
-        WEB_URL: "http://app.example.com",
-        FACILITY_OAUTH_ISSUER: "http://app.example.com",
-        AUTH_CALLBACK_URL: "http://app.example.com/api/auth/callback",
-      },
-    ],
-    ["AUTH_CALLBACK_URL", { AUTH_CALLBACK_URL: "http://app.example.com/api/auth/callback" }],
-    ["FACILITY_OAUTH_ISSUER", { FACILITY_OAUTH_ISSUER: "http://app.example.com" }],
-  ])("requires HTTPS for %s in production", (name, overrides) => {
-    expect(() => readConfig({ ...validProductionOauthEnv, ...overrides })).toThrow(
-      `${name} must use HTTPS in production`,
-    );
-  });
-
-  it.each([
-    "https://user:secret@app.example.com",
-    "https://app.example.com/oauth",
-    "https://app.example.com?tenant=one",
-    "https://app.example.com#fragment",
-  ])("requires the OAuth WEB_URL to be a canonical origin: %s", (webUrl) => {
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        ...enabledOauthEnv,
-        PUBLIC_URL: "https://api.example.com",
-        WEB_URL: webUrl,
-        FACILITY_OAUTH_ISSUER: "https://app.example.com",
-      }),
-    ).toThrow(
-      "WEB_URL must be an HTTP(S) origin without credentials, path, query, or fragment when Facility OAuth is enabled",
-    );
-  });
-
-  it("requires the MCP authorization server issuer to be the canonical web origin", () => {
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        ...enabledOauthEnv,
-        PUBLIC_URL: "https://api.example.com",
-        WEB_URL: "https://app.example.com",
-        FACILITY_OAUTH_ISSUER: "https://api.example.com",
-      }),
-    ).toThrow(
-      "FACILITY_OAUTH_ISSUER must be the WEB_URL origin so OAuth browser cookies remain host-only and same-origin",
-    );
-    for (const oauthIssuer of [
-      "https://user:secret@app.example.com",
-      "https://app.example.com/oauth",
-      "https://app.example.com?tenant=one",
-      "https://app.example.com#fragment",
-    ]) {
-      expect(() =>
-        readConfig({
-          ...validEnv,
-          ...enabledOauthEnv,
-          WEB_URL: "https://app.example.com",
-          FACILITY_OAUTH_ISSUER: oauthIssuer,
-        }),
-      ).toThrow(
-        "FACILITY_OAUTH_ISSUER must be the WEB_URL origin so OAuth browser cookies remain host-only and same-origin",
-      );
-    }
-  });
-
-  it.each([
-    "https://user:secret@app.example.com/api/auth/callback",
-    "https://app.example.com/auth/callback",
-    "https://app.example.com/api/auth/callback/",
-    "https://app.example.com/api/auth/callback?tenant=one",
-    "https://app.example.com/api/auth/callback#fragment",
-    "https://other.example.com/api/auth/callback",
-  ])("requires the exact host-only OAuth callback URL: %s", (callbackUrl) => {
-    expect(() =>
-      readConfig({
-        ...validEnv,
-        ...enabledOauthEnv,
-        PUBLIC_URL: "https://api.example.com",
-        WEB_URL: "https://app.example.com",
-        FACILITY_OAUTH_ISSUER: "https://app.example.com",
-        AUTH_CALLBACK_URL: callbackUrl,
-      }),
-    ).toThrow("AUTH_CALLBACK_URL must be exactly the WEB_URL /api/auth/callback URL");
   });
 });

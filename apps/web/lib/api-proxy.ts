@@ -76,6 +76,8 @@ export function apiProxyRequestHeaders(input: Headers) {
   // the forwarded content-encoding header can never describe different bytes;
   // production compression belongs at the edge in front of this service.
   headers.set("accept-encoding", "identity");
+  // The web proxy, rather than caller-controlled browser input, records this activation surface.
+  headers.set("x-facility-surface", "ui");
   return headers;
 }
 

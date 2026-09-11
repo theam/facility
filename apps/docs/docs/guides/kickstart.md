@@ -1,75 +1,97 @@
 ---
-title: Kickstart a project
+title: Kickstart a repository
 ---
 
-# Kickstart a project
+# Kickstart a repository
 
-From zero to a working factory:
+Kickstart adds Facility's repository-owned contract without changing application code. Use the UI
+when the repository is already connected to an instance. Use the CLI when you want to prepare the
+files locally before connecting it.
 
-1. **Create the project** in the web app or through the API. The CLI can list
-   and get projects, but it does not create them.
-2. **Connect the repo.** Configure and install your GitHub App using the
-   [self-hosting guide](../self-host/github-app); it then appears in the
-   project's repo picker.
-3. **Answer the six questions.** Default branch, provision command, check
-   commands, modules, model tier, board (optional). The platform pre-fills
-   what it can detect — a Node repo with pnpm and Playwright gets the right
-   defaults without typing.
-4. **Review the generated assets.** Every file the kickstart will write, with hashes, and the
-   conflict report if the repo already has any of them (existing files are
-   never overwritten).
-5. **Open the PR.** The platform commits the rendered assets to
-   `facility/kickstart` and opens a pull request. Manual steps that only you
-   can do are in the PR body: create the agent token secret, protect the
-   default branch, confirm App permissions, and complete preview configuration.
-6. **Configure a live PR preview.** Choose a Facility-owned preview or an
-   external deployment adapter. For a native preview, provide an immutable
-   image, optional command, internal port, readiness path, and TTL. Add
-   `FACILITY_API_URL`, `FACILITY_PROJECT_ID`, and a project-scoped
-   `FACILITY_PREVIEW_KEY` to the repo. In production, interactive GitHub/OIDC login must be fully
-   configured before Facility accepts preview creation. The private origin is
-   never returned to callers.
-7. **Merge it.** That's Gate 2 muscle memory from day zero. Validate the live
-   preview, review the PR, and squash-merge it in GitHub. On merge the
-   fingerprint baseline is recorded and the project reports **system ok**.
+## Before kickstart
 
-Now open an issue and comment `/architect`. The agent's task-specific checklist
-and final plan appear in one comment. Continue entirely from GitHub: comment
-`/builder` to approve that plan, or `/architect <feedback>` to request another
-planning pass. The builder owns the delivered semantic branch, commit message,
-PR title, and PR description; Facility signs and publishes that exact delivery
-through the installed GitHub App.
+You need:
 
-## Choose one execution lane per role
+- a GitHub repository and permission to open a configuration pull request;
+- a development command that starts the complete environment non-interactively;
+- one service port Facility can expose for the application; and
+- a Facility project whose GitHub App installation can access the repository.
 
-Architect and builder commands can run in repository CI (`repo`) or in a
-Facility sandbox (`platform`). Choose exactly one owner for each role during
-kickstart. When the platform owns a role, the generated GitHub workflow keeps
-the same job as a visible fallback but gates it off, so a slash command cannot
-start duplicate agents.
+Prefer a Compose command when the application depends on databases, queues, or other services. A
+single package start script is enough for a standalone application. Commands run from the primary
+repository checkout inside the workspace.
+
+## Kickstart from the UI
+
+Create a project in the UI and choose a repository visible to the GitHub App. Facility detects a
+Compose file or a package start script. Review and, if needed, edit the setup command, start
+command, readiness command, and exposed application port.
+
+Kickstart opens a pull request containing exactly `.facility.yml` and six initial agent manifests
+under `.agents/`. Existing files are not overwritten. The pull request does not modify the default
+branch until a maintainer merges it.
+
+If the preview shows an incorrect command, correct it before creating the PR. Detection is a
+starting point; the repository contract must be deterministic enough to run in a fresh Linux
+workspace.
+
+## Kickstart from the CLI
+
+The CLI writes the same files locally:
 
 ```bash
-facility kickstart payments \
-  --repo acme/payments \
-  --execution-lane '{"architect":"platform","builder":"platform"}'
+facility init \
+  --repo=acme/app \
+  --provision='pnpm install --frozen-lockfile' \
+  --start='docker compose up -d' \
+  --preview-readiness-command='curl --fail http://localhost:3000/health' \
+  --service-port=3000
+
+facility doctor
 ```
 
-After merging the kickstart PR, follow the
-[complete delivery-loop validation](validate-delivery-loop) before onboarding a
-production repository.
+`facility init` is interactive by default. Use `--yes` with explicit flags in automation. It writes
+`.facility.yml` plus the six default manifests and leaves every existing target untouched unless
+`--force` is present.
 
-## Defaults that ship
+Model flags let the initial catalog match your provider setup:
 
-The rendered system is the production-proven v0.2 shape: crew workflows
-(architect/builder), review, address-review, doctor, security sweep,
-watchtower with budgets, canary, guards runner, skills, `STANDARD.md`, and
-the operating contracts — SHA-pinned actions, slash-command parsing,
-bot-refusal, untrusted-text discipline included. You customize by editing
-your repo or your registry, not by fighting a generator.
+```bash
+facility init --yes \
+  --repo=acme/app \
+  --start='docker compose up -d' \
+  --service-port=3000 \
+  --build-model=gpt-5.6-sol \
+  --review-model=claude-sonnet-5 \
+  --plan-model=claude-opus-4-8
+```
 
-The security sweep uses a split trust boundary: the auditor has read-only
-repository access and can only emit a bounded JSON artifact. A separate
-reviewed job owns issue-write permission, redacts common credential shapes,
-and creates or updates a fingerprinted issue only for actionable,
-high-confidence findings of high or critical severity. Run a manual sweep with
-`create_issues: false` to inspect the artifact without mutating GitHub.
+Use `facility init --help` for the complete flag set. See the [CLI reference](../reference/cli.md)
+for overwrite and exit behavior.
+
+## Review the pull request
+
+Before merge, inspect every command and port in `.facility.yml`, and inspect each agent's prompt,
+engine, model, and triggers. All of them will run with full workspace and GitHub maintainer access.
+
+In particular, verify:
+
+- `repositories.primary` names the repository that owns the story branch and agent catalog;
+- related repositories are listed if the environment needs them;
+- `setup` is safe to rerun when the manifest changes;
+- `start` returns after launching long-running services rather than holding the only shell;
+- `ready` fails until the exposed service can actually accept traffic;
+- every declared secret and variable has an operator-provided value; and
+- scheduled and GitHub triggers cannot activate unexpectedly.
+
+Run `facility doctor` from the repository root, commit the files, and let CI exercise them before
+merging. The server performs stricter validation when it loads the merged catalog and project
+manifest, so use the [manifest references](../reference/project-manifest.md) as the authoritative
+schema.
+
+## After merge
+
+Request an immediate GitHub sync if the project does not yet see the commit. Confirm the agents
+appear in the UI or through `facility_list_agents`, then start a disposable story and follow the
+[validation guide](validate-workspace-loop.md). Kickstart is complete only when the declared
+environment becomes ready in a Facility workspace.

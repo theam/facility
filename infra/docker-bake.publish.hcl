@@ -19,20 +19,6 @@ target "api" {
   cache-to   = ["type=gha,mode=max,scope=facility-api"]
 }
 
-target "gateway" {
-  tags       = []
-  output     = ["type=image,name=${PUBLISH_REGISTRY}/${PUBLISH_PREFIX}/gateway,push-by-digest=true,name-canonical=true,push=true"]
-  cache-from = ["type=gha,scope=facility-gateway"]
-  cache-to   = ["type=gha,mode=max,scope=facility-gateway"]
-}
-
-target "mcp" {
-  tags       = []
-  output     = ["type=image,name=${PUBLISH_REGISTRY}/${PUBLISH_PREFIX}/mcp,push-by-digest=true,name-canonical=true,push=true"]
-  cache-from = ["type=gha,scope=facility-mcp"]
-  cache-to   = ["type=gha,mode=max,scope=facility-mcp"]
-}
-
 target "web" {
   tags       = []
   output     = ["type=image,name=${PUBLISH_REGISTRY}/${PUBLISH_PREFIX}/web,push-by-digest=true,name-canonical=true,push=true"]

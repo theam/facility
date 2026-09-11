@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 
 const apiTests = readdirSync(new URL("../services/api/test", import.meta.url))
-  .filter((name) => name.endsWith(".test.ts") && name !== "sandbox.e2e.test.ts")
+  .filter((name) => name.endsWith(".test.ts") && name !== "workspace-runtime.integration.test.ts")
   .sort()
   .map((name) => `test/${name}`);
 
@@ -11,12 +11,12 @@ if (apiTests.length === 0) throw new Error("No API tests discovered");
 
 run("pnpm", ["--filter", "@facility/db", "test"], "facility_test");
 run("pnpm", ["--filter", "@theagilemonkeys/facility", "test"], "facility_test");
-run(
-  "pnpm",
-  ["--filter", "@facility/api", "exec", "vitest", "run", "--fileParallelism=false", ...apiTests],
-  "facility_test",
-);
-run("pnpm", ["--filter", "@facility/gateway", "test"], "facility_gw");
+// Run each API file in its own Vitest process. Several suites build a complete
+// Fastify application during collection; isolating the processes prevents one
+// suite's hooks and module-level resources from overlapping another suite.
+for (const testFile of apiTests) {
+  run("pnpm", ["--filter", "@facility/api", "exec", "vitest", "run", testFile], "facility_test");
+}
 
 function run(command, args, database) {
   const result = spawnSync(command, args, {

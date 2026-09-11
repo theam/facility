@@ -1,9 +1,0 @@
-{
-  "name": "ai-queryability",
-  "title": "AI Queryability",
-  "description": "Durable product data is queryable and actionable by AI by default — or the waiver is written down.",
-  "standardSection": "standard-section.md",
-  "files": [
-    { "from": "agents/queryability-reviewer.md", "to": ".claude/agents/queryability-reviewer.md" }
-  ]
-}

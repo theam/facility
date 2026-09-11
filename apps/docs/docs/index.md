@@ -1,63 +1,77 @@
 ---
+title: Facility
 slug: /
-title: What Facility is
 ---
 
-# Facility
+# Reviewable software delivery with AI coding agents
 
-**The platform that governs your AI SDLC.** Agents carry every change from
-signal to production; people decide what ships; every run leaves a receipt.
-Facility is the control plane that makes that operable for an organization —
-not one repo at a time, but as a governed system.
+Facility is open-source, self-hosted tooling for running AI coding agents as part of a reviewable
+software delivery process — with the humans, the gates and the evidence in one place.
 
-:::warning Early software
+Facility is an AI SDLC system. It follows work from an issue or ad hoc story through agent planning,
+implementation, validation, review, and a pull request. The control plane keeps the people involved,
+repository gates, conversation, Git state, delivery status, cost, and operational evidence connected
+to that work.
 
-Facility runs the delivery of the team that builds it, and nowhere else yet.
-The schema moves, the API is young, features arrive ahead of their
-documentation, and no upgrade path is promised between `0.x` releases. It is
-published this early on purpose — it improves by being used and corrected —
-but Apache-2.0 means what it says: no warranty, use at your own risk.
+Persistent story workspaces give Claude Code and Codex one durable place to work: a shared
+conversation, worktree, native engine sessions, and complete development environment that Facility
+keeps until explicit deletion. MCP is the primary automation interface, and the web UI is a
+first-class human surface over the same system.
 
-:::
+The repository defines its environment in `.facility.yml` and every agent in `.agents/*.md`.
+Architects, builders, reviewers, CI repair agents, and scheduled security audits use the same
+manifest format, dispatcher, workspace, GitHub access, and conversation.
 
-## The problem it closes
+Facility trusts these agents as repository maintainers. They can use shell, network, Docker,
+browser tools, branches, commits, pushes, and pull requests. GitHub review, CI, and branch
+protection decide what merges.
 
-Wiring an AI agent into a repository is the easy part. The second month is
-where it breaks: keys and budgets sprawl across repo secrets, upgrades mean
-re-vendoring files everywhere, the knowledge (skills, standards, guards)
-forks silently per repo, humans have no single place where their decisions
-are requested, and the run data that would tell you whether any of it works
-evaporates. The method is proven — Facility's SDLC has run The Agile Monkeys'
-own products in production since August 2025. What was missing is the
-platform.
+## Humans, gates, and evidence
 
-## What it owns
+- **Humans** select work, steer the shared conversation, inspect previews and changes, review pull
+  requests, and control the merge policy.
+- **Gates** remain explicit in repository rules, required CI and reviews, project budgets, and the
+  configured triggers that admit agent work.
+- **Evidence** includes the conversation and turn history, Git branches and pull requests, CI and
+  issue state, previews, usage and cost, audit events, and operational telemetry.
 
-Execution stays where it belongs: GitHub repos, CI, isolated sandboxes.
-Facility owns what must be centralized to govern:
+Facility records evidence directly from agent turns, Git, GitHub, costs, and runtime activity.
+Repository branch protection, required CI, reviews, and merge controls provide the delivery
+approval boundary. Cost controls, observability, analytics, auditing, scheduled agents, and the
+GitHub delivery mirror run in the same control plane.
 
-| concern | what the platform does |
-|---|---|
-| **identity** | GitHub identity for humans, scoped API keys for machines, one RBAC for web, CLI, MCP, and agents |
-| **projects** | kickstart a repo into a working factory in minutes; fingerprint managed files; upgrade with a PR, never a surprise |
-| **money** | every model call goes through the gateway: project keys, hard budgets, cost by model, agent, and task |
-| **execution** | agents run in disposable sandboxes; sessions stream live; a stuck agent can be steered by a human; private per-PR previews run in Facility-owned Docker/AWS sandboxes behind SSO or arrive through deployment adapters |
-| **knowledge** | skills, rules, contracts, harnesses, guards — versioned, bundled, immutable once published |
-| **humans** | one inbox for Facility decisions such as plan gates, learning validations, and budget overrides; GitHub review and squash merge remain Gate 2 |
-| **observation** | receipts, outcomes, health, the canary — live numbers straight from the pipeline, stored by default |
+## What Facility keeps
 
-## The two gates, still human
+- The story conversation and every turn.
+- The repository worktree, including uncommitted files and local branches.
+- Claude Code or Codex native session data, so a compatible later turn can resume the same engine
+  context.
+- Dependencies, development data, and test artifacts stored in the workspace volume.
+- Cost, budget, audit, observability, analytics, GitHub issue, pull-request, and CI records.
 
-Facility never moves accountability. Agents cannot approve, cannot merge,
-cannot push to protected branches. A person accepts the plan; a person validates
-the live preview, reviews the pull request, and signs the merge. The platform
-makes those decisions cheap to exercise — it never makes them optional.
+Compute may sleep or be replaced. These records and the workspace volume remain until an operator
+uses the explicit delete operation. Merging or archiving a story never deletes them.
 
-## Where to go next
+## Choose a path
 
-- [The method](concepts/method) — the decisions the tooling makes structural.
-- [The loop](concepts/the-loop) — how a change travels the factory.
-- [Self-host quickstart](self-host/quickstart) — up in one compose file.
-- [Kickstart a project](guides/kickstart) — greenfield or an existing repo.
-- [Roadmap](roadmap) — what is available now and what is planned.
-- [FAQ](faq) — the questions that arrive before the second week does.
+If you want to use Facility:
+
+1. [Install or run an instance](self-host/quickstart.md).
+2. [Kickstart a repository](guides/kickstart.md), or [configure an existing
+   repository](guides/existing-repo.md).
+3. [Start and operate a story](guides/operate-story.md) from MCP or the web UI.
+4. [Validate the complete loop](guides/validate-workspace-loop.md) before using a production
+   repository.
+
+If you operate an instance, read the [production checklist](self-host/production.md),
+[authentication](self-host/authentication.md), [GitHub App setup](self-host/github-app.md), and
+[hardening guide](reference/hardening.md).
+
+If you want to change Facility, begin with
+[Contributing](https://github.com/theam/facility/blob/main/CONTRIBUTING.md), then read the [contributor
+architecture](contributors/architecture.md), [testing guide](contributors/testing.md), and
+[documentation guide](contributors/documentation.md).
+
+The contract references for [`.facility.yml`](reference/project-manifest.md),
+[`.agents/*.md`](reference/agent-manifest.md), [lifecycle](reference/lifecycle.md),
+[MCP](reference/mcp.md), and [HTTP](reference/api.md) describe the supported behavior.

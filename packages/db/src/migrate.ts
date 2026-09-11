@@ -68,6 +68,18 @@ export class MigrationExecutionError extends Error {
   }
 }
 
+export class LegacyDatabaseError extends Error {
+  readonly code = "legacy_database_unsupported";
+  readonly exitCode = 13;
+
+  constructor() {
+    super(
+      "Facility 0.12 requires a new database; this database contains the Facility 0.11 run model and was not modified",
+    );
+    this.name = "LegacyDatabaseError";
+  }
+}
+
 export async function migrate(connectionString = process.env.DATABASE_URL): Promise<void> {
   if (!connectionString) {
     throw new Error("DATABASE_URL is required");
@@ -128,7 +140,11 @@ export async function applyMigrations(
   options: MigrationOptions = {},
 ): Promise<MigrationResult> {
   const log = options.log ?? console.log;
-  const migrationsDir = options.migrationsDir ?? join(here, "..", "migrations");
+  const migrationsDir = options.migrationsDir ?? join(here, "..", "migrations", "v0.12");
+  const legacy = await client<{ table_name: string | null }[]>`
+    SELECT to_regclass('runs')::text AS table_name
+  `;
+  if (legacy[0]?.table_name) throw new LegacyDatabaseError();
   await client`CREATE TABLE IF NOT EXISTS _facility_migrations (
     name text PRIMARY KEY,
     applied_at timestamptz NOT NULL DEFAULT now()

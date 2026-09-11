@@ -6,23 +6,17 @@ export const PERMISSION_RESOURCES = [
   "roles",
   "projects",
   "repos",
-  "registry",
   "agents",
-  "sandboxes",
-  "runs",
-  "sessions",
+  "stories",
+  "workspaces",
+  "previews",
   "keys",
-  "providers",
+  "settings",
+  "costs",
   "budgets",
-  "spend",
-  "hitl",
-  "kb",
-  "tasks",
-  "issues",
   "analytics",
   "audit",
-  "integrations",
-  "settings",
+  "github",
 ] as const;
 
 const basePermissions = PERMISSION_RESOURCES.flatMap(
@@ -30,13 +24,8 @@ const basePermissions = PERMISSION_RESOURCES.flatMap(
 );
 
 export const SPECIAL_PERMISSIONS = [
-  "runs:trigger",
-  "runs:steer",
-  "sessions:read",
-  "hitl:decide",
+  "workspaces:execute",
   "keys:issue",
-  "audit:read",
-  "registry:publish",
   "projects:kickstart",
 ] as const;
 

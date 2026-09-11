@@ -1,0 +1,3 @@
+FROM scratch
+COPY busybox /busybox
+ENTRYPOINT ["/busybox", "httpd", "-f", "-p", "3002", "-h", "/www"]

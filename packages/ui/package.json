@@ -1,6 +1,6 @@
 {
   "name": "@facility/ui",
-  "version": "0.3.0",
+  "version": "0.12.0",
   "private": true,
   "description": "Facility design system — TAM-50 tier: IBM Plex, hairline grids, agent yellow reserved for agent work.",
   "license": "Apache-2.0",

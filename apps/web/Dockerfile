@@ -34,14 +34,12 @@ ENV FACILITY_ALLOW_UNUSED_PATCHES=true
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY patches ./patches
 COPY apps/web/package.json apps/web/
-COPY packages/run-objective/package.json packages/run-objective/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/ui/package.json packages/ui/
 # The reviewed image-size patch belongs to the docs-only graph. This filtered
 # web install deliberately omits docs, so it may leave that patch unused.
 RUN pnpm install --frozen-lockfile --filter '@facility/web...'
 COPY apps/web apps/web
-COPY packages/run-objective packages/run-objective
 COPY packages/sdk packages/sdk
 COPY packages/ui packages/ui
 COPY tsconfig.base.json ./

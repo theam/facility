@@ -39,6 +39,7 @@ try {
 
   step("Critical integration tests (direct, uncached, skips forbidden)", "pnpm", ["test:critical"]);
   step("Remaining tests (Turbo cache disabled)", "pnpm", ["test:uncached"]);
+  step("Removed component references", "pnpm", ["check:unused"]);
   step("Repository guards", "pnpm", ["guards"]);
   step("All-severity dependency audit", "pnpm", ["audit", "--audit-level", "low"]);
 } finally {

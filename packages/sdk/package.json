@@ -1,6 +1,6 @@
 {
   "name": "@facility/sdk",
-  "version": "0.3.0",
+  "version": "0.12.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -21,6 +21,6 @@
     "openapi-typescript": "^7.10.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.15"
+    "vitest": "^4.1.11"
   }
 }

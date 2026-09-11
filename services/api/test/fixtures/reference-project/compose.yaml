@@ -1,0 +1,21 @@
+services:
+  database:
+    build:
+      context: .
+      dockerfile: Dockerfile.database
+    volumes:
+      - ./state:/www:ro
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      - database
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    depends_on:
+      - api
+    ports:
+      - "3210:3000"

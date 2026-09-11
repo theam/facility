@@ -1,7 +1,7 @@
 {
   "name": "@theagilemonkeys/facility",
-  "version": "0.3.0",
-  "description": "Run an AI crew on your GitHub repo: agents that plan before building, build to your standard, verify on a provisioned environment, and never merge their own work.",
+  "version": "0.12.0",
+  "description": "Create and validate Facility 0.12 repository workspace and agent manifests.",
   "keywords": [
     "ai",
     "agents",
@@ -27,8 +27,7 @@
   "files": [
     "bin",
     "src",
-    "templates",
-    "modules"
+    "templates"
   ],
   "engines": {
     "node": "^22.13.0 || ^24.0.0"
