@@ -242,6 +242,116 @@ environment:
     ).toContain("shared");
   });
 
+  it("retains browser test artifacts and records the failed command", async () => {
+    const browserTestSecret = "browser-test-secret-value";
+    const environment = new ProjectEnvironmentService(
+      db,
+      runtime,
+      `file://${remotes}`,
+      (_projectId, name) => (name === "BROWSER_TEST_SECRET" ? browserTestSecret : undefined),
+    );
+    const failingManifest = {
+      ...manifest,
+      environment: {
+        ...manifest.environment,
+        browser_test: `
+          printf screenshot > "$FACILITY_ARTIFACT_DIR/failure.png"
+          printf trace > "$FACILITY_ARTIFACT_DIR/failure-trace.zip"
+          printf '%s' "$BROWSER_TEST_SECRET" >&2
+          exit 23
+        `,
+        secrets: ["BROWSER_TEST_SECRET"],
+      },
+    };
+
+    await expect(
+      environment.runBrowserTest({
+        orgId,
+        projectId,
+        storyId,
+        workspace,
+        manifest: failingManifest,
+        credentials,
+      }),
+    ).rejects.toMatchObject({
+      code: "environment_command_failed",
+      details: { exitCode: 23, stderr: "[REDACTED]" },
+    });
+
+    const artifacts = await db
+      .select()
+      .from(storyArtifacts)
+      .where(eq(storyArtifacts.storyId, storyId));
+    expect(artifacts.map((artifact) => artifact.label)).toEqual(
+      expect.arrayContaining(["failure.png", "failure-trace.zip"]),
+    );
+    const [event] = await db
+      .select()
+      .from(workspaceEvents)
+      .where(
+        and(
+          eq(workspaceEvents.workspaceId, workspaceId),
+          eq(workspaceEvents.type, "environment.browser_test"),
+        ),
+      )
+      .orderBy(desc(workspaceEvents.seq))
+      .limit(1);
+    const eventData = event?.data as { artifacts?: string[] } | undefined;
+    expect(eventData).toMatchObject({
+      exitCode: 23,
+      stderr: "[REDACTED]",
+    });
+    expect(eventData?.artifacts ?? []).toHaveLength(2);
+    expect(JSON.stringify(event)).not.toContain(browserTestSecret);
+  });
+
+  it("does not replace a browser test failure when artifact collection fails", async () => {
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    const failingManifest = {
+      ...manifest,
+      environment: {
+        ...manifest.environment,
+        browser_test: "exit 29",
+      },
+    };
+    const originalExec = runtime.exec.bind(runtime);
+    const exec = vi.spyOn(runtime, "exec").mockImplementation(async (locator, command) => {
+      if (command.command === "find") throw new Error("artifact scan unavailable");
+      return originalExec(locator, command);
+    });
+
+    try {
+      await expect(
+        environment.runBrowserTest({
+          orgId,
+          projectId,
+          storyId,
+          workspace,
+          manifest: failingManifest,
+          credentials,
+        }),
+      ).rejects.toMatchObject({
+        code: "environment_command_failed",
+        details: { exitCode: 29 },
+      });
+    } finally {
+      exec.mockRestore();
+    }
+
+    const [event] = await db
+      .select()
+      .from(workspaceEvents)
+      .where(
+        and(
+          eq(workspaceEvents.workspaceId, workspaceId),
+          eq(workspaceEvents.type, "environment.browser_test"),
+        ),
+      )
+      .orderBy(desc(workspaceEvents.seq))
+      .limit(1);
+    expect(event?.data).toMatchObject({ exitCode: 29, artifacts: [] });
+  });
+
   it("opens previews on the agent's changed workspace without checkout, setup, or reseeding", async () => {
     const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
     const prepared = await environment.prepare({
