@@ -8,6 +8,9 @@ MCP is the primary way to automate a Facility story. The web UI exposes the same
 useful for browsing conversations, inspecting environments, opening previews, and taking lifecycle
 actions.
 
+In the web UI, press Command+K on macOS or Ctrl+K to open navigation. Type to filter projects and
+sections, use the arrow keys and Enter to choose a destination, or press Escape to dismiss it.
+
 ## Start a story
 
 Before starting, identify the project, the agent, and the body of work. For GitHub work, use a

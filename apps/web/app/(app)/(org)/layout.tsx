@@ -1,3 +1,4 @@
+import { CommandPalette } from "@/components/shell/cmdk";
 import { MobileNav, Sidebar } from "@/components/shell/nav";
 import { Topbar } from "@/components/shell/topbar";
 import { api } from "@/lib/api";
@@ -8,6 +9,7 @@ export default async function OrgLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-dvh">
+      <CommandPalette projects={projectList} />
       <Sidebar />
       <div className="min-w-0 flex-1">
         <MobileNav />
