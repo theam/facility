@@ -83,6 +83,17 @@ jobs:
       - name: Release-shaped verification
         run: pnpm verify
 
+      - name: Install browser acceptance runtime
+        run: pnpm --filter @facility/web exec playwright install --with-deps chromium
+
+      - name: Verify workspace lifecycle through the web UI
+        env:
+          DATABASE_URL: postgres://facility:facility@127.0.0.1:5461/facility_test
+        run: |
+          pnpm --filter @facility/web test:e2e
+          docker compose -f docker-compose.dev.yml up -d --wait postgres
+          pnpm --filter @facility/web test:e2e:integration
+
   # Keep the compatibility floor honest without duplicating the integration
   # and deployment suites already exercised by the Node 24 acceptance jobs.
   minimum-node:

@@ -11,6 +11,8 @@ node_modules/
 
 # Next.js build output
 .next/
+test-results/
+playwright-report/
 .docusaurus/
 build/
 dist/
