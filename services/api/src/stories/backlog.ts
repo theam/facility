@@ -141,6 +141,12 @@ const PHASE_PRIORITY: Record<WorkPhase, number> = {
 export class ProjectBacklogService {
   constructor(private readonly db: FacilityDb) {}
 
+  /** Read the same persisted phase used by the backlog, without provider calls. */
+  async getStory(orgId: string, projectId: string, storyId: string, now = new Date()) {
+    const items = await this.items(orgId, projectId, now);
+    return items.find((item) => item.story?.id === storyId) ?? null;
+  }
+
   async list(
     orgId: string,
     projectId: string,

@@ -4,7 +4,7 @@ import {
   AgentTriggerSchema,
   renderAgentManifest,
 } from "@facility/agents";
-import { projectRepositories, workspaceEvents } from "@facility/db";
+import { projectRepositories, workspaceEvents, workspaces } from "@facility/db";
 import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -12,6 +12,7 @@ import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
 import type { AppConfig } from "../../types.js";
+import { previewRegistrationSnapshot } from "../../workspaces/preview-registration.js";
 import {
   parseWorkspaceVariables,
   WorkspaceVariablesInput,
@@ -97,6 +98,43 @@ const DeleteBody = z.object({
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/preview-registration",
+    {
+      config: { permission: "previews:read" },
+      schema: { params: StoryParams, operationId: "getPreviewRegistration" },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const orgId = principal(request).orgId;
+      const now = new Date();
+      const item = await domain.backlog.getStory(orgId, projectId, storyId, now);
+      if (!item) throw new ApiError(404, "not_found", "Story not found");
+      const [workspace] = await app.facilityDb
+        .select({ id: workspaces.id, state: workspaces.state })
+        .from(workspaces)
+        .where(
+          and(
+            eq(workspaces.orgId, orgId),
+            eq(workspaces.projectId, projectId),
+            eq(workspaces.storyId, storyId),
+          ),
+        )
+        .orderBy(desc(workspaces.createdAt))
+        .limit(1);
+      reply.header("cache-control", "private, no-store");
+      return previewRegistrationSnapshot({
+        orgId,
+        projectId,
+        storyId,
+        item,
+        workspace: workspace ?? null,
+        sites: config.previewSites ?? [],
+        now,
+      });
+    },
+  );
 
   for (const method of ["GET", "PATCH"] as const) {
     app.route({
