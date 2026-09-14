@@ -115,12 +115,31 @@ environment:
     outputOverride?: string;
     renameNextBranch?: string;
     corruptResumeOnce = false;
+    failNextRun = false;
     replacementPending = false;
     blockUntilCanceled = false;
     blockingStarted = false;
     observedCancellation = false;
     async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
       this.requests.push(request);
+      if (this.failNextRun) {
+        this.failNextRun = false;
+        throw new AgentEngineError("agent_engine_failed", "codex exited with status 1", {
+          engine: "codex",
+          exitCode: 1,
+          events: [
+            {
+              engine: "codex",
+              type: "result.error",
+              data: {
+                error: "authentication_failed",
+                message: "API key is invalid.",
+                projectSecret: request.environment?.FACILITY_DISPATCH_SECRET,
+              },
+            },
+          ],
+        });
+      }
       if (this.corruptResumeOnce && request.nativeSessionId) {
         this.corruptResumeOnce = false;
         this.replacementPending = true;
@@ -592,6 +611,43 @@ environment:
         "Continue after the native session was lost",
       ]),
     );
+  });
+
+  it("records engine events when a turn fails, with project secrets redacted", async () => {
+    engine.failNextRun = true;
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `engine-failure-${suffix}`,
+      title: "Surface the engine failure",
+      agent: builder,
+      message: "Plan the change",
+      messageDedupeKey: `engine-failure-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected initial turn");
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+    ).resolves.toMatchObject({ state: "failed" });
+
+    const failed = await storiesService.get(orgId, projectId, started.story.id);
+    expect(failed.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          turnId: started.queued.turn.id,
+          type: "engine.result.error",
+          data: {
+            error: "authentication_failed",
+            message: "API key is invalid.",
+            projectSecret: "[REDACTED]",
+          },
+        }),
+        expect.objectContaining({ turnId: started.queued.turn.id, type: "turn.failed" }),
+      ]),
+    );
+    expect(JSON.stringify(failed)).not.toContain("project-secret");
   });
 
   it("cancels a running agent process while preserving the workspace and future turns", async () => {
