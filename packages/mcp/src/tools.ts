@@ -52,8 +52,10 @@ const agent = z
   .string()
   .min(1)
   .max(64)
-  .default("builder")
-  .describe("Agent name from the repository's .agents directory.");
+  .optional()
+  .describe(
+    "Agent name from the repository's .agents directory. Omit to use the project's default agent for MCP requests.",
+  );
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -108,12 +110,18 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_start_story",
     permission: "workspaces:execute",
     description:
-      "Create or resume one persistent story workspace and queue its first agent turn directly. Needs workspaces:execute.",
+      "Create or resume one persistent story workspace and queue its first agent turn directly. Omit the title to have Facility generate one from the message. Needs workspaces:execute.",
     inputSchema: {
       projectId,
       provider: z.enum(["github", "manual"]).default("manual"),
       externalId: z.string().min(1).max(240).optional(),
-      title: z.string().min(1).max(500),
+      repositoryId: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe("Repository of a GitHub identity; defaults to the primary repository."),
+      title: z.string().min(1).max(500).optional(),
       agent,
       message: z.string().min(1).max(200_000),
       idempotencyKey,
@@ -123,6 +131,7 @@ export const toolDefinitions: ToolDefinition[] = [
     body: (args) => ({
       provider: args.provider,
       external_id: args.externalId,
+      repository_id: args.repositoryId,
       title: args.title,
       agent: args.agent,
       message: args.message,
@@ -252,13 +261,50 @@ export const toolDefinitions: ToolDefinition[] = [
     query: (args) => ({ days: Number(args.days ?? 30) }),
   },
   {
-    name: "facility_get_pipeline",
-    permission: "github:read",
+    name: "facility_list_backlog",
+    permission: "projects:read",
     description:
-      "Read the mirrored GitHub issue and pull-request pipeline with story and CI state. Needs github:read.",
-    inputSchema: { projectId },
+      "Read the unified project backlog: mirrored GitHub issues not yet started, stories in progress, blocked, in review, done, or archived, each with its phase, agent activity, assignees, and links. Supports search, phase, label, assignee, and repository filters with pagination. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      q: z.string().max(200).optional().describe("Ticket number or words to search for."),
+      phase: z
+        .array(
+          z.enum([
+            "not_started",
+            "in_progress",
+            "attention",
+            "review",
+            "done",
+            "archived",
+            "open",
+            "all",
+          ]),
+        )
+        .optional()
+        .describe("Phases to include; defaults to open (everything except done and archived)."),
+      label: z.array(z.string().min(1).max(160)).optional(),
+      assignee: z
+        .array(z.string().min(1).max(200))
+        .optional()
+        .describe("unassigned, me, user:<id>, or github:<login>."),
+      repository: z.array(z.string().min(1).max(200)).optional(),
+      sort: z.enum(["priority", "updated", "created"]).default("priority"),
+      limit: z.number().int().min(1).max(100).default(50),
+      offset: z.number().int().min(0).default(0),
+    },
     method: "GET",
-    path: (args) => `/v1/projects/${part(args.projectId)}/pipeline`,
+    path: (args) => `/v1/projects/${part(args.projectId)}/backlog`,
+    query: (args) => ({
+      q: stringValue(args.q),
+      phase: listValue(args.phase),
+      label: listValue(args.label),
+      assignee: listValue(args.assignee),
+      repository: listValue(args.repository),
+      sort: stringValue(args.sort),
+      limit: Number(args.limit ?? 50),
+      offset: Number(args.offset ?? 0),
+    }),
   },
   {
     name: "facility_sync_github",
@@ -503,6 +549,13 @@ function part(value: unknown) {
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value ? value : undefined;
+}
+
+/** Repeatable filters travel as one comma-separated query value; the API splits them again. */
+function listValue(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const values = value.map((entry) => String(entry).trim()).filter(Boolean);
+  return values.length > 0 ? values.join(",") : undefined;
 }
 
 function numberValue(value: unknown) {

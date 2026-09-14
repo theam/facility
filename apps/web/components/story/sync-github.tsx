@@ -24,7 +24,7 @@ export function SyncGithub({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex items-center gap-3">
-      <Button type="button" onClick={sync} disabled={state === "syncing"}>
+      <Button type="button" size="sm" onClick={sync} disabled={state === "syncing"}>
         {state === "syncing" ? "Syncing…" : "Sync GitHub"}
       </Button>
       {state === "error" ? (

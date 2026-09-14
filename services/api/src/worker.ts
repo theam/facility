@@ -6,6 +6,7 @@ import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
+import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
 
 const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
@@ -27,10 +28,23 @@ export async function startWorker() {
     githubFactory,
     enqueue: (queue, data) => boss.send(queue, data),
   });
-  const queues = ["turns.dispatch", "github.webhook", "github.mirror", "agent.schedules"];
+  const queues = [
+    "turns.dispatch",
+    "github.webhook",
+    "github.mirror",
+    "agent.schedules",
+    "stories.title",
+  ];
   for (const queue of queues) {
     await boss.createQueue(queue);
   }
+  // A provider hiccup retries a few times; the story keeps its provisional title meanwhile.
+  await boss.updateQueue("stories.title", {
+    name: "stories.title",
+    retryLimit: 3,
+    retryDelay: 15,
+    retryBackoff: true,
+  });
   const interruptedAtStartup = await recoverInterruptedTurns(
     db,
     storyDomain.stories,
@@ -65,6 +79,14 @@ export async function startWorker() {
         );
       } else if (queue === "github.mirror") {
         result = await storyDomain.mirror.syncAll();
+      } else if (queue === "stories.title") {
+        const outcome = await storyDomain.titles.generate(
+          data as { orgId: string; projectId: string; storyId: string },
+        );
+        if (outcome.outcome === "retry") {
+          throw new Error(`story title generation will retry: ${outcome.reason}`);
+        }
+        result = { ...outcome, title: undefined };
       } else if (queue === "agent.schedules") {
         const interruptedTurns = await recoverInterruptedTurns(
           db,
@@ -76,7 +98,15 @@ export async function startWorker() {
         const recoveredTurns = await recoverQueuedTurns(db, (name, payload) =>
           boss.send(name, payload),
         );
-        result = { ...(await storyDomain.scheduler.tick()), interruptedTurns, recoveredTurns };
+        const pendingTitles = await recoverPendingTitles(storyDomain.titles, (name, payload) =>
+          boss.send(name, payload),
+        );
+        result = {
+          ...(await storyDomain.scheduler.tick()),
+          interruptedTurns,
+          recoveredTurns,
+          pendingTitles,
+        };
       }
       logger.info({ queue, jobId, ...result }, "worker completed job");
     });
@@ -86,6 +116,18 @@ export async function startWorker() {
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());
   return boss;
+}
+
+/** Titles whose job was lost (restart, crash) are queued again; generation itself stays idempotent. */
+export async function recoverPendingTitles(
+  titles: Pick<StoryTitleService, "pending">,
+  enqueue: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+  now = new Date(),
+  olderThanMs = 2 * 60 * 1_000,
+) {
+  const pending = await titles.pending(new Date(now.getTime() - olderThanMs));
+  for (const story of pending) await enqueue("stories.title", story);
+  return pending.length;
 }
 
 export async function recoverQueuedTurns(
