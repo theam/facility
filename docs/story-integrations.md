@@ -14,10 +14,21 @@ GET is needed. Reading never wakes/executes/destroys/provisions compute.
 
 `lifecycle` contains schemaVersion 1, org/project/story identities, persisted story
 status and completion/archive/deletion timestamps, effective backlog phase/reason,
-independent activity, GitHub issue state/freshness and associated PR state, plus
+independent activity, source `provider`/`repositoryId`/`externalId`, GitHub issue
+and associated PR state/freshness, plus
 `workspace: { id, state, sites: [{ id, service, origin }] }` (or null). Sites are
 filtered to the exact org/project/workspace; surface credentials are never exposed.
 An origin is **configured**, not proof that the application is ready or login works.
+
+For GitHub stories, `externalId` identifies `issue:N` or `pull-request:N` in the
+source `repositoryId`. Both issue and PR facts include `repositoryId`, `number`,
+`state` and `stale`. Freshness uses the mirror's `syncedAt` (30-minute threshold),
+not the last GitHub edit or the time of this GET. A PR-backed story can legitimately
+have `issue: null`; use its exact PR evidence. Missing source evidence is unknown,
+not permission to fall back to another PR with the same branch or number in a
+different repository. Issue-backed stories still require their issue evidence;
+if acting on a related PR's state, check that PR's freshness too. A closed,
+unmerged PR keeps the story in progress; a merged PR produces the done phase.
 
 `revision` is an opaque content hash; `observedAt` is observation time. A reopened
 story may revisit an earlier revision. Missing/stale GitHub data, missing workspace,

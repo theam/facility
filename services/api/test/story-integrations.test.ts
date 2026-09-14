@@ -25,7 +25,7 @@ const input = {
     phase: "in_progress",
     reason: "started",
     activity: { state: "idle" },
-    story: { provider: "github" },
+    story: { provider: "github", repositoryId: "repo_a", externalId: "issue:1" },
     issue: { state: "open", number: 1, repositoryId: "repo_a", stale: false },
   } as BacklogItem,
   workspace: { id: "ws_a", state: "sleeping" },
@@ -50,6 +50,48 @@ describe("generic story integration contracts", () => {
   it("empty configured sites and missing workspace are distinct facts, not deletion instructions", () => {
     expect(storyLifecycleSnapshot({ ...input, sites: [] }).workspace?.sites).toEqual([]);
     expect(storyLifecycleSnapshot({ ...input, workspace: null }).workspace).toBeNull();
+  });
+  it("exposes exact PR source and freshness without requiring issue evidence", () => {
+    if (!input.item.story) throw new Error("Fixture requires a story");
+    const item = {
+      ...input.item,
+      story: { ...input.item.story, externalId: "pull-request:2" },
+      issue: null,
+      phase: "review",
+      pullRequest: { repositoryId: "repo_a", number: 2, state: "open", stale: false },
+    } as BacklogItem;
+    const value = storyLifecycleSnapshot({ ...input, item });
+    if (!item.pullRequest) throw new Error("Fixture requires a PR");
+    expect(value).toMatchObject({
+      repositoryId: "repo_a",
+      externalId: "pull-request:2",
+      issue: null,
+      phase: "review",
+      activity: "idle",
+      pullRequest: { repositoryId: "repo_a", number: 2, state: "open", stale: false },
+    });
+    const changed = storyLifecycleSnapshot({
+      ...input,
+      item: {
+        ...item,
+        pullRequest: { ...item.pullRequest, stale: true },
+      },
+    });
+    expect(changed.pullRequest?.stale).toBe(true);
+    expect(changed.revision).not.toBe(value.revision);
+    const initial = lifecycleChanges(
+      value,
+      "repo_a",
+      { storyRevision: null, workspaceRevision: null },
+      input.now,
+    );
+    expect(
+      lifecycleChanges(changed, "repo_a", initial, input.now).pending.map((e) => e.type),
+    ).toEqual(["story.updated"]);
+    const missing = storyLifecycleSnapshot({ ...input, item: { ...item, pullRequest: null } });
+    expect(missing.externalId).toBe("pull-request:2");
+    expect(missing.pullRequest).toBeNull();
+    expect(missing.issue).toBeNull();
   });
   it("content revisions ignore observation time, not GitHub freshness or site changes", () => {
     const value = storyLifecycleSnapshot(input);

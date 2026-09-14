@@ -35,6 +35,8 @@ export function storyLifecycleSnapshot(input: {
     reason: input.item.reason,
     activity: input.item.activity.state,
     provider: input.item.story?.provider ?? null,
+    repositoryId: input.item.story?.repositoryId ?? null,
+    externalId: input.item.story?.externalId ?? null,
     issue: input.item.issue
       ? {
           repositoryId: input.item.issue.repositoryId,
@@ -45,8 +47,10 @@ export function storyLifecycleSnapshot(input: {
       : null,
     pullRequest: input.item.pullRequest
       ? {
+          repositoryId: input.item.pullRequest.repositoryId,
           number: input.item.pullRequest.number,
           state: input.item.pullRequest.state,
+          stale: input.item.pullRequest.stale,
         }
       : null,
     workspace: input.workspace

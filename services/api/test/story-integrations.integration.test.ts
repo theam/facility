@@ -13,7 +13,9 @@ import {
   roles,
   seed,
   stories,
+  storyConversations,
   storyIntegrationNotifications,
+  turns,
   workspaces,
 } from "@facility/db";
 import { eq } from "drizzle-orm";
@@ -289,6 +291,180 @@ describe("story integration API with persisted lifecycle and real authorization"
         })
       ).statusCode,
     ).toBeGreaterThanOrEqual(400);
+  });
+
+  async function prStory(number: number) {
+    const id = newId("story"),
+      workspace = newId("ws"),
+      conversationId = newId("sess");
+    const pullId = newId("ghp"),
+      branch = `facility/pr-${number}`;
+    await db.insert(stories).values({
+      id,
+      orgId: "org_local",
+      projectId,
+      repositoryId,
+      provider: "github",
+      externalId: `pull-request:${number}`,
+      title: "PR regression",
+      status: "working",
+      branch,
+      createdBy: { type: "user", id: "test" },
+    });
+    await db.insert(workspaces).values({
+      id: workspace,
+      orgId: "org_local",
+      projectId,
+      storyId: id,
+      provider: "fake",
+      state: "sleeping",
+      volumeRef: "pr-retained-volume",
+    });
+    await db
+      .insert(storyConversations)
+      .values({ id: conversationId, orgId: "org_local", projectId, storyId: id });
+    await db.insert(turns).values({
+      id: newId("turn"),
+      orgId: "org_local",
+      projectId,
+      storyId: id,
+      conversationId,
+      agentName: "architect",
+      manifestHash: "synthetic",
+      manifest: {},
+      engine: "claude_code",
+      model: "synthetic",
+      state: "succeeded",
+      triggerType: "github",
+      createdBy: { type: "user", id: "test" },
+    });
+    const pull = {
+      id: pullId,
+      orgId: "org_local",
+      projectId,
+      repositoryId,
+      number,
+      title: "PR regression",
+      state: "open",
+      draft: false,
+      headRef: branch,
+      headSha: "b".repeat(40),
+      baseRef: "main",
+      htmlUrl: `https://github.com/acme/parent/pull/${number}`,
+      syncedAt: new Date(),
+      githubUpdatedAt: new Date(0),
+    };
+    await db.insert(githubPullRequests).values(pull);
+    const readPr = async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: `${url(projectId, id)}?evidence=none`,
+        headers: { authorization: `Bearer ${secret}` },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json().lifecycle;
+    };
+    return { id, workspace, pullId, pull, readPr };
+  }
+
+  it("reports a fresh PR-backed story after its turn settles, including close, merge and reopen", async () => {
+    const f = await prStory(401);
+    for (const [state, draft, phase] of [
+      ["open", false, "review"],
+      ["open", true, "in_progress"],
+      ["closed", false, "in_progress"],
+      ["merged", false, "done"],
+      ["open", false, "review"],
+    ] as const) {
+      await db
+        .update(githubPullRequests)
+        .set({ state, draft })
+        .where(eq(githubPullRequests.id, f.pullId));
+      expect(await f.readPr()).toMatchObject({
+        provider: "github",
+        repositoryId,
+        externalId: "pull-request:401",
+        issue: null,
+        phase,
+        activity: "idle",
+        pullRequest: { repositoryId, number: 401, state, stale: false },
+        workspace: { id: f.workspace, state: "sleeping" },
+      });
+    }
+    for (const spy of [wake, execute, destroy, inspect]) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("uses PR mirror sync time, not GitHub edit time, and preserves stale merged evidence", async () => {
+    const f = await prStory(402);
+    const fresh = await f.readPr(); // Old GitHub edit, freshly synced mirror.
+    expect(fresh.pullRequest.stale).toBe(false);
+    await db
+      .update(githubPullRequests)
+      .set({ syncedAt: new Date(0), githubUpdatedAt: new Date() })
+      .where(eq(githubPullRequests.id, f.pullId));
+    const stale = await f.readPr();
+    expect(stale.pullRequest.stale).toBe(true);
+    expect(stale.revision).not.toBe(fresh.revision);
+    await db
+      .update(githubPullRequests)
+      .set({ state: "merged" })
+      .where(eq(githubPullRequests.id, f.pullId));
+    expect(await f.readPr()).toMatchObject({
+      phase: "done",
+      pullRequest: { stale: true, state: "merged" },
+    });
+    await db
+      .update(githubPullRequests)
+      .set({ state: "open", syncedAt: new Date() })
+      .where(eq(githubPullRequests.id, f.pullId));
+    expect((await f.readPr()).revision).toBe(fresh.revision);
+  });
+
+  it("never substitutes a same-branch or child-repository PR for missing/stale source evidence", async () => {
+    const f = await prStory(403);
+    await db
+      .update(githubPullRequests)
+      .set({ state: "merged", syncedAt: new Date(0) })
+      .where(eq(githubPullRequests.id, f.pullId));
+    await db.insert(githubPullRequests).values([
+      { ...f.pull, id: newId("ghp"), number: 404 },
+      { ...f.pull, id: newId("ghp"), repositoryId: childId },
+    ]);
+    expect(await f.readPr()).toMatchObject({
+      pullRequest: { repositoryId, number: 403, state: "merged", stale: true },
+    });
+    await db.delete(githubPullRequests).where(eq(githubPullRequests.id, f.pullId));
+    expect(await f.readPr()).toMatchObject({
+      externalId: "pull-request:403",
+      issue: null,
+      pullRequest: null,
+      phase: "in_progress",
+    });
+  });
+
+  it("retains missing or stale issue evidence even when its related PR is fresh", async () => {
+    const f = await prStory(405);
+    await db.update(stories).set({ externalId: "issue:405" }).where(eq(stories.id, f.id));
+    expect(await f.readPr()).toMatchObject({
+      externalId: "issue:405",
+      issue: null,
+      pullRequest: { stale: false },
+    });
+    await db.insert(githubIssues).values({
+      id: newId("iss"),
+      orgId: "org_local",
+      projectId,
+      repositoryId,
+      number: 405,
+      title: "Stale source issue",
+      state: "closed",
+      htmlUrl: "https://github.com/acme/parent/issues/405",
+      syncedAt: new Date(0),
+    });
+    expect(await f.readPr()).toMatchObject({
+      issue: { stale: true, state: "closed" },
+      pullRequest: { stale: false },
+    });
   });
 
   const patch = (payload: unknown, credential = writerSecret, project = projectId) =>
