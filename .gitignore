@@ -8,6 +8,7 @@ node_modules/
 .claude/worktrees/
 .claude/launch.json
 .turbo/
+.pnpm-store/
 
 # Next.js build output
 .next/
