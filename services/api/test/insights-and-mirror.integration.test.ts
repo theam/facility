@@ -28,9 +28,9 @@ import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GithubMirrorService, restCiSignal, webhookCiSignal } from "../src/github/mirror.js";
-import { GithubPipelineService } from "../src/github/pipeline.js";
 import { BudgetPolicyError, CostBudgetService } from "../src/insights/costs.js";
 import { InsightsService } from "../src/insights/overview.js";
+import { ProjectBacklogService } from "../src/stories/backlog.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
@@ -47,7 +47,7 @@ async function canConnect() {
   }
 }
 
-describe("cost controls, GitHub mirror, and pipeline", async () => {
+describe("cost controls, GitHub mirror, and backlog", async () => {
   const reachable = await canConnect();
   if (!reachable) {
     it.skip("Postgres is unreachable at DATABASE_URL; insights tests skipped", () => undefined);
@@ -437,9 +437,16 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
         { type: "github.check_observed", turnId },
       ]),
     );
-    const pipeline = await new GithubPipelineService(db).get(orgId, projectId);
-    expect(pipeline.stages.validating).toMatchObject([
-      { number: 17, state: "checks_failed", story: { id: storyId } },
+    const backlog = await new ProjectBacklogService(db).list(orgId, projectId, { phase: ["all"] });
+    expect(backlog.items).toMatchObject([
+      {
+        key: `story:${storyId}`,
+        phase: "attention",
+        reason: "checks_failing",
+        issue: { number: 17 },
+        pullRequest: { number: 23, ciState: "failure" },
+        attention: [{ source: "github", kind: "checks_failing" }],
+      },
     ]);
   });
 
@@ -660,9 +667,16 @@ describe("cost controls, GitHub mirror, and pipeline", async () => {
         .from(githubPullRequests)
         .where(eq(githubPullRequests.repositoryId, repositoryId)),
     ).toContainEqual({ state: "merged" });
-    const pipeline = await new GithubPipelineService(db).get(orgId, projectId);
-    expect(pipeline.stages.shipped).toEqual(
-      expect.arrayContaining([expect.objectContaining({ number: 17, state: "merged" })]),
+    const backlog = await new ProjectBacklogService(db).list(orgId, projectId, { phase: ["done"] });
+    expect(backlog.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "done",
+          reason: "merged",
+          issue: expect.objectContaining({ number: 17 }),
+          pullRequest: expect.objectContaining({ number: 23, state: "merged" }),
+        }),
+      ]),
     );
   });
 });

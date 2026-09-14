@@ -173,6 +173,7 @@ environment:
       return {
         nativeSessionId,
         output: this.outputOverride ?? `completed with ${secret} and ${projectSecret}`,
+        progress: [],
         events: [
           {
             engine: "codex",
@@ -651,7 +652,7 @@ environment:
     });
     expect(afterCancellation.turns.filter((turn) => turn.state === "canceled")).toHaveLength(1);
     expect(
-      afterCancellation.events.filter((event) => event.type === "turn.cancel_requested"),
+      (afterCancellation.events ?? []).filter((event) => event.type === "turn.cancel_requested"),
     ).toHaveLength(1);
 
     engine.blockUntilCanceled = false;

@@ -30,7 +30,9 @@ import { buildApp } from "../src/app.js";
 import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
+import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
+import { StoryTitleService } from "../src/stories/titles.js";
 import type { StoryDomain } from "../src/story-domain.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
 import {
@@ -142,6 +144,7 @@ describe("Facility 0.12 reference journey", async () => {
       return {
         nativeSessionId,
         output: `completed turn ${sequence} with ${request.environment?.GH_TOKEN}`,
+        progress: [],
         events: [
           {
             engine: this.name,
@@ -266,6 +269,11 @@ environment:
       }),
       costs: new CostBudgetService(db),
       evidence: new TurnGitEvidenceService(db, runtime),
+      titles: new StoryTitleService(db, {
+        credentials: async () => ({}),
+        budget: new CostBudgetService(db),
+      }),
+      backlog: new ProjectBacklogService(db),
     };
     app = await buildApp(config, {
       storyDomain: domain,

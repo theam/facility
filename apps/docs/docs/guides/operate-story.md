@@ -8,11 +8,36 @@ MCP is the primary way to automate a Facility story. The web UI exposes the same
 useful for browsing conversations, inspecting environments, opening previews, and taking lifecycle
 actions.
 
+## Find work
+
+The Stories page is the project's backlog. It lists mirrored GitHub issues that nobody has started
+next to work started from a request, one entry per unit of work, and groups open entries by phase:
+needs attention, in progress, in review, not started. Done and archived work stay one filter away.
+Search accepts a ticket number (`#42`) or words; labels, assignees (including "assigned to me" and
+"unassigned"), repository, and sort combine, and every combination is a shareable URL. Listing the
+backlog never starts an agent or wakes a machine. `facility_list_backlog` returns the same view.
+
+Each entry shows the phase, what is actually happening (a running or queued agent, a waiting
+question, failing checks, a review decision), who is involved, and links to the issue, pull
+request, story, and active run. Assignees from GitHub and people who started or continued the
+story in Facility appear together; neither source removes the other.
+
 ## Start a story
 
-Before starting, identify the project, the agent, and the body of work. For GitHub work, use a
-stable external id such as the issue id. For an ad hoc request, Facility can create a manual id from
-the idempotency key.
+Describe what you need in the request box. A title is optional: Facility stores the request at
+once under a provisional title and generates a short title afterwards with the project's
+configured provider credentials, honouring the project budget. If generation is slow or fails, the
+provisional title stays and the page says so; the request is never lost or duplicated.
+
+Choosing an action is optional too. Actions are the agents the repository defines in `.agents/`;
+each runs on an engine (Claude Code or Codex) from a provider (Anthropic or OpenAI). Without a
+choice, the project's default runs: the enabled agent that accepts requests from that surface,
+`builder` when present. Starting from a not-started issue keeps the issue's title and links the
+story to it, so the issue does not appear twice.
+
+For MCP, identify the project and the body of work. For GitHub work, use a stable external id such
+as the issue id and, for a related repository, its `repositoryId`. For an ad hoc request, Facility
+can create a manual id from the idempotency key.
 
 An MCP client normally follows this sequence:
 
@@ -26,8 +51,8 @@ Use a new idempotency key for a new start request. Reuse the same key only when 
 same request after an uncertain network result.
 
 The selected agent must be enabled and include an `mcp` trigger. A story started from the web UI
-requires a `ui` trigger. Facility records the source rather than treating them as separate story
-types.
+requires a `ui` trigger. When no agent is named, the same rule picks the default for that surface.
+Facility records the source rather than treating them as separate story types.
 
 ## Continue the shared conversation
 
@@ -36,8 +61,10 @@ the next turn; the conversation, worktree, and native engine state remain attach
 Messages sent while a turn is active wait in order.
 
 Use `facility_get_story` to inspect status and `next_operations`. Use
-`facility_get_conversation` with its cursor for durable message history. The UI renders the same
-conversation and can continue it under the current user's project membership.
+`facility_get_conversation` with its cursor for durable message history. Each agent message is the
+run's final response; progress messages and logs live in the run's activity
+(`/turns/:turnId/activity`). The UI renders the same conversation as request-and-response
+exchanges and can continue it under the current user's project membership.
 
 The story timeline is the review path across the whole delivery. It shows which agent, model,
 session, workspace, branch, and initial SHA started each turn; the final SHA, commits, files, and

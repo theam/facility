@@ -253,7 +253,7 @@ test("the API reference maps every resource family", () => {
     "/costs",
     "/budget",
     "/observability",
-    "/pipeline",
+    "/backlog",
     "/github/sync",
     "/audit",
   ]) {
