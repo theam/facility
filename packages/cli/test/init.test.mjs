@@ -195,7 +195,40 @@ test("local doctor validates the 0.12 contract and preserves its JSON output", (
   );
   const invalidPort = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
   assert.equal(invalidPort.status, 1);
-  assert.match(invalidPort.stdout, /between 1 and 65535/);
+  assert.match(JSON.parse(invalidPort.stdout).checks[0].detail, /expected number to be <=65535/);
+});
+
+test("doctor applies the server project manifest contract", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const init = runCli(
+    ["init", "--yes", `--dir=${dir}`, "--repo=acme/demo-app", "--start=npm run dev"],
+    dir,
+  );
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+
+  const manifestPath = join(dir, ".facility.yml");
+  const validWithoutVersion = readFileSync(manifestPath, "utf8").replace("version: 1\n", "");
+  writeFileSync(manifestPath, validWithoutVersion);
+  assert.equal(runCli(["doctor", `--dir=${dir}`, "--json"], dir).status, 0);
+
+  writeFileSync(manifestPath, `${validWithoutVersion}  extra: true\n`);
+  const unknownProperty = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(unknownProperty.status, 1);
+  assert.match(
+    JSON.parse(unknownProperty.stdout).checks[0].detail,
+    /environment: Unrecognized key: "extra"/,
+  );
+
+  writeFileSync(manifestPath, `${validWithoutVersion}repositories:\n  primary: github.com/acme/other\n`);
+  const duplicateKey = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(duplicateKey.status, 1);
+  assert.match(JSON.parse(duplicateKey.stdout).checks[0].detail, /Map keys must be unique/);
+
+  writeFileSync(manifestPath, "repositories: [\nenvironment:\n  start: npm run dev\n");
+  const malformed = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(malformed.status, 1);
+  assert.match(JSON.parse(malformed.stdout).checks[0].detail, /Flow sequence in block collection/);
 });
 
 test("local commands reject unknown and valueless flags and legacy commands", () => {

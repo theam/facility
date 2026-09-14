@@ -97,8 +97,8 @@ RUN test -f /app/node_modules/@facility/db/dist/bin/deploy.js \
 # tasks inside the VPC. `facility instance bootstrap` needs the database, and in
 # a reference deployment the database accepts connections only from the service
 # security group — there is nowhere else to run it from. The package is a few
-# hundred kilobytes of plain ESM whose only dependency, `postgres`, is already
-# here for @facility/db.
+# hundred kilobytes of plain ESM whose production dependencies are already
+# installed for the API image.
 COPY --from=build-api /app/packages/cli /app/cli
 # Operator commands read as `facility …` inside the image, the way they read
 # everywhere else, instead of as a path into it. A wrapper rather than a symlink
@@ -119,7 +119,7 @@ RUN printf '%s\n' \
 # resolves `facility` the way the container runtime does for an ECS command
 # override, with no shell in between, so the guard exercises the same lookup the
 # runbook depends on. Reaching the command proves the PATH entry, and importing
-# it proves that its production `postgres` dependency resolves.
+# it proves that its production dependencies resolve.
 RUN ["facility", "instance", "bootstrap", "--help"]
 EXPOSE 4400
 CMD ["node", "dist/start.js"]

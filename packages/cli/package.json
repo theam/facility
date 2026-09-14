@@ -33,7 +33,9 @@
     "node": "^22.13.0 || ^24.0.0"
   },
   "dependencies": {
-    "postgres": "^3.4.7"
+    "postgres": "^3.4.7",
+    "yaml": "^2.8.1",
+    "zod": "^4.1.13"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
