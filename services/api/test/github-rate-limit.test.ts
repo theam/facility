@@ -93,14 +93,15 @@ describe("historical pull request CI polling", () => {
       false,
     );
   });
+  it.each(["pending", null])("does not poll abandoned closed CI forever: %s", (ciState) => {
+    expect(shouldRefreshPullRequestCi({ ...terminal, ciState })).toBe(false);
+  });
   it.each([
     { state: "open" },
     { ciHeadSha: "b" },
-    { ciState: "pending" },
-    { ciState: null },
     { ciUpdatedAt: null },
     { githubUpdatedAt: new Date("2026-09-03") },
-  ])("refreshes active, changed, missing, or unfinished CI: %s", (change) => {
+  ])("refreshes active, changed, or unobserved CI: %s", (change) => {
     expect(shouldRefreshPullRequestCi({ ...terminal, ...change })).toBe(true);
   });
 });
