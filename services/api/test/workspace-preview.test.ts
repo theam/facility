@@ -1,4 +1,4 @@
-import type { FacilityDb } from "@facility/db";
+import { type FacilityDb, projects, stories, workspaces } from "@facility/db";
 import { describe, expect, it, vi } from "vitest";
 import type { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import type { AppConfig } from "../src/types.js";
@@ -34,7 +34,12 @@ const input = {
   service: "app",
 };
 
-function fixture(state: string, setupChecksum: string | null, native = false) {
+function fixture(
+  state: string,
+  setupChecksum: string | null,
+  native = false,
+  projectSettings: Record<string, unknown> = { nativePreviewsEnabled: native },
+) {
   const story = { id: input.storyId, branch: "facility/story-test", deletedAt: null };
   const workspace = {
     id: "ws_test",
@@ -45,11 +50,23 @@ function fixture(state: string, setupChecksum: string | null, native = false) {
     volumeRef: "retained-volume",
     environment: { image: "runner:test" },
   };
-  const rows = [story, workspace];
+  // Resolve reads by table: native open checks the project both before and after preparation.
+  const rows = new Map<unknown, unknown>([
+    [stories, story],
+    [workspaces, workspace],
+    [projects, { settings: projectSettings }],
+  ]);
   const insert = vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) }));
   const db = {
     select: vi.fn(() => ({
-      from: () => ({ where: () => ({ limit: async () => [rows.shift()] }) }),
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () => {
+            if (!rows.has(table)) throw new Error("Unexpected preview fixture table");
+            return [rows.get(table)];
+          },
+        }),
+      }),
     })),
     insert,
   } as unknown as FacilityDb;
@@ -91,6 +108,38 @@ describe("preview workspace preparation", () => {
       url: "https://native-one.vercel.run",
       expiresAt: null,
     });
+    expect(f.environment.prepare).toHaveBeenCalledOnce();
+    expect(f.insert).not.toHaveBeenCalled();
+  });
+  it.each([
+    {},
+    { nativePreviewsEnabled: false },
+    { nativePreviewsEnabled: "true" },
+  ])("does not prepare a native preview without explicit project opt-in: %j", async (settings) => {
+    const f = fixture("running", null, true, settings);
+    await expect(f.service.open(input)).rejects.toMatchObject({
+      code: "preview_origin_unavailable",
+    });
+    expect(f.runtime.wake).not.toHaveBeenCalled();
+    expect(f.environment.prepare).not.toHaveBeenCalled();
+    expect(f.environment.startPrepared).not.toHaveBeenCalled();
+    expect(f.insert).not.toHaveBeenCalled();
+  });
+  it("rechecks project opt-in after preparing a native preview", async () => {
+    const settings = { nativePreviewsEnabled: true };
+    const f = fixture("running", null, true, settings);
+    f.environment.prepare.mockImplementationOnce(async () => {
+      settings.nativePreviewsEnabled = false;
+      return {
+        endpoints: [
+          { service: "app", port: 3000, access: "native", url: "https://native-one.vercel.run" },
+        ],
+      };
+    });
+    await expect(f.service.open(input)).rejects.toMatchObject({
+      code: "preview_origin_unavailable",
+    });
+    expect(f.runtime.wake).toHaveBeenCalledOnce();
     expect(f.environment.prepare).toHaveBeenCalledOnce();
     expect(f.insert).not.toHaveBeenCalled();
   });
