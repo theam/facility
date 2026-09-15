@@ -48,3 +48,10 @@ pagination, and the empty and error states.
 For Vercel workspaces, temporary network failures while reading command output or waiting for completion reconnect to the original command. They never submit the agent command again. Replayed output is checked against the already received text and delivered only once, even if the provider changes chunk boundaries.
 
 Observation retries use exponential backoff, with eight retries per interrupted stream or sequence of failed waits. Cancellation stops recovery immediately; authentication, authorization, missing commands, and invalid responses fail without retry. If observation cannot recover, the failed turn retains the engine events already received. An observation failure does not prove the remote process exited: inspect the retained workspace before retrying the turn.
+
+### Cost coverage in Insights
+
+Insights distinguishes measured, priced usage from completed turns without a
+usage report. A partial reported amount is shown as a lower bound; when no
+completed turn has a price, it is shown as unknown. Queued and running turns do
+not count as missing completed usage. These are usage estimates, not invoices.
