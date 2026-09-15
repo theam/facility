@@ -15,6 +15,7 @@ import {
   projectRepositories,
   seed,
   turns,
+  workspaces,
 } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -29,7 +30,9 @@ import { buildApp } from "../src/app.js";
 import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
+import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
+import { StoryTitleService } from "../src/stories/titles.js";
 import type { StoryDomain } from "../src/story-domain.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
 import {
@@ -47,6 +50,7 @@ import {
   type ProjectManifestSource,
   parseProjectManifest,
 } from "../src/workspaces/project-environment.js";
+import { WorkspaceVariablesService } from "../src/workspaces/variables.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_ws";
@@ -140,6 +144,7 @@ describe("Facility 0.12 reference journey", async () => {
       return {
         nativeSessionId,
         output: `completed turn ${sequence} with ${request.environment?.GH_TOKEN}`,
+        progress: [],
         events: [
           {
             engine: this.name,
@@ -241,6 +246,7 @@ environment:
       environment,
     );
     const domain: StoryDomain = {
+      variables: new WorkspaceVariablesService(db, config.secretMasterKey),
       runtime,
       stories,
       catalog,
@@ -263,6 +269,11 @@ environment:
       }),
       costs: new CostBudgetService(db),
       evidence: new TurnGitEvidenceService(db, runtime),
+      titles: new StoryTitleService(db, {
+        credentials: async () => ({}),
+        budget: new CostBudgetService(db),
+      }),
+      backlog: new ProjectBacklogService(db),
     };
     app = await buildApp(config, {
       storyDomain: domain,
@@ -506,6 +517,13 @@ environment:
       next_operations: mcpStory.next_operations,
     });
 
+    // Native agents can change HEAD after setup. Browser verification must preserve
+    // the prepared workspace even when its recorded setup checksum differs.
+    const retainedChecksum = "prepared-before-the-agent-commit";
+    await db
+      .update(workspaces)
+      .set({ setupChecksum: retainedChecksum })
+      .where(eq(workspaces.id, workspaceId));
     const browserTest = await app.inject({
       method: "POST",
       url: `/v1/projects/${projectId}/workspace-stories/${storyId}/environment/browser-test`,
@@ -513,6 +531,11 @@ environment:
     });
     expect(browserTest.statusCode, browserTest.body).toBe(200);
     expect(browserTest.json().browser_test.artifacts).toHaveLength(2);
+    expect(await runtime.read(workspace, `repos/${owner}/${repository}/.setup-complete`)).toBe("1");
+    expect(browserTest.json().workspace.setupChecksum).toBe(retainedChecksum);
+    expect(await runtime.read(workspace, ".facility/codex/native-session")).toBe(
+      "codex-persistent-session",
+    );
     const cleanSetup = await app.inject({
       method: "POST",
       url: `/v1/projects/${projectId}/workspace-stories/${storyId}/environment/clean-setup`,

@@ -95,7 +95,7 @@ describe("@facility/mcp 0.12", () => {
       "facility_get_budget",
       "facility_set_budget",
       "facility_get_observability",
-      "facility_get_pipeline",
+      "facility_list_backlog",
       "facility_sync_github",
       "facility_open_preview",
       "facility_suspend_story",

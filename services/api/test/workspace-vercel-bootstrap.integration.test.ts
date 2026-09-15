@@ -44,6 +44,7 @@ async function localProvider(
     colliding.kill();
   });
   await mkdir(join(root, "proc", String(dockerPid)), { recursive: true });
+  await writeFile(join(root, "proc", String(dockerPid), "environ"), "OTHER=fixture\0");
   if (dockerState !== "ready") {
     await writeFile(join(root, "run/docker.pid"), String(dockerPid));
     await writeFile(join(root, "run/docker.sock"), "existing socket");
@@ -355,4 +356,59 @@ it("replaces only the recorded gateway invocation for this port", async () => {
     environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: "x".repeat(32) },
   });
   expect(colliding.signalCode).toBe("SIGTERM");
+});
+
+it.each([
+  false,
+  true,
+])("reuses a healthy gateway only with the same credential (rotate=%s)", async (rotate) => {
+  const { fixture, appPort, root, gatewayPort } = await localProvider(false);
+  const runtime = new VercelWorkspaceRuntime();
+  const originalToken = "original-preview-credential-".repeat(2);
+  const input = {
+    id: fixture.name,
+    image: "runner:test",
+    ports: [{ service: "web", port: appPort }],
+    environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: originalToken },
+  };
+  await runtime.create(input);
+  const pidPath = join(root, `.facility/preview-${gatewayPort}.pid`);
+  const before = (await readFile(pidPath, "utf8")).trim();
+  // Linux /proc is a deterministic fixture on both macOS and Linux CI.
+  await mkdir(join(root, "proc", before), { recursive: true });
+  await writeFile(
+    join(root, "proc", before, "cmdline"),
+    [
+      "node",
+      "/usr/local/bin/facility-preview-gateway",
+      "--listen",
+      String(gatewayPort),
+      "--target",
+      String(appPort),
+      "",
+    ].join("\0"),
+  );
+  await writeFile(
+    join(root, "proc", before, "environ"),
+    `FACILITY_PREVIEW_GATEWAY_TOKEN=${originalToken}\0`,
+  );
+  const token = rotate ? "rotated-preview-credential-".repeat(2) : originalToken;
+  await runtime.create({ ...input, environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: token } });
+  const after = (await readFile(pidPath, "utf8")).trim();
+  if (rotate) expect(after).not.toBe(before);
+  else expect(after).toBe(before);
+  const url = `http://127.0.0.1:${gatewayPort}/`;
+  expect((await fetch(url)).status).toBe(401);
+  expect(
+    (await fetch(url, { headers: { "x-facility-preview-token": "another-workspace-credential" } }))
+      .status,
+  ).toBe(401);
+  const allowed = await fetch(url, { headers: { "x-facility-preview-token": token } });
+  expect(allowed.status).toBe(200);
+  expect(await allowed.text()).toBe("preview app");
+  if (rotate)
+    expect(
+      (await fetch(url, { headers: { "x-facility-preview-token": originalToken } })).status,
+    ).toBe(401);
+  expect(fixture.stop).not.toHaveBeenCalled();
 });

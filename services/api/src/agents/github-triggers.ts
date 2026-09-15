@@ -28,6 +28,8 @@ const SUPPORTED_EVENTS = new Set([
 type GithubEvent = {
   id: string;
   orgId: string;
+  projectId?: string;
+  repositoryId?: string;
   eventType: string;
   payload: Record<string, unknown>;
 };
@@ -54,30 +56,48 @@ export class GithubAgentTriggerService {
         .limit(1)
     )[0];
     if (!event?.verified) return { matched: 0, queued: 0, merged: 0 };
+    if (event.projectId && !event.repositoryId) return { matched: 0, queued: 0, merged: 0 };
+    return this.processInbound(event);
+  }
+
+  private async processInbound(event: typeof githubWebhookEvents.$inferSelect) {
+    const inboundEventId = event.id;
+    // Keep the original binding through every lookup, including deliveries already in flight.
+    // No transaction/connection is held while calling GitHub or nested domain services.
+    const binding = {
+      projectId: event.projectId ?? undefined,
+      repositoryId: event.repositoryId ?? undefined,
+    };
+    const receiptScope = and(
+      eq(githubWebhookEvents.id, inboundEventId),
+      event.repositoryId ? eq(githubWebhookEvents.repositoryId, event.repositoryId) : undefined,
+    );
     try {
       await this.mirror?.handleWebhook({
         id: event.id,
         orgId: event.orgId,
+        ...binding,
         eventType: event.eventType,
         payload: event.payload as Record<string, unknown>,
       });
       const result = await this.handle({
         id: event.id,
         orgId: event.orgId,
+        ...binding,
         eventType: event.eventType,
         payload: event.payload as Record<string, unknown>,
       });
       await this.db
         .update(githubWebhookEvents)
         .set({ processedAt: new Date(), error: null })
-        .where(eq(githubWebhookEvents.id, inboundEventId));
+        .where(receiptScope);
       return result;
     } catch (error) {
       // Provider errors may contain credential-bearing request headers; persist only a safe code.
       await this.db
         .update(githubWebhookEvents)
         .set({ processedAt: null, error: "github_webhook_processing_failed" })
-        .where(eq(githubWebhookEvents.id, inboundEventId));
+        .where(receiptScope);
       throw error;
     }
   }
@@ -109,6 +129,8 @@ export class GithubAgentTriggerService {
         .where(
           and(
             eq(projectRepositories.orgId, event.orgId),
+            event.projectId ? eq(projectRepositories.projectId, event.projectId) : undefined,
+            event.repositoryId ? eq(projectRepositories.id, event.repositoryId) : undefined,
             eq(projectRepositories.owner, owner),
             eq(projectRepositories.name, name),
             eq(projects.status, "active"),

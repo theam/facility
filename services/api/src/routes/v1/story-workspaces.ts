@@ -5,18 +5,27 @@ import {
   renderAgentManifest,
 } from "@facility/agents";
 import { projectRepositories, workspaceEvents } from "@facility/db";
-import { and, asc, desc, eq, gt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
+import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
+import { readStoryLifecycle } from "../../stories/lifecycle.js";
+import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
 import type { AppConfig } from "../../types.js";
+import {
+  parseWorkspaceVariables,
+  WorkspaceVariablesInput,
+  WorkspaceVariablesMetadata,
+} from "../../workspaces/variables.js";
 import { principal } from "./shared.js";
 
 const ProjectParams = z.object({ projectId: z.string() });
 const StoryParams = z.object({ projectId: z.string(), storyId: z.string() });
 const AttentionParams = StoryParams.extend({ attentionId: z.string() });
 const TurnParams = StoryParams.extend({ turnId: z.string() });
+const TurnEventParams = TurnParams.extend({ seq: z.coerce.number().int().min(0) });
 const StoryAgentParams = z.object({ projectId: z.string(), agentName: AgentNameSchema });
 const ReasoningEffort = z.enum([
   "none",
@@ -41,13 +50,17 @@ const UpdateAgentBody = z.object({
 const StartStoryBody = z.object({
   provider: z.enum(["github", "manual"]).default("manual"),
   external_id: z.string().min(1).max(240).optional(),
-  title: z.string().min(1).max(500),
-  agent: z.string().min(1).max(64).default("builder"),
+  /** Repository the GitHub identity belongs to; defaults to the primary repository. */
+  repository_id: z.string().min(1).max(200).optional(),
+  /** Optional. Omitted titles start provisional and are generated from the request. */
+  title: z.string().trim().min(1).max(500).optional(),
+  /** Optional. Omitted agents resolve to the project's default for this surface. */
+  agent: z.string().min(1).max(64).optional(),
   message: z.string().min(1).max(200_000),
   idempotency_key: z.string().min(1).max(200),
 });
 const SendMessageBody = z.object({
-  agent: z.string().min(1).max(64).default("builder"),
+  agent: z.string().min(1).max(64).optional(),
   message: z.string().min(1).max(200_000),
   idempotency_key: z.string().min(1).max(200),
 });
@@ -55,11 +68,28 @@ const ListStoriesQuery = z.object({
   status: z.enum(["ready", "working", "attention", "review", "done", "archived"]).optional(),
 });
 const ConversationQuery = z.object({
+  order: z.enum(["asc", "desc"]).default("asc"),
+  before: z.coerce.number().int().min(1).optional(),
   after: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+const StoryBundleQuery = z.object({
+  // "recent" keeps the bounded turn events and composed timeline in the bundle for
+  // existing clients; readers that page evidence separately ask for "none".
+  evidence: z.enum(["recent", "none"]).default("recent"),
+});
+const ActivityQuery = z.object({
+  before: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+const TimelineQuery = z.object({
+  // Opaque keyset cursor returned as next_cursor by the previous page.
+  before: z.string().min(1).max(400).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
 const EnvironmentQuery = z.object({
   after: z.coerce.number().int().min(0).optional(),
+  before: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
 });
 const DeleteBody = z.object({
@@ -69,6 +99,87 @@ const DeleteBody = z.object({
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+
+  app.patch(
+    "/v1/projects/:projectId/workspace-stories/:storyId/integration-state",
+    {
+      config: { permission: "stories:write", auditAction: "story.integration_state.updated" },
+      schema: {
+        params: StoryParams,
+        body: IntegrationStateBody,
+        operationId: "updateStoryIntegrationState",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const orgId = principal(request).orgId;
+      reply.header("cache-control", "private, no-store");
+      return updateIntegrationState(
+        app.facilityDb,
+        { orgId, projectId, storyId },
+        request.body as z.infer<typeof IntegrationStateBody>,
+      );
+    },
+  );
+
+  for (const method of ["GET", "PATCH"] as const) {
+    app.route({
+      method,
+      url: "/v1/projects/:projectId/environment/variables",
+      config: {
+        permission: method === "GET" ? "workspaces:read" : "workspaces:execute",
+        ...(method === "PATCH" ? { auditAction: "project.variables.updated" } : {}),
+      },
+      schema: {
+        params: ProjectParams,
+        ...(method === "PATCH" ? { body: WorkspaceVariablesInput } : {}),
+        operationId: method === "GET" ? "listProjectVariables" : "updateProjectVariables",
+        response: { 200: WorkspaceVariablesMetadata },
+      },
+      handler: async (request, reply) => {
+        const { projectId } = request.params as z.infer<typeof ProjectParams>;
+        const scope = { orgId: principal(request).orgId, projectId };
+        reply.header("cache-control", "no-store");
+        return method === "GET"
+          ? domain.variables.projectMetadata(scope)
+          : domain.variables.updateProject(
+              scope,
+              parseWorkspaceVariables(request.body as z.infer<typeof WorkspaceVariablesInput>),
+            );
+      },
+    });
+  }
+
+  for (const method of ["GET", "PATCH"] as const) {
+    app.route({
+      method,
+      url: "/v1/projects/:projectId/workspace-stories/:storyId/environment/variables",
+      config: {
+        permission: method === "GET" ? "workspaces:read" : "workspaces:execute",
+        ...(method === "PATCH" ? { auditAction: "workspace.variables.updated" } : {}),
+      },
+      schema: {
+        params: StoryParams,
+        ...(method === "PATCH" ? { body: WorkspaceVariablesInput } : {}),
+        operationId: method === "GET" ? "listWorkspaceVariables" : "updateWorkspaceVariables",
+        response: { 200: WorkspaceVariablesMetadata },
+      },
+      handler: async (request, reply) => {
+        const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+        const actor = principal(request);
+        const { workspace } = await domain.stories.get(actor.orgId, projectId, storyId);
+        if (!workspace) throw new ApiError(404, "not_found", "Workspace not found");
+        const scope = { orgId: actor.orgId, projectId, workspaceId: workspace.id };
+        reply.header("cache-control", "no-store");
+        return method === "GET"
+          ? domain.variables.metadata(scope)
+          : domain.variables.update(
+              scope,
+              parseWorkspaceVariables(request.body as z.infer<typeof WorkspaceVariablesInput>),
+            );
+      },
+    });
+  }
 
   app.get(
     "/v1/projects/:projectId/story-agents",
@@ -85,6 +196,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           domain.scheduler.status(actor.orgId, projectId),
         ]),
       );
+      const manifests = rows.map(manifestFromProjection);
       return {
         agents: rows.map((row) => ({
           ...manifestFromProjection(row),
@@ -92,6 +204,12 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           synced_at: row.syncedAt,
           schedule_status: presentScheduleStatus(scheduleStatus.get(row.name)),
         })),
+        defaults: {
+          ui: resolveDefaultAgent(manifests, "ui")?.name ?? null,
+          mcp: resolveDefaultAgent(manifests, "mcp")?.name ?? null,
+          manual: resolveDefaultAgent(manifests, "manual")?.name ?? null,
+        },
+        title_generation: await domain.titles.available(actor.orgId, projectId),
       };
     },
   );
@@ -248,13 +366,13 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       const body = request.body as z.infer<typeof StartStoryBody>;
       const actor = principal(request);
       const orgId = actor.orgId;
-      const [projection, projectManifest] = await translate(() =>
+      const surface = requestSurface(request.headers["x-facility-surface"]);
+      const [manifest, projectManifest] = await translate(() =>
         Promise.all([
-          domain.catalog.get(orgId, projectId, body.agent),
+          selectAgent(domain, orgId, projectId, body.agent, surface),
           domain.projectManifests.load(orgId, projectId),
         ]),
       );
-      const manifest = manifestFromProjection(projection);
       const repositoryId =
         body.provider === "github"
           ? (
@@ -265,14 +383,22 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
                   and(
                     eq(projectRepositories.orgId, orgId),
                     eq(projectRepositories.projectId, projectId),
-                    eq(projectRepositories.role, "primary"),
+                    body.repository_id
+                      ? eq(projectRepositories.id, body.repository_id)
+                      : eq(projectRepositories.role, "primary"),
                   ),
                 )
                 .limit(1)
             )[0]?.id
           : undefined;
-      const surface = requestSurface(request.headers["x-facility-surface"]);
+      if (body.provider === "github" && !repositoryId) {
+        throw new ApiError(404, "repository_not_found", "Repository not found in this project");
+      }
       requireAgentSurface(manifest, surface);
+      // A request without a title is stored at once under a provisional title.
+      // The AI title arrives asynchronously; the request is never held for it.
+      const titled = body.title !== undefined;
+      const generation = titled ? false : await domain.titles.available(orgId, projectId);
       const result = await translate(() =>
         domain.stories.start({
           orgId,
@@ -280,7 +406,14 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           repositoryId,
           provider: body.provider,
           externalId: body.external_id ?? `manual:${body.idempotency_key}`,
-          title: body.title,
+          title: body.title ?? provisionalTitle(body.message),
+          titleSource: titled
+            ? body.provider === "github"
+              ? "github"
+              : "user"
+            : generation
+              ? "pending"
+              : "fallback",
           agent: manifest,
           message: body.message,
           messageDedupeKey: body.idempotency_key,
@@ -297,6 +430,14 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           },
         }),
       );
+      if (result.story.titleSource === "pending") {
+        try {
+          await domain.titles.request({ orgId, projectId, storyId: result.story.id });
+        } catch (error) {
+          // The worker re-queues pending titles on its own; the story is already durable.
+          request.log.warn({ err: error, storyId: result.story.id }, "title job enqueue failed");
+        }
+      }
       reply.status(202);
       return storyResponse(result);
     },
@@ -329,14 +470,115 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
     "/v1/projects/:projectId/workspace-stories/:storyId",
     {
       config: { permission: "projects:read" },
-      schema: { params: StoryParams, operationId: "getWorkspaceStory" },
+      schema: {
+        params: StoryParams,
+        querystring: StoryBundleQuery,
+        operationId: "getWorkspaceStory",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const query = request.query as z.infer<typeof StoryBundleQuery>;
+      const actor = principal(request);
+      const value = await translate(() =>
+        domain.stories.get(actor.orgId, projectId, storyId, {
+          evidence: query.evidence !== "none",
+        }),
+      );
+      const lifecycle = await readStoryLifecycle(
+        app.facilityDb,
+        domain.backlog,
+        config.previewSites ?? [],
+        { orgId: actor.orgId, projectId, storyId },
+      );
+      reply.header("cache-control", "private, no-store");
+      return { ...storyResponse(value), lifecycle };
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/timeline",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: StoryParams,
+        querystring: TimelineQuery,
+        operationId: "getWorkspaceStoryTimeline",
+      },
     },
     async (request) => {
       const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const query = request.query as z.infer<typeof TimelineQuery>;
       const actor = principal(request);
-      return storyResponse(
-        await translate(() => domain.stories.get(actor.orgId, projectId, storyId)),
+      const before = query.before === undefined ? undefined : decodeTimelineCursor(query.before);
+      const page = await translate(() =>
+        domain.stories.timelinePage(actor.orgId, projectId, storyId, {
+          limit: query.limit,
+          before,
+        }),
       );
+      return {
+        entries: page.entries.map((entry) => ({
+          id: entry.id,
+          source: entry.source,
+          type: entry.type,
+          turn_id: entry.turnId,
+          data: entry.data,
+          occurred_at: entry.occurredAt,
+          observed_at: entry.observedAt,
+        })),
+        has_more: page.hasMore,
+        next_cursor: page.nextCursor ? encodeTimelineCursor(page.nextCursor) : null,
+      };
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/activity",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: TurnParams,
+        querystring: ActivityQuery,
+        operationId: "getWorkspaceStoryTurnActivity",
+      },
+    },
+    async (request) => {
+      const { projectId, storyId, turnId } = request.params as z.infer<typeof TurnParams>;
+      const query = request.query as z.infer<typeof ActivityQuery>;
+      const actor = principal(request);
+      const page = await translate(() =>
+        domain.stories.turnActivity(actor.orgId, projectId, storyId, turnId, query),
+      );
+      return {
+        turn: page.turn,
+        items: page.items,
+        has_more: page.hasMore,
+        next_cursor: page.nextCursor,
+      };
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/events/:seq",
+    {
+      config: { permission: "projects:read" },
+      schema: { params: TurnEventParams, operationId: "getWorkspaceStoryTurnEvent" },
+    },
+    async (request, reply) => {
+      const { projectId, storyId, turnId, seq } = request.params as z.infer<typeof TurnEventParams>;
+      const actor = principal(request);
+      const event = await translate(() =>
+        domain.stories.turnEvent(actor.orgId, projectId, storyId, turnId, seq),
+      );
+      reply.header("cache-control", "no-store");
+      return {
+        turn_id: event.turnId,
+        seq: event.seq,
+        type: event.type,
+        data: event.data,
+        created_at: event.createdAt,
+      };
     },
   );
 
@@ -355,9 +597,10 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       const body = request.body as z.infer<typeof SendMessageBody>;
       const actor = principal(request);
       const orgId = actor.orgId;
-      const projection = await translate(() => domain.catalog.get(orgId, projectId, body.agent));
-      const manifest = manifestFromProjection(projection);
       const surface = requestSurface(request.headers["x-facility-surface"]);
+      const manifest = await translate(() =>
+        selectAgent(domain, orgId, projectId, body.agent, surface),
+      );
       requireAgentSurface(manifest, surface);
       const queued = await translate(() =>
         domain.stories.queueMessage({
@@ -390,10 +633,14 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
       const query = request.query as z.infer<typeof ConversationQuery>;
       const actor = principal(request);
+      const page = await translate(() =>
+        domain.stories.conversationPage(actor.orgId, projectId, storyId, query),
+      );
       return {
-        messages: await translate(() =>
-          domain.stories.conversation(actor.orgId, projectId, storyId, query),
-        ),
+        messages: page.messages,
+        related: page.related,
+        has_more: page.hasMore,
+        next_cursor: page.nextCursor,
       };
     },
   );
@@ -419,6 +666,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         eq(workspaceEvents.orgId, orgId),
         eq(workspaceEvents.workspaceId, bundle.workspace.id),
         ...(query.after === undefined ? [] : [gt(workspaceEvents.seq, query.after)]),
+        ...(query.before === undefined ? [] : [lt(workspaceEvents.seq, query.before)]),
       );
       const rows = await app.facilityDb
         .select()
@@ -465,43 +713,54 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         if (bundle.workspace.state === "destroyed") {
           throw new ApiError(409, "workspace_deleted", "Workspace has been deleted");
         }
-        if (!bundle.story.branch) {
-          throw new ApiError(409, "story_branch_missing", "Story branch is not available");
-        }
         const workspaceRow = bundle.workspace;
-        const branch = bundle.story.branch;
-        const [manifest, credentials] = await translate(() =>
-          Promise.all([
-            domain.projectManifests.load(orgId, projectId),
-            domain.credentials.issue(orgId, projectId),
-          ]),
-        );
-        const workspace = workspaceLocator(workspaceRow);
-        await translate(() =>
-          domain.environment.prepare({
+        const manifest = await translate(() => domain.projectManifests.load(orgId, projectId));
+        // Validate before issuing credentials, waking compute, or touching the workspace.
+        if (action === "browser-test" && !manifest.environment.browser_test) {
+          throw new ApiError(
+            409,
+            "browser_test_not_configured",
+            ".facility.yml does not define environment.browser_test",
+          );
+        }
+        let browser: Awaited<ReturnType<typeof domain.environment.runBrowserTest>> | undefined;
+        if (action === "browser-test") {
+          const setupChecksum = workspaceRow.setupChecksum;
+          if (!setupChecksum) {
+            throw new ApiError(
+              409,
+              "workspace_not_prepared",
+              "Prepare the workspace with Clean setup before running a browser test",
+            );
+          }
+          const credentials = await translate(() => domain.credentials.issue(orgId, projectId));
+          const input = {
             orgId,
             projectId,
-            workspace,
+            workspace: workspaceLocator(workspaceRow),
             manifest,
             credentials,
-            branch,
-            previousSetupChecksum: workspaceRow.setupChecksum,
-            cleanSetup: action === "clean-setup",
-          }),
-        );
-        const browser =
-          action === "browser-test"
-            ? await translate(() =>
-                domain.environment.runBrowserTest({
-                  orgId,
-                  projectId,
-                  storyId,
-                  workspace,
-                  manifest,
-                  credentials,
-                }),
-              )
-            : undefined;
+          };
+          await translate(() => domain.environment.startPrepared({ ...input, setupChecksum }));
+          browser = await translate(() => domain.environment.runBrowserTest({ ...input, storyId }));
+        } else {
+          const branch = bundle.story.branch;
+          if (!branch)
+            throw new ApiError(409, "story_branch_missing", "Story branch is not available");
+          const credentials = await translate(() => domain.credentials.issue(orgId, projectId));
+          await translate(() =>
+            domain.environment.prepare({
+              orgId,
+              projectId,
+              workspace: workspaceLocator(workspaceRow),
+              manifest,
+              credentials,
+              branch,
+              previousSetupChecksum: workspaceRow.setupChecksum,
+              cleanSetup: true,
+            }),
+          );
+        }
         return {
           ...storyResponse(await domain.stories.get(orgId, projectId, storyId)),
           ...(browser
@@ -576,6 +835,28 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
   );
 }
 
+function encodeTimelineCursor(cursor: { at: Date; id: string }) {
+  return Buffer.from(JSON.stringify({ at: cursor.at.toISOString(), id: cursor.id })).toString(
+    "base64url",
+  );
+}
+
+function decodeTimelineCursor(value: string): { at: Date; id: string } {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as {
+      at?: unknown;
+      id?: unknown;
+    };
+    const at = typeof parsed.at === "string" ? new Date(parsed.at) : new Date(Number.NaN);
+    if (!Number.isFinite(at.getTime()) || typeof parsed.id !== "string" || !parsed.id) {
+      throw new Error("invalid");
+    }
+    return { at, id: parsed.id };
+  } catch {
+    throw new ApiError(400, "timeline_cursor_invalid", "The timeline cursor is not valid");
+  }
+}
+
 function principalActor(principal: { type: "user" | "key"; id: string }) {
   return {
     type: principal.type === "key" ? ("service" as const) : ("user" as const),
@@ -636,46 +917,53 @@ function storyResponse(value: Record<string, unknown>) {
         }>
       | undefined) ?? [];
   const openAttention = attention.filter((item) => item.status === "open");
-  const events =
-    (value.events as
-      | Array<{
-          turnId: string;
-          seq: number;
-          type: string;
-          data: unknown;
-          createdAt: Date;
-        }>
-      | undefined) ?? [];
-  const timeline =
-    (value.timeline as
-      | Array<{
-          id: string;
-          source: string;
-          type: string;
-          turnId: string | null;
-          data: unknown;
-          occurredAt: Date;
-          observedAt: Date;
-        }>
-      | undefined) ?? [];
+  const events = value.events as
+    | Array<{
+        turnId: string;
+        seq: number;
+        type: string;
+        data: unknown;
+        createdAt: Date;
+      }>
+    | undefined;
+  const timeline = value.timeline as
+    | Array<{
+        id: string;
+        source: string;
+        type: string;
+        turnId: string | null;
+        data: unknown;
+        occurredAt: Date;
+        observedAt: Date;
+      }>
+    | undefined;
+  const { events: _events, timeline: _timeline, ...rest } = value;
   return {
-    ...value,
-    events: events.map((event) => ({
-      turn_id: event.turnId,
-      seq: event.seq,
-      type: event.type,
-      data: event.data,
-      created_at: event.createdAt,
-    })),
-    timeline: timeline.map((event) => ({
-      id: event.id,
-      source: event.source,
-      type: event.type,
-      turn_id: event.turnId,
-      data: event.data,
-      occurred_at: event.occurredAt,
-      observed_at: event.observedAt,
-    })),
+    ...rest,
+    ...(events
+      ? {
+          events: events.map((event) => ({
+            turn_id: event.turnId,
+            seq: event.seq,
+            type: event.type,
+            data: event.data,
+            created_at: event.createdAt,
+          })),
+        }
+      : {}),
+    ...(timeline
+      ? {
+          timeline: timeline.map((event) => ({
+            id: event.id,
+            source: event.source,
+            type: event.type,
+            turn_id: event.turnId,
+            data: event.data,
+            occurred_at: event.occurredAt,
+            observed_at: event.observedAt,
+          })),
+        }
+      : {}),
     ...(workspace ? { workspace: presentWorkspace(workspace) } : {}),
     status: story?.status,
     needs_attention: openAttention.length > 0 || story?.status === "attention",
@@ -800,6 +1088,31 @@ async function translate<T>(operation: () => Promise<T>): Promise<T> {
     }
     throw error;
   }
+}
+
+/**
+ * A named agent is looked up directly. Without a name, the project's catalog
+ * decides through the same rule the UI shows, so "no selection" is predictable
+ * and honours the agents the repository enables for this surface.
+ */
+async function selectAgent(
+  domain: FastifyInstance["storyDomain"],
+  orgId: string,
+  projectId: string,
+  name: string | undefined,
+  surface: "manual" | "mcp" | "ui",
+): Promise<AgentManifest> {
+  if (name) return manifestFromProjection(await domain.catalog.get(orgId, projectId, name));
+  const rows = await domain.catalog.list(orgId, projectId);
+  const manifest = resolveDefaultAgent(rows.map(manifestFromProjection), surface);
+  if (!manifest) {
+    throw new ApiError(
+      409,
+      "agent_unavailable",
+      `No enabled agent in .agents/ accepts ${surface} requests; choose an agent or enable one`,
+    );
+  }
+  return manifest;
 }
 
 function requestSurface(value: string | string[] | undefined): "manual" | "mcp" | "ui" {

@@ -13,6 +13,7 @@ import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { assertWorkspacePreviewAvailable } from "../origin-isolation.js";
 import type { AppConfig } from "../types.js";
+import { type PreviewSite, previewSiteFor } from "./preview-sites.js";
 import type { ProjectEnvironmentService, ProjectManifestSource } from "./project-environment.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "./runtime.js";
 
@@ -46,8 +47,9 @@ export class WorkspacePreviewService {
     userId: string;
     service: string;
   }) {
-    assertWorkspacePreviewAvailable(this.config);
     const { story, workspace } = await this.bundle(input.orgId, input.projectId, input.storyId);
+    const site = previewSiteFor(this.config, { ...input, workspaceId: workspace.id });
+    if (!site) assertWorkspacePreviewAvailable(this.config);
     if (story.deletedAt || workspace.state === "destroyed" || !workspace.externalRef) {
       throw new WorkspacePreviewError("workspace_not_available", "Workspace is not available");
     }
@@ -99,14 +101,16 @@ export class WorkspacePreviewService {
       expiresAt,
     });
     const url = new URL(
-      `/workspace-preview-auth/${encodeURIComponent(sessionId)}`,
-      this.config.previewUrl,
+      site
+        ? `/.facility/auth/${encodeURIComponent(sessionId)}`
+        : `/workspace-preview-auth/${encodeURIComponent(sessionId)}`,
+      site?.origin ?? this.config.previewUrl,
     );
     url.searchParams.set("token", token);
     return { sessionId, url: url.toString(), expiresAt };
   }
 
-  async exchange(sessionId: string, token: string) {
+  async exchange(sessionId: string, token: string, site?: PreviewSite) {
     const consumed = (
       await this.db
         .update(previewSessions)
@@ -115,6 +119,14 @@ export class WorkspacePreviewService {
           and(
             eq(previewSessions.id, sessionId),
             eq(previewSessions.tokenHash, tokenHash(token)),
+            site
+              ? and(
+                  eq(previewSessions.orgId, site.orgId),
+                  eq(previewSessions.projectId, site.projectId),
+                  eq(previewSessions.workspaceId, site.workspaceId),
+                  eq(previewSessions.service, site.service),
+                )
+              : undefined,
             isNull(previewSessions.consumedAt),
             isNull(previewSessions.revokedAt),
             gt(previewSessions.expiresAt, new Date()),
@@ -285,7 +297,7 @@ function tokenHash(token: string) {
 function normalizeProxyPath(path: string) {
   let decoded: string;
   try {
-    decoded = decodeURIComponent(path);
+    decoded = decodeURIComponent(path.split("?", 1)[0] ?? "");
   } catch {
     throw new WorkspacePreviewError("preview_path_invalid", "Preview path is invalid", 400);
   }
@@ -296,7 +308,7 @@ function normalizeProxyPath(path: string) {
   ) {
     throw new WorkspacePreviewError("preview_path_invalid", "Preview path is invalid", 400);
   }
-  return new URL(`http://preview/${decoded.replace(/^\/+/, "")}`);
+  return new URL(`http://preview/${path.replace(/^\/+/, "")}`);
 }
 
 function invalidAccess() {

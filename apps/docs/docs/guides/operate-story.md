@@ -8,11 +8,36 @@ MCP is the primary way to automate a Facility story. The web UI exposes the same
 useful for browsing conversations, inspecting environments, opening previews, and taking lifecycle
 actions.
 
+## Find work
+
+The Stories page is the project's backlog. It lists mirrored GitHub issues that nobody has started
+next to work started from a request, one entry per unit of work, and groups open entries by phase:
+needs attention, in progress, in review, not started. Done and archived work stay one filter away.
+Search accepts a ticket number (`#42`) or words; labels, assignees (including "assigned to me" and
+"unassigned"), repository, and sort combine, and every combination is a shareable URL. Listing the
+backlog never starts an agent or wakes a machine. `facility_list_backlog` returns the same view.
+
+Each entry shows the phase, what is actually happening (a running or queued agent, a waiting
+question, failing checks, a review decision), who is involved, and links to the issue, pull
+request, story, and active run. Assignees from GitHub and people who started or continued the
+story in Facility appear together; neither source removes the other.
+
 ## Start a story
 
-Before starting, identify the project, the agent, and the body of work. For GitHub work, use a
-stable external id such as the issue id. For an ad hoc request, Facility can create a manual id from
-the idempotency key.
+Describe what you need in the request box. A title is optional: Facility stores the request at
+once under a provisional title and generates a short title afterwards with the project's
+configured provider credentials, honouring the project budget. If generation is slow or fails, the
+provisional title stays and the page says so; the request is never lost or duplicated.
+
+Choosing an action is optional too. Actions are the agents the repository defines in `.agents/`;
+each runs on an engine (Claude Code or Codex) from a provider (Anthropic or OpenAI). Without a
+choice, the project's default runs: the enabled agent that accepts requests from that surface,
+`builder` when present. Starting from a not-started issue keeps the issue's title and links the
+story to it, so the issue does not appear twice.
+
+For MCP, identify the project and the body of work. For GitHub work, use a stable external id such
+as the issue id and, for a related repository, its `repositoryId`. For an ad hoc request, Facility
+can create a manual id from the idempotency key.
 
 An MCP client normally follows this sequence:
 
@@ -26,8 +51,8 @@ Use a new idempotency key for a new start request. Reuse the same key only when 
 same request after an uncertain network result.
 
 The selected agent must be enabled and include an `mcp` trigger. A story started from the web UI
-requires a `ui` trigger. Facility records the source rather than treating them as separate story
-types.
+requires a `ui` trigger. When no agent is named, the same rule picks the default for that surface.
+Facility records the source rather than treating them as separate story types.
 
 ## Continue the shared conversation
 
@@ -36,8 +61,10 @@ the next turn; the conversation, worktree, and native engine state remain attach
 Messages sent while a turn is active wait in order.
 
 Use `facility_get_story` to inspect status and `next_operations`. Use
-`facility_get_conversation` with its cursor for durable message history. The UI renders the same
-conversation and can continue it under the current user's project membership.
+`facility_get_conversation` with its cursor for durable message history. Each agent message is the
+run's final response; progress messages and logs live in the run's activity
+(`/turns/:turnId/activity`). The UI renders the same conversation as request-and-response
+exchanges and can continue it under the current user's project membership.
 
 The story timeline is the review path across the whole delivery. It shows which agent, model,
 session, workspace, branch, and initial SHA started each turn; the final SHA, commits, files, and
@@ -65,9 +92,45 @@ Use clean setup when you need to prove that the declared setup works without its
 cache. It may rebuild dependencies or development data, but it does not delete the worktree.
 
 Use browser test to run `environment.browser_test`. Facility sets `FACILITY_ARTIFACT_DIR` and
-retains files written there as story artifacts. Use an authenticated preview to interact with a
+retains files written there as story artifacts. The operation reuses the agent's prepared
+workspace, starts services only when needed, and does not synchronize Git or rerun setup or seed
+when the agent changes HEAD. A missing test command or an unprepared workspace is rejected
+before execution; use clean setup explicitly when preparation is needed.
+
+Use an authenticated preview to interact with a
 declared service from your own browser. Preview sessions are expiring and revocable; they do not
 make the workspace port public.
+
+## Share development environment variables
+
+Open **project settings → project environment variables** to add or replace a value, remove a
+variable, or paste a `.env` file. These defaults apply to every current and future workspace in
+that project, for both agents and app services. Keep workspace-specific database addresses and
+credentials in each workspace instead of sharing them across projects.
+
+Open **environment variables** in a story to configure workspace overrides. An override takes
+priority over its project default; removing it restores the inherited value. The editor lists the
+inherited names and links to project settings. Imports replace only the provided names.
+
+Values are encrypted in Facility's database and never returned to the browser. Reading requires
+`workspaces:read`; changes require `workspaces:execute` in the project. Runtime and agent
+credential names are reserved. Ordinary project settings cannot read or replace this secret store.
+
+Defaults and overrides are delivered to new agent runs, app service starts, and browser tests,
+including names not declared in `.facility.yml`. They take precedence over operator-declared
+project variables. Saving does not rewrite repository files, run setup, reseed data, or interrupt
+a running agent. Existing processes retain their environment: after the active turn has finished,
+use **suspend compute** followed by **open app** to start the app with new values in the same
+retained workspace.
+
+The API supports `GET` and `PATCH` at:
+
+- `/v1/projects/{projectId}/environment/variables` for project defaults.
+- `/v1/projects/{projectId}/workspace-stories/{storyId}/environment/variables` for overrides.
+
+Read the current `revision`, then PATCH `{ revision, variables: { NAME: "value", OLD_NAME: null } }`
+or `{ revision, dotenv: "NAME=value" }`. An outdated revision returns 409 to prevent overwriting
+another editor's changes. Responses contain names and revision metadata only.
 
 ## Work with GitHub
 

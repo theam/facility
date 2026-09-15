@@ -49,6 +49,41 @@ at creation; store it as a secret.
 Repository connections are organization- and installation-bound. A project-scoped key requesting
 another project receives 404 rather than a distinguishable authorization error.
 
+### Disconnect a repository
+
+`DELETE /v1/projects/:projectId/repos/:repoId` requires `repos:write` and returns
+`200 { "ok": true }`. It is a scoped no-op if that connection is already absent;
+send `Idempotency-Key` to replay the same request safely. It never deletes or
+modifies the upstream GitHub repository, branches, issues or pull requests.
+
+The transaction removes the connection and its derived GitHub mirror rows:
+issues, PRs, branches, reviews, checks and CI events. Webhook receipts retain their
+payload and project attribution but lose the repository reference; pending receipts
+are marked processed with `repository_disconnected`. Bound receipt processing keeps
+the original project and repository IDs through mirror and trigger lookups, so
+queued, replayed or in-flight deliveries cannot target a later connection. Detached
+receipts are ignored without overwriting their cancellation state. The `repo.removed` audit event
+continues to record the operation. Reconnecting and synchronizing rebuilds current
+GitHub data, not necessarily every historical CI observation.
+
+Removing a primary promotes the oldest remaining connection (ID breaks creation-time
+ties). Removing the sole connection leaves an empty project. No placeholder is
+required. Update the primary's `.facility.yml` and agent catalog before new work.
+
+`409 repository_in_use` leaves all data unchanged when the repository has any
+retained Facility story (including archived history), the project has any workspace
+not in `destroyed` state, or another foreign-key dependency remains. Workspaces can
+contain related checkouts even without a story directly referencing that repository.
+Resolve their lifecycle or arrange an explicit history migration; this endpoint
+never removes conversations, turns, artifacts or volumes. Project archival alone
+does not resolve these dependencies. This is not a history-transfer endpoint.
+
+Readers receive 403. Project-scoped keys cannot use another project, and an ID
+belonging to a different project is never deleted. The route/body schema and
+permission are unchanged; no database migration or additional provider credentials
+are required. Unlink does not revoke already issued GitHub tokens or App access;
+credential revocation remains a separate operator action.
+
 ## Agents and stories
 
 - `/v1/projects/:projectId/story-agents` lists the catalog and schedule status.
@@ -57,10 +92,22 @@ another project receives 404 rather than a distinguishable authorization error.
   commit. It is inventory only; it does not install or upgrade skills.
 - `/v1/projects/:projectId/workspace-stories` lists or starts stories.
 - `/v1/projects/:projectId/workspace-stories/:storyId` returns the story bundle and ordered
-  timeline of turn, Git, artifact, attention, and GitHub evidence.
+  timeline of turn, Git, artifact, attention, and GitHub evidence. `?evidence=none` omits the
+  bounded `events` and `timeline` for readers that page evidence separately.
 - `/v1/projects/:projectId/workspace-stories/:storyId/messages` queues a shared-conversation
   message.
 - `/v1/projects/:projectId/workspace-stories/:storyId/conversation` pages durable messages.
+  Each message carries `author` (person, GitHub login, schedule, API client, or agent), the
+  `turn` it belongs to (agent, engine, model, state), and `content.kind`: `final_response` for
+  agent responses recorded separately from progress, `combined_transcript` for older agent
+  messages stored before that separation, `text` otherwise. Newest-first pages add `related`
+  (older messages completing a run present on the page), `has_more` and `next_cursor`.
+- `/v1/projects/:projectId/workspace-stories/:storyId/timeline` pages the evidence timeline
+  newest first with an opaque `before` cursor; agent events are summarized, not raw.
+- `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/activity` pages one run's
+  readable activity (progress messages, tools, commands, results, lifecycle) with bounded text.
+- `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/events/:seq` returns one
+  stored engine event in full.
 - `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/cancel` cancels active work.
 - `/v1/projects/:projectId/workspace-stories/:storyId/attention/:attentionId/retry` retries an
   attention item.
@@ -68,6 +115,29 @@ another project receives 404 rather than a distinguishable authorization error.
 
 Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
 request can also use the HTTP `Idempotency-Key` behavior described below.
+
+### External integrations
+
+The existing story GET includes `lifecycle`: effective phase/activity, GitHub issue
+state and freshness, persisted completion/archive/deletion facts, and exact scoped
+`workspace.sites` public origins. It is a read-only observation, not a registration
+policy, runtime readiness check or proof of production deployment.
+
+`story.integrationState` is a small namespaced JSON object stored in Facility's
+database, retained across sleep, archive and soft deletion. It has a 16 KiB limit
+and must never contain secrets. `PATCH .../:storyId/integration-state` requires
+`stories:write` and accepts `{ namespace, expected_revision, value }`. Read the
+revision from `story.integrationStateRevision`; a conflict returns 409. Null removes
+one namespace, preserving others. State writes do not trigger lifecycle events.
+
+The worker sends coarse `facility.story.updated` / `facility.workspace.updated`
+repository-dispatch notifications to each project's primary repository. A workflow
+on the default branch can subscribe; no matching workflow is normal. Events carry
+identity, not URLs or credentials. Consumers fetch the latest story, reconcile
+idempotently and save their state. Delivery is durable/retried and may duplicate
+or coalesce intermediate changes; GitHub acceptance is not workflow completion.
+See the [integration contract](https://github.com/theam/facility/blob/main/docs/story-integrations.md)
+for payloads, persistence, failure recovery, permissions and worker operation.
 
 ## Environments, previews, and lifecycle
 
@@ -89,8 +159,19 @@ in another client.
 
 - `/v1/projects/:projectId/costs` returns cost and usage analysis.
 - `/v1/projects/:projectId/budget` reads or updates the monthly project budget.
+- `/v1/projects/:projectId/overview` returns the operator entry point: running and queued turns,
+  open attention with the action each accepts, pull requests waiting for review, recent results,
+  backlog counts, recorded workspace states, and permission-gated agent spend and budget. It reads
+  persisted state only and never wakes a workspace. See [Read the project overview](../guides/project-overview.md).
 - `/v1/projects/:projectId/observability` returns operational events and summaries.
-- `/v1/projects/:projectId/pipeline` returns the issue, pull-request, check, and workflow view.
+- `/v1/projects/:projectId/backlog` returns the unified backlog: mirrored issues that nobody has
+  started, stories, and open pull requests, one item per unit of work, each with its derived work
+  phase (`not_started`, `in_progress`, `attention`, `review`, `done`, `archived`), the reason for
+  that phase, live agent activity, the recorded workspace state, open attention, assignees from
+  GitHub and Facility, and links. It accepts `q` (a ticket number such as `#42` or words), repeatable
+  `phase`, `label`, `assignee` (`me`, `unassigned`, `user:<id>`, `github:<login>`) and
+  `repository` filters, `sort` (`priority`, `updated`, `created`), and `limit`/`offset` pagination
+  over the whole filtered set. Reading it never inspects a workspace provider.
 - `/v1/projects/:projectId/github/sync` requests immediate mirror reconciliation.
 - `/v1/projects/:projectId/audit` returns project audit events.
 

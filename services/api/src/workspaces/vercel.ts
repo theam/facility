@@ -352,8 +352,9 @@ done`,
       const gatewayCommand = `set -eu
 pid_file=/workspace/.facility/preview-${gatewayPort}.pid
 # A retained PID is only a hint: verify the full gateway invocation before signaling it.
-node - "$pid_file" ${gatewayPort} ${port.port} <<'NODE'
+gateway_action="$(node - "$pid_file" ${gatewayPort} ${port.port} <<'NODE'
 const fs = require("node:fs");
+(async () => {
 try {
   const pid = fs.readFileSync(process.argv[2], "utf8").trim();
   if (!/^[1-9][0-9]*$/.test(pid)) process.exit(0);
@@ -361,12 +362,25 @@ try {
   if (argv.length === 7 && argv[1] === "/usr/local/bin/facility-preview-gateway" &&
       argv[2] === "--listen" && argv[3] === process.argv[3] &&
       argv[4] === "--target" && argv[5] === process.argv[4] && argv[6] === "") {
+    const environment = fs.readFileSync("/proc/" + pid + "/environ", "utf8").split("\\0");
+    const credential = environment.find((entry) => entry.startsWith("FACILITY_PREVIEW_GATEWAY_TOKEN="));
+    if (credential === "FACILITY_PREVIEW_GATEWAY_TOKEN=" + process.env.FACILITY_PREVIEW_GATEWAY_TOKEN) {
+      const response = await fetch("http://127.0.0.1:" + process.argv[3] + "/", {
+        redirect: "manual", signal: AbortSignal.timeout(1000),
+      }).catch(() => null);
+      await response?.body?.cancel();
+      if (response?.status === 401) { console.log("reuse"); return; }
+    }
     process.kill(Number(pid), "SIGTERM");
   }
 } catch (error) {
   if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
 }
+})().catch(() => { console.error("Preview gateway inspection failed"); process.exitCode = 1; });
 NODE
+)"
+# A new preview must not interrupt another tab's in-flight HTTP or WebSocket connection.
+if test "$gateway_action" = reuse; then exit 0; fi
 nohup facility-preview-gateway --listen ${gatewayPort} --target ${port.port} >>/workspace/.facility/preview-${gatewayPort}.log 2>&1 &
 pid=$!
 echo "$pid" > "$pid_file"

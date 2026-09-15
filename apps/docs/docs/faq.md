@@ -66,7 +66,7 @@ checks, and workflows. The API, worker, and PostgreSQL provide these functions.
 ## Is MCP the only interface?
 
 No. MCP is the primary automation interface. The web UI uses the same story, agent, environment,
-preview, lifecycle, budget, and pipeline services and can inspect and continue the shared
+preview, lifecycle, budget, and backlog services and can inspect and continue the shared
 conversation.
 
 ## How do I configure an existing repository?

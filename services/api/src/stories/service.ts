@@ -7,14 +7,18 @@ import {
   previewSessions,
   stories,
   storyArtifacts,
+  storyAssignees,
   storyConversations,
   storyEvidenceEvents,
   storyMessages,
   turnEvents,
   turns,
+  userIdentities,
+  users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { ACTIVITY_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
@@ -28,6 +32,8 @@ import { reconcileTurnBranch } from "./branch.js";
 
 export type StoryActor = { type: "user" | "service" | "system"; id: string };
 
+export type StoryTitleSource = "user" | "github" | "schedule" | "pending" | "fallback";
+
 export type StartStoryInput = {
   orgId: string;
   projectId: string;
@@ -35,6 +41,8 @@ export type StartStoryInput = {
   provider: "github" | "manual" | "schedule";
   externalId: string;
   title: string;
+  /** Where the title came from; `pending` means an AI title is still being generated. */
+  titleSource?: StoryTitleSource;
   branch?: string;
   agent: AgentManifest;
   message: string;
@@ -49,6 +57,41 @@ export type StartStoryInput = {
 };
 
 export type StoryWorkspaceBundle = Awaited<ReturnType<StoryWorkspaceService["get"]>>;
+
+/** How an agent response was recorded; older rows have no metadata and stay combined. */
+export type StoryMessageMetadata = {
+  content?: "final_response";
+  engine?: string;
+  model?: string;
+  progressMessages?: number;
+};
+
+export type ConversationAuthor = {
+  kind: "user" | "github" | "service" | "schedule" | "system" | "agent";
+  id: string;
+  name: string;
+  handle: string | null;
+  avatarUrl: string | null;
+};
+
+export type ConversationTurn = {
+  id: string;
+  agentName: string;
+  engine: string;
+  model: string;
+  state: string;
+  error: string | null;
+  triggerType: string;
+  createdAt: Date;
+  startedAt: Date | null;
+  endedAt: Date | null;
+};
+
+export type ConversationContent = {
+  kind: "final_response" | "combined_transcript" | "text";
+  progressMessages: number | null;
+  reportedModel: string | null;
+};
 
 export class StoryServiceError extends Error {
   constructor(
@@ -107,6 +150,7 @@ export class StoryWorkspaceService {
               provider: input.provider,
               externalId: input.externalId,
               title: input.title,
+              titleSource: input.titleSource ?? defaultTitleSource(input.provider),
               status: "ready",
               branch: input.branch,
               createdBy: input.actor,
@@ -122,6 +166,7 @@ export class StoryWorkspaceService {
           "this story's workspace was explicitly deleted; start a new story identity",
         );
       }
+      await recordParticipation(tx, story, input.actor);
 
       let conversation = (
         await tx
@@ -326,6 +371,7 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
+      await recordParticipation(tx, story, input.actor);
       const sequence = await allocateMessageSequence(tx, conversation.id);
       let turn: typeof turns.$inferSelect | undefined;
       if (!active) {
@@ -395,6 +441,7 @@ export class StoryWorkspaceService {
     turnId: string;
     output: string;
     actor: StoryActor;
+    metadata?: StoryMessageMetadata;
   }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
@@ -420,6 +467,7 @@ export class StoryWorkspaceService {
         body: input.output,
         actor: input.actor,
         turnId: turn.id,
+        metadata: input.metadata ?? {},
       });
       const completed = (
         await tx
@@ -974,7 +1022,18 @@ export class StoryWorkspaceService {
     return turn;
   }
 
-  async get(orgId: string, projectId: string, storyId: string) {
+  /**
+   * The story bundle. `evidence: false` leaves out the recent turn events and
+   * the composed timeline so a reader that pages evidence separately does not
+   * download bounded-but-large payloads it will not show.
+   */
+  async get(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    options: { evidence?: boolean } = {},
+  ) {
+    const includeEvidence = options.evidence !== false;
     const story = await scopedStory(this.db, orgId, projectId, storyId);
     const [
       workspace,
@@ -984,6 +1043,7 @@ export class StoryWorkspaceService {
       attention,
       recentEvents,
       recentEvidence,
+      assignees,
     ] = await Promise.all([
       this.db
         .select()
@@ -1015,18 +1075,25 @@ export class StoryWorkspaceService {
         .where(and(eq(attentionItems.orgId, orgId), eq(attentionItems.storyId, storyId)))
         .orderBy(desc(attentionItems.createdAt))
         .limit(50),
-      this.db
-        .select()
-        .from(turnEvents)
-        .where(and(eq(turnEvents.orgId, orgId), eq(turnEvents.storyId, storyId)))
-        .orderBy(desc(turnEvents.createdAt))
-        .limit(100),
-      this.db
-        .select()
-        .from(storyEvidenceEvents)
-        .where(and(eq(storyEvidenceEvents.orgId, orgId), eq(storyEvidenceEvents.storyId, storyId)))
-        .orderBy(desc(storyEvidenceEvents.occurredAt))
-        .limit(200),
+      includeEvidence
+        ? this.db
+            .select()
+            .from(turnEvents)
+            .where(and(eq(turnEvents.orgId, orgId), eq(turnEvents.storyId, storyId)))
+            .orderBy(desc(turnEvents.createdAt))
+            .limit(100)
+        : Promise.resolve(undefined),
+      includeEvidence
+        ? this.db
+            .select()
+            .from(storyEvidenceEvents)
+            .where(
+              and(eq(storyEvidenceEvents.orgId, orgId), eq(storyEvidenceEvents.storyId, storyId)),
+            )
+            .orderBy(desc(storyEvidenceEvents.occurredAt))
+            .limit(200)
+        : Promise.resolve(undefined),
+      this.assignees(orgId, projectId, [storyId]).then((rows) => rows.get(storyId) ?? []),
     ]);
     return {
       story,
@@ -1035,8 +1102,271 @@ export class StoryWorkspaceService {
       turns: recentTurns,
       artifacts,
       attention,
-      events: recentEvents.reverse(),
-      timeline: storyTimeline(story, recentEvents, recentEvidence, artifacts, attention),
+      assignees,
+      events: recentEvents ? recentEvents.reverse() : undefined,
+      timeline:
+        recentEvents && recentEvidence
+          ? storyTimeline(story, recentEvents, recentEvidence, artifacts, attention)
+          : undefined,
+    };
+  }
+
+  /**
+   * One page of the shared conversation with the people, agents, and runs
+   * behind each message resolved. `messages` is the contiguous page; `related`
+   * carries the older messages that complete a run already present on this
+   * page (a request whose response made the page), so a reader never sees a
+   * response without the request that produced it. Related messages appear
+   * again on the page that reaches them; readers merge by id.
+   */
+  async conversationPage(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    options: { after?: number; before?: number; order?: "asc" | "desc"; limit?: number } = {},
+  ) {
+    const limit = Math.min(200, Math.max(1, options.limit ?? 50));
+    const rows = await this.conversation(orgId, projectId, storyId, {
+      ...options,
+      limit: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const contiguous = rows.slice(0, limit);
+    const oldest = contiguous.at(-1);
+    const pageTurnIds = [...new Set(contiguous.map((row) => row.turnId).filter(isString))];
+    const related =
+      options.order === "desc" && hasMore && oldest && pageTurnIds.length > 0
+        ? await this.db
+            .select()
+            .from(storyMessages)
+            .where(
+              and(
+                eq(storyMessages.orgId, orgId),
+                eq(storyMessages.projectId, projectId),
+                eq(storyMessages.storyId, storyId),
+                inArray(storyMessages.turnId, pageTurnIds),
+                lt(storyMessages.seq, oldest.seq),
+              ),
+            )
+            .orderBy(desc(storyMessages.seq))
+            .limit(40)
+        : [];
+    const page = [...contiguous, ...related];
+    const turnIds = [...new Set(page.map((row) => row.turnId).filter(isString))];
+    const userIds = [
+      ...new Set(
+        page
+          .map((row) => actorOf(row.actor))
+          .filter((actor) => actor.type === "user")
+          .map((actor) => actor.id),
+      ),
+    ];
+    const [turnRows, userRows] = await Promise.all([
+      turnIds.length === 0
+        ? Promise.resolve([])
+        : this.db
+            .select()
+            .from(turns)
+            .where(
+              and(
+                eq(turns.orgId, orgId),
+                eq(turns.projectId, projectId),
+                eq(turns.storyId, storyId),
+                inArray(turns.id, turnIds),
+              ),
+            ),
+      userIds.length === 0
+        ? Promise.resolve([])
+        : this.db
+            .select({
+              id: users.id,
+              name: users.name,
+              email: users.email,
+              avatarUrl: users.avatarUrl,
+            })
+            .from(users)
+            .where(inArray(users.id, userIds)),
+    ]);
+    const turnById = new Map(turnRows.map((turn) => [turn.id, turn]));
+    const userById = new Map(userRows.map((user) => [user.id, user]));
+    const enrich = (row: typeof storyMessages.$inferSelect) => {
+      const turn = row.turnId ? (turnById.get(row.turnId) ?? null) : null;
+      const metadata = messageMetadata(row.metadata);
+      return {
+        ...row,
+        author: conversationAuthor(row, turn, userById),
+        turn: turn ? conversationTurn(turn) : null,
+        content: conversationContent(row.role, metadata),
+      };
+    };
+    const messages = contiguous.map(enrich);
+    const edge = messages.at(-1);
+    return {
+      messages,
+      related: related.map(enrich),
+      hasMore,
+      nextCursor: hasMore && edge ? edge.seq : null,
+    };
+  }
+
+  /**
+   * Readable activity for one run, newest first. Raw payloads are not returned
+   * here; `turnEvent` serves a single stored event on demand.
+   */
+  async turnActivity(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    turnId: string,
+    options: { before?: number; limit?: number } = {},
+  ) {
+    const turn = await scopedTurn(this.db, orgId, projectId, turnId);
+    if (turn.storyId !== storyId)
+      throw new StoryServiceError("turn_not_found", "turn not found", 404);
+    const limit = Math.min(50, Math.max(1, options.limit ?? 10));
+    const rows = await this.db
+      .select()
+      .from(turnEvents)
+      .where(
+        and(
+          eq(turnEvents.orgId, orgId),
+          eq(turnEvents.projectId, projectId),
+          eq(turnEvents.storyId, storyId),
+          eq(turnEvents.turnId, turnId),
+          notInArray(turnEvents.type, [...ACTIVITY_NOISE_TYPES]),
+          options.before === undefined ? undefined : lt(turnEvents.seq, options.before),
+        ),
+      )
+      .orderBy(desc(turnEvents.seq))
+      .limit(limit + 1);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map(presentTurnEvent);
+    return {
+      turn: conversationTurn(turn),
+      items,
+      hasMore,
+      nextCursor: hasMore ? (items.at(-1)?.seq ?? null) : null,
+    };
+  }
+
+  async turnEvent(orgId: string, projectId: string, storyId: string, turnId: string, seq: number) {
+    const turn = await scopedTurn(this.db, orgId, projectId, turnId);
+    if (turn.storyId !== storyId)
+      throw new StoryServiceError("turn_not_found", "turn not found", 404);
+    const row = (
+      await this.db
+        .select()
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.orgId, orgId),
+            eq(turnEvents.projectId, projectId),
+            eq(turnEvents.storyId, storyId),
+            eq(turnEvents.turnId, turnId),
+            eq(turnEvents.seq, seq),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!row) throw new StoryServiceError("turn_event_not_found", "turn event not found", 404);
+    return row;
+  }
+
+  /**
+   * One newest-first page of the story timeline across facility, agent, Git,
+   * GitHub, artifact, and attention evidence, keyed by occurrence time and id
+   * so later inserts never shift an already-read page. Agent events are
+   * summarized; their raw payloads stay behind `turnEvent`.
+   */
+  async timelinePage(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    options: { limit?: number; before?: { at: Date; id: string } } = {},
+  ) {
+    await scopedStory(this.db, orgId, projectId, storyId);
+    const limit = Math.min(50, Math.max(1, options.limit ?? 10));
+    const at = options.before?.at.toISOString();
+    const cursor = options.before
+      ? sql`and (occurred_at < ${at}::timestamptz or (occurred_at = ${at}::timestamptz and id < ${options.before.id}))`
+      : sql``;
+    const result = await this.db.execute<TimelineRow>(sql`
+      with entries as (
+        select 'story:' || id || ':created' as id, 'facility' as source, 'story.created' as type,
+               null::text as turn_id,
+               jsonb_build_object('provider', provider, 'externalId', external_id, 'title', title) as data,
+               created_at as occurred_at, created_at as observed_at
+          from stories
+         where org_id = ${orgId} and project_id = ${projectId} and id = ${storyId}
+        union all
+        select 'turn:' || turn_id || ':' || seq, 'agent', type, turn_id, data, created_at, created_at
+          from turn_events
+         where org_id = ${orgId} and project_id = ${projectId} and story_id = ${storyId}
+        union all
+        select id, source, type, turn_id, data, occurred_at, observed_at
+          from story_evidence_events
+         where org_id = ${orgId} and project_id = ${projectId} and story_id = ${storyId}
+        union all
+        select 'artifact:' || id, 'artifact', 'artifact.recorded', turn_id,
+               jsonb_build_object('id', id, 'kind', kind, 'label', label, 'uri', uri),
+               created_at, created_at
+          from story_artifacts
+         where org_id = ${orgId} and project_id = ${projectId} and story_id = ${storyId}
+        union all
+        select 'attention:' || id, 'facility',
+               case when status = 'open' then 'attention.opened' else 'attention.resolved' end,
+               turn_id,
+               jsonb_build_object('id', id, 'kind', kind, 'title', title, 'status', status, 'resolution', resolution),
+               coalesce(resolved_at, created_at), updated_at
+          from attention_items
+         where org_id = ${orgId} and project_id = ${projectId} and story_id = ${storyId}
+      )
+      select id, source, type, turn_id, data, occurred_at, observed_at
+        from entries
+       where true ${cursor}
+       order by occurred_at desc, id desc
+       limit ${limit + 1}
+    `);
+    const rows = [...result];
+    const hasMore = rows.length > limit;
+    const entries = rows.slice(0, limit).map((row) => {
+      const occurredAt = new Date(row.occurred_at);
+      const observedAt = new Date(row.observed_at);
+      const base = {
+        id: row.id,
+        source: row.source,
+        type: row.type,
+        turnId: row.turn_id,
+        occurredAt,
+        observedAt,
+      };
+      if (row.source === "agent" && row.turn_id) {
+        const item = presentTurnEvent({
+          turnId: row.turn_id,
+          seq: Number(row.id.split(":").at(-1)),
+          type: row.type,
+          data: row.data,
+          createdAt: occurredAt,
+        });
+        return {
+          ...base,
+          data: {
+            kind: item.kind,
+            title: item.title,
+            text: item.text,
+            truncated: item.truncated,
+            size_bytes: item.size_bytes,
+            seq: item.seq,
+          },
+        };
+      }
+      return { ...base, data: row.data };
+    });
+    const edge = entries.at(-1);
+    return {
+      entries,
+      hasMore,
+      nextCursor: hasMore && edge ? { at: edge.occurredAt, id: edge.id } : null,
     };
   }
 
@@ -1044,7 +1374,7 @@ export class StoryWorkspaceService {
     orgId: string,
     projectId: string,
     storyId: string,
-    options: { after?: number; limit?: number } = {},
+    options: { after?: number; before?: number; order?: "asc" | "desc"; limit?: number } = {},
   ) {
     await scopedStory(this.db, orgId, projectId, storyId);
     const after = Math.max(0, options.after ?? 0);
@@ -1058,14 +1388,15 @@ export class StoryWorkspaceService {
           eq(storyMessages.projectId, projectId),
           eq(storyMessages.storyId, storyId),
           sql`${storyMessages.seq} > ${after}`,
+          options.before === undefined ? undefined : sql`${storyMessages.seq} < ${options.before}`,
         ),
       )
-      .orderBy(asc(storyMessages.seq))
+      .orderBy(options.order === "desc" ? desc(storyMessages.seq) : asc(storyMessages.seq))
       .limit(limit);
   }
 
   async list(orgId: string, projectId: string, status?: string) {
-    return this.db
+    const rows = await this.db
       .select()
       .from(stories)
       .where(
@@ -1076,6 +1407,58 @@ export class StoryWorkspaceService {
         ),
       )
       .orderBy(desc(stories.updatedAt));
+    const assignees = await this.assignees(
+      orgId,
+      projectId,
+      rows.map((row) => row.id),
+    );
+    return rows.map((row) => ({ ...row, assignees: assignees.get(row.id) ?? [] }));
+  }
+
+  /** Facility-side assignees with the display identity of each member. */
+  async assignees(orgId: string, projectId: string, storyIds: string[]) {
+    const result = new Map<string, StoryAssignee[]>();
+    if (storyIds.length === 0) return result;
+    const rows = await this.db
+      .select({
+        storyId: storyAssignees.storyId,
+        kind: storyAssignees.kind,
+        subject: storyAssignees.subject,
+        source: storyAssignees.source,
+        createdAt: storyAssignees.createdAt,
+        name: users.name,
+        email: users.email,
+        avatarUrl: users.avatarUrl,
+        login: userIdentities.login,
+      })
+      .from(storyAssignees)
+      .leftJoin(users, and(eq(storyAssignees.kind, "user"), eq(users.id, storyAssignees.subject)))
+      .leftJoin(
+        userIdentities,
+        and(eq(userIdentities.userId, users.id), eq(userIdentities.provider, "github")),
+      )
+      .where(
+        and(
+          eq(storyAssignees.orgId, orgId),
+          eq(storyAssignees.projectId, projectId),
+          inArray(storyAssignees.storyId, storyIds),
+        ),
+      )
+      .orderBy(asc(storyAssignees.createdAt));
+    for (const row of rows) {
+      const entry: StoryAssignee = {
+        kind: row.kind as "user" | "github",
+        subject: row.subject,
+        source: row.source as "facility" | "github",
+        login: row.kind === "github" ? row.subject : (row.login ?? null),
+        name: row.name ?? null,
+        email: row.email ?? null,
+        avatarUrl: row.avatarUrl ?? null,
+        createdAt: row.createdAt,
+      };
+      result.set(row.storyId, [...(result.get(row.storyId) ?? []), entry]);
+    }
+    return result;
   }
 
   async suspend(orgId: string, projectId: string, storyId: string) {
@@ -1417,6 +1800,178 @@ function storyTimeline(
   return rows
     .sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime())
     .slice(-300);
+}
+
+type TimelineRow = {
+  id: string;
+  source: string;
+  type: string;
+  turn_id: string | null;
+  data: Record<string, unknown>;
+  occurred_at: string | Date;
+  observed_at: string | Date;
+};
+
+function isString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function actorOf(value: unknown): { type: string; id: string } {
+  const actor =
+    value && typeof value === "object" ? (value as { type?: unknown; id?: unknown }) : {};
+  return {
+    type: typeof actor.type === "string" ? actor.type : "unknown",
+    id: typeof actor.id === "string" ? actor.id : "",
+  };
+}
+
+function messageMetadata(value: unknown): StoryMessageMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  return {
+    content: record.content === "final_response" ? "final_response" : undefined,
+    engine: typeof record.engine === "string" ? record.engine : undefined,
+    model: typeof record.model === "string" ? record.model : undefined,
+    progressMessages:
+      typeof record.progressMessages === "number" && Number.isSafeInteger(record.progressMessages)
+        ? record.progressMessages
+        : undefined,
+  };
+}
+
+function conversationContent(role: string, metadata: StoryMessageMetadata): ConversationContent {
+  if (role !== "agent") return { kind: "text", progressMessages: null, reportedModel: null };
+  if (metadata.content === "final_response") {
+    return {
+      kind: "final_response",
+      progressMessages: metadata.progressMessages ?? null,
+      reportedModel: metadata.model ?? null,
+    };
+  }
+  return { kind: "combined_transcript", progressMessages: null, reportedModel: null };
+}
+
+function conversationTurn(turn: typeof turns.$inferSelect): ConversationTurn {
+  return {
+    id: turn.id,
+    agentName: turn.agentName,
+    engine: turn.engine,
+    model: turn.model,
+    state: turn.state,
+    error: turn.error,
+    triggerType: turn.triggerType,
+    createdAt: turn.createdAt,
+    startedAt: turn.startedAt,
+    endedAt: turn.endedAt,
+  };
+}
+
+/**
+ * Who a message is from, for display. Agent responses are attributed to the
+ * agent that ran, never to a person; unknown actors keep their raw identity
+ * rather than being assigned one.
+ */
+function conversationAuthor(
+  row: typeof storyMessages.$inferSelect,
+  turn: typeof turns.$inferSelect | null,
+  userById: Map<
+    string,
+    { id: string; name: string | null; email: string; avatarUrl: string | null }
+  >,
+): ConversationAuthor {
+  const actor = actorOf(row.actor);
+  if (row.role === "agent") {
+    return {
+      kind: "agent",
+      id: actor.id,
+      name: turn?.agentName ?? row.requestedAgentName ?? "agent",
+      handle: null,
+      avatarUrl: null,
+    };
+  }
+  if (actor.type === "user") {
+    const user = userById.get(actor.id);
+    return {
+      kind: "user",
+      id: actor.id,
+      name: user?.name?.trim() || (user ? user.email.split("@")[0] || user.email : actor.id),
+      handle: null,
+      avatarUrl: user?.avatarUrl ?? null,
+    };
+  }
+  const github = /^github:(.+)$/.exec(actor.id);
+  if (github?.[1]) {
+    const login = github[1];
+    return {
+      kind: "github",
+      id: actor.id,
+      name: login,
+      handle: `@${login}`,
+      avatarUrl: `https://avatars.githubusercontent.com/${encodeURIComponent(login)}?s=64`,
+    };
+  }
+  const schedule = /^schedule:(.+)$/.exec(actor.id);
+  if (schedule?.[1]) {
+    return {
+      kind: "schedule",
+      id: actor.id,
+      name: `Schedule ${schedule[1]}`,
+      handle: null,
+      avatarUrl: null,
+    };
+  }
+  if (actor.type === "service") {
+    return { kind: "service", id: actor.id, name: "API client", handle: null, avatarUrl: null };
+  }
+  return {
+    kind: "system",
+    id: actor.id,
+    name: actor.id || "System",
+    handle: null,
+    avatarUrl: null,
+  };
+}
+
+export type StoryAssignee = {
+  kind: "user" | "github";
+  subject: string;
+  source: "facility" | "github";
+  login: string | null;
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  createdAt: Date;
+};
+
+function defaultTitleSource(provider: StartStoryInput["provider"]): StoryTitleSource {
+  return provider === "github" ? "github" : provider === "schedule" ? "schedule" : "user";
+}
+
+/**
+ * Starting or continuing a story from Facility is an explicit act of taking
+ * part in it. Only humans are recorded; service and system actors (GitHub
+ * deliveries, schedules, retries on behalf of the system) never reassign work,
+ * and an existing assignee is never removed here.
+ */
+async function recordParticipation(
+  db: FacilityDb,
+  story: Pick<typeof stories.$inferSelect, "id" | "orgId" | "projectId">,
+  actor: StoryActor,
+) {
+  if (actor.type !== "user" || !actor.id) return;
+  await db
+    .insert(storyAssignees)
+    .values({
+      id: newId("asg"),
+      orgId: story.orgId,
+      projectId: story.projectId,
+      storyId: story.id,
+      kind: "user",
+      subject: actor.id,
+      source: "facility",
+      addedBy: actor,
+    })
+    .onConflictDoNothing();
 }
 
 function validateStartInput(input: StartStoryInput) {

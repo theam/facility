@@ -192,6 +192,11 @@ export class ProjectEnvironmentService {
       projectId,
       name,
     ) => process.env[projectEnvironmentVariableName(projectId, name)],
+    private readonly workspaceValues: (scope: {
+      orgId: string;
+      projectId: string;
+      workspaceId: string;
+    }) => Promise<Record<string, string>> = async () => ({}),
   ) {}
 
   async prepare(
@@ -202,7 +207,7 @@ export class ProjectEnvironmentService {
     },
   ) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
-    const preparedInput = this.withDeclaredEnvironment(input);
+    const preparedInput = await this.withDeclaredEnvironment(input);
     await this.run(preparedInput, "mkdir -p repos", ".", "environment.repositories");
     for (const repository of preparedInput.credentials.repositories) {
       await this.runCommand(
@@ -280,7 +285,7 @@ export class ProjectEnvironmentService {
   /** Reuse the agent's files and data; preview access must never prepare Git or reseed. */
   async startPrepared(input: EnvironmentInput & { setupChecksum: string }) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
-    const preparedInput = this.withDeclaredEnvironment(input);
+    const preparedInput = await this.withDeclaredEnvironment(input);
     const ready = preparedInput.manifest.environment.ready;
     const alreadyReady = ready
       ? (await this.command(preparedInput, ready, primaryPath(preparedInput.credentials)))
@@ -337,6 +342,7 @@ export class ProjectEnvironmentService {
       primaryCwd: primaryPath(preparedInput.credentials),
       setupChecksum,
       processEnvironment: preparedInput.credentials.environment,
+      secretNames: preparedInput.manifest.environment.secrets,
     };
   }
 
@@ -356,7 +362,7 @@ export class ProjectEnvironmentService {
         ".facility.yml does not define environment.browser_test",
       );
     }
-    const preparedInput = this.withDeclaredEnvironment({ ...input, branch: "browser-test" });
+    const preparedInput = await this.withDeclaredEnvironment({ ...input, branch: "browser-test" });
     const artifactDirectory = `.facility/artifacts/browser-${Date.now()}`;
     await this.runCommand(
       preparedInput,
@@ -419,19 +425,26 @@ export class ProjectEnvironmentService {
     return { result: safeResult, artifacts };
   }
 
-  private withDeclaredEnvironment<
+  private async withDeclaredEnvironment<
     T extends {
+      orgId: string;
       projectId: string;
+      workspace: WorkspaceLocator;
       manifest: ProjectManifest;
       credentials: GithubWorkspaceCredentials;
     },
-  >(input: T): T {
+  >(input: T): Promise<T> {
+    const managed = await this.workspaceValues({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      workspaceId: input.workspace.id,
+    });
     const names = [...input.manifest.environment.variables, ...input.manifest.environment.secrets];
     const values: Record<string, string> = {};
     const missing: Array<{ name: string; operatorName: string }> = [];
     for (const name of names) {
       const operatorName = projectEnvironmentVariableName(input.projectId, name);
-      const value = this.environmentValue(input.projectId, name);
+      const value = managed[name] ?? this.environmentValue(input.projectId, name);
       if (value === undefined) missing.push({ name, operatorName });
       else values[name] = value;
     }
@@ -444,9 +457,16 @@ export class ProjectEnvironmentService {
     }
     return {
       ...input,
+      manifest: {
+        ...input.manifest,
+        environment: {
+          ...input.manifest.environment,
+          secrets: [...new Set([...input.manifest.environment.secrets, ...Object.keys(managed)])],
+        },
+      },
       credentials: {
         ...input.credentials,
-        environment: { ...input.credentials.environment, ...values },
+        environment: { ...input.credentials.environment, ...values, ...managed },
       },
     };
   }
@@ -665,8 +685,8 @@ function redactCredentials(
   const secrets = new Set<string>();
   for (const [name, candidate] of Object.entries(environment)) {
     if (
-      (sensitiveNames.includes(name) || name.includes("TOKEN") || name.includes("CREDENTIAL")) &&
-      candidate.length >= 4
+      (sensitiveNames.includes(name) && candidate.length > 0) ||
+      ((name.includes("TOKEN") || name.includes("CREDENTIAL")) && candidate.length >= 4)
     ) {
       secrets.add(candidate);
     }
