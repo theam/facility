@@ -22,6 +22,24 @@ describe("GitHub CI attempts", () => {
     }
   });
 
+  it("uses completed check runs when the legacy status collection is explicitly empty", () => {
+    expect(
+      restCiSignal(
+        { state: "pending", total_count: 0, statuses: [] },
+        { check_runs: [check(1, "success")] },
+      ),
+    ).toEqual({ state: "success", failureNames: [] });
+    expect(
+      restCiSignal({ state: "pending", total_count: 0, statuses: [] }, { check_runs: [] }),
+    ).toEqual({ state: "pending", failureNames: [] });
+    expect(
+      restCiSignal(
+        { state: "pending", total_count: 1, statuses: [] },
+        { check_runs: [check(1, "success")] },
+      ),
+    ).toEqual({ state: "pending", failureNames: [] });
+  });
+
   it("keeps a newer failed or pending attempt authoritative", () => {
     expect(
       restCiSignal(

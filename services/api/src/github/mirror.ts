@@ -1107,7 +1107,11 @@ export function restCiSignal(
   if (combinedState === "failure" || failureNames.length > 0) {
     return { state: "failure", failureNames };
   }
-  if (combinedState === "pending" || checkRuns.some((check) => check.status !== "completed")) {
+  // GitHub returns pending with total_count:0 when a repository only uses
+  // check runs. That empty legacy status collection must not mask finished CI.
+  const pendingStatus =
+    combinedState === "pending" && !(status.total_count === 0 && checkRuns.length > 0);
+  if (pendingStatus || checkRuns.some((check) => check.status !== "completed")) {
     return { state: "pending", failureNames: [] };
   }
   return { state: "success", failureNames: [] };

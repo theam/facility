@@ -609,7 +609,14 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
             updated_at: "2026-09-01T10:00:00Z",
           })),
         };
-      if (route.endsWith("/status")) return { data: { state: ciState, statuses: [] } };
+      if (route.endsWith("/status"))
+        return {
+          data: {
+            state: ciState === "success" ? "pending" : ciState,
+            total_count: 0,
+            statuses: [],
+          },
+        };
       if (route.endsWith("/check-runs"))
         return {
           data: {
