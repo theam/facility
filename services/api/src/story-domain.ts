@@ -24,6 +24,7 @@ import {
   GithubProjectManifestSource,
   ProjectEnvironmentService,
 } from "./workspaces/project-environment.js";
+import { nativePreviewsEnabledForWorkspace } from "./workspaces/project-native-previews.js";
 import type { WorkspaceRuntime } from "./workspaces/runtime.js";
 import { WorkspaceVariablesService } from "./workspaces/variables.js";
 import { VercelWorkspaceRuntime } from "./workspaces/vercel.js";
@@ -56,7 +57,7 @@ export function createStoryDomain(input: {
   githubFactory?: GithubClientFactory;
   maintainerTokenFactory?: GithubMaintainerTokenFactory;
 }): StoryDomain {
-  const runtime = input.runtime ?? workspaceRuntime(input.config);
+  const runtime = input.runtime ?? workspaceRuntime(input.config, input.db);
   const githubFactory =
     input.githubFactory ??
     (input.config.githubAppId && input.config.githubAppPrivateKey
@@ -158,7 +159,7 @@ export function createStoryDomain(input: {
   };
 }
 
-function workspaceRuntime(config: AppConfig): WorkspaceRuntime {
+function workspaceRuntime(config: AppConfig, db: FacilityDb): WorkspaceRuntime {
   if (config.workspaceDriver === "docker") return new DockerWorkspaceRuntime();
   if (config.workspaceDriver === "vercel") {
     const credentials =
@@ -175,6 +176,7 @@ function workspaceRuntime(config: AppConfig): WorkspaceRuntime {
         ? {
             apiUrl: config.publicUrl,
             webUrl: config.webUrl ?? config.publicUrl,
+            enabledForWorkspace: (id) => nativePreviewsEnabledForWorkspace(db, id),
           }
         : undefined,
     );

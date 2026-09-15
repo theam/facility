@@ -31,6 +31,7 @@ const input = {
   } as BacklogItem,
   workspace: { id: "ws_a", state: "sleeping" },
   sites: [site],
+  nativePreviewsEnabled: true,
   now: new Date(),
 };
 
@@ -56,6 +57,14 @@ describe("generic story integration contracts", () => {
       sites: [{ id: "native-app", service: "app", origin: endpoint.url }],
     });
     expect(snapshot.workspace).not.toHaveProperty("endpoints");
+    expect(
+      storyLifecycleSnapshot({ ...input, workspace, nativePreviewsEnabled: false }).workspace
+        ?.sites,
+    ).toEqual([{ id: site.id, service: site.service, origin: site.origin }]);
+    expect(
+      storyLifecycleSnapshot({ ...input, workspace, nativePreviewsEnabled: undefined, sites: [] })
+        .workspace?.sites,
+    ).toEqual([]);
     const initial = lifecycleChanges(
       snapshot,
       "repo_a",

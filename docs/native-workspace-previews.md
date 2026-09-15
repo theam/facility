@@ -5,6 +5,41 @@ gateway port. It needs no new CloudFront distribution, reverse-proxy hostname or
 per-story site configuration. The gateway in that same workspace protects browser
 access; the project's Compose stack remains responsible for the application.
 
+## Project opt-in
+
+Native preview URLs are **off by default for every project**, including existing
+projects. In **Project → Settings → native preview URLs**, a user with
+`projects:write` can enable or disable that project. Saving does not start, rebuild
+or upgrade a workspace, change roles, or modify another project's configuration.
+The URL is externally reachable; the application behind it still requires Facility
+login and the preview permissions described below. This is not anonymous access.
+
+There are two independent controls:
+
+- `FACILITY_NATIVE_PREVIEWS=1` on API and worker makes the capability available on a
+  compatible Vercel installation. By itself, it opts in **no projects**.
+- `projects.settings.nativePreviewsEnabled === true` opts in one project. Missing
+  settings and every value other than the boolean `true` are treated as disabled.
+
+The UI distinguishes a saved preference from installation availability. You may
+save the preference before an operator enables the installation capability, but
+native access remains disabled until both controls are on. Ordinary projects
+continue using their legacy preview flow and do not run native capability checks.
+
+Automation can use the existing `PATCH /v1/projects/:projectId` endpoint with
+`{ "nativePreviewsEnabled": true }` and an idempotency key. This narrowly merges the
+preference without replacing unrelated settings. Do not send `settings` and
+`nativePreviewsEnabled` together. The existing generic `settings` update retains
+its replacement semantics and validates the reserved field as a boolean.
+Project responses expose `nativePreviews: { enabled, available }`; effective opt-in
+requires both. Existing authorization, tenant/project restrictions and audit apply.
+
+Disabling a project rejects subsequent native logins, grant exchanges, HTTP
+authorization and WebSocket handshakes, even with retained endpoint metadata or
+previously-issued sessions. Already-established connections are not terminated.
+The next operator wake/open reconfigures the gateway for the legacy path. No
+workspace, application data or existing preview-site configuration is deleted.
+
 ## Access and browser flow
 
 1. A visitor opens the provider URL. The gateway sends them to Facility's web
@@ -24,7 +59,7 @@ access; the project's Compose stack remains responsible for the application.
    OAuth callbacks interrupted by preview reauthentication. Only relative,
    non-reserved paths up to 2,048 characters are retained; invalid destinations
    fall back to `/`. Tampered or expired login cookies fail closed.
-5. Each HTTP request and WebSocket handshake rechecks the session, current role,
+5. Each HTTP request and WebSocket handshake rechecks the project opt-in, session, current role,
    active membership, workspace state and exact workspace/service/origin binding.
    Unavailable authorization fails closed. An already-established WebSocket is not
    continuously reauthorized; reconnects repeat authorization.
@@ -76,10 +111,12 @@ independently operated edge proxy; do not advertise this mode as providing that.
 
 - Keep `FACILITY_NATIVE_PREVIEWS=0` until both API/worker and runner support this
   protocol. Apply migration `v0.12/0008_native_preview_sessions.sql` before the API.
-- Publish the matching runner image, then opt in with `FACILITY_NATIVE_PREVIEWS=1`
+- Publish the matching runner image, then enable the capability with `FACILITY_NATIVE_PREVIEWS=1`
   on **both API and worker**, with `FACILITY_WORKSPACE_DRIVER=vercel`. `PUBLIC_URL`
   and `WEB_URL` must be HTTPS origins without paths or trailing slashes and outside
   `vercel.run`; the web `/api` proxy and existing Facility login must work.
+- Opt in only the pilot project from its Settings page. Other projects remain off;
+  turning on the installation flag alone never migrates their gateways or URLs.
 - Existing legacy preview configuration, including production's
   `FACILITY_PREVIEW_URL` requirement, is unchanged. Native access does not traverse
   that proxy. Docker and deployments with the flag off keep their existing flow.
@@ -94,17 +131,22 @@ independently operated edge proxy; do not advertise this mode as providing that.
 - Disable query-string access logging at provider/edge layers: the callback carries
   a short-lived code. The gateway logs no requests and consumes the callback itself;
   Facility's request logger already omits queries and headers.
-- For rollback, disable the flag on both API and worker. Existing native sessions
+- For a project rollback, turn off its preference in Settings. For an installation-wide
+  rollback, disable the flag on both API and worker. Existing native sessions
   fail authorization. An execute-authorized wake/open reconfigures the gateway for
   the legacy path; retained files and databases are not reset.
 
 ## Lifecycle facts and external callbacks
 
-The existing story GET reports verified native origins in `lifecycle.workspace.sites`
+While both controls are on, the existing story GET reports verified native origins in `lifecycle.workspace.sites`
 as `{ id: "native-<service>", service, origin }`. Native endpoints take precedence
 over a configured legacy site for the same service. No gateway credentials or raw
 endpoint metadata are exposed in that snapshot. Suspended workspaces retain their
 last recorded origin; permanently destroyed ones do not advertise a native site.
+Disabling either control removes native facts and restores configured legacy sites
+in the lifecycle snapshot. The worker observes this as a workspace revision change.
+External integrations still own callback cleanup policy; this setting does not
+delete an Auth0 callback directly.
 
 The existing `facility.workspace.updated` dispatch reflects origin/state changes.
 Project-owned integrations can read those facts and reconcile Auth0 or other
@@ -124,6 +166,9 @@ gateway process and local HTTP/WebSocket servers. They cover browser redirects,
 code rotation/replay, wrong browser/service/workspace/tenant, role removal, user
 disablement, expiry, unavailable authorization, application payload/cookie handling,
 native capability checks, lifecycle notifications and preview-only UI actions.
+Project opt-in tests cover default-off behavior, unrelated-settings preservation,
+scoped and cross-tenant API permissions, strict boolean validation, idempotent saves,
+opt-out with existing sessions, lifecycle removal and the legacy runtime path.
 The browser suite traverses the real Facility login/callback handlers with a fake
 GitHub identity provider, verifies deep-link/application OAuth return URLs and
 exercises the actual production limiter (asset bursts and bounded denial traffic).

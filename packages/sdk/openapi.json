@@ -549,6 +549,106 @@
         "security": []
       }
     },
+    "/auth/dev-login": {
+      "get": {
+        "responses": {
+          "302": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getAuthDevLogin",
+        "summary": "Get dev login",
+        "tags": [
+          "Authentication"
+        ],
+        "security": []
+      }
+    },
     "/auth/login": {
       "get": {
         "parameters": [
@@ -3708,6 +3808,22 @@
                       "updatedAt": {
                         "type": "string",
                         "format": "date-time"
+                      },
+                      "nativePreviews": {
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "enabled",
+                          "available"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [
@@ -3719,7 +3835,8 @@
                       "settings",
                       "status",
                       "createdAt",
-                      "updatedAt"
+                      "updatedAt",
+                      "nativePreviews"
                     ],
                     "additionalProperties": false
                   }
@@ -3846,6 +3963,11 @@
                   },
                   "settings": {
                     "type": "object",
+                    "properties": {
+                      "nativePreviewsEnabled": {
+                        "type": "boolean"
+                      }
+                    },
                     "additionalProperties": {}
                   }
                 },
@@ -3895,6 +4017,22 @@
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "nativePreviews": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "available": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "enabled",
+                        "available"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -3906,7 +4044,8 @@
                     "settings",
                     "status",
                     "createdAt",
-                    "updatedAt"
+                    "updatedAt",
+                    "nativePreviews"
                   ],
                   "additionalProperties": false
                 }
@@ -4097,6 +4236,22 @@
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "nativePreviews": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "available": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "enabled",
+                        "available"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -4108,7 +4263,8 @@
                     "settings",
                     "status",
                     "createdAt",
-                    "updatedAt"
+                    "updatedAt",
+                    "nativePreviews"
                   ],
                   "additionalProperties": false
                 }
@@ -4231,7 +4387,15 @@
                   },
                   "settings": {
                     "type": "object",
+                    "properties": {
+                      "nativePreviewsEnabled": {
+                        "type": "boolean"
+                      }
+                    },
                     "additionalProperties": {}
+                  },
+                  "nativePreviewsEnabled": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -4321,6 +4485,22 @@
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "nativePreviews": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "available": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "enabled",
+                        "available"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -4332,7 +4512,8 @@
                     "settings",
                     "status",
                     "createdAt",
-                    "updatedAt"
+                    "updatedAt",
+                    "nativePreviews"
                   ],
                   "additionalProperties": false
                 }

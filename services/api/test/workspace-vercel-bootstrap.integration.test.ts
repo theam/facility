@@ -194,6 +194,7 @@ it("boots the native gateway with a provider origin and redirects visitors to Fa
   const runtime = new VercelWorkspaceRuntime(undefined, {
     apiUrl: "https://api.example.test",
     webUrl: "https://app.example.test",
+    enabledForWorkspace: async () => true,
   });
   await runtime.create({
     id: fixture.name,

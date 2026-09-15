@@ -5,6 +5,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { ApiError } from "../errors.js";
 import { nativePreviewOrigin } from "../workspaces/native-preview.js";
 import type { PreviewSite } from "../workspaces/preview-sites.js";
+import { nativePreviewsEnabledForProject } from "../workspaces/project-native-previews.js";
 import type { BacklogItem, ProjectBacklogService } from "./backlog.js";
 
 export const contentRevision = (value: unknown) =>
@@ -24,9 +25,10 @@ export function storyLifecycleSnapshot(input: {
   item: BacklogItem;
   workspace: { id: string; state: string; provider?: string; endpoints?: unknown } | null;
   sites: PreviewSite[];
+  nativePreviewsEnabled?: boolean;
   now: Date;
 }) {
-  const native = input.workspace ? nativeSites(input.workspace) : [];
+  const native = input.nativePreviewsEnabled && input.workspace ? nativeSites(input.workspace) : [];
   const body = {
     schemaVersion: 1,
     orgId: input.orgId,
@@ -84,6 +86,7 @@ export async function readStoryLifecycle(
   sites: PreviewSite[],
   scope: { orgId: string; projectId: string; storyId: string },
   now = new Date(),
+  nativePreviewsAvailable = false,
 ) {
   const { orgId, projectId, storyId } = scope;
   const [story] = await db
@@ -122,6 +125,8 @@ export async function readStoryLifecycle(
     item,
     workspace: workspace ?? null,
     sites,
+    nativePreviewsEnabled:
+      nativePreviewsAvailable && (await nativePreviewsEnabledForProject(db, scope)),
     now,
   });
 }

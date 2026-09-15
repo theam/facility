@@ -27,7 +27,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   constructor(
     private readonly credentials?: { token: string; teamId: string; projectId: string },
-    private readonly nativePreview?: { apiUrl: string; webUrl: string },
+    private readonly nativePreview?: {
+      apiUrl: string;
+      webUrl: string;
+      enabledForWorkspace: (workspaceId: string) => Promise<boolean>;
+    },
   ) {}
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
@@ -174,7 +178,8 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
     const sandbox = await this.get(workspace, true);
     const endpoints = this.endpoints(sandbox, validateWorkspacePorts(ports));
-    if (!this.nativePreview) return endpoints;
+    if (!this.nativePreview || !(await this.nativePreview.enabledForWorkspace(workspace.id)))
+      return endpoints;
     const verified: PreviewEndpoint[] = [];
     for (const endpoint of endpoints) {
       const native = { ...endpoint, access: "native" as const };
@@ -297,7 +302,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     try {
       await initializeSandbox(
         sandbox,
-        this.nativePreview
+        this.nativePreview && (await this.nativePreview.enabledForWorkspace(input.id))
           ? workspaceBootstrapCommand(input, {
               ...this.nativePreview,
               origins: Object.fromEntries(

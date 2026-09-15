@@ -23,6 +23,7 @@ import {
 } from "./native-preview.js";
 import { type PreviewSite, previewSiteFor } from "./preview-sites.js";
 import type { ProjectEnvironmentService, ProjectManifestSource } from "./project-environment.js";
+import { nativePreviewsEnabledForProject } from "./project-native-previews.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "./runtime.js";
 
 const SESSION_TTL_MS = 60 * 60 * 1_000;
@@ -61,7 +62,10 @@ export class WorkspacePreviewService {
   }) {
     const { story, workspace } = await this.bundle(input.orgId, input.projectId, input.storyId);
     const site = previewSiteFor(this.config, { ...input, workspaceId: workspace.id });
-    const nativeEnabled = this.config.nativePreviews && workspace.provider === "vercel";
+    const nativeEnabled =
+      this.config.nativePreviews &&
+      workspace.provider === "vercel" &&
+      (await nativePreviewsEnabledForProject(this.db, input));
     const native = nativeEnabled && nativePreviewOrigin(workspace.endpoints, input.service);
     if (!site && !nativeEnabled) assertWorkspacePreviewAvailable(this.config);
     if (story.deletedAt || workspace.state === "destroyed" || !workspace.externalRef) {
@@ -109,7 +113,9 @@ export class WorkspacePreviewService {
       );
     }
     const preparedNative =
-      this.config.nativePreviews && nativePreviewOrigin(prepared.endpoints, input.service);
+      nativeEnabled &&
+      (await nativePreviewsEnabledForProject(this.db, input)) &&
+      nativePreviewOrigin(prepared.endpoints, input.service);
     if (preparedNative) return { url: preparedNative, expiresAt: null };
     if (!site) assertWorkspacePreviewAvailable(this.config);
 
@@ -311,6 +317,9 @@ export class WorkspacePreviewService {
       row.workspace.provider !== "vercel"
     )
       throw invalidAccess();
+    // Re-read on login, exchange and every authorized request: disabling a project
+    // must also deny retained origins and already-issued native sessions.
+    if (!(await nativePreviewsEnabledForProject(this.db, row.workspace))) throw invalidAccess();
     const origin = nativePreviewOrigin(row.workspace.endpoints, service);
     if (!origin) throw invalidAccess();
     if (gatewayToken !== undefined) {

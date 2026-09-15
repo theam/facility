@@ -139,6 +139,7 @@ describe("Vercel persistent workspace runtime", () => {
     const runtime = new VercelWorkspaceRuntime(undefined, {
       apiUrl: "https://api.example.test",
       webUrl: "https://app.example.test",
+      enabledForWorkspace: async () => true,
     });
     await runtime.wake(input);
     const bootstrap = sandbox.runCommand.mock.calls[0]?.[0].args[1];
@@ -168,6 +169,7 @@ describe("Vercel persistent workspace runtime", () => {
     const runtime = new VercelWorkspaceRuntime(undefined, {
       apiUrl: "https://api.example.test",
       webUrl: "https://app.example.test",
+      enabledForWorkspace: async () => true,
     });
     for (const response of [
       new Response("unavailable", { status: 401 }),
@@ -184,6 +186,34 @@ describe("Vercel persistent workspace runtime", () => {
       "Invalid native preview origin",
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps opted-out create, wake and expose on the legacy path and rechecks the project", async () => {
+    const sandbox = fakeSandbox();
+    sandboxApi.getOrCreate.mockResolvedValue(sandbox);
+    sandboxApi.get.mockResolvedValue(sandbox);
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await new VercelWorkspaceRuntime().wake(input);
+    const legacyBootstrap = sandbox.runCommand.mock.calls[0]?.[0].args[1];
+    sandbox.runCommand.mockClear();
+    const enabledForWorkspace = vi.fn(async (_id: string) => false);
+    const runtime = new VercelWorkspaceRuntime(undefined, {
+      apiUrl: "https://api.example.test",
+      webUrl: "https://app.example.test",
+      enabledForWorkspace,
+    });
+    await runtime.create(input);
+    await runtime.wake(input);
+    for (const call of sandbox.runCommand.mock.calls) {
+      expect(call[0].args[1]).toBe(legacyBootstrap);
+      expect(call[0].args[1]).not.toContain("Native preview gateway capability check failed");
+    }
+    expect(await runtime.expose(input, input.ports)).toEqual([
+      { service: "web", port: 3000, url: "https://workspace-65535.example.test" },
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(enabledForWorkspace.mock.calls).toEqual([[input.id], [input.id], [input.id]]);
   });
 
   it.each([

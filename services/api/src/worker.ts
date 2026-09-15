@@ -87,6 +87,7 @@ export async function startWorker() {
           storyDomain.backlog,
           config.previewSites ?? [],
           githubFactory,
+          config.nativePreviews,
         ).tick();
         if (result.failed)
           logger.warn(

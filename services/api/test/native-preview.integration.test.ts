@@ -197,6 +197,10 @@ describe("native preview browser flow with persisted authorization", () => {
   });
   beforeEach(async () => {
     await db
+      .update(projects)
+      .set({ settings: { nativePreviewsEnabled: true } })
+      .where(eq(projects.id, projectId));
+    await db
       .update(roles)
       .set({ permissions: ["previews:read"] })
       .where(eq(roles.id, roleId));
@@ -230,6 +234,65 @@ describe("native preview browser flow with persisted authorization", () => {
     const result = await service.nativeExchange(input, gatewayToken);
     return { ...input, token: result.accessToken };
   };
+  it("does not grant access to a different, opted-out project in the same organization", async () => {
+    const otherProjectId = newId("proj"),
+      otherStoryId = newId("story"),
+      otherWorkspaceId = newId("ws");
+    await db
+      .insert(projects)
+      .values({ id: otherProjectId, orgId, name: "Legacy", slug: otherProjectId });
+    await db.insert(stories).values({
+      id: otherStoryId,
+      orgId,
+      projectId: otherProjectId,
+      provider: "manual",
+      externalId: otherStoryId,
+      title: "Legacy",
+      status: "working",
+      createdBy: { type: "user", id: userId },
+    });
+    await db.insert(workspaces).values({
+      id: otherWorkspaceId,
+      orgId,
+      projectId: otherProjectId,
+      storyId: otherStoryId,
+      provider: "vercel",
+      externalRef: otherWorkspaceId,
+      volumeRef: otherWorkspaceId,
+      state: "running",
+      endpoints: endpoint("https://legacy.vercel.run"),
+    });
+    await expect(grant(otherWorkspaceId)).rejects.toMatchObject({ statusCode: 401 });
+    await expect(grant()).resolves.toHaveProperty("code");
+  });
+  it("denies retained URLs, grants and sessions immediately after project opt-out", async () => {
+    const session = await active();
+    const pending = await grant();
+    await db.update(projects).set({ settings: {} }).where(eq(projects.id, projectId));
+    await expect(grant()).rejects.toMatchObject({ statusCode: 401 });
+    await expect(service.nativeExchange(pending, gatewayToken)).rejects.toMatchObject({
+      statusCode: 401,
+    });
+    await expect(service.nativeAuthorize(session, gatewayToken)).rejects.toMatchObject({
+      statusCode: 401,
+    });
+    await expect(
+      service.open({
+        orgId,
+        projectId,
+        storyId: storyIds[0],
+        userId,
+        service: "web",
+        canExecute: false,
+      }),
+    ).rejects.toMatchObject({ code: "preview_not_running" });
+    const response = await fetch(`${gatewayOrigin}/private-data`, {
+      headers: { cookie: `__Host-facility-preview=${session.sessionId}.${session.token}` },
+      redirect: "manual",
+    });
+    expect(response.status).toBe(401);
+    expect(execute).not.toHaveBeenCalled();
+  });
   it.each([
     "/projects/123?tab=files&filter=a%2Fb",
     "/auth/callback?code=app-code&state=app-state%2F123",
