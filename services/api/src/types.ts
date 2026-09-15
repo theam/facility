@@ -29,6 +29,7 @@ export type AppConfig = {
   // classify preview-surface requests even when that proxy replaces Host with
   // its origin hostname.
   previewSurfaceToken?: string;
+  previewSites?: import("./workspaces/preview-sites.js").PreviewSite[];
   workspaceImage: string;
   workspaceDriver: "docker" | "vercel";
   authIdentityProvider?: "github" | "oidc";
@@ -88,6 +89,7 @@ declare module "fastify" {
     ) => Promise<void>;
   }
   interface FastifyContextConfig {
+    cors?: false;
     permission?: string | string[];
     auditAction?: string;
     public?: boolean;

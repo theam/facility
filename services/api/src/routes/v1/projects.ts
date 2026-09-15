@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
 import { createGithubClientFactory } from "../../github/client.js";
+import { removeRepositoryConnection } from "../../github/repository-connections.js";
 import {
   AnyObject,
   DateValue,
@@ -305,42 +306,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
     async (request) => {
       const actor = principal(request);
       const { projectId: id, repoId } = request.params as { projectId: string; repoId: string };
-      await db.transaction(async (transaction) => {
-        const tx = transaction as unknown as FacilityDb;
-        const removed = (
-          await tx
-            .delete(projectRepositories)
-            .where(
-              and(
-                eq(projectRepositories.orgId, actor.orgId),
-                eq(projectRepositories.projectId, id),
-                eq(projectRepositories.id, repoId),
-              ),
-            )
-            .returning({ role: projectRepositories.role })
-        )[0];
-        if (removed?.role === "primary") {
-          const replacement = (
-            await tx
-              .select({ id: projectRepositories.id })
-              .from(projectRepositories)
-              .where(
-                and(
-                  eq(projectRepositories.orgId, actor.orgId),
-                  eq(projectRepositories.projectId, id),
-                ),
-              )
-              .orderBy(asc(projectRepositories.createdAt))
-              .limit(1)
-          )[0];
-          if (replacement) {
-            await tx
-              .update(projectRepositories)
-              .set({ role: "primary", updatedAt: new Date() })
-              .where(eq(projectRepositories.id, replacement.id));
-          }
-        }
-      });
+      await removeRepositoryConnection(db, actor.orgId, id, repoId);
       return { ok: true };
     },
   );

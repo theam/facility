@@ -3,7 +3,6 @@ import { auditEvents, projectBudgets } from "@facility/db";
 import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { GithubPipelineService } from "../../github/pipeline.js";
 import { InsightsService } from "../../insights/overview.js";
 import { AnyObject, DateValue, principal, type V1RouteContext } from "./shared.js";
 
@@ -143,65 +142,6 @@ const ObservabilityResponse = z.object({
   byModel: z.array(ObservabilityUsage.extend({ name: z.string() })),
   recentAudit: z.array(AuditEvent),
 });
-const PipelinePullRequest = z.object({
-  number: z.number(),
-  title: z.string(),
-  url: z.string().url(),
-  state: z.enum(["open", "closed", "merged"]),
-  draft: z.boolean(),
-  ciState: z.enum(["pending", "success", "failure"]).nullable(),
-  ciFailureNames: z.array(z.string()),
-  headSha: z.string(),
-});
-const PipelineStage = z.enum([
-  "backlog",
-  "planning",
-  "building",
-  "validating",
-  "review",
-  "shipped",
-]);
-const PipelineItem = z.object({
-  key: z.string(),
-  source: z.enum(["issue", "pull_request"]),
-  number: z.number(),
-  title: z.string(),
-  url: z.string().url(),
-  repository: z.string(),
-  labels: z.array(z.string()),
-  assignees: z.array(z.string()),
-  updatedAt: DateValue,
-  stage: PipelineStage,
-  state: z.string(),
-  story: z
-    .object({
-      id: z.string(),
-      status: z.string(),
-      activeAgentName: z.string().nullable(),
-      branch: z.string().nullable(),
-    })
-    .nullable(),
-  pullRequests: z.array(PipelinePullRequest),
-});
-const PipelineResponse = z.object({
-  generatedAt: DateValue,
-  counts: z.object({
-    backlog: z.number(),
-    planning: z.number(),
-    building: z.number(),
-    validating: z.number(),
-    review: z.number(),
-    shipped: z.number(),
-  }),
-  stages: z.object({
-    backlog: z.array(PipelineItem),
-    planning: z.array(PipelineItem),
-    building: z.array(PipelineItem),
-    validating: z.array(PipelineItem),
-    review: z.array(PipelineItem),
-    shipped: z.array(PipelineItem),
-  }),
-});
 const SyncResponse = z.object({
   repositories: z.number(),
   issues: z.number(),
@@ -215,7 +155,6 @@ export async function registerInsightsPipelineRoutes(
 ) {
   const { db } = context;
   const insights = new InsightsService(db, app.storyDomain.costs);
-  const pipeline = new GithubPipelineService(db);
 
   app.get(
     "/v1/projects/:projectId/costs",
@@ -312,23 +251,6 @@ export async function registerInsightsPipelineRoutes(
       const { projectId } = request.params as z.infer<typeof ProjectParams>;
       const { days } = request.query as z.infer<typeof DaysQuery>;
       return insights.overview(actor.orgId, projectId, days);
-    },
-  );
-
-  app.get(
-    "/v1/projects/:projectId/pipeline",
-    {
-      config: { permission: "github:read" },
-      schema: {
-        params: ProjectParams,
-        response: { 200: PipelineResponse },
-        operationId: "getProjectPipeline",
-      },
-    },
-    async (request) => {
-      const actor = principal(request);
-      const { projectId } = request.params as z.infer<typeof ProjectParams>;
-      return pipeline.get(actor.orgId, projectId);
     },
   );
 

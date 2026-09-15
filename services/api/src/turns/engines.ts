@@ -21,7 +21,12 @@ export type AgentTurnEvent = {
 
 export type AgentTurnResult = {
   nativeSessionId: string;
+  /** The engine's final response for this turn, separated from progress commentary. */
   output: string;
+  /** Intermediate agent messages the engine emitted before its final response, in order. */
+  progress: string[];
+  /** The model the engine reported using, when its event stream states one. */
+  model?: string;
   events: AgentTurnEvent[];
   exitCode: number;
   stderr: string;
@@ -109,6 +114,8 @@ abstract class CliAgentEngine implements AgentEngine {
     return {
       nativeSessionId: parsed.sessionId,
       output: parsed.output,
+      progress: parsed.progress,
+      model: parsed.model,
       events: parsed.events,
       exitCode: result.exitCode,
       stderr: result.stderr,
@@ -235,6 +242,8 @@ const INTERRUPTED_PROCESS_CLEANUP = [
 type ParsedEngineEvents = {
   sessionId?: string;
   output: string;
+  progress: string[];
+  model?: string;
   events: AgentTurnEvent[];
   usage?: AgentTurnUsage;
 };
@@ -277,8 +286,15 @@ abstract class EngineEventParser {
   abstract result(): ParsedEngineEvents;
 }
 
+/**
+ * Claude Code stream-json. The `result` event carries the final response; every
+ * earlier assistant text block is progress commentary. Without a result event
+ * (an errored or truncated stream) the last assistant text stands in as the
+ * response so the turn still records what the agent said last.
+ */
 export class ClaudeEventParser extends EngineEventParser {
   private sessionId?: string;
+  private model?: string;
   private resultText?: string;
   private readonly assistantText: string[] = [];
   private usage?: AgentTurnUsage;
@@ -287,31 +303,41 @@ export class ClaudeEventParser extends EngineEventParser {
     const type = stringValue(value.type) ?? "unknown";
     this.events.push({ engine: "claude_code", type, data: value });
     this.sessionId ??= stringValue(value.session_id);
+    if (type === "system") this.model ??= stringValue(value.model);
     if (type === "result") {
       this.resultText = stringValue(value.result) ?? this.resultText;
       this.usage = usageValue(value.usage, value.total_cost_usd) ?? this.usage;
     }
     if (type === "assistant") {
       const message = objectValue(value.message);
+      this.model ??= stringValue(message?.model);
       const content = Array.isArray(message?.content) ? message.content : [];
       for (const block of content) {
         const item = objectValue(block);
-        if (item?.type === "text" && typeof item.text === "string")
+        if (item?.type === "text" && typeof item.text === "string" && item.text.trim())
           this.assistantText.push(item.text);
       }
     }
   }
 
   result(): ParsedEngineEvents {
+    const { output, progress } = separateFinalResponse(this.assistantText, this.resultText);
     return {
       sessionId: this.sessionId,
-      output: this.resultText ?? this.assistantText.join("\n\n"),
+      output,
+      progress,
+      model: this.model,
       events: this.events,
       usage: this.usage,
     };
   }
 }
 
+/**
+ * Codex JSONL. Codex emits several `agent_message` items per turn: running
+ * commentary while it works, then the response it ends with. Only the last one
+ * is the turn's final response; the rest are progress.
+ */
 export class CodexEventParser extends EngineEventParser {
   private sessionId?: string;
   private readonly messages: string[] = [];
@@ -324,20 +350,41 @@ export class CodexEventParser extends EngineEventParser {
     if (type === "turn.completed") this.usage = usageValue(value.usage) ?? this.usage;
     if (type === "item.completed") {
       const item = objectValue(value.item);
-      if (item?.type === "agent_message" && typeof item.text === "string") {
+      if (item?.type === "agent_message" && typeof item.text === "string" && item.text.trim()) {
         this.messages.push(item.text);
       }
     }
   }
 
   result(): ParsedEngineEvents {
+    const { output, progress } = separateFinalResponse(this.messages);
     return {
       sessionId: this.sessionId,
-      output: this.messages.join("\n\n"),
+      output,
+      progress,
       events: this.events,
       usage: this.usage,
     };
   }
+}
+
+/**
+ * Split an ordered list of agent messages into progress commentary and the
+ * final response. When the engine names the final response explicitly (Claude's
+ * `result`), a trailing duplicate of it is not counted as progress.
+ */
+export function separateFinalResponse(
+  messages: string[],
+  explicitFinal?: string,
+): { output: string; progress: string[] } {
+  if (explicitFinal !== undefined) {
+    const last = messages.at(-1);
+    const progress =
+      last !== undefined && last === explicitFinal ? messages.slice(0, -1) : messages;
+    return { output: explicitFinal, progress: [...progress] };
+  }
+  if (messages.length === 0) return { output: "", progress: [] };
+  return { output: messages[messages.length - 1] ?? "", progress: messages.slice(0, -1) };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

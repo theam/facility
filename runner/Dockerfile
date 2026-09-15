@@ -35,7 +35,7 @@ RUN archive=/tmp/moby.tar.gz \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
-  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.1 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && VERSION="$MOBY_VERSION" DOCKER_GITCOMMIT="$MOBY_COMMIT" \
     EXCLUDE_AUTO_BUILDTAG_JOURNALD=1 SOURCE_DATE_EPOCH=1785456000 \
     GOFLAGS=-mod=mod ./hack/make.sh binary-daemon binary-proxy \
@@ -78,7 +78,7 @@ RUN archive=/tmp/containerd.tar.gz \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
-  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.1 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && make VERSION="v${CONTAINERD_VERSION}" REVISION="$CONTAINERD_COMMIT" STATIC=1 \
     GO_BUILD_FLAGS='-mod=mod -trimpath' \
     bin/containerd bin/containerd-shim-runc-v2 bin/ctr \
@@ -117,7 +117,7 @@ RUN archive=/tmp/buildx.tar.gz \
   && go mod edit -replace=github.com/moby/go-archive=github.com/moby/go-archive@v0.3.0 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
-  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.1 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/docker/buildx/version.Version=${BUILDX_VERSION} \
       -X github.com/docker/buildx/version.Revision=${BUILDX_COMMIT} \
@@ -139,7 +139,7 @@ RUN archive=/tmp/compose.tar.gz \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
-  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.1 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 GOMAXPROCS=1 go build -p=1 -mod=mod -trimpath -tags=e2e \
     -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
     -o /out/docker-compose ./cmd \
@@ -174,7 +174,7 @@ RUN archive=/tmp/gh.tar.gz \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
-  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.1 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=mod -trimpath \
     -ldflags="-s -w -X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} \
       -X github.com/cli/cli/v2/internal/build.Date=2026-07-31" \
@@ -199,7 +199,7 @@ RUN for binary in /out/*; do \
   done \
   && for binary in /out/dockerd /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/docker-buildx /out/docker-compose /out/gh; do \
     go version -m "$binary" | awk \
-      '$1 == "=>" && $2 == "google.golang.org/grpc" && $3 == "v1.83.1" { found = 1 } END { exit !found }' || exit 1; \
+      '$1 == "=>" && $2 == "google.golang.org/grpc" && $3 == "v1.83.2" { found = 1 } END { exit !found }' || exit 1; \
   done \
   && for binary in /out/dockerd /out/containerd /out/ctr /out/docker-buildx /out/docker-compose /out/gh; do \
     go version -m "$binary" | awk \
@@ -219,7 +219,8 @@ FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf23286
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20260905
+ARG DEBIAN_SECURITY_REFRESH=20260910
+ARG CHROMIUM_MIN_VERSION=152.0.7977.82-1~deb13u1
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -272,6 +273,8 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     util-linux \
     xfonts-scalable \
     xvfb \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium)" ge "$CHROMIUM_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium-common)" ge "$CHROMIUM_MIN_VERSION" \
   && rm -rf /var/lib/apt/lists/*
 
 # npm is a runtime capability for repositories that use package-lock.json, so

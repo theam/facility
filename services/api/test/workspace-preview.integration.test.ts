@@ -170,6 +170,44 @@ describe("workspace preview session security", async () => {
     await client.end();
   });
 
+  it("binds the stable origin exchange in the database before consuming the grant", async () => {
+    const site = {
+      id: "app",
+      orgId,
+      projectId,
+      workspaceId,
+      service: "web",
+      origin: "https://one.cloudfront.net",
+      surfaceToken: "s".repeat(43),
+    };
+    config.previewSites = [site];
+    try {
+      const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+      const url = new URL(opened.url);
+      expect(url.origin).toBe(site.origin);
+      expect(url.pathname).toBe(`/.facility/auth/${opened.sessionId}`);
+      const token = url.searchParams.get("token");
+      if (!token) throw new Error("missing grant");
+      for (const field of ["orgId", "projectId", "workspaceId", "service"] as const) {
+        await expect(
+          service.exchange(opened.sessionId, token, { ...site, [field]: "other" }),
+        ).rejects.toMatchObject({ code: "preview_access_invalid" });
+      }
+      const session = await service.exchange(opened.sessionId, token, site);
+      expect(session.workspaceId).toBe(workspaceId);
+      await expect(service.exchange(opened.sessionId, token, site)).rejects.toMatchObject({
+        code: "preview_access_invalid",
+      });
+      const target = await service.target(
+        session,
+        "/callback?return=%2Fclients%3Fx%3D1&code=a%2Bb",
+      );
+      expect(target.url.search).toBe("?return=%2Fclients%3Fx%3D1&code=a%2Bb");
+    } finally {
+      config.previewSites = [];
+    }
+  });
+
   it("requires a one-time exchange and remains bound to an active organization member", async () => {
     const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
     const accessUrl = new URL(opened.url);

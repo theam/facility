@@ -69,7 +69,7 @@ stable trigger/story identity before dispatch.
 Push, create, delete, issue, pull request, pull request review, workflow run, check suite, and check
 run deliveries update the project mirror where applicable. CI state attaches to the matching pull
 request only when the event's head SHA is current. The worker reconciles every connected repository
-every ten minutes, and maintainers can request an immediate sync through MCP, API, or the Pipeline
+every ten minutes, and maintainers can request an immediate sync through MCP, API, or the Stories
 page.
 Reconciliation keeps current terminal CI results for unchanged closed or merged pull requests.
 Open pulls, changed heads, missing or pending results, and pulls updated after the last CI refresh

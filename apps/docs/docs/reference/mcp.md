@@ -22,7 +22,7 @@ The server exposes twenty task-oriented tools:
 | `facility_list_skills` | Valid skills installed in `.agents/skills/` or `.claude/skills/`. |
 | `facility_list_stories` | Stories, optionally filtered by status. |
 | `facility_get_story` | Story, workspace, turns, artifacts, attention, and ordered evidence timeline. |
-| `facility_start_story` | Idempotently create or resume a story and queue its first message. |
+| `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
 | `facility_get_conversation` | Read the shared ordered conversation. |
 | `facility_get_environment` | Read runtime, services, readiness, endpoints, and recent events. |
@@ -35,7 +35,7 @@ The server exposes twenty task-oriented tools:
 | `facility_get_budget` | Read the current monthly budget and amount spent. |
 | `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
 | `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
-| `facility_get_pipeline` | Read mirrored issues, pull requests, CI state, and story stage. |
+| `facility_list_backlog` | Read the unified backlog with phases, activity, assignees, search, filters, and pagination. |
 | `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
 
 ## Connect Claude Code or Codex

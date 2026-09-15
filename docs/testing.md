@@ -29,6 +29,12 @@ database that contains useful data.
 
 ## Focused feedback
 
+The story preview controls request a new one-time access grant on every launch,
+including “Open a new authenticated preview”. A previously opened grant must not
+remain as a reusable link. `apps/web/test/workspace-preview-launch.test.tsx`
+exercises both the controls and a local exchange server that rejects replayed
+grants; it does not require provider credentials or a live workspace.
+
 Common commands include:
 
 ```bash
