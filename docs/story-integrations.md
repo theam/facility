@@ -133,3 +133,9 @@ reserved across sleep/reopen and never recycle them across workspaces.
 Tests: `story-integrations.test.ts` and `story-integrations.integration.test.ts`
 cover projections, namespace limits/CAS, real scoped authorization, persistence,
 dispatch destination, repeated/error delivery, worker concurrency and no loops.
+
+## GitHub CI reconciliation
+
+Open pull requests refresh CI during each mirror reconciliation. Closed pull requests refresh when their head or GitHub update timestamp changes, or when they have not been observed yet. A closed pull request whose checks stayed pending or never existed does not consume API quota on every mirror pass. Missing checks remain unknown; they are not recorded as a successful build. Webhook events continue to reconcile later changes.
+
+When GitHub returns several attempts of the same check, the newest check ID from the same GitHub App determines its current result. A successful rerun supersedes its earlier failure. Checks from different apps remain independent, even when their names match.
