@@ -14,7 +14,12 @@ const workspace = {
   image: "facility-runner:test",
 };
 
-function provider(engine: "claude_code" | "codex", exitCode = 0, onLog?: () => void) {
+function provider(
+  engine: "claude_code" | "codex",
+  exitCode = 0,
+  onLog?: () => void,
+  logError?: Error,
+) {
   const kill = vi.fn().mockResolvedValue(undefined);
   const events =
     engine === "claude_code"
@@ -36,6 +41,7 @@ function provider(engine: "claude_code" | "codex", exitCode = 0, onLog?: () => v
       logs: async function* () {
         onLog?.();
         for (const event of events) yield { stream: "stdout", data: `${JSON.stringify(event)}\n` };
+        if (logError) throw logError;
         if (exitCode) yield { stream: "stderr", data: "command terminated" };
       },
       wait,
@@ -118,6 +124,15 @@ describe.each(["claude_code", "codex"] as const)("%s through the Vercel runtime"
       code: "agent_engine_failed",
       message: "command terminated",
       details: { exitCode: 137 },
+    });
+  });
+
+  it("retains parsed engine evidence when observing the provider command fails", async () => {
+    provider(engine, 0, undefined, Object.assign(new Error("access revoked"), { status: 403 }));
+    await expect(createEngine().run(request(engine))).rejects.toMatchObject({
+      code: "agent_observation_failed",
+      message: `${engine} command observation failed: access revoked`,
+      details: { engine, events: expect.arrayContaining([expect.objectContaining({ engine })]) },
     });
   });
 

@@ -1,5 +1,9 @@
 import type { AgentManifest } from "@facility/agents";
-import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
+import type {
+  WorkspaceCommandResult,
+  WorkspaceLocator,
+  WorkspaceRuntime,
+} from "../workspaces/runtime.js";
 
 export type AgentTurnRequest = {
   turnId: string;
@@ -70,17 +74,35 @@ abstract class CliAgentEngine implements AgentEngine {
     args: string[],
     parser: EngineEventParser,
   ): Promise<AgentTurnResult> {
-    const result = await this.runtime.exec(request.workspace, {
-      command: "sh",
-      args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
-      cwd: request.cwd,
-      env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
-      timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
-      signal: request.signal,
-      onOutput: ({ stream, data }) => {
-        if (stream === "stdout") parser.push(data);
-      },
-    });
+    const startedAt = Date.now();
+    let result: WorkspaceCommandResult;
+    try {
+      result = await this.runtime.exec(request.workspace, {
+        command: "sh",
+        args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
+        cwd: request.cwd,
+        env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
+        timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
+        signal: request.signal,
+        onOutput: ({ stream, data }) => {
+          if (stream === "stdout") parser.push(data);
+        },
+      });
+    } catch (error) {
+      if (request.signal?.aborted) throw error;
+      parser.finish();
+      const parsed = parser.result();
+      throw new AgentEngineError(
+        "agent_observation_failed",
+        `${this.name} command observation failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          engine: this.name,
+          events: parsed.events,
+          usage: parsed.usage,
+          durationMs: Date.now() - startedAt,
+        },
+      );
+    }
     parser.finish(result.stdout);
     const parsed = parser.result();
     if (result.exitCode !== 0) {

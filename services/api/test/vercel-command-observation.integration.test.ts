@@ -31,9 +31,9 @@ function provider() {
   const client = {
     getCommand,
     killCommand,
-    getLogs: async function* () {
+    getLogs: vi.fn(async function* () {
       yield { stream: "stdout", data: "native output" };
-    },
+    }),
   };
   // Exercise the real SDK Command.wait/CommandFinished path. Live metadata reads
   // can keep returning exitCode:null even after a command has finished.
@@ -48,7 +48,7 @@ function provider() {
     asUser: () => ({ runCommand }),
     currentSession: () => ({ getCommand: metadataRead }),
   });
-  return { getCommand, killCommand, runCommand, metadataRead };
+  return { getCommand, killCommand, runCommand, metadataRead, getLogs: client.getLogs };
 }
 
 describe("Vercel command observation through the actual SDK", () => {
@@ -94,6 +94,71 @@ describe("Vercel command observation through the actual SDK", () => {
     expect(runCommand).toHaveBeenCalledOnce();
     expect(metadataRead).not.toHaveBeenCalled();
     expect(killCommand).not.toHaveBeenCalled();
+  });
+
+  it("reconnects dropped waits and replayed logs without duplicating output or command submission", async () => {
+    const { getCommand, getLogs, runCommand, killCommand } = provider();
+    const disconnected = new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } });
+    getCommand.mockRejectedValueOnce(disconnected).mockResolvedValue({
+      json: { command: { ...metadata, exitCode: 0, durationMs: 100 } },
+    });
+    getLogs
+      .mockImplementationOnce(async function* () {
+        yield { stream: "stdout", data: "native " };
+        yield { stream: "stderr", data: "warning" };
+        throw disconnected;
+      })
+      .mockImplementation(async function* () {
+        yield { stream: "stderr", data: "warning continued" };
+        yield { stream: "stdout", data: "nati" };
+        yield { stream: "stdout", data: "ve output" };
+      });
+    const onOutput = vi.fn();
+    await expect(
+      new VercelWorkspaceRuntime().exec(workspace, { command: "codex", onOutput }),
+    ).resolves.toMatchObject({ exitCode: 0, stdout: "native output", stderr: "warning continued" });
+    expect(onOutput.mock.calls.map(([event]) => event)).toEqual([
+      { stream: "stdout", data: "native " },
+      { stream: "stderr", data: "warning" },
+      { stream: "stderr", data: " continued" },
+      { stream: "stdout", data: "output" },
+    ]);
+    expect(getCommand).toHaveBeenCalledTimes(2);
+    expect(getLogs).toHaveBeenCalledTimes(2);
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(killCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403, 404, 422])("never retries a log read denied with HTTP %s", async (status) => {
+    const { getCommand, getLogs, runCommand } = provider();
+    const denied = Object.assign(new Error("request denied"), { response: { status } });
+    getCommand.mockResolvedValue({ json: { command: { ...metadata, exitCode: 0 } } });
+    getLogs.mockImplementation(async function* () {
+      yield { stream: "stdout", data: "before denial" };
+      throw denied;
+    });
+    await expect(new VercelWorkspaceRuntime().exec(workspace, { command: "codex" })).rejects.toBe(
+      denied,
+    );
+    expect(getLogs).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
+  it("cancels during reconnection backoff and does not reopen the stream", async () => {
+    const { getCommand, getLogs, runCommand, killCommand } = provider();
+    const controller = new AbortController();
+    getCommand.mockResolvedValue({ json: { command: { ...metadata, exitCode: 0 } } });
+    getLogs.mockImplementation(async function* () {
+      setTimeout(() => controller.abort(), 10);
+      yield { stream: "stdout", data: "before disconnect" };
+      throw new TypeError("fetch failed");
+    });
+    await expect(
+      new VercelWorkspaceRuntime().exec(workspace, { command: "codex", signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "workspace_command_canceled" });
+    expect(getLogs).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledOnce();
+    expect(killCommand).toHaveBeenCalledOnce();
   });
 
   it("propagates revoked access without retrying a wait or resubmitting the command", async () => {
