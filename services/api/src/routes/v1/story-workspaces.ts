@@ -10,6 +10,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
+import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
+import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
 import type { AppConfig } from "../../types.js";
 import {
@@ -97,6 +99,28 @@ const DeleteBody = z.object({
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+
+  app.patch(
+    "/v1/projects/:projectId/workspace-stories/:storyId/integration-state",
+    {
+      config: { permission: "stories:write", auditAction: "story.integration_state.updated" },
+      schema: {
+        params: StoryParams,
+        body: IntegrationStateBody,
+        operationId: "updateStoryIntegrationState",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const orgId = principal(request).orgId;
+      reply.header("cache-control", "private, no-store");
+      return updateIntegrationState(
+        app.facilityDb,
+        { orgId, projectId, storyId },
+        request.body as z.infer<typeof IntegrationStateBody>,
+      );
+    },
+  );
 
   for (const method of ["GET", "PATCH"] as const) {
     app.route({
@@ -452,17 +476,23 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         operationId: "getWorkspaceStory",
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
       const query = request.query as z.infer<typeof StoryBundleQuery>;
       const actor = principal(request);
-      return storyResponse(
-        await translate(() =>
-          domain.stories.get(actor.orgId, projectId, storyId, {
-            evidence: query.evidence !== "none",
-          }),
-        ),
+      const value = await translate(() =>
+        domain.stories.get(actor.orgId, projectId, storyId, {
+          evidence: query.evidence !== "none",
+        }),
       );
+      const lifecycle = await readStoryLifecycle(
+        app.facilityDb,
+        domain.backlog,
+        config.previewSites ?? [],
+        { orgId: actor.orgId, projectId, storyId },
+      );
+      reply.header("cache-control", "private, no-store");
+      return { ...storyResponse(value), lifecycle };
     },
   );
 

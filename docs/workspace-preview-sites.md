@@ -47,7 +47,14 @@ Keep the same distribution and binding when the workspace sleeps or wakes. Disab
 and remove its mapping/distribution when the workspace is permanently destroyed;
 never reassign that origin to another workspace, because browsers retain app data.
 
-Register the exact `<origin>/callback` in the application's development OAuth
+Use [story integrations](story-integrations.md) to read lifecycle/site facts,
+receive notifications and keep small integration state. A project-owned adapter
+can remove its owned OAuth callbacks when its cleanup policy is met, even if the
+workspace is retained. Suspension alone need not remove them; an effectively
+reopened story can register the same origin again. This is separate from storage
+destruction. Clean external registrations before removing their site mapping.
+
+Register the exact application-specific callback (for example `<origin>/callback`) in the application's development OAuth
 provider. Set the app's callback variable as a workspace environment override;
 project defaults remain shared. Restart only the application's process to load
 changed variables. Do not run Clean setup or reseed its database.

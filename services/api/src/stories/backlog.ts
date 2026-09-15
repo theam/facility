@@ -82,6 +82,7 @@ export type BacklogItem = {
     id: string;
     status: string;
     provider: string;
+    repositoryId: string | null;
     externalId: string;
     branch: string | null;
     activeAgentName: string | null;
@@ -102,7 +103,14 @@ export type BacklogItem = {
     syncedAt: Date;
     stale: boolean;
   } | null;
-  pullRequest: (PullRequestSummary & { author: string | null }) | null;
+  pullRequest:
+    | (PullRequestSummary & {
+        author: string | null;
+        repositoryId: string;
+        syncedAt: Date;
+        stale: boolean;
+      })
+    | null;
   labels: string[];
   assignees: BacklogPerson[];
   createdAt: Date;
@@ -140,6 +148,12 @@ const PHASE_PRIORITY: Record<WorkPhase, number> = {
 
 export class ProjectBacklogService {
   constructor(private readonly db: FacilityDb) {}
+
+  /** Read the same persisted phase used by the backlog, without provider calls. */
+  async getStory(orgId: string, projectId: string, storyId: string, now = new Date()) {
+    const items = await this.items(orgId, projectId, now);
+    return items.find((item) => item.story?.id === storyId) ?? null;
+  }
 
   async list(
     orgId: string,
@@ -273,6 +287,7 @@ export class ProjectBacklogService {
           ciFailureNames: githubPullRequests.ciFailureNames,
           githubUpdatedAt: githubPullRequests.githubUpdatedAt,
           githubCreatedAt: githubPullRequests.githubCreatedAt,
+          syncedAt: githubPullRequests.syncedAt,
           updatedAt: githubPullRequests.updatedAt,
         })
         .from(githubPullRequests)
@@ -381,6 +396,9 @@ export class ProjectBacklogService {
         title: pull.title,
         url: pull.htmlUrl,
         repository: repositoryName.get(pull.repositoryId) ?? pull.repositoryId,
+        repositoryId: pull.repositoryId,
+        syncedAt: pull.syncedAt,
+        stale: now.getTime() - pull.syncedAt.getTime() > MIRROR_STALE_AFTER_MS,
         state: pull.state as "open" | "closed" | "merged",
         draft: pull.draft,
         ciState: (pull.ciState ?? null) as "pending" | "success" | "failure" | null,
@@ -430,9 +448,12 @@ export class ProjectBacklogService {
       pulls.filter(
         (pull) =>
           pull.repositoryId === story.repositoryId &&
-          (story.pullRequestNumber === pull.number ||
-            story.externalId === `pull-request:${pull.number}` ||
-            (story.branch !== null && pull.headRef === story.branch)),
+          // A PR-backed story belongs to its exact source PR. A different PR
+          // on the same branch must not replace stale/missing source evidence.
+          (story.provider === "github" && story.externalId.startsWith("pull-request:")
+            ? story.externalId === `pull-request:${pull.number}`
+            : story.pullRequestNumber === pull.number ||
+              (story.branch !== null && pull.headRef === story.branch)),
       );
     const pullsForIssue = (issue: (typeof issueRows)[number]) =>
       pulls.filter(
@@ -517,6 +538,7 @@ export class ProjectBacklogService {
           id: story.id,
           status: story.status,
           provider: story.provider,
+          repositoryId: story.repositoryId,
           externalId: story.externalId,
           branch: story.branch,
           activeAgentName: story.activeAgentName,

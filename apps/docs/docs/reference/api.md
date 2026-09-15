@@ -116,6 +116,29 @@ credential revocation remains a separate operator action.
 Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
 request can also use the HTTP `Idempotency-Key` behavior described below.
 
+### External integrations
+
+The existing story GET includes `lifecycle`: effective phase/activity, GitHub issue
+state and freshness, persisted completion/archive/deletion facts, and exact scoped
+`workspace.sites` public origins. It is a read-only observation, not a registration
+policy, runtime readiness check or proof of production deployment.
+
+`story.integrationState` is a small namespaced JSON object stored in Facility's
+database, retained across sleep, archive and soft deletion. It has a 16 KiB limit
+and must never contain secrets. `PATCH .../:storyId/integration-state` requires
+`stories:write` and accepts `{ namespace, expected_revision, value }`. Read the
+revision from `story.integrationStateRevision`; a conflict returns 409. Null removes
+one namespace, preserving others. State writes do not trigger lifecycle events.
+
+The worker sends coarse `facility.story.updated` / `facility.workspace.updated`
+repository-dispatch notifications to each project's primary repository. A workflow
+on the default branch can subscribe; no matching workflow is normal. Events carry
+identity, not URLs or credentials. Consumers fetch the latest story, reconcile
+idempotently and save their state. Delivery is durable/retried and may duplicate
+or coalesce intermediate changes; GitHub acceptance is not workflow completion.
+See the [integration contract](https://github.com/theam/facility/blob/main/docs/story-integrations.md)
+for payloads, persistence, failure recovery, permissions and worker operation.
+
 ## Environments, previews, and lifecycle
 
 - `/v1/projects/:projectId/workspace-stories/:storyId/environment` returns provider inspection,

@@ -5,6 +5,7 @@ import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
+import { StoryIntegrationNotifications } from "./stories/integration-notifications.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
@@ -34,6 +35,7 @@ export async function startWorker() {
     "github.mirror",
     "agent.schedules",
     "stories.title",
+    "stories.integrations",
   ];
   for (const queue of queues) {
     await boss.createQueue(queue);
@@ -79,6 +81,18 @@ export async function startWorker() {
         );
       } else if (queue === "github.mirror") {
         result = await storyDomain.mirror.syncAll();
+      } else if (queue === "stories.integrations" && githubFactory) {
+        result = await new StoryIntegrationNotifications(
+          db,
+          storyDomain.backlog,
+          config.previewSites ?? [],
+          githubFactory,
+        ).tick();
+        if (result.failed)
+          logger.warn(
+            { failed: result.failed },
+            "lifecycle notifications deferred; inspect durable notification cursors",
+          );
       } else if (queue === "stories.title") {
         const outcome = await storyDomain.titles.generate(
           data as { orgId: string; projectId: string; storyId: string },
@@ -113,6 +127,7 @@ export async function startWorker() {
   }
   await boss.schedule("agent.schedules", "* * * * *", {});
   await boss.schedule("github.mirror", "*/10 * * * *", {});
+  await boss.schedule("stories.integrations", "* * * * *", {});
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());
   return boss;
