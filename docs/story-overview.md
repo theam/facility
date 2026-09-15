@@ -52,7 +52,6 @@ Observation retries use exponential backoff, with eight retries per interrupted 
 ## GitHub admission delays
 
 If GitHub throttles credential or project preparation before an engine starts, the turn stays queued until the provider's retry deadline. The deadline is stored separately from the scheduled occurrence and survives worker restarts. Recovery and direct dispatch both respect it. Cancellation remains final, access denials fail normally, and a turn whose engine already started is never automatically repeated by this mechanism.
-||||||| 9c186c9
 
 ### Cost coverage in Insights
 
