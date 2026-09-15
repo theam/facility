@@ -124,6 +124,29 @@ describe("Facility 0.12 workspace kickstart", () => {
       `model: ${JSON.stringify("claude-opus-4-8-20260101")}`,
     );
   });
+
+  it("does not interpret $& or nested placeholders during substitution", () => {
+    const result = renderWorkspaceKickstart({
+      repository: "acme/payments",
+      start: "pnpm dev",
+      models: {
+        codexBuild: "$&",
+        codexPlan: "{{CODEX_PLAN_MODEL}}",
+        plan: "claude-opus-4-8-20260101",
+      },
+    });
+    expect(fileContent(result, ".agents/builder.md")).toContain(`model: ${JSON.stringify("$&")}`);
+    expect(fileContent(result, ".agents/builder.md")).not.toContain('model: "{{CODEX_BUILD_MODEL}}"');
+    expect(fileContent(result, ".agents/ci-doctor.md")).toContain(
+      `model: ${JSON.stringify("{{CODEX_PLAN_MODEL}}")}`,
+    );
+    expect(fileContent(result, ".agents/ci-doctor.md")).not.toContain(
+      `model: ${JSON.stringify("claude-opus-4-8-20260101")}`,
+    );
+    expect(fileContent(result, ".agents/architect.md")).toContain(
+      `model: ${JSON.stringify("claude-opus-4-8-20260101")}`,
+    );
+  });
 });
 
 function fileContent(result: { files: Array<{ path: string; content: string }> }, path: string) {

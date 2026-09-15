@@ -119,10 +119,10 @@ function yamlScalar(value) {
 }
 
 function renderTemplate(source, values) {
-  return Object.entries(values).reduce(
-    (result, [key, value]) => result.replaceAll(`{{${key}}}`, yamlScalar(value)),
-    source,
-  );
+  return source.replace(/\{\{([A-Z0-9_]+)\}\}/g, (placeholder, name) => {
+    const value = values[name];
+    return value === undefined ? placeholder : yamlScalar(value);
+  });
 }
 
 function formatProjectManifest({ repository, setup, start, ready, servicePort }) {
