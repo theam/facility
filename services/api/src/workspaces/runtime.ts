@@ -49,7 +49,7 @@ export type WorkspaceCommandResult = {
   durationMs: number;
 };
 
-export type PreviewEndpoint = WorkspacePort & { url: string };
+export type PreviewEndpoint = WorkspacePort & { url: string; access?: "native" };
 
 export type WorkspaceInspection = {
   id: string;

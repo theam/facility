@@ -138,6 +138,7 @@ export default async function StoryPage({
           workspace={bundle.workspace}
           agents={agentRows}
           canExecute={canExecute}
+          canPreview={canExecute || can(permissions, "previews:read")}
           canWrite={canWrite}
           computeState={currentEnvironment?.inspection.state}
           activeTurn={activeTurn}

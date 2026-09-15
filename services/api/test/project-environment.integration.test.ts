@@ -317,6 +317,7 @@ environment:
       });
       try {
         const opened = await previews.open({ orgId, projectId, storyId, userId, service: "app" });
+        if (!opened.sessionId) throw new Error("Expected a legacy preview session");
         expect(
           exec.mock.calls.every(
             ([locator]) => locator.id === workspaceId && locator.volumeRef === workspace.volumeRef,

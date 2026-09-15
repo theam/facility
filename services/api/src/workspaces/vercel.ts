@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
+import { nativePreviewOrigin } from "./native-preview.js";
 import {
   assertWorkspaceId,
   type CreateWorkspace,
@@ -25,6 +26,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   constructor(
     private readonly credentials?: { token: string; teamId: string; projectId: string },
+    private readonly nativePreview?: { apiUrl: string; webUrl: string },
   ) {}
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
@@ -156,7 +158,38 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
     const sandbox = await this.get(workspace, true);
-    return this.endpoints(sandbox, validateWorkspacePorts(ports));
+    const endpoints = this.endpoints(sandbox, validateWorkspacePorts(ports));
+    if (!this.nativePreview) return endpoints;
+    const verified: PreviewEndpoint[] = [];
+    for (const endpoint of endpoints) {
+      const native = { ...endpoint, access: "native" as const };
+      const origin = nativePreviewOrigin([native], endpoint.service);
+      if (!origin)
+        throw new WorkspaceRuntimeError(
+          "native_preview_origin_invalid",
+          "Invalid native preview origin",
+        );
+      const response = await fetch(`${origin}/.facility/health`, {
+        headers: {
+          "x-facility-preview-token": workspace.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN ?? "",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok)
+        throw new WorkspaceRuntimeError(
+          "native_preview_unavailable",
+          "Native preview gateway is not ready",
+        );
+      const result = (await response.json()) as { native?: boolean; origin?: string };
+      if (result.native !== true || result.origin !== origin)
+        throw new WorkspaceRuntimeError(
+          "native_preview_binding_invalid",
+          "Native preview gateway binding mismatch",
+        );
+      verified.push(native);
+    }
+    return verified;
   }
 
   async inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection> {
@@ -249,7 +282,17 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     try {
       await initializeSandbox(
         sandbox,
-        bootstrapCommand,
+        this.nativePreview
+          ? workspaceBootstrapCommand(input, {
+              ...this.nativePreview,
+              origins: Object.fromEntries(
+                this.endpoints(sandbox, input.ports).map((endpoint) => [
+                  endpoint.service,
+                  endpoint.url,
+                ]),
+              ),
+            })
+          : bootstrapCommand,
         input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN,
       );
       return this.handle(input, sandbox);
@@ -297,7 +340,10 @@ async function initializeSandbox(
   }
 }
 
-function workspaceBootstrapCommand(input: CreateWorkspace) {
+function workspaceBootstrapCommand(
+  input: CreateWorkspace,
+  native?: { apiUrl: string; webUrl: string; origins: Record<string, string> },
+) {
   const gatewayToken = input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN;
   if ((input.ports?.length ?? 0) > 0 && (!gatewayToken || gatewayToken.length < 32)) {
     throw new WorkspaceRuntimeError(
@@ -349,7 +395,18 @@ done`,
     "chown root:node /var/run/docker.sock",
     "chmod 0660 /var/run/docker.sock",
     ...gatewayPorts.map(({ port, gatewayPort }) => {
+      const nativeConfig = native
+        ? JSON.stringify({
+            version: 1,
+            apiUrl: native.apiUrl,
+            webUrl: native.webUrl,
+            workspaceId: input.id,
+            service: port.service,
+            origin: native.origins[port.service],
+          })
+        : "";
       const gatewayCommand = `set -eu
+export FACILITY_NATIVE_PREVIEW=${shellQuote(nativeConfig)}
 pid_file=/workspace/.facility/preview-${gatewayPort}.pid
 # A retained PID is only a hint: verify the full gateway invocation before signaling it.
 gateway_action="$(node - "$pid_file" ${gatewayPort} ${port.port} <<'NODE'
@@ -364,7 +421,9 @@ try {
       argv[4] === "--target" && argv[5] === process.argv[4] && argv[6] === "") {
     const environment = fs.readFileSync("/proc/" + pid + "/environ", "utf8").split("\\0");
     const credential = environment.find((entry) => entry.startsWith("FACILITY_PREVIEW_GATEWAY_TOKEN="));
-    if (credential === "FACILITY_PREVIEW_GATEWAY_TOKEN=" + process.env.FACILITY_PREVIEW_GATEWAY_TOKEN) {
+    const native = environment.find((entry) => entry.startsWith("FACILITY_NATIVE_PREVIEW=")) ?? "FACILITY_NATIVE_PREVIEW=";
+    if (credential === "FACILITY_PREVIEW_GATEWAY_TOKEN=" + process.env.FACILITY_PREVIEW_GATEWAY_TOKEN &&
+        native === "FACILITY_NATIVE_PREVIEW=" + process.env.FACILITY_NATIVE_PREVIEW) {
       const response = await fetch("http://127.0.0.1:" + process.argv[3] + "/", {
         redirect: "manual", signal: AbortSignal.timeout(1000),
       }).catch(() => null);
@@ -395,6 +454,21 @@ until test "$(curl --silent --output /dev/null --write-out "%{http_code}" --max-
   sleep 0.1
 done
 kill -0 "$pid" 2>/dev/null || { echo "Preview gateway on port ${gatewayPort} exited during startup" >&2; exit 1; }
+${
+  native
+    ? `node - ${gatewayPort} <<'NODE'
+const config = JSON.parse(process.env.FACILITY_NATIVE_PREVIEW);
+fetch("http://127.0.0.1:" + process.argv[2] + "/.facility/health", {
+  headers: { "x-facility-preview-token": process.env.FACILITY_PREVIEW_GATEWAY_TOKEN },
+  signal: AbortSignal.timeout(5000),
+}).then(async (r) => {
+  if (!r.ok) throw new Error("Native preview gateway image required");
+  const result = await r.json();
+  if (result.native !== true || result.origin !== config.origin) throw new Error("Native preview binding mismatch");
+}).catch(() => { console.error("Native preview gateway capability check failed"); process.exitCode = 1; });
+NODE`
+    : ""
+}
 `;
       return `runuser --user node --preserve-environment -- sh -lc ${shellQuote(gatewayCommand)}`;
     }),

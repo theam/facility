@@ -183,6 +183,7 @@ describe("workspace preview session security", async () => {
     config.previewSites = [site];
     try {
       const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+      if (!opened.sessionId) throw new Error("Expected a legacy preview session");
       const url = new URL(opened.url);
       expect(url.origin).toBe(site.origin);
       expect(url.pathname).toBe(`/.facility/auth/${opened.sessionId}`);
@@ -210,6 +211,7 @@ describe("workspace preview session security", async () => {
 
   it("requires a one-time exchange and remains bound to an active organization member", async () => {
     const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+    if (!opened.sessionId) throw new Error("Expected a legacy preview session");
     const accessUrl = new URL(opened.url);
     const token = accessUrl.searchParams.get("token");
     if (!token) throw new Error("expected preview access token");
@@ -252,6 +254,7 @@ describe("workspace preview session security", async () => {
 
   it("stops proxying as soon as the member loses workspace execution", async () => {
     const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+    if (!opened.sessionId) throw new Error("Expected a legacy preview session");
     const token = new URL(opened.url).searchParams.get("token");
     if (!token) throw new Error("expected preview access token");
     await service.exchange(opened.sessionId, token);
@@ -268,6 +271,7 @@ describe("workspace preview session security", async () => {
     });
 
     const reopened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+    if (!reopened.sessionId) throw new Error("Expected a legacy preview session");
     const reopenedToken = new URL(reopened.url).searchParams.get("token");
     if (!reopenedToken) throw new Error("expected preview access token");
     await expect(service.exchange(reopened.sessionId, reopenedToken)).rejects.toMatchObject({
@@ -283,6 +287,7 @@ describe("workspace preview session security", async () => {
 
   it("rejects expired and malformed access tokens", async () => {
     const opened = await service.open({ orgId, projectId, storyId, userId, service: "web" });
+    if (!opened.sessionId) throw new Error("Expected a legacy preview session");
     const token = new URL(opened.url).searchParams.get("token");
     if (!token) throw new Error("expected preview access token");
     await db

@@ -34,10 +34,11 @@ const input = {
   service: "app",
 };
 
-function fixture(state: string, setupChecksum: string | null) {
+function fixture(state: string, setupChecksum: string | null, native = false) {
   const story = { id: input.storyId, branch: "facility/story-test", deletedAt: null };
   const workspace = {
     id: "ws_test",
+    provider: native ? "vercel" : "fake",
     state,
     setupChecksum,
     externalRef: "compute-test",
@@ -53,7 +54,17 @@ function fixture(state: string, setupChecksum: string | null) {
     insert,
   } as unknown as FacilityDb;
   const runtime = { wake: vi.fn().mockResolvedValue({ state: "running" }) };
-  const result = { endpoints: [{ service: "app", port: 3000, url: "http://127.0.0.1:3000" }] };
+  const result = {
+    endpoints: [
+      {
+        service: "app",
+        port: 3000,
+        ...(native
+          ? { access: "native", url: "https://native-one.vercel.run" }
+          : { url: "http://127.0.0.1:3000" }),
+      },
+    ],
+  };
   const environment = {
     prepare: vi.fn().mockResolvedValue(result),
     startPrepared: vi.fn().mockResolvedValue(result),
@@ -62,7 +73,8 @@ function fixture(state: string, setupChecksum: string | null) {
     db,
     {
       publicUrl: "https://api.example.com",
-      previewUrl: "https://preview.example.net",
+      previewUrl: native ? undefined : "https://preview.example.net",
+      nativePreviews: native,
     } as AppConfig,
     runtime as unknown as WorkspaceRuntime,
     { issue: async () => credentials } as unknown as GithubWorkspaceCredentialBroker,
@@ -73,6 +85,15 @@ function fixture(state: string, setupChecksum: string | null) {
 }
 
 describe("preview workspace preparation", () => {
+  it("prepares the first native preview without requiring an existing site or launch session", async () => {
+    const f = fixture("running", null, true);
+    await expect(f.service.open(input)).resolves.toEqual({
+      url: "https://native-one.vercel.run",
+      expiresAt: null,
+    });
+    expect(f.environment.prepare).toHaveBeenCalledOnce();
+    expect(f.insert).not.toHaveBeenCalled();
+  });
   it.each([
     "running",
     "sleeping",

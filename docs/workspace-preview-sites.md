@@ -1,5 +1,10 @@
 # Stable workspace preview origins
 
+Vercel deployments can instead opt into [native workspace previews with Facility
+login](native-workspace-previews.md), using the Sandbox's own URL without creating
+a distribution per story. That mode's live URL stability still needs validation.
+The operator-configured stable-origin path below remains supported.
+
 Applications that use OAuth, root routes, cookies or server actions need a stable
 origin per workspace and service. The session-specific path proxy remains
 available for simple previews. Configure dedicated origins for complete apps.

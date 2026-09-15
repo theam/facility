@@ -1167,6 +1167,8 @@ export const previewSessions = pgTable(
       .references(() => users.id),
     service: text("service").notNull(),
     tokenHash: text("token_hash").notNull(),
+    nativeOrigin: text("native_origin"),
+    browserChallenge: text("browser_challenge"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),

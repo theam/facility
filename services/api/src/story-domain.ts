@@ -169,7 +169,15 @@ function workspaceRuntime(config: AppConfig): WorkspaceRuntime {
             projectId: config.vercelProjectId,
           }
         : undefined;
-    return new VercelWorkspaceRuntime(credentials);
+    return new VercelWorkspaceRuntime(
+      credentials,
+      config.nativePreviews
+        ? {
+            apiUrl: config.publicUrl,
+            webUrl: config.webUrl ?? config.publicUrl,
+          }
+        : undefined,
+    );
   }
   return new UnsupportedWorkspaceRuntime();
 }

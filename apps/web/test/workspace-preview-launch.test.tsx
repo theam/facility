@@ -55,7 +55,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(canExecute = true) {
+async function render(canExecute = true, canPreview = canExecute) {
   await act(async () =>
     root.render(
       <WorkspaceControls
@@ -63,6 +63,7 @@ async function render(canExecute = true) {
         story={story}
         workspace={workspace}
         canExecute={canExecute}
+        canPreview={canPreview}
         canWrite={false}
       />,
     ),
@@ -118,7 +119,26 @@ describe("preview launch controls", () => {
     expect(container.querySelector("a[href*='token=']")).toBeNull();
   });
 
-  it("does not offer preview launches without execution permission", async () => {
+  it("offers preview-only users a launch, but no execution or maintenance controls", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(Response.json({ url: "https://native-one.vercel.run" }));
+    vi.stubGlobal("fetch", fetch);
+    await render(false, true);
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "open app ↗",
+    ]);
+    expect(container.textContent).not.toContain("maintenance");
+    await clickAndWait("open app ↗", () => opened.mock.calls.length === 1);
+    expect(opened).toHaveBeenCalledWith(
+      "https://native-one.vercel.run",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer preview launches without either view or execution permission", async () => {
     await render(false);
     expect(container.querySelector("button")).toBeNull();
     expect(opened).not.toHaveBeenCalled();

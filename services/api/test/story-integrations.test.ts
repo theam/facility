@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { BacklogItem } from "../src/stories/backlog.js";
 import { lifecycleChanges } from "../src/stories/integration-notifications.js";
 import {
@@ -34,6 +35,52 @@ const input = {
 };
 
 describe("generic story integration contracts", () => {
+  it("keeps JSON runtime validation without unresolvable embedded OpenAPI references", () => {
+    const body = {
+      namespace: "preview",
+      expected_revision: 0,
+      value: { nested: [true, null, 1, "url", { ok: false }] },
+    };
+    expect(IntegrationStateBody.parse(body)).toEqual(body);
+    for (const invalid of [undefined, () => {}, new Date(), Number.NaN, Number.POSITIVE_INFINITY])
+      expect(IntegrationStateBody.safeParse({ ...body, value: { invalid } }).success).toBe(false);
+    expect(JSON.stringify(z.toJSONSchema(IntegrationStateBody))).not.toContain('"$ref"');
+  });
+  it("publishes verified native origins, preserves them on sleep and notifies on changes", () => {
+    const endpoint = { service: "app", access: "native", url: "https://preview-one.vercel.run" };
+    const workspace = { ...input.workspace, provider: "vercel", endpoints: [endpoint] };
+    const snapshot = storyLifecycleSnapshot({ ...input, workspace });
+    expect(snapshot.workspace).toEqual({
+      id: "ws_a",
+      state: "sleeping",
+      sites: [{ id: "native-app", service: "app", origin: endpoint.url }],
+    });
+    expect(snapshot.workspace).not.toHaveProperty("endpoints");
+    const initial = lifecycleChanges(
+      snapshot,
+      "repo_a",
+      { storyRevision: null, workspaceRevision: null },
+      input.now,
+    );
+    const changed = storyLifecycleSnapshot({
+      ...input,
+      workspace: {
+        ...workspace,
+        endpoints: [{ ...endpoint, url: "https://preview-two.vercel.run" }],
+      },
+    });
+    expect(
+      lifecycleChanges(changed, "repo_a", initial, input.now).pending.map((event) => event.type),
+    ).toEqual(["workspace.updated"]);
+    for (const invalid of [
+      { ...workspace, provider: "docker" },
+      { ...workspace, state: "destroyed" },
+      { ...workspace, endpoints: [{ ...endpoint, access: undefined }] },
+    ])
+      expect(
+        storyLifecycleSnapshot({ ...input, sites: [], workspace: invalid }).workspace?.sites,
+      ).toEqual([]);
+  });
   it("reports facts rather than Auth0 registration policy and never leaks credentials", () => {
     const value = storyLifecycleSnapshot({
       ...input,

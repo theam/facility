@@ -19,6 +19,10 @@ and associated PR state/freshness, plus
 `workspace: { id, state, sites: [{ id, service, origin }] }` (or null). Sites are
 filtered to the exact org/project/workspace; surface credentials are never exposed.
 An origin is **configured**, not proof that the application is ready or login works.
+With native Vercel previews enabled, verified provider origins appear in the same
+site list and take precedence for their service. URL changes use the existing
+`workspace.updated` notification; consumers must not assume a provider route is
+permanently stable. See [native previews](native-workspace-previews.md).
 
 For GitHub stories, `externalId` identifies `issue:N` or `pull-request:N` in the
 source `repositoryId`. Both issue and PR facts include `repositoryId`, `number`,

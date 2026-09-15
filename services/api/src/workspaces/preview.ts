@@ -12,14 +12,22 @@ import {
 import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { assertWorkspacePreviewAvailable } from "../origin-isolation.js";
-import type { AppConfig } from "../types.js";
+import type { AppConfig, Principal } from "../types.js";
+import {
+  canViewPreview,
+  equalPreviewSecret,
+  nativePreviewOrigin,
+  PREVIEW_GRANT_TTL_MS,
+  PREVIEW_TOKEN_PATTERN,
+  previewChallenge,
+} from "./native-preview.js";
 import { type PreviewSite, previewSiteFor } from "./preview-sites.js";
 import type { ProjectEnvironmentService, ProjectManifestSource } from "./project-environment.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "./runtime.js";
 
 const SESSION_TTL_MS = 60 * 60 * 1_000;
 
-/** The permission the open route requires; a live session must keep holding it. */
+/** Legacy proxy sessions retain their original execution-permission requirement. */
 const PREVIEW_PERMISSION = "workspaces:execute";
 
 export class WorkspacePreviewError extends Error {
@@ -49,12 +57,24 @@ export class WorkspacePreviewService {
     storyId: string;
     userId: string;
     service: string;
+    canExecute?: boolean;
   }) {
     const { story, workspace } = await this.bundle(input.orgId, input.projectId, input.storyId);
     const site = previewSiteFor(this.config, { ...input, workspaceId: workspace.id });
-    if (!site) assertWorkspacePreviewAvailable(this.config);
+    const nativeEnabled = this.config.nativePreviews && workspace.provider === "vercel";
+    const native = nativeEnabled && nativePreviewOrigin(workspace.endpoints, input.service);
+    if (!site && !nativeEnabled) assertWorkspacePreviewAvailable(this.config);
     if (story.deletedAt || workspace.state === "destroyed" || !workspace.externalRef) {
       throw new WorkspacePreviewError("workspace_not_available", "Workspace is not available");
+    }
+    // Viewing must never mint repository credentials or execute setup/start hooks.
+    if (input.canExecute === false) {
+      if (workspace.state !== "running" || !native)
+        throw new WorkspacePreviewError(
+          "preview_not_running",
+          "Ask an operator to prepare or wake this preview",
+        );
+      return { url: native, expiresAt: null };
     }
     const [credentials, manifest] = await Promise.all([
       this.credentials.issue(input.orgId, input.projectId),
@@ -88,6 +108,10 @@ export class WorkspacePreviewService {
         404,
       );
     }
+    const preparedNative =
+      this.config.nativePreviews && nativePreviewOrigin(prepared.endpoints, input.service);
+    if (preparedNative) return { url: preparedNative, expiresAt: null };
+    if (!site) assertWorkspacePreviewAvailable(this.config);
 
     const token = randomBytes(32).toString("base64url");
     const sessionId = newId("psess");
@@ -122,6 +146,7 @@ export class WorkspacePreviewService {
           and(
             eq(previewSessions.id, sessionId),
             eq(previewSessions.tokenHash, tokenHash(token)),
+            isNull(previewSessions.nativeOrigin),
             site
               ? and(
                   eq(previewSessions.orgId, site.orgId),
@@ -142,7 +167,7 @@ export class WorkspacePreviewService {
     return consumed;
   }
 
-  async authorize(sessionId: string, token: string) {
+  async authorize(sessionId: string, token: string, native = false) {
     const session = (
       await this.db
         .select()
@@ -151,6 +176,7 @@ export class WorkspacePreviewService {
           and(
             eq(previewSessions.id, sessionId),
             eq(previewSessions.tokenHash, tokenHash(token)),
+            native ? isNotNull(previewSessions.nativeOrigin) : isNull(previewSessions.nativeOrigin),
             isNotNull(previewSessions.consumedAt),
             isNull(previewSessions.revokedAt),
             gt(previewSessions.expiresAt, new Date()),
@@ -159,8 +185,140 @@ export class WorkspacePreviewService {
         .limit(1)
     )[0];
     if (!session) throw invalidAccess();
-    await this.assertPreviewAccess(session.orgId, session.userId);
+    await this.assertPreviewAccess(session.orgId, session.userId, native);
     return session;
+  }
+
+  /** Read-only browser login: no wake, setup, agent or repository credential issuance. */
+  async nativeLogin(actor: Principal, workspaceId: string, service: string, challenge: string) {
+    if (actor.type !== "user" || !actor.userId || !canViewPreview(actor.permissions))
+      throw invalidAccess();
+    if (!PREVIEW_TOKEN_PATTERN.test(challenge)) throw invalidAccess();
+    const binding = await this.nativeBinding(workspaceId, service);
+    if (
+      binding.workspace.orgId !== actor.orgId ||
+      (actor.projectId && binding.workspace.projectId !== actor.projectId)
+    )
+      throw invalidAccess();
+    await this.assertPreviewAccess(actor.orgId, actor.userId, true);
+    const code = randomBytes(32).toString("base64url");
+    const sessionId = newId("psess");
+    await this.db.insert(previewSessions).values({
+      id: sessionId,
+      orgId: actor.orgId,
+      projectId: binding.workspace.projectId,
+      storyId: binding.workspace.storyId,
+      workspaceId,
+      userId: actor.userId,
+      service,
+      tokenHash: tokenHash(code),
+      nativeOrigin: binding.origin,
+      browserChallenge: challenge,
+      expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+    });
+    const url = new URL("/.facility/callback", binding.origin);
+    url.searchParams.set("session", sessionId);
+    url.searchParams.set("code", code);
+    return { url: url.toString() };
+  }
+
+  async nativeExchange(
+    input: {
+      workspaceId: string;
+      service: string;
+      sessionId: string;
+      code: string;
+      verifier: string;
+    },
+    gatewayToken: unknown,
+  ) {
+    const binding = await this.nativeBinding(input.workspaceId, input.service, gatewayToken);
+    const accessToken = randomBytes(32).toString("base64url");
+    return this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select()
+        .from(previewSessions)
+        .where(
+          and(
+            eq(previewSessions.id, input.sessionId),
+            eq(previewSessions.tokenHash, tokenHash(input.code)),
+            eq(previewSessions.orgId, binding.workspace.orgId),
+            eq(previewSessions.projectId, binding.workspace.projectId),
+            eq(previewSessions.workspaceId, input.workspaceId),
+            eq(previewSessions.service, input.service),
+            eq(previewSessions.nativeOrigin, binding.origin),
+            eq(previewSessions.browserChallenge, previewChallenge(input.verifier)),
+            gt(previewSessions.createdAt, new Date(Date.now() - PREVIEW_GRANT_TTL_MS)),
+            gt(previewSessions.expiresAt, new Date()),
+            isNull(previewSessions.consumedAt),
+            isNull(previewSessions.revokedAt),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!session) throw invalidAccess();
+      await this.assertPreviewAccess(session.orgId, session.userId, true);
+      // The code in browser history must never become a reusable session credential.
+      await tx
+        .update(previewSessions)
+        .set({ tokenHash: tokenHash(accessToken), consumedAt: new Date(), updatedAt: new Date() })
+        .where(eq(previewSessions.id, session.id));
+      return { accessToken, expiresAt: session.expiresAt };
+    });
+  }
+
+  async nativeAuthorize(
+    input: {
+      workspaceId: string;
+      service: string;
+      sessionId: string;
+      token: string;
+    },
+    gatewayToken: unknown,
+  ) {
+    const binding = await this.nativeBinding(input.workspaceId, input.service, gatewayToken);
+    const session = await this.authorize(input.sessionId, input.token, true);
+    if (
+      session.orgId !== binding.workspace.orgId ||
+      session.projectId !== binding.workspace.projectId ||
+      session.workspaceId !== input.workspaceId ||
+      session.service !== input.service ||
+      session.nativeOrigin !== binding.origin
+    )
+      throw invalidAccess();
+    return { expiresAt: session.expiresAt };
+  }
+
+  private async nativeBinding(workspaceId: string, service: string, gatewayToken?: unknown) {
+    if (!this.config.nativePreviews) throw invalidAccess();
+    const [row] = await this.db
+      .select({ workspace: workspaces, story: stories })
+      .from(workspaces)
+      .innerJoin(
+        stories,
+        and(
+          eq(stories.id, workspaces.storyId),
+          eq(stories.orgId, workspaces.orgId),
+          eq(stories.projectId, workspaces.projectId),
+        ),
+      )
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (
+      !row ||
+      row.story.deletedAt ||
+      row.workspace.state !== "running" ||
+      row.workspace.provider !== "vercel"
+    )
+      throw invalidAccess();
+    const origin = nativePreviewOrigin(row.workspace.endpoints, service);
+    if (!origin) throw invalidAccess();
+    if (gatewayToken !== undefined) {
+      const environment = row.workspace.environment as { variables?: Record<string, string> };
+      if (!equalPreviewSecret(gatewayToken, environment.variables?.FACILITY_PREVIEW_GATEWAY_TOKEN))
+        throw invalidAccess();
+    }
+    return { ...row, origin };
   }
 
   async target(session: typeof previewSessions.$inferSelect, path: string) {
@@ -237,7 +395,7 @@ export class WorkspacePreviewService {
    * A preview session outlives the request that opened it, so the permission
    * that opened it is re-read on every use: membership alone is not access.
    */
-  private async assertPreviewAccess(orgId: string, userId: string) {
+  private async assertPreviewAccess(orgId: string, userId: string, native = false) {
     const member = (
       await this.db
         .select({ permissions: roles.permissions })
@@ -253,7 +411,11 @@ export class WorkspacePreviewService {
         )
         .limit(1)
     )[0];
-    if (!member || !can(member.permissions, PREVIEW_PERMISSION)) throw invalidAccess();
+    if (
+      !member ||
+      !(native ? canViewPreview(member.permissions) : can(member.permissions, PREVIEW_PERMISSION))
+    )
+      throw invalidAccess();
   }
 }
 
