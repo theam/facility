@@ -42,3 +42,20 @@ state travel alongside the phase instead of being folded into it.
 parameters that hold every filter, and the agent choices offered by the composer. Unit tests cover
 the derivation and the presentation; the page integration test covers grouping, links, permissions,
 pagination, and the empty and error states.
+
+## Interrupted command observation
+
+For Vercel workspaces, temporary network failures while reading command output or waiting for completion reconnect to the original command. They never submit the agent command again. Replayed output is checked against the already received text and delivered only once, even if the provider changes chunk boundaries.
+
+Observation retries use exponential backoff, with eight retries per interrupted stream or sequence of failed waits. Cancellation stops recovery immediately; authentication, authorization, missing commands, and invalid responses fail without retry. If observation cannot recover, the failed turn retains the engine events already received. An observation failure does not prove the remote process exited: inspect the retained workspace before retrying the turn.
+
+## GitHub admission delays
+
+If GitHub throttles credential or project preparation before an engine starts, the turn stays queued until the provider's retry deadline. The deadline is stored separately from the scheduled occurrence and survives worker restarts. Recovery and direct dispatch both respect it. Cancellation remains final, access denials fail normally, and a turn whose engine already started is never automatically repeated by this mechanism.
+
+### Cost coverage in Insights
+
+Insights distinguishes measured, priced usage from completed turns without a
+usage report. A partial reported amount is shown as a lower bound; when no
+completed turn has a price, it is shown as unknown. Queued and running turns do
+not count as missing completed usage. These are usage estimates, not invoices.

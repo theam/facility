@@ -766,6 +766,7 @@ export const turns = pgTable(
     triggerType: text("trigger_type").notNull(),
     triggerKey: text("trigger_key"),
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
+    retryAfter: timestamp("retry_after", { withTimezone: true }),
     error: text("error"),
     nextEventSeq: bigint("next_event_seq", { mode: "number" }).notNull().default(1),
     startedAt: timestamp("started_at", { withTimezone: true }),

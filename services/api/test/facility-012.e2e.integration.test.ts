@@ -637,74 +637,85 @@ environment:
     expect(replayedDelete.workspace.state).toBe("destroyed");
   });
 
-  it("dispatches every kickstart agent with its own model, prompt, and MCP trigger", async () => {
+  const expectedNames = [
+    "address-review",
+    "architect",
+    "builder",
+    "ci-doctor",
+    "pr-reviewer",
+    "security-audit",
+  ];
+  it("lists every canonical kickstart agent", async () => {
     const listed = mcpData(
       await mcp.callTool({ name: "facility_list_agents", arguments: { projectId } }),
     ) as {
       agents: Array<{ name: string; engine: string; model: string; prompt: string }>;
     };
-    const expectedNames = [
-      "address-review",
-      "architect",
-      "builder",
-      "ci-doctor",
-      "pr-reviewer",
-      "security-audit",
-    ];
     expect(listed.agents.map((agent) => agent.name)).toEqual(expectedNames);
+  });
 
-    for (const agent of listed.agents) {
-      const message = `Smoke test the ${agent.name} role with its canonical configuration.`;
-      const started = mcpData(
-        await mcp.callTool({
-          name: "facility_start_story",
-          arguments: {
-            projectId,
-            provider: "manual",
-            title: `Agent smoke: ${agent.name}`,
-            agent: agent.name,
-            message,
-            idempotencyKey: `agent-smoke-${agent.name}-${suffix}`,
-          },
-        }),
-      ) as StoryToolBundle;
-      const turnId = started.queued.turn.id;
-      await expect(
-        app.storyDomain.dispatcher.dispatch({ orgId: "org_local", projectId, turnId }),
-      ).resolves.toMatchObject({ claimed: true, state: "succeeded" });
-      const request = engineRequests.at(-1);
-      expect(request?.manifest).toMatchObject({
-        name: agent.name,
+  it.each(
+    expectedNames,
+  )("dispatches %s with its own model, prompt, and MCP trigger", async (name) => {
+    const listed = mcpData(
+      await mcp.callTool({ name: "facility_list_agents", arguments: { projectId } }),
+    ) as {
+      agents: Array<{ name: string; engine: string; model: string; prompt: string }>;
+    };
+    const agent = listed.agents.find((candidate) => candidate.name === name);
+    if (!agent) throw new Error(`missing kickstart agent ${name}`);
+    const message = `Smoke test the ${agent.name} role with its canonical configuration.`;
+    const started = mcpData(
+      await mcp.callTool({
+        name: "facility_start_story",
+        arguments: {
+          projectId,
+          provider: "manual",
+          title: `Agent smoke: ${agent.name}`,
+          agent: agent.name,
+          message,
+          idempotencyKey: `agent-smoke-${agent.name}-${suffix}`,
+        },
+      }),
+    ) as StoryToolBundle;
+    const turnId = started.queued.turn.id;
+    await expect(
+      app.storyDomain.dispatcher.dispatch({ orgId: "org_local", projectId, turnId }),
+    ).resolves.toMatchObject({ claimed: true, state: "succeeded" });
+    const request = engineRequests.at(-1);
+    expect(request?.manifest).toMatchObject({
+      name: agent.name,
+      engine: agent.engine,
+      model: agent.model,
+    });
+    expect(request?.manifest.prompt).toBe(agent.prompt);
+    expect(request?.prompt).toContain(message);
+    expect(request?.prompt).toContain(agent.prompt);
+    await expect(
+      db.select().from(turns).where(eq(turns.id, turnId)).limit(1),
+    ).resolves.toMatchObject([
+      {
+        triggerType: "mcp",
+        agentName: agent.name,
         engine: agent.engine,
         model: agent.model,
-      });
-      expect(request?.manifest.prompt).toBe(agent.prompt);
-      expect(request?.prompt).toContain(message);
-      expect(request?.prompt).toContain(agent.prompt);
-      await expect(
-        db.select().from(turns).where(eq(turns.id, turnId)).limit(1),
-      ).resolves.toMatchObject([
-        {
-          triggerType: "mcp",
-          agentName: agent.name,
-          engine: agent.engine,
-          model: agent.model,
+      },
+    ]);
+    const deleted = mcpData(
+      await mcp.callTool({
+        name: "facility_delete_workspace",
+        arguments: {
+          projectId,
+          storyId: started.story.id,
+          confirm: true,
+          idempotencyKey: `agent-smoke-delete-${agent.name}-${suffix}`,
         },
-      ]);
-      const deleted = mcpData(
-        await mcp.callTool({
-          name: "facility_delete_workspace",
-          arguments: {
-            projectId,
-            storyId: started.story.id,
-            confirm: true,
-            idempotencyKey: `agent-smoke-delete-${agent.name}-${suffix}`,
-          },
-        }),
-      ) as StoryToolBundle;
-      expect(deleted.workspace.state).toBe("destroyed");
-    }
+      }),
+    ) as StoryToolBundle;
+    expect(deleted.workspace.state).toBe("destroyed");
+  });
 
+  it("records UI-originated turns and deletes their workspace", async () => {
     const uiStarted = await app.inject({
       method: "POST",
       url: `/v1/projects/${projectId}/workspace-stories`,

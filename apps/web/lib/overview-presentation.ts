@@ -2,6 +2,7 @@ import type {
   OverviewAttentionItem,
   OverviewRecentTurn,
   OverviewReviewItem,
+  ProjectObservability,
   ProjectOverview,
 } from "./api";
 import { errorSummary, safeExternalUrl } from "./story-presentation";
@@ -240,6 +241,18 @@ export function spendReading(window: {
     amount: money(window.costCents),
     note: `${window.pricedTurns} priced ${window.pricedTurns === 1 ? "turn" : "turns"}`,
   };
+}
+
+/** Apply the overview's partial-cost presentation to the observability period. */
+export function insightsSpendReading(data: Pick<ProjectObservability, "turns" | "usage">) {
+  const terminalTurns = data.turns.succeeded + data.turns.failed + data.turns.canceled;
+  return spendReading({
+    turns: data.usage.turns,
+    pricedTurns: Math.max(0, data.usage.turns - data.usage.unpricedTurns),
+    unpricedTurns: data.usage.unpricedTurns,
+    unmeasuredTurns: Math.max(0, terminalTurns - data.usage.turns),
+    costCents: data.usage.costCents,
+  });
 }
 
 export function budgetReading(budget: ProjectOverview["spend"]["budget"]) {
