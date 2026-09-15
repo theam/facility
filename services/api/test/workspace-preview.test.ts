@@ -183,3 +183,83 @@ describe("preview workspace preparation", () => {
     expect(exec).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A preview session outlives the request that opened it, so `authorize` re-reads
+ * the opening permission on every use. These drive that read directly: the
+ * integration suite covers the same ground against Postgres, and skips itself
+ * when Postgres is unreachable.
+ */
+function accessFixture(permissions: string[] | undefined) {
+  const session = {
+    id: "psess_0123456789abcdef",
+    orgId: input.orgId,
+    projectId: input.projectId,
+    storyId: input.storyId,
+    userId: input.userId,
+    workspaceId: "ws_test",
+    service: input.service,
+  };
+  // `authorize` reads the session first, then `assertPreviewAccess` reads the
+  // member row behind it. `undefined` stands for no active membership at all.
+  const rows = [session, permissions ? { permissions } : undefined];
+  const chain = () => {
+    const step = {
+      from: () => step,
+      innerJoin: () => step,
+      where: () => step,
+      limit: async () => {
+        const row = rows.shift();
+        return row ? [row] : [];
+      },
+    };
+    return step;
+  };
+  const db = { select: vi.fn(chain) } as unknown as FacilityDb;
+  const service = new WorkspacePreviewService(
+    db,
+    {
+      publicUrl: "https://api.example.com",
+      previewUrl: "https://preview.example.net",
+    } as AppConfig,
+    { wake: vi.fn() } as unknown as WorkspaceRuntime,
+    { issue: async () => credentials } as unknown as GithubWorkspaceCredentialBroker,
+    { load: async () => manifest },
+    {} as unknown as ProjectEnvironmentService,
+  );
+  return { service, session };
+}
+
+describe("preview session authorization", () => {
+  it("authorizes a session whose role still grants workspace execution", async () => {
+    const f = accessFixture(["workspaces:execute"]);
+    await expect(f.service.authorize(f.session.id, "token")).resolves.toMatchObject({
+      storyId: input.storyId,
+    });
+  });
+
+  it.each([["workspaces:*"], ["*"]])("accepts the %s wildcard grant", async (grant) => {
+    const f = accessFixture([grant]);
+    await expect(f.service.authorize(f.session.id, "token")).resolves.toMatchObject({
+      storyId: input.storyId,
+    });
+  });
+
+  it("denies a session whose role lost workspace execution", async () => {
+    // Membership and user stay active; only the permission is gone. Reading the
+    // row and not reading its permissions is what let a demoted member keep
+    // proxying into a live workspace for the rest of the session's hour.
+    const f = accessFixture(["previews:read"]);
+    await expect(f.service.authorize(f.session.id, "token")).rejects.toMatchObject({
+      code: "preview_access_invalid",
+      statusCode: 401,
+    });
+  });
+
+  it("denies a session with no active membership behind it", async () => {
+    const f = accessFixture(undefined);
+    await expect(f.service.authorize(f.session.id, "token")).rejects.toMatchObject({
+      code: "preview_access_invalid",
+    });
+  });
+});
