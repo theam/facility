@@ -78,6 +78,7 @@ describe("turn dispatcher end to end", async () => {
   const installationRowId = newId("ghi");
   const queuedTurns: string[] = [];
   let rejectEnqueue = false;
+  let credentialFailure: unknown;
   const builder = parseAgentManifest(
     `---
 name: builder
@@ -116,12 +117,19 @@ environment:
     renameNextBranch?: string;
     corruptResumeOnce = false;
     failNextRun = false;
+    throttleDuringRun = false;
     replacementPending = false;
     blockUntilCanceled = false;
     blockingStarted = false;
     observedCancellation = false;
     async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
       this.requests.push(request);
+      if (this.throttleDuringRun) {
+        this.throttleDuringRun = false;
+        throw Object.assign(new Error("API rate limit exceeded after execution began"), {
+          status: 429,
+        });
+      }
       if (this.failNextRun) {
         this.failNextRun = false;
         throw new AgentEngineError("agent_engine_failed", "codex exited with status 1", {
@@ -269,11 +277,14 @@ environment:
       db,
       storiesService,
       new AgentCatalogService(db, catalogSource),
-      new GithubWorkspaceCredentialBroker(db, async () => ({
-        gitIdentity: { name: "my-app[bot]", email: "12345+my-app[bot]@users.noreply.github.com" },
-        token: "secret-installation-token",
-        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-      })),
+      new GithubWorkspaceCredentialBroker(db, async () => {
+        if (credentialFailure) throw credentialFailure;
+        return {
+          gitIdentity: { name: "my-app[bot]", email: "12345+my-app[bot]@users.noreply.github.com" },
+          token: "secret-installation-token",
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        };
+      }),
       manifestSource,
       new ProjectEnvironmentService(
         db,
@@ -959,6 +970,128 @@ environment:
       cwd: firstRequest.cwd,
     });
     expect(actual.stdout.trim()).toBe(branch);
+  });
+  async function startAdmissionStory() {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: randomUUID(),
+      title: "Recover provider admission",
+      agent: builder,
+      message: "Run after provider capacity recovers",
+      messageDedupeKey: randomUUID(),
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected queued admission turn");
+    return { storyId: started.story.id, turnId: started.queued.turn.id, orgId, projectId };
+  }
+
+  it("durably defers throttled admission, rejects early and cross-tenant claims, then runs the same turn once", async () => {
+    const input = await startAdmissionStory();
+    const before = engine.requests.length;
+    credentialFailure = Object.assign(new Error("API rate limit exceeded"), {
+      status: 403,
+      response: {
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
+        },
+      },
+    });
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({
+        claimed: true,
+        state: "queued",
+        retryAfter: expect.any(Date),
+      });
+      expect(engine.requests).toHaveLength(before);
+      const [deferred] = await db.select().from(turns).where(eq(turns.id, input.turnId));
+      expect(deferred).toMatchObject({
+        state: "queued",
+        error: null,
+        startedAt: null,
+        scheduledFor: null,
+      });
+      expect(deferred?.retryAfter?.getTime()).toBeGreaterThan(Date.now() + 3_500_000);
+      await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
+      const enqueued: unknown[] = [];
+      await recoverQueuedTurns(db, async (_queue, data) => {
+        if (data.turnId === input.turnId) enqueued.push(data);
+      });
+      expect(enqueued).toEqual([]);
+      expect(
+        await db.select().from(attentionItems).where(eq(attentionItems.turnId, input.turnId)),
+      ).toEqual([]);
+      expect(await db.select().from(turnUsage).where(eq(turnUsage.turnId, input.turnId))).toEqual(
+        [],
+      );
+      await db
+        .update(turns)
+        .set({ retryAfter: new Date(Date.now() - 1_000) })
+        .where(eq(turns.id, input.turnId));
+      await expect(dispatcher.dispatch({ ...input, orgId: "org_other" })).resolves.toEqual({
+        claimed: false,
+      });
+      credentialFailure = undefined;
+      await recoverQueuedTurns(db, async (_queue, data) => {
+        if (data.turnId === input.turnId) enqueued.push(data);
+      });
+      expect(enqueued).toHaveLength(1);
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "succeeded" });
+      await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
+      expect(engine.requests).toHaveLength(before + 1);
+    } finally {
+      credentialFailure = undefined;
+    }
+  });
+
+  it.each([
+    401, 403,
+  ])("fails admission denied with HTTP %s instead of repeatedly deferring it", async (status) => {
+    const input = await startAdmissionStory();
+    credentialFailure = Object.assign(new Error("access revoked"), { status });
+    const before = engine.requests.length;
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "failed" });
+      expect(engine.requests).toHaveLength(before);
+      const [turn] = await db.select().from(turns).where(eq(turns.id, input.turnId));
+      expect(turn).toMatchObject({ state: "failed", retryAfter: null });
+    } finally {
+      credentialFailure = undefined;
+    }
+  });
+
+  it("never automatically repeats a turn after its engine has started", async () => {
+    const input = await startAdmissionStory();
+    const before = engine.requests.length;
+    engine.throttleDuringRun = true;
+    await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "failed" });
+    expect(engine.requests).toHaveLength(before + 1);
+    const [turn] = await db.select().from(turns).where(eq(turns.id, input.turnId));
+    expect(turn).toMatchObject({ state: "failed", retryAfter: null });
+  });
+
+  it("does not revive a canceled deferred turn after its deadline", async () => {
+    const input = await startAdmissionStory();
+    credentialFailure = Object.assign(new Error("API rate limit exceeded"), { status: 429 });
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "queued" });
+    } finally {
+      credentialFailure = undefined;
+    }
+    await storiesService.cancelTurn({ ...input, actor: { type: "user", id: "user_test" } });
+    await db
+      .update(turns)
+      .set({ retryAfter: new Date(Date.now() - 1_000) })
+      .where(eq(turns.id, input.turnId));
+    const enqueued: unknown[] = [];
+    await recoverQueuedTurns(db, async (_queue, data) => {
+      if (data.turnId === input.turnId) enqueued.push(data);
+    });
+    expect(enqueued).toEqual([]);
+    await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
   });
 });
 

@@ -9,8 +9,9 @@ import {
   turns,
   workspaces,
 } from "@facility/db";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
+import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { CostBudgetService } from "../insights/costs.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
@@ -43,13 +44,14 @@ export class TurnDispatcher {
     const turn = (
       await this.db
         .update(turns)
-        .set({ state: "running", startedAt: new Date(), updatedAt: new Date() })
+        .set({ state: "running", retryAfter: null, startedAt: new Date(), updatedAt: new Date() })
         .where(
           and(
             eq(turns.orgId, input.orgId),
             eq(turns.projectId, input.projectId),
             eq(turns.id, input.turnId),
             eq(turns.state, "queued"),
+            or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
           ),
         )
         .returning()
@@ -90,6 +92,7 @@ export class TurnDispatcher {
     let secrets: string[] = [];
     let startedGitEvidence: StartedGitEvidence | undefined;
     let gitEvidenceCompleted = false;
+    let engineStarted = false;
     try {
       await this.storiesService.resolveAttention({
         orgId: input.orgId,
@@ -210,6 +213,7 @@ export class TurnDispatcher {
       };
       let result: AgentTurnResult;
       try {
+        engineStarted = true;
         result = await engine.run(engineRequest);
       } catch (error) {
         if (
@@ -326,6 +330,31 @@ export class TurnDispatcher {
           type: "turn.canceled",
           data: {},
         });
+        await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
+        return { claimed: true as const, state: "canceled" as const };
+      }
+      const retryAfter = !engineStarted ? githubRateLimitRetryAt(error) : undefined;
+      if (retryAfter) {
+        const deferred = await this.db
+          .update(turns)
+          .set({ state: "queued", retryAfter, startedAt: null, updatedAt: new Date() })
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.id, input.turnId),
+              eq(turns.state, "running"),
+            ),
+          )
+          .returning({ id: turns.id });
+        if (deferred.length > 0) {
+          await appendTurnEvent(this.db, {
+            ...eventBase,
+            type: "turn.deferred",
+            data: { reason: "github_rate_limit", retryAfter: retryAfter.toISOString() },
+          });
+          return { claimed: true as const, state: "queued" as const, retryAfter };
+        }
         await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
         return { claimed: true as const, state: "canceled" as const };
       }

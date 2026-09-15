@@ -48,3 +48,7 @@ pagination, and the empty and error states.
 For Vercel workspaces, temporary network failures while reading command output or waiting for completion reconnect to the original command. They never submit the agent command again. Replayed output is checked against the already received text and delivered only once, even if the provider changes chunk boundaries.
 
 Observation retries use exponential backoff, with eight retries per interrupted stream or sequence of failed waits. Cancellation stops recovery immediately; authentication, authorization, missing commands, and invalid responses fail without retry. If observation cannot recover, the failed turn retains the engine events already received. An observation failure does not prove the remote process exited: inspect the retained workspace before retrying the turn.
+
+## GitHub admission delays
+
+If GitHub throttles credential or project preparation before an engine starts, the turn stays queued until the provider's retry deadline. The deadline is stored separately from the scheduled occurrence and survives worker restarts. Recovery and direct dispatch both respect it. Cancellation remains final, access denials fail normally, and a turn whose engine already started is never automatically repeated by this mechanism.
