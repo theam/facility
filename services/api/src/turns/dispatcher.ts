@@ -219,7 +219,6 @@ export class TurnDispatcher {
         ) {
           throw error;
         }
-        await this.persistFailedEngineEvents(error, eventBase, secrets);
         await this.db
           .update(engineSessions)
           .set({ status: "corrupt", updatedAt: new Date() })
@@ -345,6 +344,7 @@ export class TurnDispatcher {
             status: "failed",
           })
           .catch(() => undefined);
+        await this.persistFailedEngineEvents(error, eventBase, secrets);
       }
       const detail = redactString(error instanceof Error ? error.message : String(error), secrets);
       await this.storiesService.failTurn({ ...input, error: detail });
