@@ -22,8 +22,25 @@ export function oauthConfigFromApp(config: AppConfig): OauthConfig | null {
     issuer: config.oauthIssuer,
     audience: config.mcpPublicUrl,
     jwks: {
+      // This derives a verification set from signing keys, so an operation the
+      // source key declares cannot carry over: `key_ops: ["sign"]` describes the
+      // private half, and jose skips any candidate whose `key_ops` omits
+      // "verify", which leaves the instance unable to verify the tokens it just
+      // signed. Drop it with the private members rather than translating it, so
+      // the derived set constrains nothing beyond `kid`, `alg`, and `use`.
       keys: config.oauthJwks.keys.map(
-        ({ d: _d, p: _p, q: _q, dp: _dp, dq: _dq, qi: _qi, oth: _oth, ...publicKey }) => publicKey,
+        ({
+          d: _d,
+          p: _p,
+          q: _q,
+          dp: _dp,
+          dq: _dq,
+          qi: _qi,
+          oth: _oth,
+          key_ops: _keyOps,
+          ext: _ext,
+          ...publicKey
+        }) => publicKey,
       ),
     } as JSONWebKeySet,
   };

@@ -1,9 +1,6 @@
-import type { AuditInsert, FacilityDb } from "@facility/db";
-import type {
-  GithubAppMetadataReader,
-  GithubClientFactory,
-  GithubInstallationTokenFactory,
-} from "./github/client.js";
+import type { FacilityDb } from "@facility/db";
+import type { GithubClientFactory } from "./github/client.js";
+import type { StoryDomain } from "./story-domain.js";
 
 export type Principal = {
   type: "user" | "key";
@@ -32,18 +29,9 @@ export type AppConfig = {
   // classify preview-surface requests even when that proxy replaces Host with
   // its origin hostname.
   previewSurfaceToken?: string;
-  // URLs a sandbox uses to reach back — distinct from publicUrl because a
-  // container cannot resolve the host's "localhost". Default to the public
-  // URLs; override (e.g. host.docker.internal) for the local docker driver.
-  sandboxApiUrl: string;
-  sandboxGatewayUrl: string;
-  // Gateway URL reachable from the API process itself (in-process assistant
-  // loop) — sandboxGatewayUrl may be a container-network address instead.
-  gatewayUrl: string;
-  // Image the seeded default sandbox profile uses to run the platform runner.
-  sandboxRunnerImage: string;
-  // Driver the seeded default sandbox profile uses.
-  sandboxDriver: "docker" | "aws" | "vercel";
+  previewSites?: import("./workspaces/preview-sites.js").PreviewSite[];
+  workspaceImage: string;
+  workspaceDriver: "docker" | "vercel";
   authIdentityProvider?: "github" | "oidc";
   authCallbackUrl?: string;
   githubOauthClientId?: string;
@@ -60,17 +48,9 @@ export type AppConfig = {
   oauthJwks?: { keys: Record<string, unknown>[] };
   mcpPublicUrl?: string;
   facilityInsecureDev: boolean;
-  s3Endpoint?: string;
-  s3AccessKey?: string;
-  s3SecretKey?: string;
-  s3Bucket?: string;
-  awsRegion?: string;
-  awsCodeBuildProject?: string;
-  awsCodeBuildCacheBaseLocation?: string;
   vercelToken?: string;
   vercelTeamId?: string;
   vercelProjectId?: string;
-  packageRegistryToken?: string;
   githubAppId?: string;
   githubAppPrivateKey?: string;
   githubAppWebhookSecret?: string;
@@ -96,8 +76,7 @@ declare module "fastify" {
     facilityDb: FacilityDb;
     enqueue: (queue: string, data: Record<string, unknown>) => Promise<string | null>;
     githubClientFactory?: GithubClientFactory;
-    githubInstallationTokenFactory?: GithubInstallationTokenFactory;
-    githubAppMetadataReader?: GithubAppMetadataReader;
+    storyDomain: StoryDomain;
   }
   interface FastifyRequest {
     principal?: Principal;
@@ -105,11 +84,12 @@ declare module "fastify" {
     idempotencyReplayed?: boolean;
     audit: (
       action: string,
-      target: AuditInsert["target"],
+      target: { type: string; id?: string },
       payload?: Record<string, unknown>,
     ) => Promise<void>;
   }
   interface FastifyContextConfig {
+    cors?: false;
     permission?: string | string[];
     auditAction?: string;
     public?: boolean;

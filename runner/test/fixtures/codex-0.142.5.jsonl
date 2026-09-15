@@ -1,4 +1,0 @@
-{"type":"assistant_message","message":"I will run the requested check."}
-{"type":"tool_call","name":"shell","arguments":{"cmd":"pnpm typecheck","cwd":"/work/repo"}}
-{"type":"task_complete","status":"success"}
-

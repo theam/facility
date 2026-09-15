@@ -1,9 +1,0 @@
-{
-  "name": "design-system",
-  "title": "Design system",
-  "description": "UI changes conform to your design system and critical flows carry browser evidence.",
-  "standardSection": "standard-section.md",
-  "files": [
-    { "from": "agents/design-reviewer.md", "to": ".claude/agents/design-reviewer.md" }
-  ]
-}

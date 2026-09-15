@@ -9,11 +9,12 @@ import {
   userIdentities,
   users,
 } from "@facility/db";
-import { createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
 import {
+  isAuthorizationServerPath,
   oauthBrowserOrigin,
   oauthScopes,
   oidcScopesForConsent,
@@ -22,6 +23,7 @@ import { pkceChallenge } from "../src/auth/identity-provider.js";
 import {
   AccessTokenError,
   looksLikeJwt,
+  type OauthConfig,
   oauthConfigFromApp,
   verifyAccessToken,
 } from "../src/oauth.js";
@@ -35,6 +37,10 @@ const audience = "https://mcp.facility.test/mcp";
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
 const privateJwk = { ...(await exportJWK(privateKey)), kid: "test-key", alg: "ES256", use: "sig" };
 const publicJwk = { ...(await exportJWK(publicKey)), kid: "test-key", alg: "ES256", use: "sig" };
+// `exportJWK` emits no `key_ops`, so it cannot reproduce what an operator gets
+// out of `crypto.subtle.exportKey`. The integration below configures this shape
+// instead, so the flow runs on the key derivation production actually uses.
+const webCryptoPrivateJwk = { ...privateJwk, key_ops: ["sign"], ext: true };
 const foreign = await generateKeyPair("ES256");
 type SignKey = Awaited<ReturnType<typeof generateKeyPair>>["privateKey"];
 const base: AppConfig = {
@@ -43,11 +49,8 @@ const base: AppConfig = {
   port: 4400,
   publicUrl: "https://api.facility.test",
   webUrl: issuer,
-  sandboxApiUrl: "http://localhost:4400",
-  sandboxGatewayUrl: "http://localhost:4410",
-  gatewayUrl: "http://localhost:4410",
-  sandboxRunnerImage: "facility-runner:dev",
-  sandboxDriver: "docker",
+  workspaceImage: "facility-runner:dev",
+  workspaceDriver: "docker",
   authCallbackUrl: `${issuer}/api/auth/callback`,
   facilityInsecureDev: true,
   logLevel: "silent",
@@ -77,6 +80,28 @@ async function token(
   return jwt.sign(input.key ?? privateKey);
 }
 
+describe("authorization-server route ownership", () => {
+  it.each([
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/register",
+    "/oauth/jwks",
+    "/.well-known/openid-configuration",
+    "/.well-known/oauth-authorization-server",
+  ])("delegates %s to the authorization server", (path) => {
+    expect(isAuthorizationServerPath(path)).toBe(true);
+  });
+  it.each([
+    "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/unknown",
+    "/oauth/interaction/consent",
+    "/mcp",
+    "/v1/projects",
+  ])("leaves %s to the application router", (path) => {
+    expect(isAuthorizationServerPath(path)).toBe(false);
+  });
+});
+
 describe("Facility OAuth access-token verification", () => {
   it("enables OAuth only when issuer, resource, and keys are all configured", () => {
     expect(oauthConfigFromApp(base)).toBeNull();
@@ -96,6 +121,25 @@ describe("Facility OAuth access-token verification", () => {
       userId: "user_test",
       orgId: "org_test",
       scope: "facility:mcp",
+    });
+  });
+
+  it("verifies its own tokens against keys derived from a WebCrypto signing key", async () => {
+    const derived = oauthConfigFromApp({
+      ...base,
+      oauthIssuer: issuer,
+      mcpPublicUrl: audience,
+      oauthJwks: { keys: [webCryptoPrivateJwk] },
+    });
+
+    // Carrying `key_ops: ["sign"]` into the verification set makes jose reject the
+    // key as a candidate, and the instance stops trusting anything it signs.
+    expect(derived?.jwks.keys[0]).not.toHaveProperty("key_ops");
+    expect(derived?.jwks.keys[0]).not.toHaveProperty("ext");
+    expect(derived?.jwks.keys[0]).not.toHaveProperty("d");
+    await expect(verifyAccessToken(await token(), derived as OauthConfig)).resolves.toMatchObject({
+      userId: "user_test",
+      orgId: "org_test",
     });
   });
 
@@ -196,9 +240,12 @@ describe("Facility OAuth resource-server integration", async () => {
     ...base,
     oauthIssuer: issuer,
     mcpPublicUrl: audience,
-    oauthJwks: { keys: [privateJwk] },
+    oauthJwks: { keys: [webCryptoPrivateJwk] },
   };
-  const app = await buildApp(config, { oauthJwks: createLocalJWKSet({ keys: [publicJwk] }) });
+  // Deliberately no `oauthJwks` override: injecting a hand-built verification set
+  // here is what hid this bug, because it skips the derivation that turns the
+  // configured signing keys into the keys the running instance verifies with.
+  const app = await buildApp(config);
   const { db, client } = createDb(databaseUrl);
   const userId = newId("user");
   let orgId = "";
@@ -212,6 +259,7 @@ describe("Facility OAuth resource-server integration", async () => {
       url: "/__test/session",
       payload: { email: `oauth-${Date.now()}@example.com` },
     });
+    expect(login.statusCode, login.body).toBe(200);
     orgId = login.json().orgId;
     await db.insert(users).values({
       id: userId,
@@ -241,6 +289,48 @@ describe("Facility OAuth resource-server integration", async () => {
   afterAll(async () => {
     await app.close();
     await client.end();
+  });
+
+  it("serves canonical MCP resource discovery alongside the enabled authorization server", async () => {
+    const challenge = await app.inject({ method: "POST", url: "/mcp", payload: {} });
+    expect(challenge.statusCode).toBe(401);
+    const resourceMetadata = String(challenge.headers["www-authenticate"]).match(
+      /resource_metadata="([^"]+)"/,
+    )?.[1];
+    expect(resourceMetadata).toBe(
+      "https://mcp.facility.test/.well-known/oauth-protected-resource/mcp",
+    );
+    const metadata = await app.inject({
+      method: "GET",
+      url: new URL(resourceMetadata as string).pathname,
+      headers: {
+        host: "evil.example",
+        "x-forwarded-host": "evil.example",
+        "x-forwarded-proto": "http",
+      },
+    });
+    expect(metadata.statusCode).toBe(200);
+    expect(metadata.json()).toEqual({
+      resource: audience,
+      authorization_servers: [issuer],
+      bearer_methods_supported: ["header"],
+      scopes_supported: ["facility:mcp"],
+    });
+    for (const authorization of [
+      "Bearer malformed",
+      `Bearer ${await token({ aud: "https://other.example" })}`,
+    ]) {
+      const denied = await app.inject({
+        method: "POST",
+        url: "/mcp",
+        payload: {},
+        headers: { authorization },
+      });
+      expect(denied.statusCode).toBe(401);
+    }
+    const oidc = await app.inject({ method: "GET", url: "/.well-known/openid-configuration" });
+    expect(oidc.statusCode).toBe(200);
+    expect(oidc.json().issuer).toBe(issuer);
   });
 
   it("publishes authorization metadata and registers a public PKCE client", async () => {

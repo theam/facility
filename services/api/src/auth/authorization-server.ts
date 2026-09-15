@@ -110,10 +110,7 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
   let registrationWindow = { startedAt: Date.now(), count: 0 };
   app.use((req, res, next) => {
     const path = req.url?.split("?")[0] ?? "";
-    if (
-      (path.startsWith("/oauth/") && !path.startsWith("/oauth/interaction/")) ||
-      path.startsWith("/.well-known/")
-    ) {
+    if (isAuthorizationServerPath(path)) {
       if (path === "/oauth/register") {
         if (Date.now() - registrationWindow.startedAt >= 60_000)
           registrationWindow = { startedAt: Date.now(), count: 0 };
@@ -206,6 +203,15 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       );
       return reply.hijack();
     },
+  );
+}
+
+// Resource-server metadata belongs to its Fastify route, not oidc-provider.
+export function isAuthorizationServerPath(path: string): boolean {
+  return (
+    (path.startsWith("/oauth/") && !path.startsWith("/oauth/interaction/")) ||
+    path === "/.well-known/openid-configuration" ||
+    path === "/.well-known/oauth-authorization-server"
   );
 }
 

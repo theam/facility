@@ -1,210 +1,239 @@
-import { cx, Eyebrow, StatusDot } from "@facility/ui";
+import { Eyebrow } from "@facility/ui";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { IssueRow } from "@/components/issues/issue-row";
-import { SyncIssuesButton } from "@/components/issues/sync-button";
 import { ErrorNotice, Offline } from "@/components/offline";
-import { StageSection } from "@/components/project/stage-section";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { BacklogFilters } from "@/components/story/backlog-filters";
+import { BacklogList, PhaseChips } from "@/components/story/backlog-list";
+import { NewStory } from "@/components/story/new-story";
+import { SyncGithub } from "@/components/story/sync-github";
 import { api } from "@/lib/api";
-import type { PipelineStageKey, PipelineStageKind, PipelineStageState } from "@/lib/pipeline";
-import { pipelineStageStateLabel, pipelineStories } from "@/lib/pipeline";
+import {
+  activeFilterCount,
+  agentChoices,
+  PAGE_SIZE,
+  parseStoriesSearch,
+  startTarget,
+  storiesHref,
+  toBacklogQuery,
+} from "@/lib/backlog-presentation";
+import { can } from "@/lib/permissions";
 
 export const metadata = { title: "stories" };
 
-const FILTER_DOT: Record<PipelineStageKind, ReactNode> = {
-  human: <StatusDot tone="human" />,
-  agent: <StatusDot tone="agent" />,
-  machine: <StatusDot tone="machine" />,
-  done: <StatusDot tone="ok" />,
-};
-const FILTER_COUNT_TONE: Record<PipelineStageKind, string> = {
-  human: "text-(--human)",
-  agent: "text-(--ink)",
-  machine: "text-(--info)",
-  done: "text-(--ink)",
-};
-
-function hasPermission(permissions: string[], permission: string) {
-  const [resource] = permission.split(":");
-  return permissions.some((p) => p === "*" || p === permission || p === `${resource}:*`);
-}
-
+/**
+ * Stories is the project's backlog: GitHub issues nobody has started, work
+ * started from a request, and everything in between. Reading it never wakes a
+ * machine or starts an agent; starting work is always an explicit action.
+ */
 export default async function ProjectStoriesPage({
   params,
   searchParams,
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ stage?: string; status?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [{ projectId }, { stage, status }] = await Promise.all([params, searchParams]);
-  const [pipelineResult, me, project] = await Promise.all([
-    api.pipeline(projectId),
+  const [{ projectId }, rawSearch] = await Promise.all([params, searchParams]);
+  const search = parseStoriesSearch(rawSearch);
+  const [backlog, agentsResult, me] = await Promise.all([
+    api.projectBacklog(projectId, toBacklogQuery(search)),
+    api.storyAgents(projectId),
     api.me(),
-    api.project(projectId),
   ]);
+  if (!backlog.ok && backlog.offline) return <Offline />;
 
-  if (!pipelineResult.ok && pipelineResult.offline) return <Offline />;
-
+  const now = new Date();
   const permissions = me.ok ? me.data.permissions : [];
-  const canTrigger = hasPermission(permissions, "runs:trigger");
-  const canSync = hasPermission(permissions, "repos:write");
-  const stages = pipelineResult.ok ? pipelineResult.data.stages : [];
-  const stageKeys = new Set(stages.map((candidate) => candidate.key));
-  const activeStage =
-    stage && stageKeys.has(stage as PipelineStageKey) ? (stage as PipelineStageKey) : null;
-  const items = pipelineResult.ok ? pipelineStories(pipelineResult.data) : [];
-  const stageStates = new Set(items.map((story) => story.stageState));
-  const activeStatus =
-    activeStage && status && stageStates.has(status as PipelineStageState)
-      ? (status as PipelineStageState)
-      : null;
-  const counts = [...stages].reverse();
-  const activeOpenStoryCount = items.filter((story) => story.state === "open").length;
-
-  const stageFiltered = activeStage
-    ? counts.filter((candidate) => candidate.key === activeStage)
-    : counts;
-  const visibleStages = activeStatus
-    ? stageFiltered.map((candidate) => ({
-        ...candidate,
-        stories: candidate.stories.filter((story) => story.stageState === activeStatus),
-      }))
-    : stageFiltered;
-  const activeStatusLabel =
-    activeStage && activeStatus
-      ? pipelineStageStateLabel(
-          activeStage,
-          activeStatus,
-          visibleStages.reduce((total, candidate) => total + candidate.stories.length, 0),
-        )
-      : null;
+  const canStart = can(permissions, "workspaces:execute");
+  const canSync = can(permissions, "github:write");
+  const viewer = {
+    userId: me.ok ? (me.data.principal.userId ?? me.data.principal.id) : null,
+    githubLogin: me.ok ? (me.data.principal.githubLogin ?? null) : null,
+  };
+  const agents = agentsResult.ok ? agentsResult.data : null;
+  const choices = agents ? agentChoices(agents.agents, agents.defaults.ui) : [];
+  const items = backlog.ok ? backlog.data.items : [];
+  const counts = backlog.ok
+    ? backlog.data.counts
+    : { not_started: 0, in_progress: 0, attention: 0, review: 0, done: 0, archived: 0 };
+  const total = backlog.ok ? backlog.data.total : 0;
+  const first = total === 0 || items.length === 0 ? 0 : (search.page - 1) * PAGE_SIZE + 1;
+  const last = first === 0 ? 0 : first + items.length - 1;
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const linked = startTarget(search.start, items);
+  const openCount = counts.attention + counts.in_progress + counts.review + counts.not_started;
+  const runningCount = items.filter((item) => item.activity.state === "running").length;
 
   return (
-    <div className="flex flex-col gap-8">
-      <LiveRefresh seconds={30} />
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-2">
-          <Eyebrow>stories</Eyebrow>
+    <div className="flex flex-col gap-6">
+      <LiveRefresh seconds={15} />
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <Eyebrow>backlog</Eyebrow>
           <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Stories</h1>
-          <p className="text-[12.5px] text-(--dim)">
-            {pipelineResult.ok
-              ? `${activeOpenStoryCount} active open stories · closest to shipping on top`
-              : "pipeline unavailable"}{" "}
-            · the full life of each unit of work — synced with GitHub
+          <p className="text-[12.5px] text-(--mut)">
+            {backlog.ok ? (
+              <>
+                {openCount} open
+                {counts.attention > 0 ? (
+                  <>
+                    {" · "}
+                    <span className="text-(--bad)">{counts.attention} need attention</span>
+                  </>
+                ) : null}
+                {counts.review > 0 ? ` · ${counts.review} in review` : ""}
+                {runningCount > 0 ? (
+                  <>
+                    {" · "}
+                    <span className="text-(--accent)">{runningCount} running on this page</span>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              "Backlog unavailable"
+            )}
           </p>
         </div>
-        {canSync ? <SyncIssuesButton projectId={projectId} /> : null}
-      </div>
+        {canSync ? <SyncGithub projectId={projectId} /> : null}
+      </header>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Link
-          href={`/projects/${projectId}/stories`}
-          className={cx(
-            "border px-3 py-1.5 text-[12px] font-medium transition-colors",
-            !activeStage
-              ? "border-(--line-strong) text-(--ink)"
-              : "border-(--line) text-(--mut) hover:text-(--ink)",
-          )}
-        >
-          all
-        </Link>
-        {counts.map((s) => (
-          <Link
-            key={s.key}
-            href={`/projects/${projectId}/stories?stage=${s.key}`}
-            className={cx(
-              "inline-flex items-center gap-2 border px-3 py-1.5 text-[12px] font-medium transition-colors",
-              activeStage === s.key
-                ? "border-(--line-strong) text-(--ink)"
-                : "border-(--line) text-(--mut) hover:text-(--ink)",
-            )}
-          >
-            {FILTER_DOT[s.kind]}
-            {s.label}
-            <span
-              className={cx(
-                "font-mono text-[11px]",
-                s.count > 0 ? FILTER_COUNT_TONE[s.kind] : "text-(--dim)",
-              )}
-            >
-              {s.count}
-            </span>
-          </Link>
-        ))}
-        {activeStage && activeStatusLabel ? (
-          <>
-            <span className="font-mono text-[11px] text-(--dim)">/</span>
-            <span className="inline-flex items-center gap-2 border border-(--line-strong) px-3 py-1.5 text-[12px] font-medium text-(--ink)">
-              {activeStatusLabel}
-              <Link
-                href={`/projects/${projectId}/stories?stage=${activeStage}`}
-                aria-label="clear status filter"
-                className="text-(--dim) hover:text-(--ink)"
-              >
-                ×
-              </Link>
-            </span>
-          </>
+      {canStart ? (
+        agents ? (
+          <NewStory
+            projectId={projectId}
+            agents={choices}
+            defaultAgent={agents.defaults.ui}
+            titleGeneration={agents.title_generation}
+            linked={
+              linked?.issue
+                ? {
+                    key: linked.key,
+                    title: linked.title,
+                    number: linked.issue.number,
+                    repository: linked.issue.repository,
+                    repositoryId: linked.issue.repositoryId,
+                    url: linked.issue.url,
+                  }
+                : null
+            }
+            clearHref={`${storiesHref(projectId, search)}#new-story`}
+          />
+        ) : (
+          <ErrorNotice
+            message={`Couldn't load the project's agents — ${agentsResult.ok ? "" : agentsResult.message}`}
+          />
+        )
+      ) : null}
+
+      <section className="flex flex-col gap-3" aria-label="Backlog">
+        <PhaseChips projectId={projectId} search={search} counts={counts} />
+        {backlog.ok ? (
+          <BacklogFilters
+            projectId={projectId}
+            search={search}
+            facets={backlog.data.facets}
+            viewer={viewer}
+          />
         ) : null}
-      </div>
 
-      {!pipelineResult.ok ? (
-        <ErrorNotice
-          message={
-            pipelineResult.status === 404
-              ? "The story pipeline isn't available on this control plane yet."
-              : `Couldn't load stories — ${pipelineResult.message}`
-          }
-        />
-      ) : items.length === 0 ? (
-        <p className="max-w-lg text-sm leading-relaxed text-(--dim)">
-          No active stories right now. Closed and merged stories leave Shipped after seven days;
-          sync refreshes the GitHub mirror.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-6">
-          {visibleStages.map((s) => {
-            const stageItems = s.stories;
-            return (
-              <StageSection
-                key={s.key}
-                label={s.label}
-                sub={s.sub}
-                kind={s.kind}
-                total={stageItems.length}
-                liveCount={stageItems.filter((story) => story.runState === "live").length}
-                failedCount={
-                  stageItems.filter(
-                    (story) => story.runState === "failed" || story.ciState === "failure",
-                  ).length
-                }
-                defaultOpen={activeStage !== null || s.key !== "shipped"}
-              >
-                {stageItems.length === 0 ? (
-                  <p className="border border-(--line) px-5 py-3.5 text-[12.5px] text-(--dim)">
-                    Nothing here right now.
-                  </p>
-                ) : (
-                  <div className="flex flex-col border border-(--line)">
-                    {stageItems.map((story) => (
-                      <IssueRow
-                        key={story.key}
-                        projectId={projectId}
-                        story={story}
-                        canTrigger={canTrigger}
-                        builderPlanRequired={
-                          !project.ok || project.data.builderPlanPolicy === "required"
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-              </StageSection>
-            );
+        {!backlog.ok ? (
+          <ErrorNotice message={`Couldn't load the backlog — ${backlog.message}`} />
+        ) : items.length === 0 ? (
+          <EmptyState
+            projectId={projectId}
+            filtered={activeFilterCount(search) > 0 || search.phase.length > 0}
+            hasAnything={Object.values(counts).some((count) => count > 0)}
+            search={search}
+          />
+        ) : (
+          <>
+            <BacklogList
+              projectId={projectId}
+              items={items}
+              search={search}
+              counts={counts}
+              canStart={canStart}
+              now={now}
+            />
+            <nav
+              aria-label="Backlog pages"
+              className="flex flex-wrap items-center justify-between gap-3 text-[12px] text-(--mut)"
+            >
+              <span>
+                Showing {first}–{last} of {total}
+              </span>
+              <span className="flex items-center gap-3">
+                {search.page > 1 ? (
+                  <Link
+                    href={storiesHref(projectId, search, { page: search.page - 1 })}
+                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                  >
+                    ← Newer
+                  </Link>
+                ) : null}
+                <span className="font-mono text-(--dim)">
+                  page {search.page} / {lastPage}
+                </span>
+                {search.page < lastPage ? (
+                  <Link
+                    href={storiesHref(projectId, search, { page: search.page + 1 })}
+                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                  >
+                    Older →
+                  </Link>
+                ) : null}
+              </span>
+            </nav>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function EmptyState({
+  projectId,
+  filtered,
+  hasAnything,
+  search,
+}: {
+  projectId: string;
+  filtered: boolean;
+  hasAnything: boolean;
+  search: ReturnType<typeof parseStoriesSearch>;
+}) {
+  if (filtered && hasAnything) {
+    return (
+      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+        <p>Nothing matches these filters.</p>
+        <Link
+          href={storiesHref(projectId, search, {
+            q: "",
+            phase: [],
+            label: [],
+            assignee: [],
+            repository: [],
+            page: 1,
           })}
-        </div>
-      )}
+          className="text-(--info) underline-offset-4 hover:underline"
+        >
+          Show all open work
+        </Link>
+      </div>
+    );
+  }
+  return (
+    <div className="border border-(--line) p-8 text-sm leading-relaxed text-(--dim)">
+      <p>No work here yet.</p>
+      <p className="mt-2">
+        Describe what you need above to start a story, or connect a GitHub repository in{" "}
+        <Link
+          href={`/projects/${encodeURIComponent(projectId)}/settings`}
+          className="text-(--info) underline-offset-4 hover:underline"
+        >
+          settings
+        </Link>{" "}
+        so its open issues appear as work to pick up.
+      </p>
     </div>
   );
 }

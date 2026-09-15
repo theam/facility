@@ -1,17 +1,11 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { open } from "@facility/core";
-import { inboundEvents, integrations } from "@facility/db";
+import { githubInstallations, githubWebhookEvents, projectRepositories } from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ApiError } from "../errors.js";
-import { resolveGithubIntegration } from "../github/processor.js";
 import { parseGithubJson, verifyGithubSignature } from "../github/webhook.js";
-import { processGenericInboundEvent } from "../integrations/inbound.js";
 import type { AppConfig } from "../types.js";
 
-const Ok = z.object({ ok: z.boolean(), replayed: z.boolean().optional() });
-const INBOUND_SIGNATURE_MAX_AGE_SECONDS = 300;
+const Response = z.object({ ok: z.boolean(), replayed: z.boolean().optional() });
 
 export async function registerWebhookRoutes(app: FastifyInstance, config: AppConfig) {
   await app.register(async (webhookApp) => {
@@ -24,124 +18,101 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
     webhookApp.post(
       "/webhooks/github",
       {
-        // GitHub deliveries are authenticated by HMAC and deduplicated by their
-        // delivery id below. The global per-IP API limiter rejects legitimate
-        // GitHub bursts before either protection can run, so this signed durable
-        // ingress has its own backpressure boundary in the job queue.
         config: { public: true, rateLimit: false },
-        schema: { response: { 202: Ok, 401: Ok } },
+        schema: { response: { 202: Response, 400: Response, 401: Response } },
       },
       async (request, reply) => {
         const secret = config.githubAppWebhookSecret;
-        if (!secret) return reply.status(401).send({ ok: false });
         const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
-        const signature = request.headers["x-hub-signature-256"];
+        const signature = header(request.headers["x-hub-signature-256"]);
+        const delivery = header(request.headers["x-github-delivery"]);
+        const eventType = header(request.headers["x-github-event"]);
         if (
-          !verifyGithubSignature(
-            rawBody,
-            Array.isArray(signature) ? signature[0] : signature,
-            secret,
-          )
+          !secret ||
+          !delivery ||
+          !eventType ||
+          !verifyGithubSignature(rawBody, signature, secret)
         ) {
           return reply.status(401).send({ ok: false });
         }
-        const delivery = request.headers["x-github-delivery"];
-        const eventType = request.headers["x-github-event"];
-        if (typeof delivery !== "string" || typeof eventType !== "string") {
-          return reply.status(401).send({ ok: false });
+
+        let payload: Record<string, unknown>;
+        try {
+          const parsed = parseGithubJson(rawBody);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return reply.status(400).send({ ok: false });
+          }
+          payload = parsed as Record<string, unknown>;
+        } catch {
+          return reply.status(400).send({ ok: false });
         }
-        const payload = parseGithubJson(rawBody) as Record<string, unknown>;
-        const integration = await resolveGithubIntegration(app.facilityDb, payload);
-        if (!integration) {
-          // HMAC-valid but we can't unambiguously attribute it to an org
-          // (unknown installation in a multi-org deployment). Drop, don't guess.
-          request.log.warn({ delivery, eventType }, "github webhook: unresolved installation");
+        const installationNumber = githubInstallationNumber(payload);
+        if (!installationNumber) {
+          request.log.warn({ delivery, eventType }, "github webhook has no installation identity");
           return reply.status(202).send({ ok: true });
         }
-        const id = `gh_${delivery}`;
+        const installation = (
+          await app.facilityDb
+            .select()
+            .from(githubInstallations)
+            .where(eq(githubInstallations.installationId, installationNumber))
+            .limit(1)
+        )[0];
+        if (!installation || installation.suspendedAt) {
+          request.log.warn(
+            { delivery, eventType, installationNumber },
+            "github webhook installation is unknown or suspended",
+          );
+          return reply.status(202).send({ ok: true });
+        }
+
+        const repositoryIdentity = githubRepositoryIdentity(payload);
+        const repository = repositoryIdentity
+          ? (
+              await app.facilityDb
+                .select({
+                  id: projectRepositories.id,
+                  projectId: projectRepositories.projectId,
+                })
+                .from(projectRepositories)
+                .where(
+                  and(
+                    eq(projectRepositories.orgId, installation.orgId),
+                    eq(projectRepositories.installationId, installation.id),
+                    eq(projectRepositories.owner, repositoryIdentity.owner),
+                    eq(projectRepositories.name, repositoryIdentity.name),
+                  ),
+                )
+                .limit(1)
+            )[0]
+          : undefined;
+
+        const id = `gh_${installation.id}_${delivery}`;
         const inserted = await app.facilityDb
-          .insert(inboundEvents)
+          .insert(githubWebhookEvents)
           .values({
             id,
-            orgId: integration.orgId,
-            integrationId: integration.integrationId,
-            verified: true,
+            orgId: installation.orgId,
+            installationId: installation.id,
+            projectId: repository?.projectId,
+            repositoryId: repository?.id,
             eventType,
             payload,
+            verified: true,
           })
           .onConflictDoNothing()
-          .returning();
-        if (inserted.length === 0) return reply.status(202).send({ ok: true, replayed: true });
+          .returning({ id: githubWebhookEvents.id });
+        if (inserted.length === 0) {
+          return reply.status(202).send({ ok: true, replayed: true });
+        }
         if (!githubWebhookRequiresWorker(eventType, payload)) {
           await app.facilityDb
-            .update(inboundEvents)
+            .update(githubWebhookEvents)
             .set({ processedAt: new Date() })
-            .where(eq(inboundEvents.id, id));
+            .where(eq(githubWebhookEvents.id, id));
           return reply.status(202).send({ ok: true });
         }
         await app.enqueue("github.webhook", { inboundEventId: id });
-        return reply.status(202).send({ ok: true });
-      },
-    );
-
-    webhookApp.post(
-      "/webhooks/inbound/:integrationId",
-      {
-        config: { public: true },
-        schema: {
-          params: z.object({ integrationId: z.string() }),
-          response: { 202: Ok, 401: Ok },
-        },
-      },
-      async (request, reply) => {
-        const { integrationId } = request.params as { integrationId: string };
-        const integration = (
-          await app.facilityDb
-            .select()
-            .from(integrations)
-            .where(
-              and(
-                eq(integrations.id, integrationId),
-                eq(integrations.enabled, true),
-                eq(integrations.kind, "generic_inbound"),
-              ),
-            )
-            .limit(1)
-        )[0];
-        if (!integration?.sealedSecret) return reply.status(401).send({ ok: false });
-        const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
-        const signature = headerString(request.headers["x-facility-signature"]);
-        const timestamp = headerString(request.headers["x-facility-timestamp"]);
-        const deliveryId = headerString(request.headers["x-facility-delivery"]);
-        const eventType = headerString(request.headers["x-facility-event"]);
-        if (!timestamp || !deliveryId || !eventType) {
-          return reply.status(401).send({ ok: false });
-        }
-        const secret = await open(integration.sealedSecret, config.secretMasterKey);
-        if (
-          !verifyInboundSignature(rawBody, { signature, timestamp, deliveryId, eventType }, secret)
-        ) {
-          return reply.status(401).send({ ok: false });
-        }
-        const payload = parseJson(rawBody);
-        // Scope idempotency to the integration: a delivery id is only unique per
-        // sender, so a global `in_${deliveryId}` would let one integration's
-        // delivery id suppress a different integration's event.
-        const id = `in_${integration.id}_${deliveryId}`;
-        const inserted = await app.facilityDb
-          .insert(inboundEvents)
-          .values({
-            id,
-            orgId: integration.orgId,
-            integrationId: integration.id,
-            verified: true,
-            eventType,
-            payload,
-          })
-          .onConflictDoNothing()
-          .returning();
-        if (inserted.length === 0) return reply.status(202).send({ ok: true, replayed: true });
-        await processGenericInboundEvent(app.facilityDb, id, app.enqueue);
         return reply.status(202).send({ ok: true });
       },
     );
@@ -153,53 +124,32 @@ export function githubWebhookRequiresWorker(eventType: string, payload: Record<s
   return payload.action === "completed";
 }
 
-function verifyInboundSignature(
-  body: Buffer,
-  headers: {
-    signature?: string;
-    timestamp?: string;
-    deliveryId?: string;
-    eventType?: string;
-  },
-  secret: string,
-): boolean {
-  const { signature, timestamp, deliveryId, eventType } = headers;
-  if (
-    !signature?.startsWith("sha256=") ||
-    !timestamp ||
-    !/^\d{10}$/.test(timestamp) ||
-    !deliveryId ||
-    !eventType
-  ) {
-    return false;
+function githubInstallationNumber(payload: Record<string, unknown>) {
+  const installation = payload.installation;
+  if (!installation || typeof installation !== "object" || Array.isArray(installation)) {
+    return undefined;
   }
-  const sentAt = Number(timestamp);
-  const now = Math.floor(Date.now() / 1_000);
-  if (!Number.isSafeInteger(sentAt) || Math.abs(now - sentAt) > INBOUND_SIGNATURE_MAX_AGE_SECONDS) {
-    return false;
-  }
-  const expected = `sha256=${createHmac("sha256", secret)
-    .update(`${timestamp}.${deliveryId}.${eventType}.`)
-    .update(body)
-    .digest("hex")}`;
-  const left = Buffer.from(signature);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
+  const id = (installation as Record<string, unknown>).id;
+  return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : undefined;
 }
 
-function parseJson(body: Buffer): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body.toString("utf8")) as unknown;
-  } catch {
-    throw new ApiError(400, "bad_request", "Invalid JSON payload");
-  }
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
+function githubRepositoryIdentity(payload: Record<string, unknown>) {
+  const repository = payload.repository;
+  if (!repository || typeof repository !== "object" || Array.isArray(repository)) return undefined;
+  const value = repository as Record<string, unknown>;
+  const fullName = typeof value.full_name === "string" ? value.full_name.split("/") : [];
+  const ownerObject = value.owner;
+  const owner =
+    ownerObject && typeof ownerObject === "object" && !Array.isArray(ownerObject)
+      ? (ownerObject as Record<string, unknown>).login
+      : fullName[0];
+  const name = typeof value.name === "string" ? value.name : fullName[1];
+  return typeof owner === "string" && owner && typeof name === "string" && name
+    ? { owner, name }
+    : undefined;
 }
 
-function headerString(value: string | string[] | undefined): string | undefined {
-  const raw = Array.isArray(value) ? value[0] : value;
-  return typeof raw === "string" && raw.trim() ? raw : undefined;
+function header(value: string | string[] | undefined) {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return typeof candidate === "string" && candidate.trim() ? candidate : undefined;
 }

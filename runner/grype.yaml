@@ -6,7 +6,7 @@
 # path. A Docker-tool digest or embedded-version change therefore fails closed
 # and requires this evidence to be reviewed again.
 #
-# Reviewed 2026-08-07 with Grype 0.110.0 and govulncheck 1.6.0. runc and
+# Reviewed 2026-09-04 with Grype 0.110.0 and govulncheck 1.6.0. runc and
 # RootlessKit have no reachable vulnerable symbols. The containerd findings are
 # limited to its rootless, local-UNIX-socket runtime behind Facility's Docker
 # proxy; it does not use Docker AuthZ plugins or xDS RBAC. Remove these rules as
@@ -85,23 +85,5 @@ ignore:
     package:
       name: golang.org/x/text
       version: v0.38.0
-      type: go-module
-      location: /usr/local/bin/ctr
-  - vulnerability: GHSA-hrxh-6v49-42gf
-    package:
-      name: google.golang.org/grpc
-      version: v1.80.0
-      type: go-module
-      location: /usr/local/bin/containerd
-  - vulnerability: GHSA-hrxh-6v49-42gf
-    package:
-      name: google.golang.org/grpc
-      version: v1.80.0
-      type: go-module
-      location: /usr/local/bin/containerd-shim-runc-v2
-  - vulnerability: GHSA-hrxh-6v49-42gf
-    package:
-      name: google.golang.org/grpc
-      version: v1.80.0
       type: go-module
       location: /usr/local/bin/ctr

@@ -1,9 +1,9 @@
 import { can, keyLookup, newId, open, seal, verifyKey } from "@facility/core";
 import {
   apiKeys,
+  auditEvents,
   createDb,
   githubInstallations,
-  insertAuditEvent,
   orgMembers,
   orgs,
   projects,
@@ -16,7 +16,8 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import websocket from "@fastify/websocket";
+import { and, eq, isNull, or } from "drizzle-orm";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   jsonSchemaTransform,
@@ -37,12 +38,14 @@ import {
   type OpenApiDocument,
   type OpenApiRouteRecord,
 } from "./openapi-contract.js";
-import { assertPreviewOriginSurface } from "./previews.js";
+import { assertPreviewOriginSurface } from "./origin-isolation.js";
+import { safeRequestLog } from "./request-log.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGithubRoutes } from "./routes/github.js";
-import { registerInternalRoutes } from "./routes/internal.js";
+import { registerMcpRoutes } from "./routes/mcp.js";
 import { registerV1Routes } from "./routes/v1.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
+import { createStoryDomain, type StoryDomain } from "./story-domain.js";
 import type { AppConfig, Principal } from "./types.js";
 
 const publicRoutes = new Set([
@@ -55,19 +58,31 @@ const publicPrefixes = ["/docs"];
 
 export async function buildApp(
   config: AppConfig = readConfig(),
-  deps: { oauthJwks?: JWTVerifyGetKey; rateLimitMax?: number; authFetch?: typeof fetch } = {},
+  deps: {
+    oauthJwks?: JWTVerifyGetKey;
+    rateLimitMax?: number;
+    authFetch?: typeof fetch;
+    storyDomain?: StoryDomain;
+  } = {},
 ): Promise<FastifyInstance> {
   const oauthConfig = oauthConfigFromApp(config);
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: { level: config.logLevel, serializers: { req: safeRequestLog } },
     genReqId: () => uuidv7(),
   });
   const routeRecords: OpenApiRouteRecord[] = [];
   const { db, client } = createDb(config.databaseUrl);
   app.decorate("facilityDb", db);
   app.decorate("githubClientFactory", undefined);
-  app.decorate("githubInstallationTokenFactory", undefined);
-  app.decorate("githubAppMetadataReader", undefined);
+  app.decorate(
+    "storyDomain",
+    deps.storyDomain ??
+      createStoryDomain({
+        db,
+        config,
+        enqueue: (queue, data) => app.enqueue(queue, data),
+      }),
+  );
 
   // Producer-only pg-boss handle: routes enqueue, the worker consumes.
   const boss = new PgBoss({ connectionString: config.databaseUrl });
@@ -153,6 +168,7 @@ export async function buildApp(
   );
 
   await app.register(cookie, { secret: config.secretMasterKey });
+  await app.register(websocket, { options: { maxPayload: 16 * 1024 * 1024 } });
   await app.register(cors, {
     origin: [config.publicUrl, config.webUrl].filter((value): value is string => Boolean(value)),
     credentials: true,
@@ -166,9 +182,9 @@ export async function buildApp(
     openapi: {
       info: {
         title: "Facility API",
-        version: "0.3.0",
+        version: "0.12.0",
         description:
-          "Control-plane API for projects, AI agent runs, human approval gates, knowledge, cost governance, and auditability.",
+          "MCP-first control plane for persistent story workspaces and repository-defined agents.",
         contact: { name: "Facility", url: "https://github.com/theam/facility" },
         license: { name: "Apache-2.0", url: "https://www.apache.org/licenses/LICENSE-2.0" },
       },
@@ -189,17 +205,20 @@ export async function buildApp(
     async function audit(this: FastifyRequest, action: string, target, payload = {}) {
       const principal = this.principal;
       if (!principal) return;
-      const projectId =
-        (target?.type === "project" ? target.id : undefined) ?? this.principal?.projectId ?? null;
-      await insertAuditEvent(db, {
+      this.log.info(
+        { action, target, payload, actor: { type: principal.type, id: principal.id } },
+        "facility access event",
+      );
+      const projectId = (this.params as Record<string, string | undefined>)?.projectId;
+      await db.insert(auditEvents).values({
+        id: newId("evt"),
         orgId: principal.orgId,
         projectId,
         actor: { type: principal.type, id: principal.id },
         action,
         target,
         payload,
-        ip: this.ip,
-        userAgent: this.headers["user-agent"],
+        requestId: this.id,
       });
     },
   );
@@ -221,6 +240,7 @@ export async function buildApp(
 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("x-request-id", request.id);
+    if ((request.raw.url ?? request.url).startsWith("/workspace-preview-site/")) return;
     request.principal = await resolvePrincipal(request, db, config, oauthConfig, deps.oauthJwks);
     const permission = request.routeOptions.config?.permission as string | string[] | undefined;
     const isPublic = request.routeOptions.config?.public === true;
@@ -264,9 +284,7 @@ export async function buildApp(
     }
   });
 
-  app.addHook("preHandler", async (request, reply) => {
-    return beginIdempotentRequest(db, request, reply);
-  });
+  app.addHook("preHandler", async (request, reply) => beginIdempotentRequest(db, request, reply));
 
   app.addHook("onSend", async (request, reply, payload) => {
     await completeIdempotentRequest(db, request, reply, payload);
@@ -274,23 +292,20 @@ export async function buildApp(
   });
 
   app.addHook("onResponse", async (request, reply) => {
-    const permission = request.routeOptions.config?.permission;
     const action = request.routeOptions.config?.auditAction as string | undefined;
     if (
-      !permission ||
-      request.idempotencyReplayed ||
-      request.method === "GET" ||
-      reply.statusCode < 200 ||
-      reply.statusCode >= 300 ||
-      !action
+      action &&
+      !request.idempotencyReplayed &&
+      request.method !== "GET" &&
+      reply.statusCode >= 200 &&
+      reply.statusCode < 300
     ) {
-      return;
+      const params = request.params as Record<string, string | undefined>;
+      await request.audit(action, {
+        type: params.projectId ? "project" : "route",
+        id: params.projectId ?? request.url,
+      });
     }
-    const params = request.params as Record<string, string | undefined>;
-    await request.audit(action, {
-      type: params.projectId ? "project" : "route",
-      id: params.projectId ?? request.url,
-    });
   });
 
   const healthOptions = {
@@ -305,15 +320,16 @@ export async function buildApp(
   const healthHandler = async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       await db.execute("select 1" as never);
-      return { ok: true, version: "0.3.0", db: "ok" as const };
+      return { ok: true, version: "0.12.0", db: "ok" as const };
     } catch {
-      return reply.status(503).send({ ok: false, version: "0.3.0", db: "down" as const });
+      return reply.status(503).send({ ok: false, version: "0.12.0", db: "down" as const });
     }
   };
   app.get("/health", healthOptions, healthHandler);
   app.get("/readyz", healthOptions, healthHandler);
 
   await registerAuthorizationServer(app, config);
+  await registerMcpRoutes(app, config);
   if (process.env.NODE_ENV === "test" || process.env.VITEST === "true") {
     app.post(
       "/__test/session",
@@ -337,8 +353,30 @@ export async function buildApp(
       },
     );
   }
+  if (config.facilityInsecureDev) {
+    app.get(
+      "/auth/dev-login",
+      {
+        config: { public: true },
+        schema: { response: { 302: z.unknown() } },
+      },
+      async (_request, reply) => {
+        const session = await ensureDevUser(db, "admin@facility.local");
+        reply.setCookie(
+          "facility_session",
+          await mintSessionCookie(config, session.userId, session.orgId),
+          {
+            httpOnly: true,
+            sameSite: "lax",
+            path: "/",
+            secure: false,
+          },
+        );
+        return reply.redirect(config.webUrl ?? config.publicUrl);
+      },
+    );
+  }
   await registerAuthRoutes(app, config, { fetch: deps.authFetch });
-  await registerInternalRoutes(app, config);
   await registerWebhookRoutes(app, config);
   await registerV1Routes(app, config);
   await registerGithubRoutes(app, config);
@@ -385,16 +423,7 @@ async function resolvePrincipal(
       })
       .from(apiKeys)
       .innerJoin(rolesTable, eq(apiKeys.roleId, rolesTable.id))
-      // Reject revoked keys and expired run-scoped keys (expiresAt is null for
-      // ordinary keys). A run's platform key thus stops authenticating the moment
-      // it expires, even if the terminal-path revoke was somehow missed.
-      .where(
-        and(
-          eq(apiKeys.prefix, keyLookup(secret)),
-          isNull(apiKeys.revokedAt),
-          or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date())),
-        ),
-      )
+      .where(and(eq(apiKeys.prefix, keyLookup(secret)), isNull(apiKeys.revokedAt)))
       .limit(2);
     for (const row of rows) {
       if (await verifyKey(secret, row.key.hash)) {
@@ -521,7 +550,7 @@ export async function mintSessionCookie(config: AppConfig, userId: string, orgId
 }
 
 export async function ensureDevUser(db: ReturnType<typeof createDb>["db"], email: string) {
-  const org = (await db.select().from(orgs).where(eq(orgs.slug, "the-agile-monkeys")).limit(1))[0];
+  const org = (await db.select().from(orgs).where(eq(orgs.slug, "facility-local")).limit(1))[0];
   if (!org) throw new ApiError(500, "seed_required", "Dev org is not seeded");
   const role = (
     await db

@@ -12,11 +12,15 @@ export async function beginIdempotentRequest(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
-  // Every authenticated POST may opt into replay safety simply by sending the
-  // header. Route authors cannot accidentally accept and silently ignore it on
-  // a new creator/transition endpoint. Public webhook/internal routes have no
-  // permission declaration and retain their own delivery-specific replay rules.
-  if (request.method !== "POST" || !request.routeOptions.config?.permission) return;
+  // Every authenticated mutation may opt into replay safety simply by sending
+  // the header. Public webhook/internal routes have no permission declaration
+  // and retain their own delivery-specific replay rules.
+  if (
+    !["POST", "PATCH", "PUT", "DELETE"].includes(request.method) ||
+    !request.routeOptions.config?.permission
+  ) {
+    return;
+  }
   const rawKey = request.headers["idempotency-key"];
   const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
   if (key === undefined) return;
@@ -114,24 +118,72 @@ export async function completeIdempotentRequest(
 ) {
   const id = request.idempotencyId;
   if (!id) return;
-  try {
-    if (reply.statusCode >= 500) {
-      await db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, id));
-      return;
-    }
-    const responseBody = parsePayload(payload);
-    await db
-      .update(idempotencyRecords)
-      .set({
-        state: "completed",
-        statusCode: reply.statusCode,
-        responseBody,
-        updatedAt: new Date(),
-      })
-      .where(eq(idempotencyRecords.id, id));
-  } catch (error) {
-    request.log.error({ err: error, idempotencyId: id }, "could not persist idempotent response");
+  if (reply.statusCode >= 500) {
+    await db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, id));
+    request.idempotencyId = undefined;
+    return;
   }
+  const responseBody = parsePayload(payload);
+  const completed = await db
+    .update(idempotencyRecords)
+    .set({
+      state: "completed",
+      statusCode: reply.statusCode,
+      responseBody,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(idempotencyRecords.id, id), eq(idempotencyRecords.state, "pending")))
+    .returning({ id: idempotencyRecords.id });
+  if (completed.length !== 1) {
+    throw new Error(`Idempotency record ${id} could not be completed`);
+  }
+  request.idempotencyId = undefined;
+}
+
+/**
+ * A handler committed but its transport disappeared before onSend could
+ * persist the actual response. Seal the key as non-replayable rather than
+ * deleting/reclaiming an outcome that may already have external side effects.
+ */
+export async function finalizeIndeterminateIdempotentRequest(
+  db: FacilityDb,
+  request: FastifyRequest,
+) {
+  const id = request.idempotencyId;
+  if (!id) return;
+  const completed = await db
+    .update(idempotencyRecords)
+    .set({
+      state: "completed",
+      statusCode: 409,
+      responseBody: {
+        error: {
+          code: "idempotency_outcome_indeterminate",
+          message: "The original request may have completed; automatic replay is refused",
+        },
+      },
+      updatedAt: new Date(),
+    })
+    .where(and(eq(idempotencyRecords.id, id), eq(idempotencyRecords.state, "pending")))
+    .returning({ id: idempotencyRecords.id });
+  if (completed.length !== 1) {
+    throw new Error(`Idempotency record ${id} could not be sealed as indeterminate`);
+  }
+  request.idempotencyId = undefined;
+}
+
+/** Remove a pending replay record when its client disconnected before a response. */
+export async function abandonIdempotentRequest(db: FacilityDb, request: FastifyRequest) {
+  const id = request.idempotencyId;
+  if (!id) return;
+  const deleted = await db
+    .delete(idempotencyRecords)
+    .where(and(eq(idempotencyRecords.id, id), eq(idempotencyRecords.state, "pending")))
+    .returning({ id: idempotencyRecords.id });
+  if (deleted.length !== 1) {
+    throw new Error(`Pending idempotency record ${id} could not be abandoned`);
+  }
+  request.idempotencyId = undefined;
 }
 
 export async function expireIdempotencyRecords(db: FacilityDb, now = new Date()) {

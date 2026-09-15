@@ -7,9 +7,16 @@ export async function clientApi<T = unknown>(
   body?: unknown,
 ): Promise<{ ok: true; data: T } | { ok: false; message: string }> {
   try {
+    const idempotencyKey =
+      body && typeof body === "object" && "idempotency_key" in body
+        ? String((body as { idempotency_key?: unknown }).idempotency_key ?? "")
+        : "";
     const res = await fetch(`/api${path}`, {
       method,
-      headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+      headers: {
+        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
+      },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     const payload = (await res.json().catch(() => null)) as

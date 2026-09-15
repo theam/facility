@@ -1,4 +1,3 @@
-import { CommandPalette } from "@/components/shell/cmdk";
 import { MobileNav, Sidebar } from "@/components/shell/nav";
 import { Topbar } from "@/components/shell/topbar";
 import { api } from "@/lib/api";
@@ -15,7 +14,6 @@ export default async function OrgLayout({ children }: { children: React.ReactNod
         {me.ok ? <Topbar me={me.data} projects={projectList} /> : null}
         <main className="px-5 py-8 sm:px-8 lg:px-10">{children}</main>
       </div>
-      <CommandPalette projects={projectList} />
     </div>
   );
 }

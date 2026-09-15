@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { BUILD_IMAGES, publishImageSet } from "./images.mjs";
+import { BUILD_IMAGES, PUBLISHED_IMAGES, publishImageSet } from "./images.mjs";
 
 const repository = "theam/facility";
 const owner = "theam";
@@ -114,23 +114,26 @@ function publishOptions({ api, docker, overrides = {} }) {
   };
 }
 
-test("a fresh image set promotes six packages and aliases worker to the api digest", async (t) => {
+test("a fresh image set promotes four packages and aliases worker to the api digest", async (t) => {
   const api = await fakePackages(t);
   const docker = await fakeDocker(t);
 
   const result = await publishImageSet(publishOptions({ api, docker }));
 
-  assert.equal(result.promoted, 6);
-  assert.equal(api.requests.length, 6);
+  assert.equal(result.promoted, PUBLISHED_IMAGES.length);
+  assert.equal(api.requests.length, PUBLISHED_IMAGES.length);
   assert.deepEqual(
     api.requests.map(({ authorization, method }) => ({ authorization, method })),
-    Array.from({ length: 6 }, () => ({ authorization: `Bearer ${token}`, method: "GET" })),
+    Array.from({ length: PUBLISHED_IMAGES.length }, () => ({
+      authorization: `Bearer ${token}`,
+      method: "GET",
+    })),
   );
   const calls = await invocations(docker.log);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, PUBLISHED_IMAGES.length);
   assert.deepEqual(
     calls.map(({ githubToken, ghToken }) => ({ githubToken, ghToken })),
-    Array.from({ length: 6 }, () => ({ githubToken: null, ghToken: null })),
+    Array.from({ length: PUBLISHED_IMAGES.length }, () => ({ githubToken: null, ghToken: null })),
   );
   assert.ok(
     calls.every(({ args }) => args.includes("--prefer-index=false")),
@@ -171,7 +174,11 @@ test("a conflicting replay fails before any registry mutation", async (t) => {
     publishImageSet(publishOptions({ api, docker })),
     /refusing to replace facility\/runner:sha-aaaaaaaaaaaa/,
   );
-  assert.equal(api.requests.length, 6, "every package must be inspected before promotion starts");
+  assert.equal(
+    api.requests.length,
+    PUBLISHED_IMAGES.length,
+    "every package must be inspected before promotion starts",
+  );
   assert.deepEqual(await invocations(docker.log), []);
 });
 
@@ -207,9 +214,9 @@ test("a promotion failure stops the set and a same-digest retry can fill the rem
   const firstApi = await fakePackages(t);
   const failingDocker = await fakeDocker(t);
   const failing = publishOptions({ api: firstApi, docker: failingDocker });
-  failing.env.FAKE_DOCKER_FAIL_IMAGE = "gateway";
+  failing.env.FAKE_DOCKER_FAIL_IMAGE = "web";
 
-  await assert.rejects(publishImageSet(failing), /promotion failed for gateway with exit 23/);
+  await assert.rejects(publishImageSet(failing), /promotion failed for web with exit 23/);
   assert.equal((await invocations(failingDocker.log)).length, 3);
 
   const digests = imageDigests();
@@ -221,6 +228,6 @@ test("a promotion failure stops the set and a same-digest retry can fill the rem
   const retryDocker = await fakeDocker(t);
   const retry = await publishImageSet(publishOptions({ api: retryApi, docker: retryDocker }));
 
-  assert.equal(retry.promoted, 4);
-  assert.equal((await invocations(retryDocker.log)).length, 4);
+  assert.equal(retry.promoted, 2);
+  assert.equal((await invocations(retryDocker.log)).length, 2);
 });

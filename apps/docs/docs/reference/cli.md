@@ -4,126 +4,93 @@ title: CLI
 
 # CLI
 
-One binary, two lives: the vendored installer it always was, and a client
-for your platform.
+The CLI configures and checks a repository. Runtime automation belongs to MCP; people can also use
+the web UI.
 
-The CLI is not yet distributed through npm. Run it from a Facility checkout:
-
-```bash
-node /absolute/path/to/facility/packages/cli/bin/facility.mjs <command>
-# Optional interactive shorthand used throughout this page:
-alias facility='node /absolute/path/to/facility/packages/cli/bin/facility.mjs'
-```
-
-## Vendored lane (no platform required)
-
-| command | does |
-|---|---|
-| `init` | install the method into a repo (asks six questions, writes the files, prints the human steps) |
-| `add <module>` | add a quality module (database, analytics, ai-queryability, design-system) |
-| `doctor [--json]` | check the install and list what's left |
-
-### Repository configuration
-
-Interactive `facility init` detects the package manager, checks, deployment
-providers, existing preview configuration, and GitHub Project hints. For a
-reproducible non-interactive install, provide the decisions explicitly:
+Install or invoke the published package from a repository root:
 
 ```bash
-facility init \
-  --branch=main \
-  --provision='pnpm install --frozen-lockfile' \
-  --checks='pnpm lint, pnpm typecheck, pnpm test' \
-  --org=acme \
-  --project=12 \
-  --preview-image='ghcr.io/acme/app:${{ steps.delivery.outputs.head_sha }}' \
-  --preview-command='pnpm start' \
-  --preview-port=3000 \
-  --preview-readiness-path=/healthz \
-  --preview-ttl-hours=24
+npx @theagilemonkeys/facility --version
+npx @theagilemonkeys/facility init
+npx @theagilemonkeys/facility doctor
 ```
 
-The resulting `.facility.json` is the reviewable source of truth. Its `checks`
-must be non-empty for builder delivery. `preview.command` may prepare
-non-production data before starting the server; Facility injects no project
-secrets, and the immutable image must already be published. The
-`${{ steps.delivery.outputs.head_sha }}` tag placeholder is resolved by GitHub
-Actions in the repository lane and by Facility in the platform lane.
-
-```json
-{
-  "defaultBranch": "main",
-  "packageInstall": "pnpm install --frozen-lockfile",
-  "provision": "pnpm run local:setup",
-  "checks": ["pnpm lint", "pnpm typecheck", "pnpm test"],
-  "board": { "org": "acme", "project": 12 },
-  "executionLane": { "architect": "platform", "builder": "platform" },
-  "preview": {
-    "enabled": true,
-    "image": "ghcr.io/acme/app:sha-…",
-    "command": ["sh", "-lc", "pnpm start"],
-    "port": 3000,
-    "readinessPath": "/healthz",
-    "ttlHours": 24
-  }
-}
+```text
+facility init      write .facility.yml and .agents/*.md
+facility doctor    validate the local workspace contract
+facility instance bootstrap
+                   bind the first owner and GitHub installation
 ```
 
-Run `facility doctor --run-guards --github` after committing. It checks the
-manifest, generated workflows, configured agent models and authentication,
-preview variables/secrets, deterministic guards, and branch protection.
+## `facility init`
 
-## Platform lane
+Init detects the GitHub remote, package manager, setup command, development command, and likely
+service port. Interactive mode lets you correct those values. `--yes` accepts detected or explicit
+values without prompts.
 
-The platform lane is the complete operator surface; the web application is not
-required.
+| Flag | Purpose |
+| --- | --- |
+| `--dir=<path>` | Configure another repository directory. |
+| `--yes`, `-y` | Run without interactive confirmation. |
+| `--force` | Overwrite the seven Facility-owned targets. |
+| `--repo=<owner/name>` | Set the primary GitHub repository. |
+| `--provision=<command>` | Set optional `environment.setup`. |
+| `--start=<command>` | Set required `environment.start`. |
+| `--preview-readiness-command=<command>` | Set optional `environment.ready`. |
+| `--service-port=<number>` | Set the initial `app` service port. |
+| `--build-model=<id>` | Set the initial Claude builder model. |
+| `--review-model=<id>` | Set the initial Claude reviewer model. |
+| `--plan-model=<id>` | Set the initial Claude architect model. |
+| `--codex-build-model=<id>` | Set the initial Codex builder model. |
+| `--codex-plan-model=<id>` | Set the initial Codex architect model. |
 
-| area | commands |
-|---|---|
-| connection | `login`, `logout`, `profiles list\|use\|remove`, `status`, `doctor --platform [--profile]` |
-| projects and repos | `projects list\|get\|create\|update\|archive`, `repos list\|connect\|create\|disconnect\|verify\|adopt`, `kickstart`, `upgrade`, `health` |
-| execution | `agents list\|status\|create\|update\|delete`, `sessions list\|get\|events\|transcript\|watch\|trigger\|steer\|interrupt\|resume\|cancel` (`runs` is an alias), `conversations list\|get\|start\|send`, `sandboxes list\|create\|update\|delete` |
-| GitHub delivery | `github installations\|repos\|issues\|issue\|sync\|trigger`, `outcomes`, `repos list\|connect\|create\|disconnect\|verify\|adopt` |
-| human gates | `inbox`, `inbox decide`, `proposals get\|create\|execute`, `action-types list\|get`, `issues list\|ack\|resolve` |
-| knowledge and policy | `kb space get\|set`, `kb entries list\|get\|create\|update`, `kb validate`, `tasks list\|create\|update\|delete\|transition\|propose`, `registry list\|get\|create\|version\|publish\|deprecate` |
-| money and models | `providers list\|create\|delete`, `virtual-keys list\|issue\|revoke`, `budgets list\|get\|set\|delete`, `spend`, `llm-requests list\|get` |
-| administration | `org get\|update`, `members list\|add\|update\|remove`, `roles list\|create\|update\|delete`, `keys issue\|list\|revoke` |
-| evidence and integrations | `catalog`, `analytics overview\|timeseries`, `audit list\|verify`, `integrations list\|get\|create\|update\|rotate-secret\|events\|deliveries\|retry\|delete` |
+Init writes only `.facility.yml` and these manifests:
 
-Run `facility <command> --help` for exact flags and an example. Global platform
-flags can appear before or after the command: `--profile`, `--json`, `--timeout`,
-and `--help`. Unknown flags and missing values fail closed. Destructive commands
-require `--yes`.
+- `.agents/architect.md`
+- `.agents/builder.md`
+- `.agents/pr-reviewer.md`
+- `.agents/address-review.md`
+- `.agents/ci-doctor.md`
+- `.agents/security-audit.md`
 
-Human output uses compact tables that adapt to the terminal width and switch to
-a readable field layout when a table cannot fit. Color is restrained to live
-work, status, and warnings and honors both non-TTY output and `NO_COLOR`. JSON
-mode emits one JSON value per command and JSONL for `runs watch`; failures use
-stdout too, leaving stderr clean for deterministic pipelines. Exit codes are
-`0` success, `1` command/API/terminal-run failure, and `2` authentication.
-`kb validate` and `audit verify` return `1` when their report is not valid, so
-they can be used directly as CI gates.
+It preserves each existing file independently unless `--force` is explicit. Review before using
+force: these files are project-owned configuration, not disposable generated output.
 
-`sessions transcript` writes the original NDJSON transcript in human mode and
-one JSON object with parsed events in `--json` mode. `sessions watch --json`
-is the deliberate JSONL exception because it is an unbounded event stream.
+## `facility doctor`
 
-`sessions trigger <project> <agent> --input <json-or-text>` carries the manual
-run's objective. Builder agents require a non-empty text or structured input;
-Facility rejects objective-free manual builder runs instead of letting an agent
-guess what to implement.
-Programmatic callers must likewise provide a non-empty `message`, `approvedPlan`,
-structured `input`, or governed issue number when they trigger a builder.
+Doctor checks the local seven-file kickstart contract and exits non-zero when it finds a problem.
+Use `--dir=<path>` to inspect another checkout and `--json` for machine-readable results:
 
-`facility doctor` checks the current repository. Add `--platform` to use the
-current saved profile, `--profile <name>` to select one, or pass `--url` and
-`--key` together. Remote plaintext targets require `--allow-insecure`, exactly
-as login does. `--json` is machine-readable in both modes.
+```bash
+facility doctor --json
+```
 
-Credentials can come from a mode-`0600` profile file, an alternate
-`FACILITY_CONFIG`, or the paired `FACILITY_URL` and `FACILITY_API_KEY`
-environment variables. Interactive keys are masked and remote plaintext HTTP
-is refused unless `--allow-insecure` is explicitly chosen for development.
-Non-interactive login may receive URL and key as two newline-delimited stdin
-values. JSON mode never prompts: credentials must come from flags or the paired
-environment variables, preserving the one-JSON-value contract.
+Doctor does not connect to a Facility instance or GitHub and does not prove that commands start
+successfully. The server's strict manifest parsers remain authoritative. Follow local validation
+with a disposable story workspace.
+
+## `facility instance bootstrap`
+
+After migrations and seed data exist in an empty database, bootstrap binds the first organization,
+owner identity, and GitHub App installation:
+
+```bash
+DATABASE_URL=postgres://... facility instance bootstrap \
+  --org-name='Acme Engineering' \
+  --org-slug=acme \
+  --owner-email=owner@example.com \
+  --owner-name='Repository Owner' \
+  --github-user-id=12345 \
+  --github-login=owner \
+  --github-account-id=67890 \
+  --github-installation-id=24680 \
+  --github-account-login=acme \
+  --github-account-type=organization
+```
+
+The command takes a PostgreSQL advisory lock. Repeating the exact binding is safe and reports that
+it already exists; a different binding against a populated instance is refused. Use `--json` for
+automation and protect `DATABASE_URL` as an administrative secret.
+
+Run `facility <command> --help` for local usage. Unknown options and missing option values fail
+instead of being ignored.
