@@ -1,5 +1,5 @@
 import { createDb, type FacilityDb, turns } from "@facility/db";
-import { and, asc, eq, lte } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
@@ -153,7 +153,12 @@ export async function recoverQueuedTurns(
   const queued = await db
     .select({ id: turns.id, orgId: turns.orgId, projectId: turns.projectId })
     .from(turns)
-    .where(eq(turns.state, "queued"))
+    .where(
+      and(
+        eq(turns.state, "queued"),
+        or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
+      ),
+    )
     .orderBy(asc(turns.createdAt))
     .limit(limit);
   for (const turn of queued) {

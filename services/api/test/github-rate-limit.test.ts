@@ -50,6 +50,13 @@ describe("GitHub retry deadlines", () => {
     ).toBe(now + 60_000);
   });
 
+  it("recognizes the request error message when response data is unavailable", () => {
+    const error = Object.assign(new Error("API rate limit exceeded"), { status: 403 });
+    expect(githubRateLimitRetryAt(error, now)?.getTime()).toBe(now + 60_000);
+    expect(
+      githubRateLimitRetryAt(Object.assign(new Error("access revoked"), { status: 403 }), now),
+    ).toBeUndefined();
+  });
   it("bounds parseable but implausible provider dates instead of stranding the receipt", () => {
     for (const headers of [
       { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "99999999999" },
