@@ -68,7 +68,10 @@ export async function registerNativeWorkspacePreviewRoutes(
   app.post(
     "/workspace-preview-native/:workspaceId/:service/authorize",
     {
-      config: { public: true },
+      // A page load authorizes every asset and app request. Keep a bounded,
+      // independent per-IP budget for this route, not the general API's 200/min.
+      // Do not trust caller-supplied IP/session headers to create fresh buckets.
+      config: { public: true, rateLimit: { max: 6_000, timeWindow: "1 minute" } },
       schema: {
         params: Params,
         body: z.object({ sessionId: Session, token: Token }).strict(),

@@ -9,6 +9,8 @@ access; the project's Compose stack remains responsible for the application.
 
 1. A visitor opens the provider URL. The gateway sends them to Facility's web
    origin, carrying a challenge tied to a temporary HttpOnly browser cookie.
+   This signed, two-minute cookie also retains the same-origin application path
+   and query; those values are not sent to Facility or the identity provider.
 2. Facility uses its normal login and checks the active user's membership and
    `previews:read` or `workspaces:execute` permission. It discovers the destination
    from its persisted, verified workspace endpoint, never from a caller's return URL.
@@ -18,10 +20,23 @@ access; the project's Compose stack remains responsible for the application.
 4. Exchange replaces the code with a different random session credential, stored
    hashed in Facility PostgreSQL and in a host-only `__Host-facility-preview`
    Secure/HttpOnly/SameSite=Lax cookie. Its lifetime is at most one hour.
+   The gateway restores the original application path/query, including application
+   OAuth callbacks interrupted by preview reauthentication. Only relative,
+   non-reserved paths up to 2,048 characters are retained; invalid destinations
+   fall back to `/`. Tampered or expired login cookies fail closed.
 5. Each HTTP request and WebSocket handshake rechecks the session, current role,
    active membership, workspace state and exact workspace/service/origin binding.
    Unavailable authorization fails closed. An already-established WebSocket is not
    continuously reauthorized; reconnects repeat authorization.
+
+The per-resource `/authorize` route has its own bounded 6,000 requests/minute/IP
+budget, independent of the general production API limit of 200/minute/IP. This
+initial ceiling allows asset-heavy page loads and concurrent testers behind the
+same gateway egress. It also bounds invalid requests; all accepted requests still
+need valid gateway and browser credentials and fresh permission checks. It does
+not trust forwarded client IPs or caller-chosen session IDs as rate-limit keys.
+Visitors sharing an egress still share that budget; tune it from pilot traffic
+if needed, rather than disabling rate limiting or caching authorization decisions.
 
 The same view permission covers every accessible preview; there is no per-story
 allowlist. Per-workspace browser credentials prevent accidental credential reuse
@@ -109,6 +124,9 @@ gateway process and local HTTP/WebSocket servers. They cover browser redirects,
 code rotation/replay, wrong browser/service/workspace/tenant, role removal, user
 disablement, expiry, unavailable authorization, application payload/cookie handling,
 native capability checks, lifecycle notifications and preview-only UI actions.
+The browser suite traverses the real Facility login/callback handlers with a fake
+GitHub identity provider, verifies deep-link/application OAuth return URLs and
+exercises the actual production limiter (asset bursts and bounded denial traffic).
 They require no live GitHub, Auth0 or Vercel credential.
 
 After review and deployment, separately verify a real browser login, application

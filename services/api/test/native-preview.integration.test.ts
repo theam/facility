@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { newId } from "@facility/core";
 import {
   createDb,
+  githubInstallations,
   migrate,
   orgMembers,
   orgs,
@@ -13,12 +14,10 @@ import {
   workspaces,
 } from "@facility/db";
 import { eq } from "drizzle-orm";
-import Fastify from "fastify";
-import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { buildApp, mintSessionCookie } from "../src/app.js";
 import type { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
-import { registerNativeWorkspacePreviewRoutes } from "../src/routes/v1/native-workspace-previews.js";
 import type { StoryDomain } from "../src/story-domain.js";
 import type { AppConfig, Principal } from "../src/types.js";
 import { previewChallenge } from "../src/workspaces/native-preview.js";
@@ -58,10 +57,37 @@ describe("native preview browser flow with persisted authorization", () => {
     permissions: ["previews:read"],
   };
   const config = {
+    databaseUrl,
+    secretMasterKey: Buffer.alloc(32, 31).toString("base64"),
+    port: 4400,
+    workspaceImage: "facility-runner:test",
+    workspaceDriver: "docker",
+    facilityInsecureDev: false,
+    logLevel: "silent",
     nativePreviews: true,
     webUrl: "https://facility.test",
     publicUrl: "https://api.facility.test",
+    previewUrl: "https://facility-preview.test",
+    authIdentityProvider: "github",
+    githubOauthClientId: "test-client",
+    githubOauthClientSecret: "test-secret",
+    githubOauthAuthorizeUrl: "https://github.test/login/oauth/authorize",
+    githubOauthTokenUrl: "https://github.test/login/oauth/access_token",
+    githubOauthApiUrl: "https://api.github.test",
   } as AppConfig;
+  const installationId = Date.now(),
+    accountId = installationId + 1;
+  const authFetch: typeof fetch = async (input) => {
+    const url = String(input);
+    const json = (value: unknown) => Response.json(value);
+    if (url.endsWith("/login/oauth/access_token")) return json({ access_token: "fake-token" });
+    if (url.endsWith("/user/emails"))
+      return json([{ email: `${userId}@example.test`, verified: true, primary: true }]);
+    if (url.includes("/user/installations"))
+      return json({ installations: [{ id: installationId, account: { id: accountId } }] });
+    if (url.endsWith("/user")) return json({ id: accountId, login: "preview-reader" });
+    throw new Error(`Unexpected identity request: ${url}`);
+  };
   const execute = vi.fn(() => {
     throw new Error("Must not execute workspace commands");
   });
@@ -73,7 +99,7 @@ describe("native preview browser flow with persisted authorization", () => {
     { load: execute } as unknown as ProjectManifestSource,
     { prepare: execute, startPrepared: execute } as unknown as ProjectEnvironmentService,
   );
-  const api = Fastify({ logger: false });
+  let api: Awaited<ReturnType<typeof buildApp>>;
   let apiOrigin: string, gatewayOrigin: string;
   let gateway: ReturnType<typeof createServer>;
   let requests = 0;
@@ -112,6 +138,14 @@ describe("native preview browser flow with persisted authorization", () => {
       .insert(roles)
       .values({ id: roleId, orgId, name: "Preview reader", permissions: ["previews:read"] });
     await db.insert(orgMembers).values({ id: newId("member"), orgId, userId, roleId });
+    await db.insert(githubInstallations).values({
+      id: newId("int"),
+      orgId,
+      installationId,
+      accountId,
+      accountLogin: "test",
+      targetType: "Organization",
+    });
     await db.insert(projects).values({ id: projectId, orgId, name: "Preview", slug: projectId });
     for (const i of [0, 1] as const) {
       await db.insert(stories).values({
@@ -141,12 +175,9 @@ describe("native preview browser flow with persisted authorization", () => {
         endpoints: endpoint(i ? secondOrigin : origin),
       });
     }
-    api.setValidatorCompiler(validatorCompiler).setSerializerCompiler(serializerCompiler);
-    api.decorate("storyDomain", { previews: service } as StoryDomain);
-    api.addHook("onRequest", async (request) => {
-      if (request.headers["x-test-user"] === "viewer") request.principal = actor;
-    });
-    await registerNativeWorkspacePreviewRoutes(api, config);
+    // Exercise real login, cookies, middleware and the production limiter, not a
+    // route-only Fastify fixture that skips the integration boundaries.
+    api = await buildApp(config, { authFetch, storyDomain: { previews: service } as StoryDomain });
     await api.listen({ port: 0, host: "127.0.0.1" });
     apiOrigin = `http://127.0.0.1:${(api.server.address() as { port: number }).port}`;
     await new Promise<void>((resolve) => appServer.listen(0, "127.0.0.1", resolve));
@@ -177,7 +208,7 @@ describe("native preview browser flow with persisted authorization", () => {
     execute.mockClear();
   });
   afterAll(async () => {
-    await api.close();
+    await api?.close();
     ws.close();
     if (gateway) await new Promise<void>((resolve) => gateway.close(() => resolve()));
     await new Promise<void>((resolve) => appServer.close(() => resolve()));
@@ -199,6 +230,101 @@ describe("native preview browser flow with persisted authorization", () => {
     const result = await service.nativeExchange(input, gatewayToken);
     return { ...input, token: result.accessToken };
   };
+  it.each([
+    "/projects/123?tab=files&filter=a%2Fb",
+    "/auth/callback?code=app-code&state=app-state%2F123",
+  ])("returns through the real Facility login to the original application URL: %s", async (path) => {
+    const start = await fetch(gatewayOrigin + path, {
+      headers: {
+        accept: "text/html",
+        cookie: `__Host-facility-preview=psess_${"a".repeat(32)}.${"z".repeat(43)}`,
+      },
+      redirect: "manual",
+    });
+    expect(start.status).toBe(302);
+    const nonce = required(start.headers.getSetCookie()[0]?.split(";", 1)[0]);
+    const previewLogin = new URL(required(start.headers.get("location")));
+    expect([...previewLogin.searchParams.keys()]).toEqual(["challenge"]);
+    const anonymous = await api.inject({
+      url: previewLogin.pathname.slice(4) + previewLogin.search,
+    });
+    const facilityLogin = new URL(required(anonymous.headers.location));
+    const login = await api.inject({ url: facilityLogin.pathname.slice(4) + facilityLogin.search });
+    expect(login.statusCode).toBe(302);
+    const authorization = new URL(required(login.headers.location));
+    expect(authorization.origin).toBe("https://github.test");
+    const state = login.cookies.find((cookie) => cookie.name === "facility_oauth_state");
+    expect(state).toBeDefined();
+    const facilityCallback = await api.inject({
+      url: `/auth/callback?code=fake-github-code&state=${authorization.searchParams.get("state")}`,
+      headers: { cookie: `${state?.name}=${state?.value}` },
+    });
+    expect(facilityCallback.statusCode).toBe(302);
+    expect(facilityCallback.headers.location).toBe(previewLogin.toString());
+    const facilitySession = facilityCallback.cookies.find(
+      (cookie) => cookie.name === "facility_session",
+    );
+    const grant = await api.inject({
+      url: previewLogin.pathname.slice(4) + previewLogin.search,
+      headers: { cookie: `${facilitySession?.name}=${facilitySession?.value}` },
+    });
+    expect(grant.statusCode).toBe(302);
+    const callback = new URL(required(grant.headers.location));
+    const callbackUrl = gatewayOrigin + callback.pathname + callback.search;
+    // Altered or missing browser state must not consume the legitimate grant.
+    for (const cookie of ["", nonce.replace(/.$/, (last) => (last === "a" ? "b" : "a"))]) {
+      expect((await fetch(callbackUrl, { headers: { cookie }, redirect: "manual" })).status).toBe(
+        401,
+      );
+    }
+    const exchanged = await fetch(callbackUrl, { headers: { cookie: nonce }, redirect: "manual" });
+    expect(exchanged.status).toBe(302);
+    expect(exchanged.headers.get("location")).toBe(path);
+    const session = required(exchanged.headers.getSetCookie()[0]?.split(";", 1)[0]);
+    const application = await fetch(gatewayOrigin + path, {
+      headers: { cookie: `${session}; app_state=retained` },
+    });
+    expect(application.status).toBe(200);
+    expect(await application.json()).toMatchObject({ url: path, cookie: "app_state=retained" });
+    expect(
+      (await fetch(callbackUrl, { headers: { cookie: nonce }, redirect: "manual" })).status,
+    ).toBe(401);
+  });
+  it("authorizes an asset burst beyond 200 requests without caching permissions", async () => {
+    const input = await active();
+    const cookie = `__Host-facility-preview=${input.sessionId}.${input.token}`;
+    const before = requests;
+    for (let i = 0; i < 205; i++) {
+      const response = await fetch(`${gatewayOrigin}/assets/${i}.js`, { headers: { cookie } });
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+    }
+    expect(requests - before).toBe(205);
+    await db.update(roles).set({ permissions: [] }).where(eq(roles.id, roleId));
+    expect((await fetch(`${gatewayOrigin}/assets/next.js`, { headers: { cookie } })).status).toBe(
+      401,
+    );
+    expect(requests - before).toBe(205);
+  }, 30_000);
+  it("bounds authorization traffic separately and leaves the ordinary production limit unchanged", async () => {
+    // Malformed requests exercise the real limiter without 6,000 database lookups.
+    const url = `/workspace-preview-native/${workspaceIds[0]}/web/authorize`;
+    for (let i = 0; i < 6_001; i++) {
+      const response = await api.inject({
+        method: "POST",
+        url,
+        remoteAddress: "198.51.100.10",
+        payload: {},
+        headers: { "x-forwarded-for": `spoofed-${i}` },
+      });
+      expect(response.statusCode).toBe(i < 6_000 ? 400 : 429);
+    }
+    // The dedicated authorization bucket did not consume the general API bucket.
+    for (let i = 0; i < 201; i++) {
+      const response = await api.inject({ url: "/auth/login", remoteAddress: "198.51.100.10" });
+      expect(response.statusCode).toBe(i < 200 ? 302 : 429);
+    }
+  }, 30_000);
   it("allows both previews with one role without executing setup or granting commands", async () => {
     for (const i of [0, 1] as const) {
       const opened = await service.open({
@@ -336,7 +462,7 @@ describe("native preview browser flow with persisted authorization", () => {
     const login = await api.inject({
       method: "GET",
       url: apiPath,
-      headers: { "x-test-user": "viewer" },
+      headers: { cookie: `facility_session=${await mintSessionCookie(config, userId, orgId)}` },
     });
     expect(login.statusCode).toBe(302);
     const callback = new URL(required(login.headers.location));

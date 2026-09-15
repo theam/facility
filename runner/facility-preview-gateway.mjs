@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, request as upstreamRequest } from "node:http";
 import { connect } from "node:net";
 import { pathToFileURL } from "node:url";
@@ -8,6 +8,7 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const SESSION = /^psess_[a-z0-9]{16,64}$/;
 const COOKIE = "__Host-facility-preview";
 const NONCE = "__Host-facility-preview-login";
+const LOGIN_TTL_MS = 120_000;
 const reserved = (name) => name.startsWith("__Host-facility-") || name === "facility_session";
 
 export function nativePreviewConfig(raw) {
@@ -36,6 +37,69 @@ function cookieValue(request, name) {
 }
 function setCookie(name, value, age) {
   return `${name}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`;
+}
+export function previewReturnTo(value) {
+  if (
+    typeof value !== "string" ||
+    value.length > 2048 ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: Reject control characters in redirect headers.
+    /[\u0000-\u0020\u007f\\#]/.test(value)
+  )
+    return "/";
+  try {
+    const url = new URL(value, "https://gateway.invalid");
+    const decoded = decodeURIComponent(url.pathname);
+    if (
+      url.origin !== "https://gateway.invalid" ||
+      decoded.startsWith("//") ||
+      decoded.startsWith("/.facility/") ||
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: Encoded control characters must not bypass URL validation.
+      /[\u0000-\u001f\u007f\\]/.test(decoded)
+    )
+      return "/";
+    const destination = url.pathname + url.search;
+    return destination.length <= 2048 ? destination : "/";
+  } catch {
+    return "/";
+  }
+}
+
+// Keep app paths/queries on the preview host, not in Facility's OAuth transaction.
+// The MAC binds the destination and expiry to this gateway and browser verifier.
+function loginSignature(secret, value) {
+  return createHmac("sha256", secret).update(`preview-login:${value}`).digest("base64url");
+}
+export function sealPreviewLogin(secret, verifier, returnTo, now = Date.now()) {
+  const data = Buffer.from(
+    JSON.stringify({ returnTo: previewReturnTo(returnTo), expiresAt: now + LOGIN_TTL_MS }),
+  ).toString("base64url");
+  const value = `${verifier}.${data}`;
+  return `${value}.${loginSignature(secret, value)}`;
+}
+export function openPreviewLogin(secret, cookie, now = Date.now()) {
+  if (typeof cookie !== "string" || cookie.length > 4000) throw new Error("Invalid login state");
+  const [verifier, data, signature, extra] = cookie.split(".");
+  if (
+    extra !== undefined ||
+    !TOKEN.test(verifier ?? "") ||
+    !TOKEN.test(signature ?? "") ||
+    !timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(loginSignature(secret, `${verifier}.${data}`)),
+    )
+  )
+    throw new Error("Invalid login state");
+  const state = JSON.parse(Buffer.from(data, "base64url").toString());
+  if (
+    !Number.isFinite(state.expiresAt) ||
+    state.expiresAt <= now ||
+    state.expiresAt > now + LOGIN_TTL_MS ||
+    previewReturnTo(state.returnTo) !== state.returnTo
+  )
+    throw new Error("Expired or invalid login state");
+  return { verifier, returnTo: state.returnTo };
 }
 export function applicationHeaders(headers, target, native) {
   const forwarded = {};
@@ -94,7 +158,7 @@ export function createPreviewGateway({ target, secret, native, fetchImpl = fetch
       throw Object.assign(new Error("Unauthorized"), { status: 401 });
     await call("authorize", { sessionId: parts[0], token: parts[1] });
   };
-  const login = (response) => {
+  const login = (request, response) => {
     const verifier = randomBytes(32).toString("base64url");
     const url = new URL(
       `/api/workspace-preview-login/${native.workspaceId}/${native.service}`,
@@ -103,7 +167,7 @@ export function createPreviewGateway({ target, secret, native, fetchImpl = fetch
     url.searchParams.set("challenge", createHash("sha256").update(verifier).digest("base64url"));
     response.writeHead(302, {
       location: url.toString(),
-      "set-cookie": setCookie(NONCE, verifier, 120),
+      "set-cookie": setCookie(NONCE, sealPreviewLogin(secret, verifier, request.url), 120),
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
     });
@@ -135,10 +199,9 @@ export function createPreviewGateway({ target, secret, native, fetchImpl = fetch
       }
       const sessionId = path.searchParams.get("session") ?? "";
       const code = path.searchParams.get("code") ?? "";
-      const verifier = cookieValue(incoming, NONCE);
       try {
-        if (!SESSION.test(sessionId) || !TOKEN.test(code) || !TOKEN.test(verifier))
-          throw new Error("Invalid grant");
+        const { verifier, returnTo } = openPreviewLogin(secret, cookieValue(incoming, NONCE));
+        if (!SESSION.test(sessionId) || !TOKEN.test(code)) throw new Error("Invalid grant");
         const result = await call("exchange", { sessionId, code, verifier });
         if (!TOKEN.test(result.accessToken)) throw new Error("Invalid session");
         const age = Math.min(
@@ -148,7 +211,7 @@ export function createPreviewGateway({ target, secret, native, fetchImpl = fetch
         if (!Number.isFinite(age) || age <= 0) throw new Error("Expired session");
         response
           .writeHead(302, {
-            location: "/",
+            location: returnTo,
             "set-cookie": [
               setCookie(COOKIE, `${sessionId}.${result.accessToken}`, age),
               setCookie(NONCE, "", 0),
@@ -175,7 +238,7 @@ export function createPreviewGateway({ target, secret, native, fetchImpl = fetch
         incoming.method === "GET" &&
         String(incoming.headers.accept ?? "").includes("text/html")
       )
-        login(response);
+        login(incoming, response);
       else
         response
           .writeHead([401, 403].includes(error.status) ? 401 : 503, {
