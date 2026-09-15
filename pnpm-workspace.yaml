@@ -20,18 +20,21 @@ overrides:
   "fast-uri@>=3.0.0 <3.1.6": 3.1.6
   "qs@<6.16.0": 6.16.0
   "find-my-way@<9.6.1": 9.7.0
-  "js-yaml@>=3.0.0 <3.15.1": 3.15.1
-  "js-yaml@>=4.0.0 <4.3.1": 4.3.1
-  "sharp@<0.35.0": 0.35.0
-  "svgo@>=3.0.0 <3.3.4": 3.3.4
+  "js-yaml@>=3.0.0 <3.15.2": 3.15.2
+  "js-yaml@>=4.0.0 <4.3.2": 4.3.2
+  "sharp@<0.35.4": 0.35.4
+  "svgo@>=3.0.0 <3.3.5": 3.3.5
   "body-parser@<1.20.6": 1.20.6
   "@hono/node-server@<2.0.10": 2.0.10
-  "hono@<4.12.34": 4.12.34
+  "hono@<4.13.5": 4.13.5
   "ip-address@<10.3.1": 10.3.1
   "protobufjs@>=7.5.0 <7.6.5": 7.6.5
   "webpack-dev-server@<=5.2.5": 5.2.6
   "dompurify@<=3.4.12": 3.4.13
   "nanoid@>=3.0.0 <3.3.18": 3.3.18
+  "colord@<2.9.4": 2.9.4
+  "joi@>=16.0.0 <17.13.6": 17.13.6
+  "baseline-browser-mapping@>=2.0.0 <2.11.0": 2.11.0
 
 # Postinstall build-script allowlist — nothing builds unless named here.
 allowBuilds:

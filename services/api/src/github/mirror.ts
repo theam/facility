@@ -34,10 +34,12 @@ export class GithubMirrorService {
   async handleWebhook(input: {
     id: string;
     orgId: string;
+    projectId?: string;
+    repositoryId?: string;
     eventType: string;
     payload: JsonObject;
   }) {
-    const repository = await this.repositoryForPayload(input.orgId, input.payload);
+    const repository = await this.repositoryForPayload(input.orgId, input.payload, input);
     if (!repository) {
       return { mirrored: 0, branches: 0, reviews: 0, checks: 0, ciUpdated: 0 };
     }
@@ -193,7 +195,11 @@ export class GithubMirrorService {
     };
   }
 
-  private async repositoryForPayload(orgId: string, payload: JsonObject) {
+  private async repositoryForPayload(
+    orgId: string,
+    payload: JsonObject,
+    binding: { projectId?: string; repositoryId?: string },
+  ) {
     const repository = object(payload.repository);
     const fullName = string(repository.full_name)?.split("/") ?? [];
     const owner = string(object(repository.owner).login) ?? fullName[0];
@@ -207,6 +213,8 @@ export class GithubMirrorService {
           .where(
             and(
               eq(projectRepositories.orgId, orgId),
+              binding.projectId ? eq(projectRepositories.projectId, binding.projectId) : undefined,
+              binding.repositoryId ? eq(projectRepositories.id, binding.repositoryId) : undefined,
               eq(projectRepositories.owner, owner),
               eq(projectRepositories.name, name),
             ),

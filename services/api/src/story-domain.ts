@@ -11,7 +11,9 @@ import {
 import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
 import { CostBudgetService } from "./insights/costs.js";
+import { ProjectBacklogService } from "./stories/backlog.js";
 import { StoryWorkspaceService } from "./stories/service.js";
+import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
 import { AgentEngineRegistry, ClaudeCodeEngine, CodexEngine } from "./turns/engines.js";
 import { TurnGitEvidenceService } from "./turns/git-evidence.js";
@@ -23,6 +25,7 @@ import {
   ProjectEnvironmentService,
 } from "./workspaces/project-environment.js";
 import type { WorkspaceRuntime } from "./workspaces/runtime.js";
+import { WorkspaceVariablesService } from "./workspaces/variables.js";
 import { VercelWorkspaceRuntime } from "./workspaces/vercel.js";
 
 export type StoryDomain = {
@@ -32,6 +35,7 @@ export type StoryDomain = {
   credentials: GithubWorkspaceCredentialBroker;
   projectManifests: GithubProjectManifestSource;
   environment: ProjectEnvironmentService;
+  variables: WorkspaceVariablesService;
   engines: AgentEngineRegistry;
   dispatcher: TurnDispatcher;
   previews: WorkspacePreviewService;
@@ -40,6 +44,8 @@ export type StoryDomain = {
   mirror: GithubMirrorService;
   costs: CostBudgetService;
   evidence: TurnGitEvidenceService;
+  titles: StoryTitleService;
+  backlog: ProjectBacklogService;
 };
 
 export function createStoryDomain(input: {
@@ -68,7 +74,14 @@ export function createStoryDomain(input: {
   const credentials = new GithubWorkspaceCredentialBroker(input.db, tokenFactory);
   const costs = new CostBudgetService(input.db);
   const projectManifests = new GithubProjectManifestSource(input.db, githubFactory);
-  const environment = new ProjectEnvironmentService(input.db, runtime);
+  const variables = new WorkspaceVariablesService(input.db, input.config.secretMasterKey);
+  const environment = new ProjectEnvironmentService(
+    input.db,
+    runtime,
+    undefined,
+    undefined,
+    (scope) => variables.values(scope),
+  );
   const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
     await input.enqueue("turns.dispatch", {
       orgId: turn.orgId,
@@ -82,6 +95,13 @@ export function createStoryDomain(input: {
     new CodexEngine(runtime),
   ]);
   const evidence = new TurnGitEvidenceService(input.db, runtime);
+  const titles = new StoryTitleService(input.db, {
+    credentials: async (orgId, projectId) =>
+      titleCredentials(projectId, await variables.projectValues({ orgId, projectId })),
+    budget: costs,
+    enqueue: (data) => input.enqueue("stories.title", data),
+  });
+  const backlog = new ProjectBacklogService(input.db);
   const dispatcher = new TurnDispatcher(
     input.db,
     stories,
@@ -124,6 +144,7 @@ export function createStoryDomain(input: {
     credentials,
     projectManifests,
     environment,
+    variables,
     engines,
     dispatcher,
     previews,
@@ -132,6 +153,8 @@ export function createStoryDomain(input: {
     mirror,
     costs,
     evidence,
+    titles,
+    backlog,
   };
 }
 

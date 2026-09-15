@@ -105,6 +105,7 @@ export const projects = pgTable(
     slug: text("slug").notNull(),
     description: text("description"),
     settings: jsonb("settings").notNull().default(sql`'{}'::jsonb`),
+    environmentSecrets: jsonb("environment_secrets").notNull().default(sql`'{}'::jsonb`),
     status: text("status").notNull().default("active"),
     ...timestamps,
   },
@@ -469,6 +470,13 @@ export const stories = pgTable(
     branch: text("branch"),
     pullRequestNumber: integer("pull_request_number"),
     pullRequestUrl: text("pull_request_url"),
+    titleSource: text("title_source").notNull().default("user"),
+    titleGeneration: jsonb("title_generation"),
+    integrationState: jsonb("integration_state")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    integrationStateRevision: integer("integration_state_revision").notNull().default(0),
     createdBy: jsonb("created_by").notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
@@ -490,6 +498,15 @@ export const stories = pgTable(
       sql`${table.status} in ('ready', 'working', 'attention', 'review', 'done', 'archived')`,
     ),
     check("stories_provider_check", sql`${table.provider} in ('github', 'manual', 'schedule')`),
+    check(
+      "stories_integration_state_check",
+      sql`jsonb_typeof(${table.integrationState}) = 'object' and octet_length(${table.integrationState}::text) <= 16384`,
+    ),
+    check("stories_integration_state_revision_check", sql`${table.integrationStateRevision} >= 0`),
+    check(
+      "stories_title_source_check",
+      sql`${table.titleSource} in ('user', 'github', 'schedule', 'pending', 'generated', 'fallback')`,
+    ),
     foreignKey({
       name: "stories_project_scope_fk",
       columns: [table.orgId, table.projectId],
@@ -503,6 +520,85 @@ export const stories = pgTable(
         projectRepositories.projectId,
         projectRepositories.id,
       ],
+    }),
+  ],
+);
+
+/** Durable, coalesced lifecycle notification cursor; never project-owned data. */
+export const storyIntegrationNotifications = pgTable(
+  "story_integration_notifications",
+  {
+    storyId: text("story_id")
+      .primaryKey()
+      .references(() => stories.id),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyRevision: text("story_revision"),
+    workspaceRevision: text("workspace_revision"),
+    pending: jsonb("pending")
+      .$type<
+        Array<{
+          eventId: string;
+          type: "story.updated" | "workspace.updated";
+          occurredAt: string;
+          workspaceId: string | null;
+        }>
+      >()
+      .notNull()
+      .default([]),
+    leaseToken: text("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .notNull()
+      .default(sql`'1970-01-01'::timestamptz`),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull().default(0),
+    lastErrorCode: text("last_error_code"),
+    lastDeliveredAt: timestamp("last_delivered_at", { withTimezone: true }),
+  },
+  (table) => [
+    foreignKey({
+      name: "story_integration_notifications_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    index("story_integration_notifications_due_idx").on(table.nextAttemptAt, table.observedAt),
+  ],
+);
+
+export const storyAssignees = pgTable(
+  "story_assignees",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    kind: text("kind").notNull(),
+    subject: text("subject").notNull(),
+    source: text("source").notNull().default("facility"),
+    addedBy: jsonb("added_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("story_assignees_story_subject_uidx").on(table.storyId, table.kind, table.subject),
+    index("story_assignees_org_project_subject_idx").on(
+      table.orgId,
+      table.projectId,
+      table.kind,
+      table.subject,
+    ),
+    check("story_assignees_kind_check", sql`${table.kind} in ('user', 'github')`),
+    check("story_assignees_source_check", sql`${table.source} in ('facility', 'github')`),
+    foreignKey({
+      name: "story_assignees_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
     }),
   ],
 );
@@ -612,6 +708,7 @@ export const storyMessages = pgTable(
     requestedAgentName: text("requested_agent_name"),
     requestedTrigger: jsonb("requested_trigger"),
     dedupeKey: text("dedupe_key"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [

@@ -1,4 +1,5 @@
 import type {
+  BacklogQuery,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
   FacilityGeneratedQuery,
@@ -8,8 +9,11 @@ import type {
   FacilityRouteResponse,
   ProjectSkill,
   StoryAgent,
+  StoryConversationPage,
   StoryEnvironment,
-  StoryMessage,
+  StoryTimelinePage,
+  StoryTurnActivityPage,
+  StoryTurnEvent,
   WorkspaceStory,
   WorkspaceStoryBundle,
 } from "@facility/sdk";
@@ -18,6 +22,10 @@ import { cookies } from "next/headers";
 
 export type {
   ApiKey,
+  BacklogItem,
+  BacklogPerson,
+  BacklogPhase,
+  BacklogQuery,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
   KickstartAnswers,
@@ -26,22 +34,48 @@ export type {
   Me,
   Member,
   MemberRow,
+  OverviewActiveTurn,
+  OverviewAttentionItem,
+  OverviewBacklogStory,
+  OverviewRecentTurn,
+  OverviewReviewItem,
   Project,
+  ProjectBacklog,
   ProjectBudget,
   ProjectObservability,
-  ProjectPipeline,
+  ProjectOverview,
   ProjectRepo,
   ProjectSkill,
   Role,
+  StoryActivityItem,
   StoryAgent,
+  StoryAssignee,
+  StoryConversationPage,
   StoryEnvironment,
   StoryMessage,
+  StoryMessageAuthor,
+  StoryTimelineEntry,
+  StoryTimelinePage,
+  StoryTurnActivityPage,
+  StoryTurnEvent,
+  StoryTurnSummary,
   StoryWorkspace,
   WorkspaceStory,
   WorkspaceStoryBundle,
 } from "@facility/sdk";
 
+export { STORY_PAGE_SIZE } from "./story-paths";
+
+import { STORY_PAGE_SIZE } from "./story-paths";
+
 export const SESSION_COOKIE = "facility_session";
+
+/** The agent catalog plus the defaults the server applies when no agent is named. */
+export type StoryAgentsResponse = {
+  agents: StoryAgent[];
+  defaults: { ui: string | null; mcp: string | null; manual: string | null };
+  title_generation: boolean;
+};
 
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -100,9 +134,11 @@ export const api = {
   connectProjectRepo: (projectId: string, body: ConnectProjectRepoRequest) =>
     apiFetch("POST", `/v1/projects/${projectId}/repos`, { body }),
   storyAgents: (projectId: string) =>
-    typed<{ agents: StoryAgent[] }>(
+    typed<StoryAgentsResponse>(
       apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/story-agents`),
     ),
+  projectBacklog: (projectId: string, query: BacklogQuery = {}) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/backlog`, { query }),
   projectSkills: (projectId: string) =>
     typed<{ skills: ProjectSkill[] }>(
       apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/project-skills`),
@@ -113,19 +149,23 @@ export const api = {
         query: status ? { status } : {},
       }),
     ),
+  /** The story bundle without its bounded evidence; the page loads evidence on demand. */
   workspaceStory: (projectId: string, storyId: string) =>
     typed<WorkspaceStoryBundle>(
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}`,
+        { query: { evidence: "none" } },
       ),
     ),
-  workspaceStoryConversation: (projectId: string, storyId: string) =>
-    typed<{ messages: StoryMessage[] }>(
+  workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>
+    typed<StoryConversationPage>(
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/conversation`,
-        { query: { limit: 200 } },
+        {
+          query: { limit: STORY_PAGE_SIZE, order: "desc", ...(before ? { before } : {}) },
+        },
       ),
     ),
   workspaceStoryEnvironment: (projectId: string, storyId: string) =>
@@ -133,6 +173,30 @@ export const api = {
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/environment`,
+        { query: { limit: STORY_PAGE_SIZE } },
+      ),
+    ),
+  workspaceStoryActivity: (projectId: string, storyId: string, turnId: string) =>
+    typed<StoryTurnActivityPage>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/turns/${encodeURIComponent(turnId)}/activity`,
+        { query: { limit: STORY_PAGE_SIZE } },
+      ),
+    ),
+  workspaceStoryTimeline: (projectId: string, storyId: string) =>
+    typed<StoryTimelinePage>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/timeline`,
+        { query: { limit: STORY_PAGE_SIZE } },
+      ),
+    ),
+  workspaceStoryTurnEvent: (projectId: string, storyId: string, turnId: string, seq: number) =>
+    typed<StoryTurnEvent>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/turns/${encodeURIComponent(turnId)}/events/${seq}`,
       ),
     ),
   projectBudget: (projectId: string) =>
@@ -141,8 +205,8 @@ export const api = {
     apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/observability`, {
       query: { days },
     }),
-  projectPipeline: (projectId: string) =>
-    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/pipeline`),
+  projectOverview: (projectId: string) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/overview`),
   members: () => apiFetch("GET", "/v1/members"),
   roles: () => apiFetch("GET", "/v1/roles"),
   keys: () => apiFetch("GET", "/v1/keys"),

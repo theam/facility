@@ -88,3 +88,26 @@ checklist](validate-workspace-loop.md) before relying on the repository for prod
 
 If the repository already has generated or local-only files, update `.gitignore` normally. Do not
 ignore `.facility.yml` or `.agents/`; they are reviewed product configuration.
+
+## Disconnect an unused repository
+
+Open the project's **Settings → repositories**. With `repos:write`, each row offers
+**disconnect**. Review the repository name and cleanup warning, check the explicit
+confirmation, then select **confirm disconnect**. A failed request stays visible
+without removing the row; a successful request refreshes the repository list.
+Readers cannot use the control. The same operation is available through the
+[repository DELETE API](../reference/api.md#disconnect-a-repository).
+
+This removes the Facility connection and its synchronized GitHub data, not the
+GitHub repository itself. The primary can be disconnected: the oldest remaining
+repository becomes primary, or the project is left empty. No spare repository is
+needed. Review `.facility.yml` and `.agents/` in the remaining primary before
+starting agents. Reconnect the repository through the existing connect flow, then
+synchronize it to rebuild its current GitHub mirror.
+
+If Facility reports `repository_in_use`, it has retained stories or workspaces,
+or another retained reference prevents removal. Archiving does not remove those
+dependencies. Review the work and arrange an explicit migration or separately
+confirmed workspace lifecycle action; do not delete useful history just to clear
+this error. Disconnect never deletes a story, conversation, turn, file or volume,
+and it does not change existing GitHub App installation permissions.
