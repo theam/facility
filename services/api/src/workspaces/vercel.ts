@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
+import { CommandLogReplay, retryObservation } from "./command-observation.js";
 import {
   assertWorkspaceId,
   type CreateWorkspace,
@@ -108,23 +109,37 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     command.signal?.addEventListener("abort", cancel, { once: true });
     if (canceled) cancel();
     const logs = (async () => {
-      for await (const log of running.logs({ signal: observation.signal })) {
-        if (log.stream === "stdout") stdoutStream.write(log.data);
-        else stderrStream.write(log.data);
+      const replay = new CommandLogReplay();
+      for (let attempt = 0; ; attempt += 1) {
+        replay.restart();
+        try {
+          for await (const log of running.logs({ signal: observation.signal })) {
+            const fresh = replay.append(log.stream, log.data);
+            if (!fresh) continue;
+            if (log.stream === "stdout") stdoutStream.write(fresh);
+            else stderrStream.write(fresh);
+          }
+          return;
+        } catch (error) {
+          await retryObservation(error, attempt, observation.signal);
+        }
       }
     })();
     const completion = (async () => {
       // Metadata reads do not reliably include an exit status. Bound each wait
       // on this original command so no HTTP request lasts for the whole agent run.
-      while (true) {
+      for (let attempt = 0; ; attempt += 1) {
         const timeout = AbortSignal.timeout(30_000);
         try {
           return await running.wait({
             signal: AbortSignal.any([observation.signal, timeout]),
           });
         } catch (error) {
-          if (timeout.aborted && !observation.signal.aborted) continue;
-          throw error;
+          if (timeout.aborted && !observation.signal.aborted) {
+            attempt = -1;
+            continue;
+          }
+          await retryObservation(error, attempt, observation.signal);
         }
       }
     })();

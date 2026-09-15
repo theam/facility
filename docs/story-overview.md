@@ -42,3 +42,9 @@ state travel alongside the phase instead of being folded into it.
 parameters that hold every filter, and the agent choices offered by the composer. Unit tests cover
 the derivation and the presentation; the page integration test covers grouping, links, permissions,
 pagination, and the empty and error states.
+
+## Interrupted command observation
+
+For Vercel workspaces, temporary network failures while reading command output or waiting for completion reconnect to the original command. They never submit the agent command again. Replayed output is checked against the already received text and delivered only once, even if the provider changes chunk boundaries.
+
+Observation retries use exponential backoff, with eight retries per interrupted stream or sequence of failed waits. Cancellation stops recovery immediately; authentication, authorization, missing commands, and invalid responses fail without retry. If observation cannot recover, the failed turn retains the engine events already received. An observation failure does not prove the remote process exited: inspect the retained workspace before retrying the turn.
