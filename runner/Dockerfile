@@ -4,7 +4,7 @@
 # architecture-specific download/checksum matrix.
 FROM docker:29-dind-rootless@sha256:8a213afdd096a44dff403aaf8eb58b7a96a63113f18a4b094b98b7d0ed7d948b AS docker-tools
 
-# Rebuild the exact Go-based releases shipped by Docker with the first Go
+# Rebuild the exact Go-based releases shipped by Docker with a patched Go
 # toolchain that contains the reviewed standard-library fixes. The upstream
 # image still supplies its shell bootstrap and docker-init; every Go binary
 # that crosses into the runner is rebuilt from a checksum-pinned source commit.
@@ -157,7 +157,7 @@ RUN archive=/tmp/runc.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && make -C /src runc \
-  && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.26.6" \
+  && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.27.1" \
   && install -m 0755 /src/runc /out/runc \
   && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
@@ -187,7 +187,7 @@ RUN archive=/tmp/gh.tar.gz \
 # vulnerable Go modules did not resolve the reviewed replacements.
 FROM gh-build AS go-tools-audit
 RUN for binary in /out/*; do \
-    test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.26.6" || exit 1; \
+    test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.27.1" || exit 1; \
   done \
   && for binary in /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/rootlesskit; do \
     go version -m "$binary" | awk \
