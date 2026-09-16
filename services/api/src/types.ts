@@ -25,10 +25,13 @@ export type AppConfig = {
   // production this must be HTTPS on a registered site separate from every
   // control-plane site so untrusted JavaScript cannot toss Facility cookies.
   previewUrl?: string;
+  // Opt-in: serve browser access through the native Vercel workspace gateway.
+  nativePreviews?: boolean;
   // Optional value added by a trusted preview reverse proxy. A value match can
   // classify preview-surface requests even when that proxy replaces Host with
   // its origin hostname.
   previewSurfaceToken?: string;
+  previewSites?: import("./workspaces/preview-sites.js").PreviewSite[];
   workspaceImage: string;
   workspaceDriver: "docker" | "vercel";
   authIdentityProvider?: "github" | "oidc";
@@ -88,6 +91,7 @@ declare module "fastify" {
     ) => Promise<void>;
   }
   interface FastifyContextConfig {
+    cors?: false;
     permission?: string | string[];
     auditAction?: string;
     public?: boolean;

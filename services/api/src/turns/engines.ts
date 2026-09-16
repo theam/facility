@@ -1,5 +1,9 @@
 import type { AgentManifest } from "@facility/agents";
-import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
+import type {
+  WorkspaceCommandResult,
+  WorkspaceLocator,
+  WorkspaceRuntime,
+} from "../workspaces/runtime.js";
 
 export type AgentTurnRequest = {
   turnId: string;
@@ -11,6 +15,7 @@ export type AgentTurnRequest = {
   timeoutMs?: number;
   signal?: AbortSignal;
   environment?: Record<string, string>;
+  onEvent?: (event: AgentTurnEvent) => void;
 };
 
 export type AgentTurnEvent = {
@@ -21,7 +26,12 @@ export type AgentTurnEvent = {
 
 export type AgentTurnResult = {
   nativeSessionId: string;
+  /** The engine's final response for this turn, separated from progress commentary. */
   output: string;
+  /** Intermediate agent messages the engine emitted before its final response, in order. */
+  progress: string[];
+  /** The model the engine reported using, when its event stream states one. */
+  model?: string;
   events: AgentTurnEvent[];
   exitCode: number;
   stderr: string;
@@ -65,17 +75,38 @@ abstract class CliAgentEngine implements AgentEngine {
     args: string[],
     parser: EngineEventParser,
   ): Promise<AgentTurnResult> {
-    const result = await this.runtime.exec(request.workspace, {
-      command: "sh",
-      args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
-      cwd: request.cwd,
-      env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
-      timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
-      signal: request.signal,
-      onOutput: ({ stream, data }) => {
-        if (stream === "stdout") parser.push(data);
-      },
-    });
+    const startedAt = Date.now();
+    parser.onEvent = request.onEvent;
+    let result: WorkspaceCommandResult;
+    try {
+      result = await this.runtime.exec(request.workspace, {
+        command: "sh",
+        args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
+        cwd: request.cwd,
+        env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
+        timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
+        signal: request.signal,
+        onOutput: ({ stream, data }) => {
+          if (stream === "stdout") parser.push(data);
+        },
+      });
+    } catch (error) {
+      if (request.signal?.aborted) throw error;
+      parser.finish();
+      const parsed = parser.result();
+      throw new AgentEngineError(
+        "agent_observation_failed",
+        `${this.name} command observation failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          engine: this.name,
+          nativeSessionId: parsed.sessionId,
+          failure: workspaceFailure(error),
+          events: parsed.events,
+          usage: parsed.usage,
+          durationMs: Date.now() - startedAt,
+        },
+      );
+    }
     parser.finish(result.stdout);
     const parsed = parser.result();
     if (result.exitCode !== 0) {
@@ -109,6 +140,8 @@ abstract class CliAgentEngine implements AgentEngine {
     return {
       nativeSessionId: parsed.sessionId,
       output: parsed.output,
+      progress: parsed.progress,
+      model: parsed.model,
       events: parsed.events,
       exitCode: result.exitCode,
       stderr: result.stderr,
@@ -235,6 +268,8 @@ const INTERRUPTED_PROCESS_CLEANUP = [
 type ParsedEngineEvents = {
   sessionId?: string;
   output: string;
+  progress: string[];
+  model?: string;
   events: AgentTurnEvent[];
   usage?: AgentTurnUsage;
 };
@@ -242,6 +277,7 @@ type ParsedEngineEvents = {
 abstract class EngineEventParser {
   private buffer = "";
   protected readonly events: AgentTurnEvent[] = [];
+  onEvent?: (event: AgentTurnEvent) => void;
 
   push(chunk: string) {
     this.buffer += chunk;
@@ -270,15 +306,24 @@ abstract class EngineEventParser {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new AgentEngineError("agent_output_invalid", "agent CLI emitted a non-object event");
     }
+    const before = this.events.length;
     this.accept(value as Record<string, unknown>);
+    for (const event of this.events.slice(before)) this.onEvent?.(event);
   }
 
   protected abstract accept(value: Record<string, unknown>): void;
   abstract result(): ParsedEngineEvents;
 }
 
+/**
+ * Claude Code stream-json. The `result` event carries the final response; every
+ * earlier assistant text block is progress commentary. Without a result event
+ * (an errored or truncated stream) the last assistant text stands in as the
+ * response so the turn still records what the agent said last.
+ */
 export class ClaudeEventParser extends EngineEventParser {
   private sessionId?: string;
+  private model?: string;
   private resultText?: string;
   private readonly assistantText: string[] = [];
   private usage?: AgentTurnUsage;
@@ -287,31 +332,41 @@ export class ClaudeEventParser extends EngineEventParser {
     const type = stringValue(value.type) ?? "unknown";
     this.events.push({ engine: "claude_code", type, data: value });
     this.sessionId ??= stringValue(value.session_id);
+    if (type === "system") this.model ??= stringValue(value.model);
     if (type === "result") {
       this.resultText = stringValue(value.result) ?? this.resultText;
       this.usage = usageValue(value.usage, value.total_cost_usd) ?? this.usage;
     }
     if (type === "assistant") {
       const message = objectValue(value.message);
+      this.model ??= stringValue(message?.model);
       const content = Array.isArray(message?.content) ? message.content : [];
       for (const block of content) {
         const item = objectValue(block);
-        if (item?.type === "text" && typeof item.text === "string")
+        if (item?.type === "text" && typeof item.text === "string" && item.text.trim())
           this.assistantText.push(item.text);
       }
     }
   }
 
   result(): ParsedEngineEvents {
+    const { output, progress } = separateFinalResponse(this.assistantText, this.resultText);
     return {
       sessionId: this.sessionId,
-      output: this.resultText ?? this.assistantText.join("\n\n"),
+      output,
+      progress,
+      model: this.model,
       events: this.events,
       usage: this.usage,
     };
   }
 }
 
+/**
+ * Codex JSONL. Codex emits several `agent_message` items per turn: running
+ * commentary while it works, then the response it ends with. Only the last one
+ * is the turn's final response; the rest are progress.
+ */
 export class CodexEventParser extends EngineEventParser {
   private sessionId?: string;
   private readonly messages: string[] = [];
@@ -324,20 +379,41 @@ export class CodexEventParser extends EngineEventParser {
     if (type === "turn.completed") this.usage = usageValue(value.usage) ?? this.usage;
     if (type === "item.completed") {
       const item = objectValue(value.item);
-      if (item?.type === "agent_message" && typeof item.text === "string") {
+      if (item?.type === "agent_message" && typeof item.text === "string" && item.text.trim()) {
         this.messages.push(item.text);
       }
     }
   }
 
   result(): ParsedEngineEvents {
+    const { output, progress } = separateFinalResponse(this.messages);
     return {
       sessionId: this.sessionId,
-      output: this.messages.join("\n\n"),
+      output,
+      progress,
       events: this.events,
       usage: this.usage,
     };
   }
+}
+
+/**
+ * Split an ordered list of agent messages into progress commentary and the
+ * final response. When the engine names the final response explicitly (Claude's
+ * `result`), a trailing duplicate of it is not counted as progress.
+ */
+export function separateFinalResponse(
+  messages: string[],
+  explicitFinal?: string,
+): { output: string; progress: string[] } {
+  if (explicitFinal !== undefined) {
+    const last = messages.at(-1);
+    const progress =
+      last !== undefined && last === explicitFinal ? messages.slice(0, -1) : messages;
+    return { output: explicitFinal, progress: [...progress] };
+  }
+  if (messages.length === 0) return { output: "", progress: [] };
+  return { output: messages[messages.length - 1] ?? "", progress: messages.slice(0, -1) };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
@@ -385,4 +461,49 @@ function nonNegativeInteger(value: unknown) {
 
 function nonNegativeNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Provider responses are reduced to an allowlist; never copy response bodies or headers. */
+function workspaceFailure(error: unknown) {
+  const failure = error as {
+    code?: unknown;
+    status?: unknown;
+    response?: { status?: unknown };
+  } | null;
+  const status = failure?.status ?? failure?.response?.status;
+  return {
+    category: status === 410 ? "workspace_session_lost" : "command_observation_failed",
+    ...(typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599
+      ? { httpStatus: status }
+      : {}),
+  };
+}
+
+export function nativeSessionFromEvent(event: AgentTurnEvent): string | undefined {
+  const value =
+    event.engine === "codex" && event.type === "thread.started"
+      ? event.data.thread_id
+      : event.engine === "claude_code"
+        ? event.data.session_id
+        : undefined;
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(value) ? value : undefined;
+}
+
+export function observationFailureEvidence(value: unknown) {
+  const data = objectValue(value);
+  if (
+    !data ||
+    typeof data.category !== "string" ||
+    !["workspace_session_lost", "command_observation_failed"].includes(data.category)
+  )
+    return undefined;
+  return {
+    category: data.category,
+    ...(typeof data.httpStatus === "number" &&
+    Number.isInteger(data.httpStatus) &&
+    data.httpStatus >= 400 &&
+    data.httpStatus <= 599
+      ? { httpStatus: data.httpStatus }
+      : {}),
+  };
 }

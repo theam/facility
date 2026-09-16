@@ -1,5 +1,12 @@
 import { PassThrough } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
+import { CommandLogReplay, retryObservation } from "./command-observation.js";
+import {
+  parseWorkspaceHealth,
+  WORKSPACE_HEALTH_COMMAND,
+  type WorkspaceDiagnostics,
+} from "./diagnostics.js";
+import { nativePreviewOrigin } from "./native-preview.js";
 import {
   assertWorkspaceId,
   type CreateWorkspace,
@@ -25,6 +32,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   constructor(
     private readonly credentials?: { token: string; teamId: string; projectId: string },
+    private readonly nativePreview?: {
+      apiUrl: string;
+      webUrl: string;
+      enabledForWorkspace: (workspaceId: string) => Promise<boolean>;
+    },
   ) {}
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
@@ -108,23 +120,37 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     command.signal?.addEventListener("abort", cancel, { once: true });
     if (canceled) cancel();
     const logs = (async () => {
-      for await (const log of running.logs({ signal: observation.signal })) {
-        if (log.stream === "stdout") stdoutStream.write(log.data);
-        else stderrStream.write(log.data);
+      const replay = new CommandLogReplay();
+      for (let attempt = 0; ; attempt += 1) {
+        replay.restart();
+        try {
+          for await (const log of running.logs({ signal: observation.signal })) {
+            const fresh = replay.append(log.stream, log.data);
+            if (!fresh) continue;
+            if (log.stream === "stdout") stdoutStream.write(fresh);
+            else stderrStream.write(fresh);
+          }
+          return;
+        } catch (error) {
+          await retryObservation(error, attempt, observation.signal);
+        }
       }
     })();
     const completion = (async () => {
       // Metadata reads do not reliably include an exit status. Bound each wait
       // on this original command so no HTTP request lasts for the whole agent run.
-      while (true) {
+      for (let attempt = 0; ; attempt += 1) {
         const timeout = AbortSignal.timeout(30_000);
         try {
           return await running.wait({
             signal: AbortSignal.any([observation.signal, timeout]),
           });
         } catch (error) {
-          if (timeout.aborted && !observation.signal.aborted) continue;
-          throw error;
+          if (timeout.aborted && !observation.signal.aborted) {
+            attempt = -1;
+            continue;
+          }
+          await retryObservation(error, attempt, observation.signal);
         }
       }
     })();
@@ -156,7 +182,39 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
     const sandbox = await this.get(workspace, true);
-    return this.endpoints(sandbox, validateWorkspacePorts(ports));
+    const endpoints = this.endpoints(sandbox, validateWorkspacePorts(ports));
+    if (!this.nativePreview || !(await this.nativePreview.enabledForWorkspace(workspace.id)))
+      return endpoints;
+    const verified: PreviewEndpoint[] = [];
+    for (const endpoint of endpoints) {
+      const native = { ...endpoint, access: "native" as const };
+      const origin = nativePreviewOrigin([native], endpoint.service);
+      if (!origin)
+        throw new WorkspaceRuntimeError(
+          "native_preview_origin_invalid",
+          "Invalid native preview origin",
+        );
+      const response = await fetch(`${origin}/.facility/health`, {
+        headers: {
+          "x-facility-preview-token": workspace.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN ?? "",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok)
+        throw new WorkspaceRuntimeError(
+          "native_preview_unavailable",
+          "Native preview gateway is not ready",
+        );
+      const result = (await response.json()) as { native?: boolean; origin?: string };
+      if (result.native !== true || result.origin !== origin)
+        throw new WorkspaceRuntimeError(
+          "native_preview_binding_invalid",
+          "Native preview gateway binding mismatch",
+        );
+      verified.push(native);
+    }
+    return verified;
   }
 
   async inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection> {
@@ -165,7 +223,12 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       return {
         id: workspace.id,
         provider: this.provider,
-        state: sandbox.status === "running" ? "running" : "sleeping",
+        state:
+          sandbox.status === "running"
+            ? "running"
+            : ["failed", "aborted"].includes(sandbox.status)
+              ? "error"
+              : "sleeping",
         computeRef: sandbox.status === "running" ? sandbox.currentSession().sessionId : undefined,
         volumeRef: sandbox.currentSnapshotId ?? workspace.volumeRef,
         endpoints:
@@ -191,6 +254,39 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     }
   }
 
+  async diagnostics(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<WorkspaceDiagnostics> {
+    const sandbox = await this.get(workspace, false, undefined, signal);
+    const session = sandbox.currentSession();
+    const result: WorkspaceDiagnostics = {
+      provider: this.provider,
+      state: sandbox.status,
+      computeRef: session.sessionId,
+    };
+    if (sandbox.status !== "running") return result;
+    try {
+      // Bind to this VM, not Sandbox.runCommand, which can implicitly resume compute.
+      const command = await session.runCommand({
+        cmd: "sudo",
+        args: ["-u", "node", "--", "node", "-e", WORKSPACE_HEALTH_COMMAND, cwd],
+        cwd: "/",
+        timeoutMs: 5_000,
+        signal,
+      });
+      if (command.exitCode !== 0) return { ...result, probe: "unavailable" };
+      return {
+        ...result,
+        probe: "ok",
+        health: parseWorkspaceHealth(await command.stdout({ signal })),
+      };
+    } catch {
+      return { ...result, probe: "unavailable" };
+    }
+  }
+
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     try {
       const sandbox = await this.get(workspace, false);
@@ -213,6 +309,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     resume: boolean,
     onResume?: (sandbox: Sandbox) => Promise<void>,
+    signal?: AbortSignal,
   ) {
     assertWorkspaceId(workspace.id);
     if (workspace.externalRef !== workspace.id) {
@@ -225,6 +322,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       ...this.credentials,
       name: workspace.externalRef,
       resume,
+      ...(signal ? { signal } : {}),
       ...(onResume ? { onResume } : {}),
     });
   }
@@ -249,7 +347,17 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     try {
       await initializeSandbox(
         sandbox,
-        bootstrapCommand,
+        this.nativePreview && (await this.nativePreview.enabledForWorkspace(input.id))
+          ? workspaceBootstrapCommand(input, {
+              ...this.nativePreview,
+              origins: Object.fromEntries(
+                this.endpoints(sandbox, input.ports).map((endpoint) => [
+                  endpoint.service,
+                  endpoint.url,
+                ]),
+              ),
+            })
+          : bootstrapCommand,
         input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN,
       );
       return this.handle(input, sandbox);
@@ -297,7 +405,10 @@ async function initializeSandbox(
   }
 }
 
-function workspaceBootstrapCommand(input: CreateWorkspace) {
+function workspaceBootstrapCommand(
+  input: CreateWorkspace,
+  native?: { apiUrl: string; webUrl: string; origins: Record<string, string> },
+) {
   const gatewayToken = input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN;
   if ((input.ports?.length ?? 0) > 0 && (!gatewayToken || gatewayToken.length < 32)) {
     throw new WorkspaceRuntimeError(
@@ -349,11 +460,23 @@ done`,
     "chown root:node /var/run/docker.sock",
     "chmod 0660 /var/run/docker.sock",
     ...gatewayPorts.map(({ port, gatewayPort }) => {
+      const nativeConfig = native
+        ? JSON.stringify({
+            version: 1,
+            apiUrl: native.apiUrl,
+            webUrl: native.webUrl,
+            workspaceId: input.id,
+            service: port.service,
+            origin: native.origins[port.service],
+          })
+        : "";
       const gatewayCommand = `set -eu
+export FACILITY_NATIVE_PREVIEW=${shellQuote(nativeConfig)}
 pid_file=/workspace/.facility/preview-${gatewayPort}.pid
 # A retained PID is only a hint: verify the full gateway invocation before signaling it.
-node - "$pid_file" ${gatewayPort} ${port.port} <<'NODE'
+gateway_action="$(node - "$pid_file" ${gatewayPort} ${port.port} <<'NODE'
 const fs = require("node:fs");
+(async () => {
 try {
   const pid = fs.readFileSync(process.argv[2], "utf8").trim();
   if (!/^[1-9][0-9]*$/.test(pid)) process.exit(0);
@@ -361,12 +484,27 @@ try {
   if (argv.length === 7 && argv[1] === "/usr/local/bin/facility-preview-gateway" &&
       argv[2] === "--listen" && argv[3] === process.argv[3] &&
       argv[4] === "--target" && argv[5] === process.argv[4] && argv[6] === "") {
+    const environment = fs.readFileSync("/proc/" + pid + "/environ", "utf8").split("\\0");
+    const credential = environment.find((entry) => entry.startsWith("FACILITY_PREVIEW_GATEWAY_TOKEN="));
+    const native = environment.find((entry) => entry.startsWith("FACILITY_NATIVE_PREVIEW=")) ?? "FACILITY_NATIVE_PREVIEW=";
+    if (credential === "FACILITY_PREVIEW_GATEWAY_TOKEN=" + process.env.FACILITY_PREVIEW_GATEWAY_TOKEN &&
+        native === "FACILITY_NATIVE_PREVIEW=" + process.env.FACILITY_NATIVE_PREVIEW) {
+      const response = await fetch("http://127.0.0.1:" + process.argv[3] + "/", {
+        redirect: "manual", signal: AbortSignal.timeout(1000),
+      }).catch(() => null);
+      await response?.body?.cancel();
+      if (response?.status === 401) { console.log("reuse"); return; }
+    }
     process.kill(Number(pid), "SIGTERM");
   }
 } catch (error) {
   if (!["ENOENT", "ESRCH"].includes(error.code)) throw error;
 }
+})().catch(() => { console.error("Preview gateway inspection failed"); process.exitCode = 1; });
 NODE
+)"
+# A new preview must not interrupt another tab's in-flight HTTP or WebSocket connection.
+if test "$gateway_action" = reuse; then exit 0; fi
 nohup facility-preview-gateway --listen ${gatewayPort} --target ${port.port} >>/workspace/.facility/preview-${gatewayPort}.log 2>&1 &
 pid=$!
 echo "$pid" > "$pid_file"
@@ -381,6 +519,21 @@ until test "$(curl --silent --output /dev/null --write-out "%{http_code}" --max-
   sleep 0.1
 done
 kill -0 "$pid" 2>/dev/null || { echo "Preview gateway on port ${gatewayPort} exited during startup" >&2; exit 1; }
+${
+  native
+    ? `node - ${gatewayPort} <<'NODE'
+const config = JSON.parse(process.env.FACILITY_NATIVE_PREVIEW);
+fetch("http://127.0.0.1:" + process.argv[2] + "/.facility/health", {
+  headers: { "x-facility-preview-token": process.env.FACILITY_PREVIEW_GATEWAY_TOKEN },
+  signal: AbortSignal.timeout(5000),
+}).then(async (r) => {
+  if (!r.ok) throw new Error("Native preview gateway image required");
+  const result = await r.json();
+  if (result.native !== true || result.origin !== config.origin) throw new Error("Native preview binding mismatch");
+}).catch(() => { console.error("Native preview gateway capability check failed"); process.exitCode = 1; });
+NODE`
+    : ""
+}
 `;
       return `runuser --user node --preserve-environment -- sh -lc ${shellQuote(gatewayCommand)}`;
     }),
@@ -389,8 +542,18 @@ kill -0 "$pid" 2>/dev/null || { echo "Preview gateway on port ${gatewayPort} exi
 
 function isVercelNotFound(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; status?: unknown; statusCode?: unknown };
-  return value.code === "not_found" || value.status === 404 || value.statusCode === 404;
+  const value = error as {
+    code?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return (
+    value.code === "not_found" ||
+    value.status === 404 ||
+    value.statusCode === 404 ||
+    value.response?.status === 404
+  );
 }
 
 function shellQuote(value: string): string {

@@ -15,6 +15,25 @@ pipeline state, and operational analytics share the API, worker, and PostgreSQL.
 
 ## Provisioned architecture
 
+### Protect active worker turns during deployments
+
+The Terraform reference enables this for the worker. For other ECS service workers, set `FACILITY_WORKER_TASK_PROTECTION=ecs`. The worker acquires
+task scale-in protection before claiming a turn, renews it every minute, and releases it
+after completion or failure. If acquisition is denied, the turn stays queued for recovery.
+Workers outside ECS leave this setting unset. ECS supplies `ECS_AGENT_URI` and
+`ECS_CONTAINER_METADATA_URI_V4`; do not override them with external endpoints.
+
+Grant the task role `ecs:GetTaskProtection` and `ecs:UpdateTaskProtection`, scoped to
+`arn:aws:ecs:REGION:ACCOUNT:task/CLUSTER/*`. Allow rolling deployments to keep old workers
+until their turns finish, and give deployment verification enough time for long turns.
+Never clear protection merely to make a deployment finish. A failed release request expires
+after at most two hours; active workers keep renewing that lease.
+
+This protects against deployment and scale-in replacement. Explicit task stops, process
+crashes, and infrastructure failures can still interrupt a turn. Inspect retained work and
+native processes before retrying those failures. See the
+[AWS task protection documentation](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-scale-in-protection.html).
+
 The Terraform module creates:
 
 - a VPC with public load-balancer subnets and private ECS/RDS subnets;
@@ -219,7 +238,7 @@ changing the AWS services.
 
 ECS Container Insights and the four CloudWatch log groups cover infrastructure health and logs.
 Facility's Insights page covers turn outcomes, token use, cost, budget state, workspace state,
-GitHub delivery health, open attention, and audit activity. The Pipeline page is backed by webhook
+GitHub delivery health, open attention, and audit activity. The Stories backlog is backed by webhook
 updates plus ten-minute reconciliation.
 
 Back up RDS and retain Vercel workspace snapshots according to your policy. Facility never deletes

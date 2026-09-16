@@ -4,6 +4,7 @@ import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { registeredSite } from "./origin-isolation.js";
 import type { AppConfig } from "./types.js";
+import { parsePreviewSites } from "./workspaces/preview-sites.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 loadDotenv({ path: join(repoRoot, ".env"), quiet: true });
@@ -39,6 +40,8 @@ const EnvSchema = z
     PUBLIC_URL: z.string().url().default("http://localhost:4400"),
     WEB_URL: z.string().url().optional(),
     FACILITY_PREVIEW_URL: OptionalUrl,
+    FACILITY_PREVIEW_SITES: z.string().optional(),
+    FACILITY_NATIVE_PREVIEWS: z.enum(["0", "1"]).default("0"),
     FACILITY_PREVIEW_SURFACE_TOKEN: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
       z.string().min(32).max(128).optional(),
@@ -78,6 +81,32 @@ const EnvSchema = z
     NODE_ENV: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    if (env.FACILITY_NATIVE_PREVIEWS === "1") {
+      if (env.FACILITY_WORKSPACE_DRIVER !== "vercel")
+        ctx.addIssue({
+          code: "custom",
+          path: ["FACILITY_NATIVE_PREVIEWS"],
+          message: "Native previews require the Vercel workspace driver",
+        });
+      for (const [field, value] of [
+        ["PUBLIC_URL", env.PUBLIC_URL],
+        ["WEB_URL", env.WEB_URL ?? env.PUBLIC_URL],
+      ] as const) {
+        const url = new URL(value);
+        if (
+          url.protocol !== "https:" ||
+          url.origin !== value ||
+          url.username ||
+          url.password ||
+          url.hostname.endsWith(".vercel.run")
+        )
+          ctx.addIssue({
+            code: "custom",
+            path: [field],
+            message: "Native previews require HTTPS control-plane origins outside vercel.run",
+          });
+      }
+    }
     if (!isExactBase64Key(env.SECRET_MASTER_KEY)) {
       ctx.addIssue({
         code: "custom",
@@ -259,7 +288,15 @@ export function readConfig(env = process.env): AppConfig {
     publicUrl: parsed.PUBLIC_URL,
     webUrl,
     previewUrl: parsed.FACILITY_PREVIEW_URL?.replace(/\/$/, ""),
+    nativePreviews: parsed.FACILITY_NATIVE_PREVIEWS === "1",
     previewSurfaceToken: parsed.FACILITY_PREVIEW_SURFACE_TOKEN,
+    previewSites: parsePreviewSites(parsed.FACILITY_PREVIEW_SITES, {
+      publicUrl: parsed.PUBLIC_URL,
+      webUrl,
+      mcpPublicUrl: parsed.MCP_PUBLIC_URL,
+      previewUrl: parsed.FACILITY_PREVIEW_URL,
+      facilityInsecureDev: parsed.FACILITY_INSECURE_DEV === "1",
+    }),
     workspaceImage: parsed.FACILITY_WORKSPACE_IMAGE,
     workspaceDriver: parsed.FACILITY_WORKSPACE_DRIVER,
     authIdentityProvider: parsed.AUTH_IDENTITY_PROVIDER,

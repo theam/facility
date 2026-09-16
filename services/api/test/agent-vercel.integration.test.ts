@@ -14,7 +14,12 @@ const workspace = {
   image: "facility-runner:test",
 };
 
-function provider(engine: "claude_code" | "codex", exitCode = 0, onLog?: () => void) {
+function provider(
+  engine: "claude_code" | "codex",
+  exitCode = 0,
+  onLog?: () => void,
+  logError?: Error,
+) {
   const kill = vi.fn().mockResolvedValue(undefined);
   const events =
     engine === "claude_code"
@@ -36,6 +41,7 @@ function provider(engine: "claude_code" | "codex", exitCode = 0, onLog?: () => v
       logs: async function* () {
         onLog?.();
         for (const event of events) yield { stream: "stdout", data: `${JSON.stringify(event)}\n` };
+        if (logError) throw logError;
         if (exitCode) yield { stream: "stderr", data: "command terminated" };
       },
       wait,
@@ -80,6 +86,24 @@ describe.each(["claude_code", "codex"] as const)("%s through the Vercel runtime"
     return engine === "codex" ? new CodexEngine(runtime) : new ClaudeCodeEngine(runtime);
   };
 
+  it("streams recoverable session evidence before a terminal provider failure without resubmitting", async () => {
+    const lost = Object.assign(new Error("Sandbox no longer available"), {
+      response: { status: 410 },
+    });
+    const { runCommand } = provider(engine, 0, undefined, lost);
+    const onEvent = vi.fn();
+    await expect(createEngine().run({ ...request(engine), onEvent })).rejects.toMatchObject({
+      code: "agent_observation_failed",
+      details: {
+        nativeSessionId: "native-session",
+        failure: { category: "workspace_session_lost", httpStatus: 410 },
+      },
+    });
+    expect(onEvent).toHaveBeenCalled();
+    expect(onEvent.mock.calls[0]?.[0]).toMatchObject({ engine });
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
   it("starts the default agent command and resumes its native session within the provider ceiling", async () => {
     const { runCommand, kill } = provider(engine);
     await expect(createEngine().run(request(engine))).resolves.toMatchObject({
@@ -118,6 +142,15 @@ describe.each(["claude_code", "codex"] as const)("%s through the Vercel runtime"
       code: "agent_engine_failed",
       message: "command terminated",
       details: { exitCode: 137 },
+    });
+  });
+
+  it("retains parsed engine evidence when observing the provider command fails", async () => {
+    provider(engine, 0, undefined, Object.assign(new Error("access revoked"), { status: 403 }));
+    await expect(createEngine().run(request(engine))).rejects.toMatchObject({
+      code: "agent_observation_failed",
+      message: `${engine} command observation failed: access revoked`,
+      details: { engine, events: expect.arrayContaining([expect.objectContaining({ engine })]) },
     });
   });
 

@@ -1,3 +1,4 @@
+import { can } from "@facility/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { request as upstreamRequest } from "undici";
 import WebSocket from "ws";
@@ -5,7 +6,9 @@ import { z } from "zod";
 import { ApiError } from "../../errors.js";
 import type { AppConfig } from "../../types.js";
 import { previewCookieName, previewCookieOptions } from "../../workspaces/preview.js";
+import { registerNativeWorkspacePreviewRoutes } from "./native-workspace-previews.js";
 import { principal as authenticatedPrincipal } from "./shared.js";
+import { registerWorkspacePreviewSiteRoutes } from "./workspace-preview-sites.js";
 
 const OpenParams = z.object({ projectId: z.string(), storyId: z.string(), service: z.string() });
 const SessionParams = z.object({ sessionId: z.string() });
@@ -14,11 +17,13 @@ const ExchangeQuery = z.object({ token: z.string() });
 
 export async function registerWorkspacePreviewRoutes(app: FastifyInstance, config: AppConfig) {
   const previews = app.storyDomain.previews;
+  await registerWorkspacePreviewSiteRoutes(app, config);
+  await registerNativeWorkspacePreviewRoutes(app, config);
 
   app.post(
     "/v1/projects/:projectId/workspace-stories/:storyId/preview/:service/open",
     {
-      config: { permission: "workspaces:execute", idempotent: true },
+      config: { permission: ["previews:read", "workspaces:execute"], idempotent: true },
       schema: { params: OpenParams, operationId: "openWorkspacePreview" },
     },
     async (request) => {
@@ -35,6 +40,7 @@ export async function registerWorkspacePreviewRoutes(app: FastifyInstance, confi
           storyId,
           userId,
           service,
+          canExecute: can(actor.permissions, "workspaces:execute"),
         }),
       );
     },

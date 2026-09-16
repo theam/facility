@@ -23,7 +23,7 @@ import {
 } from "@facility/db";
 import { and, asc, eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/catalog.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
@@ -78,6 +78,7 @@ describe("turn dispatcher end to end", async () => {
   const installationRowId = newId("ghi");
   const queuedTurns: string[] = [];
   let rejectEnqueue = false;
+  let credentialFailure: unknown;
   const builder = parseAgentManifest(
     `---
 name: builder
@@ -115,12 +116,65 @@ environment:
     outputOverride?: string;
     renameNextBranch?: string;
     corruptResumeOnce = false;
+    failNextRun = false;
+    liveFailureGate?: Promise<void>;
+    throttleDuringRun = false;
     replacementPending = false;
     blockUntilCanceled = false;
     blockingStarted = false;
     observedCancellation = false;
     async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
       this.requests.push(request);
+      if (this.liveFailureGate) {
+        const gate = this.liveFailureGate;
+        this.liveFailureGate = undefined;
+        const events = [
+          {
+            engine: "codex" as const,
+            type: "thread.started",
+            data: { thread_id: "native-before-failure" },
+          },
+          {
+            engine: "codex" as const,
+            type: "item.completed",
+            data: { message: request.environment?.FACILITY_DISPATCH_SECRET },
+          },
+        ];
+        for (const event of events) request.onEvent?.(event);
+        await gate;
+        throw new AgentEngineError("agent_observation_failed", "Workspace session lost", {
+          events,
+          failure: {
+            category: "workspace_session_lost",
+            httpStatus: 410,
+            responseBody: "provider-private-secret",
+          },
+        });
+      }
+      if (this.throttleDuringRun) {
+        this.throttleDuringRun = false;
+        throw Object.assign(new Error("API rate limit exceeded after execution began"), {
+          status: 429,
+        });
+      }
+      if (this.failNextRun) {
+        this.failNextRun = false;
+        throw new AgentEngineError("agent_engine_failed", "codex exited with status 1", {
+          engine: "codex",
+          exitCode: 1,
+          events: [
+            {
+              engine: "codex",
+              type: "result.error",
+              data: {
+                error: "authentication_failed",
+                message: "API key is invalid.",
+                projectSecret: request.environment?.FACILITY_DISPATCH_SECRET,
+              },
+            },
+          ],
+        });
+      }
       if (this.corruptResumeOnce && request.nativeSessionId) {
         this.corruptResumeOnce = false;
         this.replacementPending = true;
@@ -173,8 +227,19 @@ environment:
       return {
         nativeSessionId,
         output: this.outputOverride ?? `completed with ${secret} and ${projectSecret}`,
+        progress: [],
         events: [
-          { engine: "codex", type: "item.completed", data: { output: secret, projectSecret } },
+          {
+            engine: "codex",
+            type: "item.completed",
+            data: {
+              output: secret,
+              projectSecret,
+              exitCode: 0,
+              ok: true,
+              configured: `0 true a"b`,
+            },
+          },
         ],
         exitCode: 0,
         stderr: "",
@@ -239,17 +304,26 @@ environment:
       db,
       storiesService,
       new AgentCatalogService(db, catalogSource),
-      new GithubWorkspaceCredentialBroker(db, async () => ({
-        gitIdentity: { name: "my-app[bot]", email: "12345+my-app[bot]@users.noreply.github.com" },
-        token: "secret-installation-token",
-        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-      })),
+      new GithubWorkspaceCredentialBroker(db, async () => {
+        if (credentialFailure) throw credentialFailure;
+        return {
+          gitIdentity: { name: "my-app[bot]", email: "12345+my-app[bot]@users.noreply.github.com" },
+          token: "secret-installation-token",
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        };
+      }),
       manifestSource,
-      new ProjectEnvironmentService(db, runtime, `file://${remotes}`, (_projectId, name) =>
-        name === "FACILITY_DISPATCH_SECRET" ? "project-secret" : undefined,
+      new ProjectEnvironmentService(
+        db,
+        runtime,
+        `file://${remotes}`,
+        (_projectId, name) => (name === "FACILITY_DISPATCH_SECRET" ? "project-secret" : undefined),
+        async () => ({ SHORT_VALUE: "0", FLAG_VALUE: "true", QUOTED_VALUE: 'a"b' }),
       ),
       new AgentEngineRegistry([engine]),
       new TurnGitEvidenceService(db, runtime),
+      undefined,
+      runtime,
     );
   });
 
@@ -333,6 +407,17 @@ environment:
       .orderBy(asc(turnEvents.seq));
     expect(JSON.stringify(events)).not.toContain("secret-installation-token");
     expect(JSON.stringify(events)).not.toContain("project-secret");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            exitCode: 0,
+            ok: true,
+            configured: "[REDACTED] [REDACTED] [REDACTED]",
+          }),
+        }),
+      ]),
+    );
 
     const followUp = await storiesService.queueMessage({
       orgId,
@@ -518,7 +603,7 @@ environment:
         expect.objectContaining({
           turnId: followUp.turn.id,
           type: "engine.resume.failed",
-          data: { projectSecret: "[REDACTED]" },
+          data: { projectSecret: "[REDACTED]", facilityEventIndex: 0 },
         }),
       ]),
     );
@@ -567,6 +652,120 @@ environment:
       ]),
     );
   });
+
+  it("records engine events when a turn fails, with project secrets redacted", async () => {
+    engine.failNextRun = true;
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `engine-failure-${suffix}`,
+      title: "Surface the engine failure",
+      agent: builder,
+      message: "Plan the change",
+      messageDedupeKey: `engine-failure-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected initial turn");
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+    ).resolves.toMatchObject({ state: "failed" });
+
+    const failed = await storiesService.get(orgId, projectId, started.story.id);
+    expect(failed.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          turnId: started.queued.turn.id,
+          type: "engine.result.error",
+          data: {
+            error: "authentication_failed",
+            message: "API key is invalid.",
+            projectSecret: "[REDACTED]",
+            facilityEventIndex: 0,
+          },
+        }),
+        expect.objectContaining({ turnId: started.queued.turn.id, type: "turn.failed" }),
+      ]),
+    );
+    expect(JSON.stringify(failed)).not.toContain("project-secret");
+  });
+
+  it("checkpoints redacted progress and session before failure, then resumes without replaying saved events", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `live-recovery-${suffix}`,
+      title: "Recover streamed context",
+      agent: builder,
+      message: "Continue work",
+      messageDedupeKey: `live-recovery-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected turn");
+    let release: (() => void) | undefined;
+    engine.liveFailureGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const turnId = started.queued.turn.id;
+    const transact = db.transaction.bind(db);
+    let lostAcknowledgement = false;
+    const transaction = vi.spyOn(db, "transaction").mockImplementation(async (...args) => {
+      const result = await transact(...args);
+      const saved = await db.select().from(turnEvents).where(eq(turnEvents.turnId, turnId));
+      if (!lostAcknowledgement && saved.some((event) => event.type.startsWith("engine."))) {
+        lostAcknowledgement = true;
+        throw new Error("commit acknowledgement lost");
+      }
+      return result;
+    });
+    const dispatch = dispatcher.dispatch({ orgId, projectId, turnId });
+    try {
+      await vi.waitFor(
+        async () => {
+          const stored = await db.select().from(turnEvents).where(eq(turnEvents.turnId, turnId));
+          expect(stored.filter((e) => e.type.startsWith("engine."))).toHaveLength(2);
+          expect(JSON.stringify(stored)).not.toContain("project-secret");
+          const session = await db
+            .select()
+            .from(engineSessions)
+            .where(eq(engineSessions.storyId, started.story.id));
+          expect(session[0]?.nativeSessionId).toBe("native-before-failure");
+          const turn = await db.select().from(turns).where(eq(turns.id, turnId));
+          expect(turn[0]?.state).toBe("running");
+        },
+        { timeout: 10000 },
+      );
+    } finally {
+      release?.();
+    }
+    await expect(dispatch).resolves.toMatchObject({ state: "failed" });
+    transaction.mockRestore();
+    expect(lostAcknowledgement).toBe(true);
+    const saved = await db.select().from(turnEvents).where(eq(turnEvents.turnId, turnId));
+    expect(saved.filter((e) => e.type.startsWith("engine."))).toHaveLength(2);
+    expect(JSON.stringify(saved)).not.toContain("provider-private-secret");
+    expect(saved.find((e) => e.type === "turn.failed")?.data).toMatchObject({
+      failure: { category: "workspace_session_lost", httpStatus: 410 },
+    });
+    const next = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "Continue from retained work",
+      dedupeKey: `resume-live-${suffix}`,
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    if (!next.turn) throw new Error("expected continuation");
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: next.turn.id }),
+    ).resolves.toMatchObject({ state: "succeeded" });
+    expect(engine.requests.at(-1)?.nativeSessionId).toBe("native-before-failure");
+  }, 15_000);
 
   it("cancels a running agent process while preserving the workspace and future turns", async () => {
     engine.blockUntilCanceled = true;
@@ -626,7 +825,7 @@ environment:
     });
     expect(afterCancellation.turns.filter((turn) => turn.state === "canceled")).toHaveLength(1);
     expect(
-      afterCancellation.events.filter((event) => event.type === "turn.cancel_requested"),
+      (afterCancellation.events ?? []).filter((event) => event.type === "turn.cancel_requested"),
     ).toHaveLength(1);
 
     engine.blockUntilCanceled = false;
@@ -877,6 +1076,128 @@ environment:
       cwd: firstRequest.cwd,
     });
     expect(actual.stdout.trim()).toBe(branch);
+  });
+  async function startAdmissionStory() {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: randomUUID(),
+      title: "Recover provider admission",
+      agent: builder,
+      message: "Run after provider capacity recovers",
+      messageDedupeKey: randomUUID(),
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected queued admission turn");
+    return { storyId: started.story.id, turnId: started.queued.turn.id, orgId, projectId };
+  }
+
+  it("durably defers throttled admission, rejects early and cross-tenant claims, then runs the same turn once", async () => {
+    const input = await startAdmissionStory();
+    const before = engine.requests.length;
+    credentialFailure = Object.assign(new Error("API rate limit exceeded"), {
+      status: 403,
+      response: {
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
+        },
+      },
+    });
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({
+        claimed: true,
+        state: "queued",
+        retryAfter: expect.any(Date),
+      });
+      expect(engine.requests).toHaveLength(before);
+      const [deferred] = await db.select().from(turns).where(eq(turns.id, input.turnId));
+      expect(deferred).toMatchObject({
+        state: "queued",
+        error: null,
+        startedAt: null,
+        scheduledFor: null,
+      });
+      expect(deferred?.retryAfter?.getTime()).toBeGreaterThan(Date.now() + 3_500_000);
+      await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
+      const enqueued: unknown[] = [];
+      await recoverQueuedTurns(db, async (_queue, data) => {
+        if (data.turnId === input.turnId) enqueued.push(data);
+      });
+      expect(enqueued).toEqual([]);
+      expect(
+        await db.select().from(attentionItems).where(eq(attentionItems.turnId, input.turnId)),
+      ).toEqual([]);
+      expect(await db.select().from(turnUsage).where(eq(turnUsage.turnId, input.turnId))).toEqual(
+        [],
+      );
+      await db
+        .update(turns)
+        .set({ retryAfter: new Date(Date.now() - 1_000) })
+        .where(eq(turns.id, input.turnId));
+      await expect(dispatcher.dispatch({ ...input, orgId: "org_other" })).resolves.toEqual({
+        claimed: false,
+      });
+      credentialFailure = undefined;
+      await recoverQueuedTurns(db, async (_queue, data) => {
+        if (data.turnId === input.turnId) enqueued.push(data);
+      });
+      expect(enqueued).toHaveLength(1);
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "succeeded" });
+      await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
+      expect(engine.requests).toHaveLength(before + 1);
+    } finally {
+      credentialFailure = undefined;
+    }
+  });
+
+  it.each([
+    401, 403,
+  ])("fails admission denied with HTTP %s instead of repeatedly deferring it", async (status) => {
+    const input = await startAdmissionStory();
+    credentialFailure = Object.assign(new Error("access revoked"), { status });
+    const before = engine.requests.length;
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "failed" });
+      expect(engine.requests).toHaveLength(before);
+      const [turn] = await db.select().from(turns).where(eq(turns.id, input.turnId));
+      expect(turn).toMatchObject({ state: "failed", retryAfter: null });
+    } finally {
+      credentialFailure = undefined;
+    }
+  });
+
+  it("never automatically repeats a turn after its engine has started", async () => {
+    const input = await startAdmissionStory();
+    const before = engine.requests.length;
+    engine.throttleDuringRun = true;
+    await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "failed" });
+    expect(engine.requests).toHaveLength(before + 1);
+    const [turn] = await db.select().from(turns).where(eq(turns.id, input.turnId));
+    expect(turn).toMatchObject({ state: "failed", retryAfter: null });
+  });
+
+  it("does not revive a canceled deferred turn after its deadline", async () => {
+    const input = await startAdmissionStory();
+    credentialFailure = Object.assign(new Error("API rate limit exceeded"), { status: 429 });
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "queued" });
+    } finally {
+      credentialFailure = undefined;
+    }
+    await storiesService.cancelTurn({ ...input, actor: { type: "user", id: "user_test" } });
+    await db
+      .update(turns)
+      .set({ retryAfter: new Date(Date.now() - 1_000) })
+      .where(eq(turns.id, input.turnId));
+    const enqueued: unknown[] = [];
+    await recoverQueuedTurns(db, async (_queue, data) => {
+      if (data.turnId === input.turnId) enqueued.push(data);
+    });
+    expect(enqueued).toEqual([]);
+    await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
   });
 });
 

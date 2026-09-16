@@ -1,6 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["FACILITY_GITHUB_CREDENTIALS", "FACILITY_PREVIEW_GATEWAY_TOKEN"],
+  "globalPassThroughEnv": [
+    "FACILITY_GITHUB_CREDENTIALS",
+    "FACILITY_PREVIEW_GATEWAY_TOKEN",
+    "FACILITY_NATIVE_PREVIEW"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

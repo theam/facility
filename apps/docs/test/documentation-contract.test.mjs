@@ -8,6 +8,25 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const docsRoot = resolve(repoRoot, "apps/docs/docs");
 const read = (path) => readFileSync(resolve(repoRoot, path), "utf8");
 
+test("repository unlink documents cleanup, retention, permissions and primary replacement", () => {
+  const reference = read("apps/docs/docs/reference/api.md");
+  for (const contract of [
+    "repos:write",
+    "repository_in_use",
+    "repository_disconnected",
+    "Idempotency-Key",
+    "oldest remaining",
+    "webhook",
+    "never removes conversations",
+  ]) {
+    assert.ok(reference.toLowerCase().includes(contract.toLowerCase()), contract);
+  }
+  const guide = read("apps/docs/docs/guides/existing-repo.md");
+  assert.match(guide, /confirm disconnect/);
+  assert.match(guide, /not the[\s\S]*GitHub repository itself/);
+  assert.match(guide, /Archiving does not remove/);
+});
+
 test("the published navigation covers user, operator, reference, and contributor paths", () => {
   const sidebar = read("apps/docs/sidebars.ts");
   const requiredPages = [
@@ -234,7 +253,7 @@ test("the API reference maps every resource family", () => {
     "/costs",
     "/budget",
     "/observability",
-    "/pipeline",
+    "/backlog",
     "/github/sync",
     "/audit",
   ]) {

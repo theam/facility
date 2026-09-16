@@ -13,3 +13,5 @@ it belongs there.
   policy. A green fast test run is not release evidence.
 - [`releasing.md`](releasing.md) — how merging to `main` publishes, how to
   recover a failed run, and the one-time bootstrap steps. Maintainers only.
+
+- [Turn evidence and recovery](turn-recovery.md): live progress, workspace health, and safe continuation after an interruption.

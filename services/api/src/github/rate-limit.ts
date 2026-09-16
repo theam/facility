@@ -8,7 +8,7 @@ export function githubRateLimitRetryAt(error: unknown, now = Date.now()): Date |
   const headers = object(response.headers);
   const retryAfter = seconds(headers["retry-after"]);
   const exhausted = headers["x-ratelimit-remaining"] === "0";
-  const message = object(response.data).message;
+  const message = object(response.data).message ?? failure.message;
   if (
     failure.status !== 429 &&
     !exhausted &&
