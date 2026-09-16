@@ -9,12 +9,14 @@ import { StoryIntegrationNotifications } from "./stories/integration-notificatio
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
+import { ecsTaskProtection, WorkerTurnGuard } from "./worker-task-protection.js";
 
 const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
 
 export async function startWorker() {
   const config = readConfig();
   const logger = pino({ level: config.logLevel });
+  const turnGuard = new WorkerTurnGuard(await ecsTaskProtection(process.env), logger);
   const { db, client } = createDb(config.databaseUrl);
   const boss = new PgBoss({ connectionString: config.databaseUrl });
   boss.on("error", (error) => logger.error({ err: error }, "pg-boss error"));
@@ -76,8 +78,10 @@ export async function startWorker() {
       const data = job?.data;
       let result: Record<string, unknown> | undefined;
       if (queue === "turns.dispatch") {
-        result = await storyDomain.dispatcher.dispatch(
-          data as { orgId: string; projectId: string; turnId: string },
+        result = await turnGuard.run(() =>
+          storyDomain.dispatcher.dispatch(
+            data as { orgId: string; projectId: string; turnId: string },
+          ),
         );
       } else if (queue === "github.mirror") {
         result = await storyDomain.mirror.syncAll();
@@ -131,7 +135,12 @@ export async function startWorker() {
   await boss.schedule("stories.integrations", "* * * * *", {});
   logger.info({ queues }, "facility worker started");
   boss.on("stopped", () => void client.end());
-  return boss;
+  return {
+    stop: () => {
+      turnGuard.close();
+      return boss.stop({ graceful: true, timeout: 30_000, close: true });
+    },
+  };
 }
 
 /** Titles whose job was lost (restart, crash) are queued again; generation itself stays idempotent. */
@@ -227,7 +236,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       closing = true;
       console.info(`facility worker received ${signal}; finishing active jobs`);
       try {
-        await boss.stop({ graceful: true, timeout: 30_000, close: true });
+        await boss.stop();
       } catch (error) {
         console.error("facility worker shutdown failed", error);
         process.exitCode = 1;
