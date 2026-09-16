@@ -57,6 +57,19 @@ setup, or replay of external writes is performed.
 
 ## Operational limits
 
+ECS workers acquire the maximum 48-hour task-protection lease before claiming a
+turn, renew it while running, and release it when dispatch finishes. The initial
+lease covers the engine's 24-hour command window plus preparation even when ECS
+rejects renewal during a deployment with `DEPLOYMENT_BLOCKED`. Protection responses
+must confirm the requested duration. Renewal and release failures log an allowlisted
+reason, HTTP status, and remaining lease time, without provider response bodies.
+This protects against deployment scale-in, not process crashes or infrastructure
+loss. If release fails, an idle task can remain protected until the lease expires;
+operators should verify it has no active work before clearing protection.
+
+See [AWS task scale-in protection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-scale-in-protection.html)
+for deployment constraints and lease limits.
+
 Evidence is durable once its database transaction commits. Worker loss can still
 lose an in-flight batch, and a database outage prevents new evidence from becoming
 durable. Event writes retry pending batches in order; turn completion fails visibly

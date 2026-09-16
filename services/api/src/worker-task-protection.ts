@@ -1,8 +1,37 @@
-type ProtectionLogger = { warn: (message: string) => void };
-type Protection = { set: (enabled: boolean) => Promise<void> };
+type ProtectionLogger = { warn: (data: Record<string, unknown>, message: string) => void };
+type Protection = { set: (enabled: boolean) => Promise<void>; readonly expiresAt?: number };
 
-const LEASE_MINUTES = 120;
+// ECS can reject renewals of an old deployment. Cover the 24-hour engine command
+// plus preparation without relying on renewal; release promptly in finally.
+const LEASE_MINUTES = 48 * 60;
 const RENEW_MS = 60_000;
+const FAILURE_CODES = new Set([
+  "DEPLOYMENT_BLOCKED",
+  "AccessDeniedException",
+  "TASK_NOT_VALID",
+  "MISSING",
+  "ThrottlingException",
+]);
+
+class ProtectionError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status?: number,
+  ) {
+    super(`ECS worker protection failed: ${code}`);
+  }
+}
+
+function failureEvidence(error: unknown, protection: Protection) {
+  return {
+    code: error instanceof ProtectionError ? error.code : "REQUEST_FAILED",
+    status: error instanceof ProtectionError ? error.status : undefined,
+    leaseRemainingMs:
+      protection.expiresAt === undefined
+        ? undefined
+        : Math.max(0, protection.expiresAt - Date.now()),
+  };
+}
 const TASK_ARN =
   /^(arn:aws(?:-us-gov|-cn)?:ecs:[a-z0-9-]+:\d{12}:task\/)(?:([a-zA-Z0-9_-]+)\/)?([a-f0-9]{32})$/;
 
@@ -55,7 +84,11 @@ export async function ecsTaskProtection(
   const taskArn = identity?.TaskARN;
   if (typeof taskArn !== "string" || !TASK_ARN.test(taskArn))
     throw new Error("Invalid ECS worker identity");
+  let expiresAt: number | undefined;
   return {
+    get expiresAt() {
+      return expiresAt;
+    },
     async set(enabled) {
       const result = await request(endpoint, {
         method: "PUT",
@@ -67,28 +100,30 @@ export async function ecsTaskProtection(
         redirect: "error",
         signal: AbortSignal.timeout(5_000),
       });
-      if (!result.ok) throw new Error("ECS worker protection request failed");
-      const body = (await result.json()) as {
-        error?: unknown;
-        failure?: unknown;
+      const body = (await result.json().catch(() => null)) as {
+        error?: { Code?: unknown };
+        failure?: { Reason?: unknown };
         protection?: { TaskArn?: unknown; ProtectionEnabled?: unknown; ExpirationDate?: unknown };
-      };
+      } | null;
+      if (!result.ok || body?.error || body?.failure) {
+        const code = body?.failure?.Reason ?? body?.error?.Code;
+        throw new ProtectionError(
+          typeof code === "string" && FAILURE_CODES.has(code) ? code : "REQUEST_FAILED",
+          result.status,
+        );
+      }
       const protection = body?.protection;
-      if (
-        body?.error ||
-        body?.failure ||
-        !sameTask(taskArn, protection?.TaskArn) ||
-        protection?.ProtectionEnabled !== enabled
-      ) {
-        throw new Error("ECS worker protection was not confirmed for this task");
+      if (!sameTask(taskArn, protection?.TaskArn) || protection?.ProtectionEnabled !== enabled) {
+        throw new ProtectionError("INVALID_RESPONSE", result.status);
       }
       if (
         enabled &&
         (typeof protection.ExpirationDate !== "string" ||
-          !(Date.parse(protection.ExpirationDate) > Date.now() + RENEW_MS))
+          !(Date.parse(protection.ExpirationDate) > Date.now() + (LEASE_MINUTES - 1) * 60_000))
       ) {
-        throw new Error("ECS worker protection lease is expired or invalid");
+        throw new ProtectionError("INSUFFICIENT_LEASE", result.status);
       }
+      expiresAt = enabled ? Date.parse(protection.ExpirationDate as string) : undefined;
     },
   };
 }
@@ -125,9 +160,13 @@ export class WorkerTurnGuard {
           if (renewal) return;
           renewal = protection
             .set(true)
-            .catch(() =>
+            .catch((error: unknown) =>
               this.logger.warn(
-                "Could not renew ECS worker protection; the previous lease remains in effect",
+                {
+                  event: "worker.protection_renewal_failed",
+                  ...failureEvidence(error, protection),
+                },
+                "ECS worker protection renewal failed",
               ),
             )
             .finally(() => {
@@ -143,8 +182,11 @@ export class WorkerTurnGuard {
       if (protectedTask && protection) {
         await protection
           .set(false)
-          .catch(() =>
-            this.logger.warn("Could not release ECS worker protection; its lease will expire"),
+          .catch((error: unknown) =>
+            this.logger.warn(
+              { event: "worker.protection_release_failed", ...failureEvidence(error, protection) },
+              "Could not release ECS worker protection; its lease will expire",
+            ),
           );
       }
       this.busy = false;

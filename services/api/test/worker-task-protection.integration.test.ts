@@ -10,6 +10,7 @@ let endpoint: string;
 let response: unknown;
 let status: number;
 let protectedTask: boolean;
+let expiresAt: number;
 let requests: { path: string; body: Record<string, unknown> }[];
 const env = {
   FACILITY_WORKER_TASK_PROTECTION: "ecs",
@@ -22,10 +23,13 @@ beforeEach(async () => {
   status = 200;
   response = undefined;
   protectedTask = false;
+  expiresAt = 0;
   server = createServer(async (req, res) => {
     if (req.url === "/rollout") {
       res.setHeader("content-type", "application/json");
-      return void res.end(JSON.stringify({ terminated: !protectedTask }));
+      return void res.end(
+        JSON.stringify({ terminated: !protectedTask || expiresAt <= Date.now() }),
+      );
     }
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -34,7 +38,10 @@ beforeEach(async () => {
     res.setHeader("content-type", "application/json");
     if (req.url === "/v4/test/task") return void res.end(JSON.stringify({ TaskARN: taskArn }));
     res.statusCode = status;
-    if (status === 200 && response === undefined) protectedTask = body.ProtectionEnabled === true;
+    if (status === 200 && response === undefined) {
+      protectedTask = body.ProtectionEnabled === true;
+      expiresAt = Date.now() + Number(body.ExpiresInMinutes ?? 0) * 60_000;
+    }
     res.end(
       JSON.stringify(
         response !== undefined
@@ -43,7 +50,7 @@ beforeEach(async () => {
               protection: {
                 TaskArn: taskArn,
                 ProtectionEnabled: body.ProtectionEnabled,
-                ExpirationDate: new Date(Date.now() + 120 * 60_000).toISOString(),
+                ExpirationDate: new Date(expiresAt).toISOString(),
               },
             },
       ),
@@ -53,6 +60,8 @@ beforeEach(async () => {
   endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -65,7 +74,7 @@ it("keeps a simulated rolling replacement from terminating an active turn", asyn
   const guard = new WorkerTurnGuard(protection, { warn: vi.fn() });
   await guard.run(async () => {
     const last = requests.at(-1)?.body;
-    expect(last).toEqual({ ProtectionEnabled: true, ExpiresInMinutes: 120 });
+    expect(last).toEqual({ ProtectionEnabled: true, ExpiresInMinutes: 2880 });
     expect(await (await fetch(`${endpoint}/rollout`)).json()).toEqual({ terminated: false });
   });
   expect(await (await fetch(`${endpoint}/rollout`)).json()).toEqual({ terminated: true });
@@ -74,6 +83,71 @@ it("keeps a simulated rolling replacement from terminating an active turn", asyn
     "/task-protection/v1/state",
     "/task-protection/v1/state",
   ]);
+  expect(requests.at(-1)?.body).toEqual({ ProtectionEnabled: false });
+});
+
+it("keeps a long turn protected when a rolling deployment rejects every renewal", async () => {
+  const now = Date.now();
+  const protection = await ecsTaskProtection(env, request);
+  const dispatch = vi.fn(async () => {
+    const initialExpiry = protection?.expiresAt;
+    response = { failure: { Reason: "DEPLOYMENT_BLOCKED", Detail: "untrusted provider body" } };
+    await expect(protection?.set(true)).rejects.toThrow("DEPLOYMENT_BLOCKED");
+    expect(protection?.expiresAt).toBe(initialExpiry);
+    vi.spyOn(Date, "now").mockReturnValue(now + 25 * 60 * 60_000);
+    expect(await (await fetch(`${endpoint}/rollout`)).json()).toEqual({ terminated: false });
+    response = undefined;
+  });
+  await new WorkerTurnGuard(protection, { warn: vi.fn() }).run(dispatch);
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(await (await fetch(`${endpoint}/rollout`)).json()).toEqual({ terminated: true });
+});
+
+it("rejects a short confirmed lease before admitting a long turn", async () => {
+  response = {
+    protection: {
+      TaskArn: taskArn,
+      ProtectionEnabled: true,
+      ExpirationDate: new Date(Date.now() + 120 * 60_000).toISOString(),
+    },
+  };
+  const dispatch = vi.fn();
+  await expect(
+    new WorkerTurnGuard(await ecsTaskProtection(env, request), { warn: vi.fn() }).run(dispatch),
+  ).rejects.toThrow("INSUFFICIENT_LEASE");
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+it("reports a blocked renewal with its remaining lease and releases after completion", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const warn = vi.fn();
+  let finish!: () => void;
+  let started!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const guard = new WorkerTurnGuard(await ecsTaskProtection(env, request), { warn });
+  const turn = guard.run(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+        started();
+      }),
+  );
+  await admitted;
+  response = { failure: { Reason: "DEPLOYMENT_BLOCKED", Detail: "credential=private-value" } };
+  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+  expect(warn.mock.calls[0]?.[0]).toMatchObject({
+    event: "worker.protection_renewal_failed",
+    code: "DEPLOYMENT_BLOCKED",
+    status: 200,
+  });
+  expect(warn.mock.calls[0]?.[0].leaseRemainingMs).toBeGreaterThan(47 * 60 * 60_000);
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("private-value");
+  response = undefined;
+  finish();
+  await turn;
   expect(requests.at(-1)?.body).toEqual({ ProtectionEnabled: false });
 });
 
@@ -130,7 +204,7 @@ it("accepts the legacy ARN format for the same task while retaining account and 
       ExpirationDate: "2099-01-01T00:00:00Z",
     },
   };
-  await expect(protection?.set(true)).rejects.toThrow("not confirmed");
+  await expect(protection?.set(true)).rejects.toThrow("INVALID_RESPONSE");
   response = {
     protection: {
       TaskArn: taskArn.replace("test-cluster", "other-cluster"),
@@ -138,5 +212,5 @@ it("accepts the legacy ARN format for the same task while retaining account and 
       ExpirationDate: "2099-01-01T00:00:00Z",
     },
   };
-  await expect(protection?.set(true)).rejects.toThrow("not confirmed");
+  await expect(protection?.set(true)).rejects.toThrow("INVALID_RESPONSE");
 });
