@@ -36,9 +36,12 @@ export class AgentScheduler {
       .from(agentSchedules)
       .where(and(eq(agentSchedules.enabled, true), lte(agentSchedules.nextRunAt, now)));
     let scheduled = 0;
+    let coalesced = 0;
     for (const schedule of due) {
-      const claimed = await this.claim(schedule, now);
+      const advance = scheduleAdvance(schedule.cron, schedule.timezone, schedule.nextRunAt, now);
+      const claimed = await this.claim(schedule, now, advance.nextRunAt);
       if (!claimed) continue;
+      if (advance.missed) coalesced += 1;
       try {
         const [projectManifest, projection] = await Promise.all([
           this.projectManifests.load(schedule.orgId, schedule.projectId),
@@ -72,7 +75,7 @@ export class AgentScheduler {
         });
       }
     }
-    return { projects: activeProjects.length, due: due.length, scheduled, failures };
+    return { projects: activeProjects.length, due: due.length, scheduled, coalesced, failures };
   }
 
   async status(orgId: string, projectId: string) {
@@ -197,8 +200,7 @@ export class AgentScheduler {
     });
   }
 
-  private async claim(schedule: typeof agentSchedules.$inferSelect, now: Date) {
-    const nextRunAt = nextOccurrence(schedule.cron, schedule.timezone, schedule.nextRunAt);
+  private async claim(schedule: typeof agentSchedules.$inferSelect, now: Date, nextRunAt: Date) {
     return (
       await this.db
         .update(agentSchedules)
@@ -222,6 +224,31 @@ export class AgentScheduler {
 
 export function nextOccurrence(cron: string, timezone: string, from: Date) {
   return cronParser.parseExpression(cron, { currentDate: from, tz: timezone }).next().toDate();
+}
+
+/**
+ * Where a due schedule should point once its occurrence is claimed.
+ *
+ * The next occurrence is computed from `now`, not from the occurrence being
+ * claimed. Advancing by one cron step from the stored value makes the loop
+ * edge-triggered: a schedule that fell behind while the worker was down stays
+ * due after each claim and dispatches again on the following tick, one paid run
+ * per missed occurrence — 24 turns in 24 minutes for an hourly schedule after a
+ * day of downtime. Advancing from `now` makes it level-triggered: the loop
+ * converges on "this schedule is due" and runs it once, however long the gap.
+ *
+ * A schedule claimed on time is unaffected, because the next occurrence after
+ * `now` and the next occurrence after its own due instant are the same one.
+ */
+export function scheduleAdvance(cron: string, timezone: string, dueAt: Date, now: Date) {
+  const from = now > dueAt ? now : dueAt;
+  return {
+    nextRunAt: nextOccurrence(cron, timezone, from),
+    // Whether this claim absorbs more than the occurrence it satisfies: the
+    // following occurrence had already come due as well. One extra cron step,
+    // never a walk over the backlog, so an outage of any length costs the same.
+    missed: nextOccurrence(cron, timezone, dueAt) <= now,
+  };
 }
 
 function workspaceInput(manifest: ProjectManifest, defaultImage: string) {
