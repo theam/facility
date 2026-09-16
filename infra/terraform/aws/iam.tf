@@ -1,3 +1,6 @@
+data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
+
 resource "aws_iam_role" "execution" {
   name = "${local.name_prefix}-execution"
   assume_role_policy = jsonencode({
@@ -46,6 +49,19 @@ resource "aws_iam_role" "task" {
       Effect    = "Allow"
       Action    = "sts:AssumeRole"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "worker_task_protection" {
+  name = "worker-task-protection"
+  role = aws_iam_role.task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]
+      Resource = "arn:${data.aws_partition.current.partition}:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task/${local.name_prefix}/*"
     }]
   })
 }

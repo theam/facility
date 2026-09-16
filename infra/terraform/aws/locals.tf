@@ -64,8 +64,10 @@ locals {
       command       = ["node", "dist/worker.js"]
       port          = 0
       desired_count = var.worker_desired_count
-      environment   = local.common_environment
-      secrets       = local.common_secrets
+      environment = concat(local.common_environment, [
+        { name = "FACILITY_WORKER_TASK_PROTECTION", value = "ecs" },
+      ])
+      secrets = local.common_secrets
     }
     web = {
       image         = "${aws_ecr_repository.service["web"].repository_url}:${var.image_tag}"
