@@ -153,8 +153,10 @@ from the provider SDK and verifies the already-initialized gateway before any
 project setup command runs. This check does not depend on the application server
 being started; it is not a discovery page or application health check.
 
-The same value is supplied to setup, seed, start and ready hooks, including on
-resume. It contains public origins only, not access credentials. The reserved
+Each `prepare` or `startPrepared` invocation resolves the current origins again,
+including on resume, and supplies that map to the hooks it executes. This is not
+a snapshot of the origins used by the original setup. It contains public origins
+only, not access credentials. The reserved
 name cannot be overridden by managed project/workspace values, namespaced process
 variables or repository credentials. Only manifests requesting it trigger this
 lookup. An unsupported provider, disabled native-preview capability or opted-out
@@ -163,10 +165,14 @@ projects that do not request it keep their existing startup path.
 
 Knowing an origin does **not** publish a ready preview. Normal start/readiness and
 the final credentialed gateway check still run before endpoints are persisted.
-If the final native binding differs from the origins supplied to setup, Facility
-rejects publication rather than advertise a mismatched application. Applications
-with persisted origin-dependent configuration should also detect changes on
-resume and preserve existing data for inspection instead of silently rebuilding.
+If the final native binding differs from the origins resolved at the beginning
+of that same `prepare` or `startPrepared` invocation, Facility rejects publication.
+This detects changes within one operation, not changes since an earlier setup or
+across suspend/resume. The setup checksum includes the manifest and repository
+HEAD, not runtime origin values; an origin change alone does not invalidate setup.
+Applications with persisted origin-dependent configuration must validate it in
+their resume hooks and preserve existing data for inspection instead of silently
+rebuilding. This contract does not guarantee origin stability across suspensions.
 
 Once endpoints are persisted, the existing `facility.workspace.updated` lifecycle
 notification can trigger project-specific callback registration. The application
