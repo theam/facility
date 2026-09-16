@@ -4,7 +4,21 @@ type Protection = { set: (enabled: boolean) => Promise<void> };
 const LEASE_MINUTES = 120;
 const RENEW_MS = 60_000;
 const TASK_ARN =
-  /^arn:aws(?:-us-gov|-cn)?:ecs:[a-z0-9-]+:\d{12}:task\/[a-zA-Z0-9_-]+\/[a-f0-9]{32}$/;
+  /^(arn:aws(?:-us-gov|-cn)?:ecs:[a-z0-9-]+:\d{12}:task\/)(?:([a-zA-Z0-9_-]+)\/)?([a-f0-9]{32})$/;
+
+function sameTask(expected: string, actual: unknown) {
+  if (typeof actual !== "string") return false;
+  const expectedParts = TASK_ARN.exec(expected);
+  const actualParts = TASK_ARN.exec(actual);
+  // ECS protection responses may omit the cluster segment present in task metadata.
+  return Boolean(
+    expectedParts &&
+      actualParts &&
+      expectedParts[1] === actualParts[1] &&
+      expectedParts[3] === actualParts[3] &&
+      (!expectedParts[2] || !actualParts[2] || expectedParts[2] === actualParts[2]),
+  );
+}
 
 function agentUrl(value: string | undefined, label: string) {
   if (!value) throw new Error(`${label} is required for ECS worker protection`);
@@ -63,7 +77,7 @@ export async function ecsTaskProtection(
       if (
         body?.error ||
         body?.failure ||
-        protection?.TaskArn !== taskArn ||
+        !sameTask(taskArn, protection?.TaskArn) ||
         protection?.ProtectionEnabled !== enabled
       ) {
         throw new Error("ECS worker protection was not confirmed for this task");

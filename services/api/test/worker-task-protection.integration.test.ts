@@ -112,3 +112,31 @@ it.each([
   await expect(guard.run(dispatch)).rejects.toThrow();
   expect(dispatch).not.toHaveBeenCalled();
 });
+
+it("accepts the legacy ARN format for the same task while retaining account and task identity", async () => {
+  response = {
+    protection: {
+      TaskArn: taskArn.replace("test-cluster/", ""),
+      ProtectionEnabled: true,
+      ExpirationDate: "2099-01-01T00:00:00Z",
+    },
+  };
+  const protection = await ecsTaskProtection(env, request);
+  await expect(protection?.set(true)).resolves.toBeUndefined();
+  response = {
+    protection: {
+      TaskArn: taskArn.replace("test-cluster/", "").replace("111111111111", "222222222222"),
+      ProtectionEnabled: true,
+      ExpirationDate: "2099-01-01T00:00:00Z",
+    },
+  };
+  await expect(protection?.set(true)).rejects.toThrow("not confirmed");
+  response = {
+    protection: {
+      TaskArn: taskArn.replace("test-cluster", "other-cluster"),
+      ProtectionEnabled: true,
+      ExpirationDate: "2099-01-01T00:00:00Z",
+    },
+  };
+  await expect(protection?.set(true)).rejects.toThrow("not confirmed");
+});
