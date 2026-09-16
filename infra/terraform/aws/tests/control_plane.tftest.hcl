@@ -52,14 +52,14 @@ run "vercel_workspace_control_plane" {
   }
 
   assert {
-    condition = contains(local.services.worker.environment, { name = "FACILITY_WORKER_TASK_PROTECTION", value = "ecs" }) && !contains(local.services.api.environment, { name = "FACILITY_WORKER_TASK_PROTECTION", value = "ecs" })
+    condition     = contains(local.services.worker.environment, { name = "FACILITY_WORKER_TASK_PROTECTION", value = "ecs" }) && !contains(local.services.api.environment, { name = "FACILITY_WORKER_TASK_PROTECTION", value = "ecs" })
     error_message = "Only the worker should enable task protection."
   }
 
   assert {
     condition = jsondecode(aws_iam_role_policy.worker_task_protection.policy).Statement == [{
-      Effect = "Allow"
-      Action = ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]
+      Effect   = "Allow"
+      Action   = ["ecs:GetTaskProtection", "ecs:UpdateTaskProtection"]
       Resource = "arn:aws:ecs:us-east-1:123456789012:task/facility-production/*"
     }]
     error_message = "Task protection must grant only protection operations on this cluster's tasks."
