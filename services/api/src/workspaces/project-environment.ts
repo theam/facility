@@ -208,6 +208,14 @@ export class ProjectEnvironmentService {
   ) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
     const preparedInput = await this.withDeclaredEnvironment(input);
+    for (const repository of preparedInput.credentials.repositories) {
+      if (!isSafeGitBranch(repository.defaultBranch)) {
+        throw new ProjectEnvironmentError(
+          "repository_branch_invalid",
+          "repository default branch is invalid",
+        );
+      }
+    }
     await this.run(preparedInput, "mkdir -p repos", ".", "environment.repositories");
     for (const repository of preparedInput.credentials.repositories) {
       await this.runCommand(
@@ -497,6 +505,12 @@ export class ProjectEnvironmentService {
   ) {
     if (!isSafeGitBranch(input.branch)) {
       throw new ProjectEnvironmentError("story_branch_invalid", "story branch is invalid");
+    }
+    if (!isSafeGitBranch(repository.defaultBranch)) {
+      throw new ProjectEnvironmentError(
+        "repository_branch_invalid",
+        "repository default branch is invalid",
+      );
     }
     const local = await this.runtime.exec(input.workspace, {
       command: "git",
