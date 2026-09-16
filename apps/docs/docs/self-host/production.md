@@ -90,7 +90,10 @@ secret value when separate rotation is useful.
 Create an empty PostgreSQL database, run the deployment migration entrypoint, and require a zero
 exit status before starting the API or worker. Then run `facility instance bootstrap` once to bind
 the first organization owner and GitHub App installation. Repeating the exact binding is safe; a
-different binding against a populated instance is refused.
+different binding against a populated instance is refused. The command reads each value from its
+`FACILITY_<OPTION>` variable when no option is given, so a one-shot task can carry the binding in
+its environment; the single-host bundle exposes it as `docker compose --profile bootstrap run --rm
+bootstrap`.
 
 For application upgrades:
 

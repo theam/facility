@@ -92,5 +92,19 @@ The command takes a PostgreSQL advisory lock. Repeating the exact binding is saf
 it already exists; a different binding against a populated instance is refused. Use `--json` for
 automation and protect `DATABASE_URL` as an administrative secret.
 
+Every option also reads a `FACILITY_<OPTION>` environment variable — `--org-slug` reads
+`FACILITY_ORG_SLUG`, `--github-installation-id` reads `FACILITY_GITHUB_INSTALLATION_ID` — so a
+container task can supply the binding without a command line and without a shell to expand it. An
+option given on the command line wins over its variable, and a malformed option fails rather than
+falling back to the environment. Values are validated identically whichever way they arrive, and a
+missing one is reported under both names.
+
+The Compose bundle runs this as a one-shot service, which needs no local Node toolchain because the
+CLI ships inside the API image:
+
+```bash
+docker compose --profile bootstrap run --rm bootstrap
+```
+
 Run `facility <command> --help` for local usage. Unknown options and missing option values fail
 instead of being ignored.
