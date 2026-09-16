@@ -23,6 +23,8 @@ The story's **Run details** and turn-events API expose the same scoped timeline.
 - Observation failures carry a structured category and HTTP status when available.
   HTTP 410 is recorded as `workspace_session_lost`; it is not retried as though
   the original process were still running.
+- Failed setup, seed, and service-start commands retain their exit code and bounded,
+  redacted output in the environment timeline before reporting failure.
 
 Health probes bind to the current Vercel session without resuming stopped compute.
 They have an eight-second observation deadline and a five-second remote command
@@ -56,6 +58,13 @@ explicit replacement workflow. No automatic Git reset, workspace deletion, clean
 setup, or replay of external writes is performed.
 
 ## Operational limits
+
+Database lease writes run every two seconds without overlapping. Job logs report
+`turn.heartbeat_unconfirmed` on failed writes or a write pending for 30 seconds,
+at most once every 30 seconds while confirmation is missing. The record includes
+the turn ID, failure count and time since the last confirmation, not database
+error text. `turn.heartbeat_recovered` records recovery; `turn.lease_lost` means
+the database no longer confirms ownership and the observer cancels the turn.
 
 ECS workers acquire the maximum 48-hour task-protection lease before claiming a
 turn, renew it while running, and release it when dispatch finishes. The initial

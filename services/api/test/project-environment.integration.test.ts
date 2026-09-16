@@ -690,6 +690,41 @@ environment:
       const serialized = JSON.stringify(error);
       return !serialized.includes(secret) && serialized.includes("[REDACTED]");
     });
+    const [failure] = await db
+      .select()
+      .from(workspaceEvents)
+      .where(and(eq(workspaceEvents.orgId, orgId), eq(workspaceEvents.workspaceId, workspaceId)))
+      .orderBy(desc(workspaceEvents.seq))
+      .limit(1);
+    expect(failure?.type).toBe("environment.start");
+    expect(failure?.data).toMatchObject({ exitCode: 17, stderr: "[REDACTED]" });
+    expect(JSON.stringify(failure?.data)).not.toContain(secret);
+
+    await expect(
+      environment.prepare({
+        orgId,
+        projectId,
+        workspace,
+        credentials: protectedCredentials,
+        branch: "facility/story-environment",
+        manifest: {
+          ...failsWithSecret,
+          environment: {
+            ...failsWithSecret.environment,
+            setup: "printf 'setup mismatch %s' \"$GH_TOKEN\" >&2; exit 19",
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "environment_command_failed" });
+    const [setupFailure] = await db
+      .select()
+      .from(workspaceEvents)
+      .where(and(eq(workspaceEvents.orgId, orgId), eq(workspaceEvents.workspaceId, workspaceId)))
+      .orderBy(desc(workspaceEvents.seq))
+      .limit(1);
+    expect(setupFailure?.type).toBe("environment.setup");
+    expect(setupFailure?.data).toMatchObject({ exitCode: 19, stderr: "setup mismatch [REDACTED]" });
+    expect(JSON.stringify(setupFailure?.data)).not.toContain(secret);
   });
 });
 

@@ -26,6 +26,7 @@ import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } 
 import { appendTurnEvent } from "./events.js";
 import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
 import { TurnHealthMonitor } from "./health-monitor.js";
+import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
 import { LiveTurnEvents } from "./live-events.js";
 
 import { redactEvent as redact, redactString } from "./redaction.js";
@@ -72,20 +73,11 @@ export class TurnDispatcher {
     }
 
     const cancellation = new AbortController();
-    let leaseCheckPending = false;
-    const leaseHeartbeat = setInterval(() => {
-      if (leaseCheckPending) return;
-      leaseCheckPending = true;
-      void this.heartbeat(input.orgId, input.projectId, input.turnId)
-        .then((alive) => {
-          if (!alive) cancellation.abort();
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          leaseCheckPending = false;
-        });
-    }, 2_000);
-    leaseHeartbeat.unref();
+    const leaseHeartbeat = new TurnLeaseHeartbeat(
+      () => this.heartbeat(input.orgId, input.projectId, input.turnId),
+      () => cancellation.abort(),
+      input.turnId,
+    );
 
     const eventBase = {
       orgId: input.orgId,
@@ -493,7 +485,7 @@ export class TurnDispatcher {
       return { claimed: true as const, state: "failed" as const, error: detail };
     } finally {
       await health?.stop();
-      clearInterval(leaseHeartbeat);
+      leaseHeartbeat.stop();
     }
   }
 
