@@ -2,7 +2,7 @@
 # daemon/client/runtime set built with a current Go toolchain. Copying from one
 # digest-pinned source avoids Debian's lagging docker.io binaries and a second
 # architecture-specific download/checksum matrix.
-FROM docker:29-dind-rootless@sha256:8a213afdd096a44dff403aaf8eb58b7a96a63113f18a4b094b98b7d0ed7d948b AS docker-tools
+FROM docker:29-dind-rootless@sha256:e17fa54c2ffd511d8407c746eec77f7814e6f74fe20caf822dad1870599984c0 AS docker-tools
 
 # Rebuild the exact Go-based releases shipped by Docker with the first Go
 # toolchain that contains the reviewed standard-library fixes. The upstream
