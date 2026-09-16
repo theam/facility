@@ -78,11 +78,20 @@ export async function startWorker() {
       const data = job?.data;
       let result: Record<string, unknown> | undefined;
       if (queue === "turns.dispatch") {
-        result = await turnGuard.run(() =>
+        const dispatched = await turnGuard.run(() =>
           storyDomain.dispatcher.dispatch(
             data as { orgId: string; projectId: string; turnId: string },
           ),
         );
+        // Agent output belongs in scoped, redacted turn events, not infrastructure logs.
+        result = {
+          claimed: dispatched.claimed,
+          ...("state" in dispatched ? { state: dispatched.state } : {}),
+          ...("retryAfter" in dispatched ? { retryAfter: dispatched.retryAfter } : {}),
+          orgId: (data as { orgId: string }).orgId,
+          projectId: (data as { projectId: string }).projectId,
+          turnId: (data as { turnId: string }).turnId,
+        };
       } else if (queue === "github.mirror") {
         result = await storyDomain.mirror.syncAll();
       } else if (queue === "stories.integrations" && githubFactory) {

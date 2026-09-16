@@ -113,6 +113,7 @@ export function createStoryDomain(input: {
     engines,
     evidence,
     costs,
+    runtime,
   );
   const previews = new WorkspacePreviewService(
     input.db,

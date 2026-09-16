@@ -6,10 +6,11 @@ import {
   stories,
   storyConversations,
   storyMessages,
+  turnEvents,
   turns,
   workspaces,
 } from "@facility/db";
-import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
@@ -19,11 +20,13 @@ import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
 } from "../workspaces/project-environment.js";
-import type { WorkspaceLocator } from "../workspaces/runtime.js";
+import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
-import { AgentEngineError } from "./engines.js";
+import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
 import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
+import { TurnHealthMonitor } from "./health-monitor.js";
+import { LiveTurnEvents } from "./live-events.js";
 
 import { redactEvent as redact, redactString } from "./redaction.js";
 
@@ -38,6 +41,7 @@ export class TurnDispatcher {
     private readonly engines: AgentEngineRegistry,
     private readonly evidence: TurnGitEvidenceService,
     private readonly costs = new CostBudgetService(db),
+    private readonly runtime?: WorkspaceRuntime,
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -93,6 +97,8 @@ export class TurnDispatcher {
     let startedGitEvidence: StartedGitEvidence | undefined;
     let gitEvidenceCompleted = false;
     let engineStarted = false;
+    let liveEvents: LiveTurnEvents | undefined;
+    let health: TurnHealthMonitor | undefined;
     try {
       await this.storiesService.resolveAttention({
         orgId: input.orgId,
@@ -145,10 +151,29 @@ export class TurnDispatcher {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
       }
       await this.costs.assertTurnAllowed(input.orgId, input.projectId, manifest.model);
+      await appendTurnEvent(this.db, {
+        ...eventBase,
+        type: "turn.phase",
+        data: { phase: "credentials" },
+      });
       const [credential, projectManifest] = await Promise.all([
         this.credentials.issue(input.orgId, input.projectId),
         this.projectManifests.load(input.orgId, input.projectId),
       ]);
+      if (this.runtime?.diagnostics) {
+        const diagnostics = this.runtime.diagnostics.bind(this.runtime);
+        health = new TurnHealthMonitor(
+          (signal) =>
+            diagnostics(
+              workspaceLocator(workspace),
+              `/workspace/repos/${projectManifest.repositories.primary}`,
+              signal,
+            ),
+          (data) => appendTurnEvent(this.db, { ...eventBase, type: "workspace.health", data }),
+          turn.id,
+        );
+        health.start();
+      }
       const branch = story.branch ?? storyBranch(story.title, story.id);
       if (!story.branch) {
         await this.db
@@ -156,6 +181,28 @@ export class TurnDispatcher {
           .set({ branch, updatedAt: new Date() })
           .where(and(eq(stories.orgId, input.orgId), eq(stories.id, story.id)));
       }
+      if (this.runtime) {
+        await appendTurnEvent(this.db, {
+          ...eventBase,
+          type: "turn.phase",
+          data: { phase: "workspace" },
+        });
+        const recovered = await this.runtime.wake(workspaceLocator(workspace));
+        await appendTurnEvent(this.db, {
+          ...eventBase,
+          type: "workspace.ready",
+          data: {
+            provider: recovered.provider,
+            computeRef: recovered.computeRef,
+            volumeRef: recovered.volumeRef,
+          },
+        });
+      }
+      await appendTurnEvent(this.db, {
+        ...eventBase,
+        type: "turn.phase",
+        data: { phase: "environment" },
+      });
       const prepared = await this.environment.prepare({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -200,6 +247,53 @@ export class TurnDispatcher {
         engine: manifest.engine,
         model: manifest.model,
       });
+      liveEvents = new LiveTurnEvents(async (events, firstIndex) => {
+        await this.db.transaction(async (rawTx) => {
+          const tx = rawTx as unknown as FacilityDb;
+          // A commit can succeed even if its acknowledgement is lost. Stable stream
+          // positions make retrying that transaction idempotent within this turn.
+          const saved = await tx
+            .select({ data: turnEvents.data })
+            .from(turnEvents)
+            .where(
+              and(
+                eq(turnEvents.orgId, input.orgId),
+                eq(turnEvents.projectId, input.projectId),
+                eq(turnEvents.turnId, turn.id),
+                inArray(
+                  sql<string>`${turnEvents.data}->>'facilityEventIndex'`,
+                  events.map((_, index) => String(firstIndex + index)),
+                ),
+              ),
+            );
+          const savedPositions = new Set(
+            saved.map((row) => (row.data as { facilityEventIndex?: number }).facilityEventIndex),
+          );
+          for (const [offset, event] of events.entries()) {
+            const facilityEventIndex = firstIndex + offset;
+            if (savedPositions.has(facilityEventIndex)) continue;
+            const nativeSessionId = nativeSessionFromEvent(event);
+            if (nativeSessionId) {
+              await this.persistSession(
+                {
+                  ...eventBase,
+                  workspaceId: workspace.id,
+                  manifest,
+                  nativeSessionId,
+                  existingId: session?.id,
+                  sessionId: engineSessionId,
+                },
+                tx,
+              );
+            }
+            await appendTurnEvent(tx, {
+              ...eventBase,
+              type: `engine.${event.type}`,
+              data: { ...boundedEvent(redact(event.data, secrets)), facilityEventIndex },
+            });
+          }
+        });
+      }, turn.id);
       const engine = this.engines.get(manifest.engine);
       const engineRequest = {
         turnId: turn.id,
@@ -210,9 +304,15 @@ export class TurnDispatcher {
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,
         signal: cancellation.signal,
+        onEvent: (event: AgentTurnResult["events"][number]) => liveEvents?.append(event),
       };
       let result: AgentTurnResult;
       try {
+        await appendTurnEvent(this.db, {
+          ...eventBase,
+          type: "turn.phase",
+          data: { phase: "agent" },
+        });
         engineStarted = true;
         result = await engine.run(engineRequest);
       } catch (error) {
@@ -238,15 +338,9 @@ export class TurnDispatcher {
           error.details,
         );
       }
+      await liveEvents.finish(result.events);
       await this.evidence.complete(startedGitEvidence);
       gitEvidenceCompleted = true;
-      for (const event of result.events) {
-        await appendTurnEvent(this.db, {
-          ...eventBase,
-          type: `engine.${event.type}`,
-          data: boundedEvent(redact(event.data, secrets)),
-        });
-      }
       const outcome = agentOutcome(result.output);
       await this.costs.record({
         orgId: input.orgId,
@@ -320,6 +414,14 @@ export class TurnDispatcher {
       await this.activateQueuedSuccessor({ ...input, storyId: story.id });
       return { claimed: true as const, state: "succeeded" as const, result };
     } catch (error) {
+      await health?.sample();
+      if (liveEvents) {
+        await liveEvents.finish(
+          error instanceof AgentEngineError && Array.isArray(error.details.events)
+            ? (error.details.events as AgentTurnResult["events"])
+            : [],
+        );
+      }
       if (startedGitEvidence && !gitEvidenceCompleted) {
         await this.evidence.complete(startedGitEvidence).catch(() => undefined);
         gitEvidenceCompleted = true;
@@ -373,18 +475,24 @@ export class TurnDispatcher {
             status: "failed",
           })
           .catch(() => undefined);
-        await this.persistFailedEngineEvents(error, eventBase, secrets);
+        if (!liveEvents) await this.persistFailedEngineEvents(error, eventBase, secrets);
       }
       const detail = redactString(error instanceof Error ? error.message : String(error), secrets);
       await this.storiesService.failTurn({ ...input, error: detail });
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.failed",
-        data: { error: detail.slice(0, 8_000) },
+        data: {
+          error: detail.slice(0, 8_000),
+          ...(error instanceof AgentEngineError
+            ? { code: error.code, failure: observationFailureEvidence(error.details.failure) }
+            : {}),
+        },
       });
       await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
       return { claimed: true as const, state: "failed" as const, error: detail };
     } finally {
+      await health?.stop();
       clearInterval(leaseHeartbeat);
     }
   }
@@ -520,17 +628,20 @@ export class TurnDispatcher {
       .then((rows) => rows[0]);
   }
 
-  private async persistSession(input: {
-    orgId: string;
-    projectId: string;
-    storyId: string;
-    workspaceId: string;
-    turnId: string;
-    manifest: AgentManifest;
-    nativeSessionId: string;
-    existingId?: string;
-    sessionId: string;
-  }) {
+  private async persistSession(
+    input: {
+      orgId: string;
+      projectId: string;
+      storyId: string;
+      workspaceId: string;
+      turnId: string;
+      manifest: AgentManifest;
+      nativeSessionId: string;
+      existingId?: string;
+      sessionId: string;
+    },
+    db: FacilityDb = this.db,
+  ) {
     const values = {
       nativeSessionId: input.nativeSessionId,
       lastTurnId: input.turnId,
@@ -538,28 +649,48 @@ export class TurnDispatcher {
       updatedAt: new Date(),
     };
     if (input.existingId) {
-      await this.db
+      await db
         .update(engineSessions)
         .set(values)
-        .where(and(eq(engineSessions.orgId, input.orgId), eq(engineSessions.id, input.existingId)));
+        .where(
+          and(
+            eq(engineSessions.orgId, input.orgId),
+            eq(engineSessions.id, input.existingId),
+            eq(engineSessions.projectId, input.projectId),
+            eq(engineSessions.workspaceId, input.workspaceId),
+            eq(engineSessions.status, "active"),
+          ),
+        );
       return;
     }
-    await this.db.insert(engineSessions).values({
-      id: input.sessionId,
-      orgId: input.orgId,
-      projectId: input.projectId,
-      storyId: input.storyId,
-      workspaceId: input.workspaceId,
-      agentName: input.manifest.name,
-      engine: input.manifest.engine,
-      model: input.manifest.model,
-      nativeSessionId: input.nativeSessionId,
-      statePath:
-        input.manifest.engine === "claude_code"
-          ? "/workspace/.facility/claude"
-          : "/workspace/.facility/codex",
-      lastTurnId: input.turnId,
-    });
+    await db
+      .insert(engineSessions)
+      .values({
+        id: input.sessionId,
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        workspaceId: input.workspaceId,
+        agentName: input.manifest.name,
+        engine: input.manifest.engine,
+        model: input.manifest.model,
+        nativeSessionId: input.nativeSessionId,
+        statePath:
+          input.manifest.engine === "claude_code"
+            ? "/workspace/.facility/claude"
+            : "/workspace/.facility/codex",
+        lastTurnId: input.turnId,
+      })
+      .onConflictDoUpdate({
+        target: engineSessions.id,
+        set: values,
+        setWhere: and(
+          eq(engineSessions.orgId, input.orgId),
+          eq(engineSessions.projectId, input.projectId),
+          eq(engineSessions.workspaceId, input.workspaceId),
+          eq(engineSessions.status, "active"),
+        ),
+      });
   }
 
   private async persistFailedEngineEvents(

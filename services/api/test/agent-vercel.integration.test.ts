@@ -86,6 +86,24 @@ describe.each(["claude_code", "codex"] as const)("%s through the Vercel runtime"
     return engine === "codex" ? new CodexEngine(runtime) : new ClaudeCodeEngine(runtime);
   };
 
+  it("streams recoverable session evidence before a terminal provider failure without resubmitting", async () => {
+    const lost = Object.assign(new Error("Sandbox no longer available"), {
+      response: { status: 410 },
+    });
+    const { runCommand } = provider(engine, 0, undefined, lost);
+    const onEvent = vi.fn();
+    await expect(createEngine().run({ ...request(engine), onEvent })).rejects.toMatchObject({
+      code: "agent_observation_failed",
+      details: {
+        nativeSessionId: "native-session",
+        failure: { category: "workspace_session_lost", httpStatus: 410 },
+      },
+    });
+    expect(onEvent).toHaveBeenCalled();
+    expect(onEvent.mock.calls[0]?.[0]).toMatchObject({ engine });
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
   it("starts the default agent command and resumes its native session within the provider ceiling", async () => {
     const { runCommand, kill } = provider(engine);
     await expect(createEngine().run(request(engine))).resolves.toMatchObject({

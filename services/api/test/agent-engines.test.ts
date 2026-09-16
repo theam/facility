@@ -9,6 +9,8 @@ import {
   ClaudeEventParser,
   CodexEngine,
   CodexEventParser,
+  nativeSessionFromEvent,
+  observationFailureEvidence,
 } from "../src/turns/engines.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import type {
@@ -380,3 +382,29 @@ async function waitForFile(
   }
   throw new Error(`expected ${path} to be ${present ? "present" : "absent"}`);
 }
+
+describe("recovery evidence validation", () => {
+  it.each([
+    "../../private",
+    "secret\nvalue",
+    "x".repeat(201),
+    {},
+    null,
+  ])("rejects malformed native session identities", (thread_id) => {
+    expect(
+      nativeSessionFromEvent({ engine: "codex", type: "thread.started", data: { thread_id } }),
+    ).toBeUndefined();
+  });
+  it("excludes arbitrary provider payloads from structured evidence", () => {
+    expect(
+      observationFailureEvidence({
+        category: "workspace_session_lost",
+        httpStatus: 410,
+        headers: { authorization: "secret" },
+      }),
+    ).toEqual({ category: "workspace_session_lost", httpStatus: 410 });
+    expect(
+      observationFailureEvidence({ category: "private provider message", httpStatus: "secret" }),
+    ).toBeUndefined();
+  });
+});

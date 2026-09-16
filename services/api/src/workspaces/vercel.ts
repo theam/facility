@@ -1,6 +1,11 @@
 import { PassThrough } from "node:stream";
 import { Sandbox } from "@vercel/sandbox";
 import { CommandLogReplay, retryObservation } from "./command-observation.js";
+import {
+  parseWorkspaceHealth,
+  WORKSPACE_HEALTH_COMMAND,
+  type WorkspaceDiagnostics,
+} from "./diagnostics.js";
 import { nativePreviewOrigin } from "./native-preview.js";
 import {
   assertWorkspaceId,
@@ -218,7 +223,12 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       return {
         id: workspace.id,
         provider: this.provider,
-        state: sandbox.status === "running" ? "running" : "sleeping",
+        state:
+          sandbox.status === "running"
+            ? "running"
+            : ["failed", "aborted"].includes(sandbox.status)
+              ? "error"
+              : "sleeping",
         computeRef: sandbox.status === "running" ? sandbox.currentSession().sessionId : undefined,
         volumeRef: sandbox.currentSnapshotId ?? workspace.volumeRef,
         endpoints:
@@ -244,6 +254,39 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     }
   }
 
+  async diagnostics(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<WorkspaceDiagnostics> {
+    const sandbox = await this.get(workspace, false, undefined, signal);
+    const session = sandbox.currentSession();
+    const result: WorkspaceDiagnostics = {
+      provider: this.provider,
+      state: sandbox.status,
+      computeRef: session.sessionId,
+    };
+    if (sandbox.status !== "running") return result;
+    try {
+      // Bind to this VM, not Sandbox.runCommand, which can implicitly resume compute.
+      const command = await session.runCommand({
+        cmd: "sudo",
+        args: ["-u", "node", "--", "node", "-e", WORKSPACE_HEALTH_COMMAND, cwd],
+        cwd: "/",
+        timeoutMs: 5_000,
+        signal,
+      });
+      if (command.exitCode !== 0) return { ...result, probe: "unavailable" };
+      return {
+        ...result,
+        probe: "ok",
+        health: parseWorkspaceHealth(await command.stdout({ signal })),
+      };
+    } catch {
+      return { ...result, probe: "unavailable" };
+    }
+  }
+
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     try {
       const sandbox = await this.get(workspace, false);
@@ -266,6 +309,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     resume: boolean,
     onResume?: (sandbox: Sandbox) => Promise<void>,
+    signal?: AbortSignal,
   ) {
     assertWorkspaceId(workspace.id);
     if (workspace.externalRef !== workspace.id) {
@@ -278,6 +322,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       ...this.credentials,
       name: workspace.externalRef,
       resume,
+      ...(signal ? { signal } : {}),
       ...(onResume ? { onResume } : {}),
     });
   }
@@ -497,8 +542,18 @@ NODE`
 
 function isVercelNotFound(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; status?: unknown; statusCode?: unknown };
-  return value.code === "not_found" || value.status === 404 || value.statusCode === 404;
+  const value = error as {
+    code?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return (
+    value.code === "not_found" ||
+    value.status === 404 ||
+    value.statusCode === 404 ||
+    value.response?.status === 404
+  );
 }
 
 function shellQuote(value: string): string {

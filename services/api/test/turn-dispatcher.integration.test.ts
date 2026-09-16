@@ -23,7 +23,7 @@ import {
 } from "@facility/db";
 import { and, asc, eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/catalog.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
@@ -117,6 +117,7 @@ environment:
     renameNextBranch?: string;
     corruptResumeOnce = false;
     failNextRun = false;
+    liveFailureGate?: Promise<void>;
     throttleDuringRun = false;
     replacementPending = false;
     blockUntilCanceled = false;
@@ -124,6 +125,32 @@ environment:
     observedCancellation = false;
     async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
       this.requests.push(request);
+      if (this.liveFailureGate) {
+        const gate = this.liveFailureGate;
+        this.liveFailureGate = undefined;
+        const events = [
+          {
+            engine: "codex" as const,
+            type: "thread.started",
+            data: { thread_id: "native-before-failure" },
+          },
+          {
+            engine: "codex" as const,
+            type: "item.completed",
+            data: { message: request.environment?.FACILITY_DISPATCH_SECRET },
+          },
+        ];
+        for (const event of events) request.onEvent?.(event);
+        await gate;
+        throw new AgentEngineError("agent_observation_failed", "Workspace session lost", {
+          events,
+          failure: {
+            category: "workspace_session_lost",
+            httpStatus: 410,
+            responseBody: "provider-private-secret",
+          },
+        });
+      }
       if (this.throttleDuringRun) {
         this.throttleDuringRun = false;
         throw Object.assign(new Error("API rate limit exceeded after execution began"), {
@@ -295,6 +322,8 @@ environment:
       ),
       new AgentEngineRegistry([engine]),
       new TurnGitEvidenceService(db, runtime),
+      undefined,
+      runtime,
     );
   });
 
@@ -574,7 +603,7 @@ environment:
         expect.objectContaining({
           turnId: followUp.turn.id,
           type: "engine.resume.failed",
-          data: { projectSecret: "[REDACTED]" },
+          data: { projectSecret: "[REDACTED]", facilityEventIndex: 0 },
         }),
       ]),
     );
@@ -653,6 +682,7 @@ environment:
             error: "authentication_failed",
             message: "API key is invalid.",
             projectSecret: "[REDACTED]",
+            facilityEventIndex: 0,
           },
         }),
         expect.objectContaining({ turnId: started.queued.turn.id, type: "turn.failed" }),
@@ -660,6 +690,82 @@ environment:
     );
     expect(JSON.stringify(failed)).not.toContain("project-secret");
   });
+
+  it("checkpoints redacted progress and session before failure, then resumes without replaying saved events", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `live-recovery-${suffix}`,
+      title: "Recover streamed context",
+      agent: builder,
+      message: "Continue work",
+      messageDedupeKey: `live-recovery-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected turn");
+    let release: (() => void) | undefined;
+    engine.liveFailureGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const turnId = started.queued.turn.id;
+    const transact = db.transaction.bind(db);
+    let lostAcknowledgement = false;
+    const transaction = vi.spyOn(db, "transaction").mockImplementation(async (...args) => {
+      const result = await transact(...args);
+      const saved = await db.select().from(turnEvents).where(eq(turnEvents.turnId, turnId));
+      if (!lostAcknowledgement && saved.some((event) => event.type.startsWith("engine."))) {
+        lostAcknowledgement = true;
+        throw new Error("commit acknowledgement lost");
+      }
+      return result;
+    });
+    const dispatch = dispatcher.dispatch({ orgId, projectId, turnId });
+    try {
+      await vi.waitFor(
+        async () => {
+          const stored = await db.select().from(turnEvents).where(eq(turnEvents.turnId, turnId));
+          expect(stored.filter((e) => e.type.startsWith("engine."))).toHaveLength(2);
+          expect(JSON.stringify(stored)).not.toContain("project-secret");
+          const session = await db
+            .select()
+            .from(engineSessions)
+            .where(eq(engineSessions.storyId, started.story.id));
+          expect(session[0]?.nativeSessionId).toBe("native-before-failure");
+          const turn = await db.select().from(turns).where(eq(turns.id, turnId));
+          expect(turn[0]?.state).toBe("running");
+        },
+        { timeout: 10000 },
+      );
+    } finally {
+      release?.();
+    }
+    await expect(dispatch).resolves.toMatchObject({ state: "failed" });
+    transaction.mockRestore();
+    expect(lostAcknowledgement).toBe(true);
+    const saved = await db.select().from(turnEvents).where(eq(turnEvents.turnId, turnId));
+    expect(saved.filter((e) => e.type.startsWith("engine."))).toHaveLength(2);
+    expect(JSON.stringify(saved)).not.toContain("provider-private-secret");
+    expect(saved.find((e) => e.type === "turn.failed")?.data).toMatchObject({
+      failure: { category: "workspace_session_lost", httpStatus: 410 },
+    });
+    const next = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "Continue from retained work",
+      dedupeKey: `resume-live-${suffix}`,
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    if (!next.turn) throw new Error("expected continuation");
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: next.turn.id }),
+    ).resolves.toMatchObject({ state: "succeeded" });
+    expect(engine.requests.at(-1)?.nativeSessionId).toBe("native-before-failure");
+  }, 15_000);
 
   it("cancels a running agent process while preserving the workspace and future turns", async () => {
     engine.blockUntilCanceled = true;
