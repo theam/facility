@@ -586,7 +586,6 @@ export class ProjectEnvironmentService {
       input.credentials.environment,
       input.manifest.environment.secrets,
     );
-    if (result.exitCode !== 0) throw commandFailure(phase, script, safeResult);
     await appendWorkspaceEvent(this.db, input.workspace.id, input.orgId, phase, {
       command: script,
       exitCode: result.exitCode,
@@ -594,6 +593,7 @@ export class ProjectEnvironmentService {
       stderr: tail(safeResult.stderr),
       durationMs: result.durationMs,
     });
+    if (result.exitCode !== 0) throw commandFailure(phase, script, safeResult);
     return result;
   }
 

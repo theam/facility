@@ -53,6 +53,12 @@ describe("worker turn protection", () => {
       }),
     ).rejects.toThrow("engine failed");
     expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toEqual({
+      event: "worker.protection_release_failed",
+      code: "REQUEST_FAILED",
+      status: undefined,
+      leaseRemainingMs: undefined,
+    });
   });
 
   it("does not start work if shutdown arrives during acquisition", async () => {
@@ -132,6 +138,34 @@ describe("worker turn protection", () => {
     finish();
     await turn;
     expect(set).toHaveBeenLastCalledWith(false);
+  });
+
+  it("reports remaining protection without exposing arbitrary error details", async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const expiresAt = Date.now() + 48 * 60 * 60_000;
+    const set = vi
+      .fn()
+      .mockResolvedValue(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("provider credential=private-value"));
+    let finish!: () => void;
+    const turn = new WorkerTurnGuard({ set, expiresAt }, { warn }).run(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(warn.mock.calls[0]?.[0]).toEqual({
+      event: "worker.protection_renewal_failed",
+      code: "REQUEST_FAILED",
+      status: undefined,
+      leaseRemainingMs: 48 * 60 * 60_000 - 60_000,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("private-value");
+    finish();
+    await turn;
   });
 
   it("keeps non-ECS workers unchanged and rejects invalid opt-in configuration", async () => {

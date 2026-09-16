@@ -23,6 +23,8 @@ The story's **Run details** and turn-events API expose the same scoped timeline.
 - Observation failures carry a structured category and HTTP status when available.
   HTTP 410 is recorded as `workspace_session_lost`; it is not retried as though
   the original process were still running.
+- Failed setup, seed, and service-start commands retain their exit code and bounded,
+  redacted output in the environment timeline before reporting failure.
 
 Health probes bind to the current Vercel session without resuming stopped compute.
 They have an eight-second observation deadline and a five-second remote command
@@ -56,6 +58,26 @@ explicit replacement workflow. No automatic Git reset, workspace deletion, clean
 setup, or replay of external writes is performed.
 
 ## Operational limits
+
+Database lease writes run every two seconds without overlapping. Job logs report
+`turn.heartbeat_unconfirmed` on failed writes or a write pending for 30 seconds,
+at most once every 30 seconds while confirmation is missing. The record includes
+the turn ID, failure count and time since the last confirmation, not database
+error text. `turn.heartbeat_recovered` records recovery; `turn.lease_lost` means
+the database no longer confirms ownership and the observer cancels the turn.
+
+ECS workers acquire the maximum 48-hour task-protection lease before claiming a
+turn, renew it while running, and release it when dispatch finishes. The initial
+lease covers the engine's 24-hour command window plus preparation even when ECS
+rejects renewal during a deployment with `DEPLOYMENT_BLOCKED`. Protection responses
+must confirm the requested duration. Renewal and release failures log an allowlisted
+reason, HTTP status, and remaining lease time, without provider response bodies.
+This protects against deployment scale-in, not process crashes or infrastructure
+loss. If release fails, an idle task can remain protected until the lease expires;
+operators should verify it has no active work before clearing protection.
+
+See [AWS task scale-in protection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-scale-in-protection.html)
+for deployment constraints and lease limits.
 
 Evidence is durable once its database transaction commits. Worker loss can still
 lose an in-flight batch, and a database outage prevents new evidence from becoming
