@@ -250,6 +250,12 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
     await expect(
       costs.assertTurnAllowed(orgId, projectId, "private-unpriced-model"),
     ).rejects.toBeInstanceOf(BudgetPolicyError);
+    // A provider id that resolves through an alias is priced, so the preflight has
+    // to judge it on spend. Refusing it as unpriced would deny a turn the project
+    // is entitled to run.
+    await expect(
+      costs.assertTurnAllowed(orgId, projectId, "gpt-5.6-20260115"),
+    ).rejects.toMatchObject({ code: "budget_exceeded" });
     expect(await costs.budgetState(otherOrgId, projectId)).toMatchObject({
       budget: null,
       spentCents: 0,
