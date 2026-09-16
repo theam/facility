@@ -188,6 +188,62 @@ describe("Vercel persistent workspace runtime", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("supplies scoped origins before application setup without starting application commands", async () => {
+    const sandbox = {
+      ...fakeSandbox(),
+      domain: (port: number) => `https://workspace-${port}.vercel.run`,
+    };
+    sandboxApi.get.mockResolvedValue(sandbox);
+    const fetch = vi.fn(async (url: string) =>
+      Response.json({ native: true, origin: new URL(url).origin }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const enabledForWorkspace = vi.fn(async (id: string) => id === input.id);
+    const runtime = new VercelWorkspaceRuntime(undefined, {
+      apiUrl: "https://api.example.test",
+      webUrl: "https://app.example.test",
+      enabledForWorkspace,
+    });
+    await expect(runtime.previewOrigins(input, input.ports)).resolves.toEqual({
+      web: "https://workspace-65535.vercel.run",
+    });
+    expect(enabledForWorkspace).toHaveBeenCalledWith(input.id);
+    expect(sandbox.runCommand).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledWith(
+      "https://workspace-65535.vercel.run/.facility/health",
+      expect.objectContaining({ redirect: "error" }),
+    );
+    fetch.mockClear();
+    sandboxApi.get.mockClear();
+    await expect(
+      runtime.previewOrigins({ ...input, id: "ws_other_project" }, input.ports),
+    ).resolves.toEqual({});
+    await expect(new VercelWorkspaceRuntime().previewOrigins(input, input.ports)).resolves.toEqual(
+      {},
+    );
+    expect(sandboxApi.get).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects unverified origins before setup just as it does at publication", async () => {
+    sandboxApi.get.mockResolvedValue({
+      ...fakeSandbox(),
+      domain: () => "https://workspace-one.vercel.run",
+    });
+    const runtime = new VercelWorkspaceRuntime(undefined, {
+      apiUrl: "https://api.example.test",
+      webUrl: "https://app.example.test",
+      enabledForWorkspace: async () => true,
+    });
+    for (const response of [
+      new Response("denied", { status: 401 }),
+      Response.json({ native: true, origin: "https://other.vercel.run" }),
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+      await expect(runtime.previewOrigins(input, input.ports)).rejects.toThrow(/Native preview/);
+    }
+  });
+
   it("keeps opted-out create, wake and expose on the legacy path and rechecks the project", async () => {
     const sandbox = fakeSandbox();
     sandboxApi.getOrCreate.mockResolvedValue(sandbox);

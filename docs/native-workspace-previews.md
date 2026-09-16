@@ -136,6 +136,46 @@ independently operated edge proxy; do not advertise this mode as providing that.
   fail authorization. An execute-authorized wake/open reconfigures the gateway for
   the legacy path; retained files and databases are not reset.
 
+## Application origin before setup
+
+A project that needs its own public origin to configure cookies, OAuth redirects
+or frontend runtime values can request the runtime-owned variable in its manifest:
+
+```yaml
+environment:
+  variables:
+    - FACILITY_PREVIEW_ORIGINS
+```
+
+Facility supplies a JSON map keyed by manifest service name, for example
+`{"app":"https://sandbox-route.vercel.run"}`. The Vercel runtime obtains the URLs
+from the provider SDK and verifies the already-initialized gateway before any
+project setup command runs. This check does not depend on the application server
+being started; it is not a discovery page or application health check.
+
+The same value is supplied to setup, seed, start and ready hooks, including on
+resume. It contains public origins only, not access credentials. The reserved
+name cannot be overridden by managed project/workspace values, namespaced process
+variables or repository credentials. Only manifests requesting it trigger this
+lookup. An unsupported provider, disabled native-preview capability or opted-out
+project produces a missing-variable error before hooks run for that manifest;
+projects that do not request it keep their existing startup path.
+
+Knowing an origin does **not** publish a ready preview. Normal start/readiness and
+the final credentialed gateway check still run before endpoints are persisted.
+If the final native binding differs from the origins supplied to setup, Facility
+rejects publication rather than advertise a mismatched application. Applications
+with persisted origin-dependent configuration should also detect changes on
+resume and preserve existing data for inspection instead of silently rebuilding.
+
+Once endpoints are persisted, the existing `facility.workspace.updated` lifecycle
+notification can trigger project-specific callback registration. The application
+can be healthy before that integration completes; a temporary login delay is
+expected. There is no new event or external-setup acknowledgment in this contract.
+Facility remains generic: it does not configure Auth0 or any project-specific
+identity provider itself. Deploy API/worker support before enabling a manifest
+that requests this variable; no database migration or new runner change is needed.
+
 ## Lifecycle facts and external callbacks
 
 While both controls are on, the existing story GET reports verified native origins in `lifecycle.workspace.sites`

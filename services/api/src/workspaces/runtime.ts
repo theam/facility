@@ -80,6 +80,11 @@ export interface WorkspaceRuntime {
   wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle>;
   exec(workspace: WorkspaceLocator, command: WorkspaceCommand): Promise<WorkspaceCommandResult>;
   expose(workspace: WorkspaceLocator, ports: WorkspacePort[]): Promise<PreviewEndpoint[]>;
+  /** Optional setup metadata; does not publish endpoints or mark the application ready. */
+  previewOrigins?(
+    workspace: WorkspaceLocator,
+    ports: WorkspacePort[],
+  ): Promise<Record<string, string>>;
   inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection>;
   diagnostics?(
     workspace: WorkspaceLocator,

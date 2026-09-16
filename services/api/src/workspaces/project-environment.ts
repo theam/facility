@@ -312,6 +312,24 @@ export class ProjectEnvironmentService {
       preparedInput.workspace,
       services(preparedInput.manifest),
     );
+    const setupOrigins = preparedInput.credentials.environment.FACILITY_PREVIEW_ORIGINS;
+    if (setupOrigins) {
+      const origins = JSON.parse(setupOrigins) as Record<string, string>;
+      for (const [service, origin] of Object.entries(origins)) {
+        if (
+          !endpoints.some(
+            (endpoint) =>
+              endpoint.service === service &&
+              endpoint.access === "native" &&
+              endpoint.url === origin,
+          )
+        )
+          throw new ProjectEnvironmentError(
+            "project_preview_origin_changed",
+            "Preview origin changed during setup; refusing to publish a mismatched application",
+          );
+      }
+    }
     await this.db
       .update(workspaces)
       .set({
@@ -440,11 +458,23 @@ export class ProjectEnvironmentService {
       workspaceId: input.workspace.id,
     });
     const names = [...input.manifest.environment.variables, ...input.manifest.environment.secrets];
+    const originsName = "FACILITY_PREVIEW_ORIGINS";
+    const origins = names.includes(originsName)
+      ? await this.runtime.previewOrigins?.(input.workspace, services(input.manifest))
+      : undefined;
+    const originsValue =
+      origins && Object.keys(origins).length ? JSON.stringify(origins) : undefined;
     const values: Record<string, string> = {};
     const missing: Array<{ name: string; operatorName: string }> = [];
     for (const name of names) {
       const operatorName = projectEnvironmentVariableName(input.projectId, name);
-      const value = managed[name] ?? this.environmentValue(input.projectId, name);
+      // This reserved value comes only from the scoped runtime, never operator,
+      // managed or repository credentials. Unsupported/opted-out providers fail
+      // only manifests that explicitly request it; legacy projects are unchanged.
+      const value =
+        name === originsName
+          ? originsValue
+          : (managed[name] ?? this.environmentValue(input.projectId, name));
       if (value === undefined) missing.push({ name, operatorName });
       else values[name] = value;
     }
@@ -455,6 +485,9 @@ export class ProjectEnvironmentService {
         { missing },
       );
     }
+    const environment = { ...input.credentials.environment, ...values, ...managed };
+    delete environment[originsName];
+    if (originsValue !== undefined) environment[originsName] = originsValue;
     return {
       ...input,
       manifest: {
@@ -466,7 +499,7 @@ export class ProjectEnvironmentService {
       },
       credentials: {
         ...input.credentials,
-        environment: { ...input.credentials.environment, ...values, ...managed },
+        environment,
       },
     };
   }

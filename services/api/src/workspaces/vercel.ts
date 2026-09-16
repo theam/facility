@@ -180,6 +180,19 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     };
   }
 
+  async previewOrigins(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
+    if (!this.nativePreview || !(await this.nativePreview.enabledForWorkspace(workspace.id)))
+      return {};
+    // The gateway is initialized by create/wake, independently of the app.
+    // Reuse its credentialed binding check, without publishing lifecycle facts.
+    const endpoints = await this.expose(workspace, ports);
+    return Object.fromEntries(
+      endpoints
+        .filter((endpoint) => endpoint.access === "native")
+        .map((endpoint) => [endpoint.service, endpoint.url]),
+    );
+  }
+
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
     const sandbox = await this.get(workspace, true);
     const endpoints = this.endpoints(sandbox, validateWorkspacePorts(ports));

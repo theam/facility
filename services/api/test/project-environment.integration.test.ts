@@ -30,6 +30,7 @@ import {
   ProjectEnvironmentService,
   parseProjectManifest,
 } from "../src/workspaces/project-environment.js";
+import type { WorkspaceRuntime } from "../src/workspaces/runtime.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
@@ -145,6 +146,148 @@ environment:
   afterAll(async () => {
     await client.end();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("injects runtime origins before setup but publishes them only after readiness", async () => {
+    const origin = "https://prepared-app.vercel.run";
+    const origins = { app: origin };
+    const fixture = runtime as FakeWorkspaceRuntime & Pick<WorkspaceRuntime, "previewOrigins">;
+    const lookup = vi.fn(async () => origins);
+    fixture.previewOrigins = lookup;
+    const expose = vi
+      .spyOn(runtime, "expose")
+      .mockResolvedValue([
+        { service: "app", port: 3000, protocol: "http", access: "native", url: origin },
+      ]);
+    const configured = {
+      ...manifest,
+      environment: {
+        ...manifest.environment,
+        variables: ["FACILITY_PREVIEW_ORIGINS"],
+        setup: 'printf "%s" "$FACILITY_PREVIEW_ORIGINS" > .setup-origins',
+        seed: undefined,
+      },
+    };
+    const spoof = JSON.stringify({ app: "https://untrusted.vercel.run" });
+    const environment = new ProjectEnvironmentService(
+      db,
+      fixture,
+      `file://${remotes}`,
+      () => spoof,
+      async () => ({ FACILITY_PREVIEW_ORIGINS: spoof }),
+    );
+    const input = {
+      orgId,
+      projectId,
+      workspace,
+      manifest: configured,
+      credentials: { ...credentials, environment: { FACILITY_PREVIEW_ORIGINS: spoof } },
+      branch: "facility/story-environment",
+      cleanSetup: true,
+      readinessTimeoutMs: 2_000,
+    };
+    try {
+      const [before] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+      await expect(environment.prepare({ ...input, readinessTimeoutMs: 0 })).rejects.toThrow(
+        /readiness/i,
+      );
+      expect(
+        JSON.parse(
+          await readFile(join(workspace.volumeRef, "repos/acme/app/.setup-origins"), "utf8"),
+        ),
+      ).toEqual(origins);
+      expect(expose).not.toHaveBeenCalled();
+      const [unready] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+      expect(unready?.endpoints).toEqual(before?.endpoints);
+      const prepared = await environment.prepare(input);
+      expect(prepared.processEnvironment.FACILITY_PREVIEW_ORIGINS).toBe(JSON.stringify(origins));
+      const [ready] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+      expect(ready?.endpoints).toEqual(prepared.endpoints);
+      await environment.startPrepared({ ...input, setupChecksum: prepared.setupChecksum });
+      expect(lookup).toHaveBeenCalledTimes(3);
+      expect(lookup).toHaveBeenCalledWith(workspace, [
+        { service: "app", port: 3000, protocol: "http", websocket: true, url: "" },
+      ]);
+      expose.mockResolvedValue([
+        {
+          service: "app",
+          port: 3000,
+          protocol: "http",
+          access: "native",
+          url: "https://changed.vercel.run",
+        },
+      ]);
+      await expect(
+        environment.startPrepared({ ...input, setupChecksum: prepared.setupChecksum }),
+      ).rejects.toMatchObject({ code: "project_preview_origin_changed" });
+      const [unchanged] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+      expect(unchanged?.endpoints).toEqual(ready?.endpoints);
+    } finally {
+      delete fixture.previewOrigins;
+      expose.mockRestore();
+    }
+  });
+
+  it("requires runtime support only for opted-in manifests and rejects operator fallbacks", async () => {
+    const fixture = runtime as FakeWorkspaceRuntime & Pick<WorkspaceRuntime, "previewOrigins">;
+    const lookup = vi.fn(async () => ({}));
+    fixture.previewOrigins = lookup;
+    const exec = vi.spyOn(runtime, "exec");
+    const spoof = JSON.stringify({ app: "https://untrusted.vercel.run" });
+    const environment = new ProjectEnvironmentService(
+      db,
+      fixture,
+      `file://${remotes}`,
+      () => spoof,
+      async () => ({ FACILITY_PREVIEW_ORIGINS: spoof }),
+    );
+    const input = {
+      orgId,
+      projectId,
+      workspace,
+      manifest,
+      credentials: { ...credentials, environment: { FACILITY_PREVIEW_ORIGINS: spoof } },
+      branch: "facility/story-environment",
+      readinessTimeoutMs: 2_000,
+    };
+    try {
+      await expect(
+        environment.prepare({
+          ...input,
+          manifest: {
+            ...manifest,
+            environment: { ...manifest.environment, variables: ["FACILITY_PREVIEW_ORIGINS"] },
+          },
+        }),
+      ).rejects.toMatchObject({ code: "project_environment_missing" });
+      expect(exec).not.toHaveBeenCalled();
+      lookup.mockClear();
+      // This call is rejected before hooks as well when the provider has no capability.
+      delete fixture.previewOrigins;
+      await expect(
+        environment.prepare({
+          ...input,
+          manifest: {
+            ...manifest,
+            environment: { ...manifest.environment, variables: ["FACILITY_PREVIEW_ORIGINS"] },
+          },
+        }),
+      ).rejects.toMatchObject({ code: "project_environment_missing" });
+      expect(exec).not.toHaveBeenCalled();
+      fixture.previewOrigins = lookup;
+      const legacy = await environment.prepare({
+        ...input,
+        manifest: {
+          ...manifest,
+          environment: { ...manifest.environment, setup: undefined, seed: undefined },
+        },
+      });
+      expect(lookup).not.toHaveBeenCalled();
+      expect(legacy.processEnvironment).not.toHaveProperty("FACILITY_PREVIEW_ORIGINS");
+    } finally {
+      delete fixture.previewOrigins;
+      exec.mockRestore();
+    }
   });
 
   it("clones all repositories, creates the primary story branch, and runs setup once", async () => {
