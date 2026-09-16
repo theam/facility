@@ -3,7 +3,9 @@ import type { FacilityDb } from "@facility/db";
 import { stories, workspaces } from "@facility/db";
 import { and, desc, eq } from "drizzle-orm";
 import { ApiError } from "../errors.js";
+import { nativePreviewOrigin } from "../workspaces/native-preview.js";
 import type { PreviewSite } from "../workspaces/preview-sites.js";
+import { nativePreviewsEnabledForProject } from "../workspaces/project-native-previews.js";
 import type { BacklogItem, ProjectBacklogService } from "./backlog.js";
 
 export const contentRevision = (value: unknown) =>
@@ -21,10 +23,12 @@ export function storyLifecycleSnapshot(input: {
     deletedAt: Date | null;
   };
   item: BacklogItem;
-  workspace: { id: string; state: string } | null;
+  workspace: { id: string; state: string; provider?: string; endpoints?: unknown } | null;
   sites: PreviewSite[];
+  nativePreviewsEnabled?: boolean;
   now: Date;
 }) {
+  const native = input.nativePreviewsEnabled && input.workspace ? nativeSites(input.workspace) : [];
   const body = {
     schemaVersion: 1,
     orgId: input.orgId,
@@ -55,16 +59,20 @@ export function storyLifecycleSnapshot(input: {
       : null,
     workspace: input.workspace
       ? {
-          ...input.workspace,
-          sites: input.sites
-            .filter(
-              (site) =>
-                site.orgId === input.orgId &&
-                site.projectId === input.projectId &&
-                site.workspaceId === input.workspace?.id,
-            )
-            .map((site) => ({ id: site.id, service: site.service, origin: site.origin }))
-            .sort((a, b) => a.id.localeCompare(b.id)),
+          id: input.workspace.id,
+          state: input.workspace.state,
+          sites: [
+            ...input.sites
+              .filter(
+                (site) =>
+                  site.orgId === input.orgId &&
+                  site.projectId === input.projectId &&
+                  site.workspaceId === input.workspace?.id &&
+                  !native.some((entry) => entry.service === site.service),
+              )
+              .map((site) => ({ id: site.id, service: site.service, origin: site.origin })),
+            ...native,
+          ].sort((a, b) => a.id.localeCompare(b.id)),
         }
       : null,
   };
@@ -78,6 +86,7 @@ export async function readStoryLifecycle(
   sites: PreviewSite[],
   scope: { orgId: string; projectId: string; storyId: string },
   now = new Date(),
+  nativePreviewsAvailable = false,
 ) {
   const { orgId, projectId, storyId } = scope;
   const [story] = await db
@@ -94,7 +103,12 @@ export async function readStoryLifecycle(
   const item = await backlog.getStory(orgId, projectId, storyId, now);
   if (!item) throw new ApiError(409, "lifecycle_unavailable", "Story lifecycle is unavailable");
   const [workspace] = await db
-    .select({ id: workspaces.id, state: workspaces.state })
+    .select({
+      id: workspaces.id,
+      state: workspaces.state,
+      provider: workspaces.provider,
+      endpoints: workspaces.endpoints,
+    })
     .from(workspaces)
     .where(
       and(
@@ -111,6 +125,22 @@ export async function readStoryLifecycle(
     item,
     workspace: workspace ?? null,
     sites,
+    nativePreviewsEnabled:
+      nativePreviewsAvailable && (await nativePreviewsEnabledForProject(db, scope)),
     now,
+  });
+}
+
+function nativeSites(workspace: { provider?: string; state: string; endpoints?: unknown }) {
+  if (
+    workspace.provider !== "vercel" ||
+    workspace.state === "destroyed" ||
+    !Array.isArray(workspace.endpoints)
+  )
+    return [];
+  return workspace.endpoints.flatMap((endpoint) => {
+    if (typeof endpoint?.service !== "string") return [];
+    const origin = nativePreviewOrigin(workspace.endpoints, endpoint.service);
+    return origin ? [{ id: `native-${endpoint.service}`, service: endpoint.service, origin }] : [];
   });
 }

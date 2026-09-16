@@ -2,6 +2,7 @@ import { Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { DisconnectRepository } from "@/components/project/disconnect-repository";
+import { NativePreviews } from "@/components/project/native-previews";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api } from "@/lib/api";
 import { can } from "@/lib/permissions";
@@ -43,6 +44,14 @@ export default async function ProjectSettingsPage({
       <WorkspaceVariables
         projectId={projectId}
         canExecute={can(me.ok ? me.data.permissions : [], "workspaces:execute")}
+      />
+
+      <NativePreviews
+        key={`${projectId}-${project.data.nativePreviews?.enabled ?? false}`}
+        projectId={projectId}
+        enabled={project.data.nativePreviews?.enabled ?? false}
+        available={project.data.nativePreviews?.available ?? false}
+        canWrite={can(me.ok ? me.data.permissions : [], "projects:write")}
       />
 
       <section className="flex flex-col gap-4">

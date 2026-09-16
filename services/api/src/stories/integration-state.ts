@@ -5,6 +5,13 @@ import { z } from "zod";
 import { ApiError } from "../errors.js";
 
 export const INTEGRATION_STATE_MAX_BYTES = 16 * 1024;
+// An arbitrary JSON value is an unconstrained OpenAPI schema. Keep the recursive
+// runtime validator behind a refinement: inlining z.json() produces root-relative
+// recursive refs which become invalid when Swagger embeds this request body.
+const JsonValue = z.json();
+const IntegrationJsonValue = z.unknown().refine((value) => JsonValue.safeParse(value).success, {
+  message: "Expected a JSON value",
+});
 export const IntegrationStateBody = z
   .object({
     namespace: z
@@ -12,7 +19,7 @@ export const IntegrationStateBody = z
       .regex(/^[a-z][a-z0-9_-]{0,63}$/)
       .refine((key) => !["constructor", "prototype", "__proto__"].includes(key)),
     expected_revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    value: z.record(z.string(), z.json()).nullable(),
+    value: z.record(z.string(), IntegrationJsonValue).nullable(),
   })
   .strict();
 

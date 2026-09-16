@@ -55,6 +55,7 @@ export class StoryIntegrationNotifications {
     private readonly backlog: ProjectBacklogService,
     private readonly sites: PreviewSite[],
     private readonly github: GithubClientFactory,
+    private readonly nativePreviewsAvailable = false,
   ) {}
 
   async tick(now = new Date(), limit = 100) {
@@ -150,7 +151,14 @@ export class StoryIntegrationNotifications {
         .limit(1);
       if (!target) throw new Error("github_destination_unavailable");
       if (!cursor.pending.length) {
-        const snapshot = await readStoryLifecycle(this.db, this.backlog, this.sites, scope, now);
+        const snapshot = await readStoryLifecycle(
+          this.db,
+          this.backlog,
+          this.sites,
+          scope,
+          now,
+          this.nativePreviewsAvailable,
+        );
         const changes = lifecycleChanges(snapshot, target.repositoryId, cursor, now);
         const [saved] = await this.db.update(notifications).set(changes).where(owned).returning();
         if (!saved) throw new Error("notification_lease_lost");

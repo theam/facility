@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sandboxApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -34,6 +34,7 @@ function fakeSandbox() {
 
 describe("Vercel persistent workspace runtime", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
 
   it("creates a non-expiring persistent sandbox and initializes it exactly once", async () => {
     const sandbox = fakeSandbox();
@@ -124,6 +125,96 @@ describe("Vercel persistent workspace runtime", () => {
     environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: "x".repeat(32) },
     ports: [{ service: "web", port: 3000 }],
   };
+
+  it("configures native gateways from SDK origins and verifies capability before publication", async () => {
+    const sandbox = {
+      ...fakeSandbox(),
+      domain: (port: number) => `https://workspace-${port}.vercel.run`,
+    };
+    sandboxApi.get.mockResolvedValue(sandbox);
+    const fetch = vi.fn(async (url: string) =>
+      Response.json({ native: true, origin: new URL(url).origin }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const runtime = new VercelWorkspaceRuntime(undefined, {
+      apiUrl: "https://api.example.test",
+      webUrl: "https://app.example.test",
+      enabledForWorkspace: async () => true,
+    });
+    await runtime.wake(input);
+    const bootstrap = sandbox.runCommand.mock.calls[0]?.[0].args[1];
+    expect(bootstrap).toContain("FACILITY_NATIVE_PREVIEW=");
+    expect(bootstrap).toContain('"workspaceId":"ws_0123456789abcdef"');
+    expect(bootstrap).toContain('"webUrl":"https://app.example.test"');
+    expect(bootstrap).toContain("Native preview gateway capability check failed");
+    expect(bootstrap).not.toContain("x".repeat(32));
+    const endpoints = await runtime.expose(input, input.ports);
+    expect(endpoints[0]).toMatchObject({ access: "native", service: "web" });
+    expect(fetch).toHaveBeenCalledWith(
+      `${endpoints[0]?.url}/.facility/health`,
+      expect.objectContaining({
+        redirect: "error",
+        headers: { "x-facility-preview-token": "x".repeat(32) },
+      }),
+    );
+    // Inspection does not claim that an old or unverified runner is native-capable.
+    expect((await runtime.inspect(input)).endpoints[0]).not.toHaveProperty("access");
+  });
+
+  it("does not publish native endpoints from old images or mismatched provider bindings", async () => {
+    sandboxApi.get.mockResolvedValue({
+      ...fakeSandbox(),
+      domain: () => "https://workspace-one.vercel.run",
+    });
+    const runtime = new VercelWorkspaceRuntime(undefined, {
+      apiUrl: "https://api.example.test",
+      webUrl: "https://app.example.test",
+      enabledForWorkspace: async () => true,
+    });
+    for (const response of [
+      new Response("unavailable", { status: 401 }),
+      Response.json({ native: true, origin: "https://workspace-other.vercel.run" }),
+      Response.json({ native: false }),
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+      await expect(runtime.expose(input, input.ports)).rejects.toThrow(/Native preview/);
+    }
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    sandboxApi.get.mockResolvedValue(fakeSandbox());
+    await expect(runtime.expose(input, input.ports)).rejects.toThrow(
+      "Invalid native preview origin",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps opted-out create, wake and expose on the legacy path and rechecks the project", async () => {
+    const sandbox = fakeSandbox();
+    sandboxApi.getOrCreate.mockResolvedValue(sandbox);
+    sandboxApi.get.mockResolvedValue(sandbox);
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await new VercelWorkspaceRuntime().wake(input);
+    const legacyBootstrap = sandbox.runCommand.mock.calls[0]?.[0].args[1];
+    sandbox.runCommand.mockClear();
+    const enabledForWorkspace = vi.fn(async (_id: string) => false);
+    const runtime = new VercelWorkspaceRuntime(undefined, {
+      apiUrl: "https://api.example.test",
+      webUrl: "https://app.example.test",
+      enabledForWorkspace,
+    });
+    await runtime.create(input);
+    await runtime.wake(input);
+    for (const call of sandbox.runCommand.mock.calls) {
+      expect(call[0].args[1]).toBe(legacyBootstrap);
+      expect(call[0].args[1]).not.toContain("Native preview gateway capability check failed");
+    }
+    expect(await runtime.expose(input, input.ports)).toEqual([
+      { service: "web", port: 3000, url: "https://workspace-65535.example.test" },
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(enabledForWorkspace.mock.calls).toEqual([[input.id], [input.id], [input.id]]);
+  });
 
   it.each([
     [undefined, undefined],

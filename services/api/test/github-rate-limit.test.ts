@@ -50,6 +50,13 @@ describe("GitHub retry deadlines", () => {
     ).toBe(now + 60_000);
   });
 
+  it("recognizes the request error message when response data is unavailable", () => {
+    const error = Object.assign(new Error("API rate limit exceeded"), { status: 403 });
+    expect(githubRateLimitRetryAt(error, now)?.getTime()).toBe(now + 60_000);
+    expect(
+      githubRateLimitRetryAt(Object.assign(new Error("access revoked"), { status: 403 }), now),
+    ).toBeUndefined();
+  });
   it("bounds parseable but implausible provider dates instead of stranding the receipt", () => {
     for (const headers of [
       { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "99999999999" },
@@ -93,14 +100,15 @@ describe("historical pull request CI polling", () => {
       false,
     );
   });
+  it.each(["pending", null])("does not poll abandoned closed CI forever: %s", (ciState) => {
+    expect(shouldRefreshPullRequestCi({ ...terminal, ciState })).toBe(false);
+  });
   it.each([
     { state: "open" },
     { ciHeadSha: "b" },
-    { ciState: "pending" },
-    { ciState: null },
     { ciUpdatedAt: null },
     { githubUpdatedAt: new Date("2026-09-03") },
-  ])("refreshes active, changed, missing, or unfinished CI: %s", (change) => {
+  ])("refreshes active, changed, or unobserved CI: %s", (change) => {
     expect(shouldRefreshPullRequestCi({ ...terminal, ...change })).toBe(true);
   });
 });

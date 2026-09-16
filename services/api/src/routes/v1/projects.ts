@@ -6,6 +6,7 @@ import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
 import { createGithubClientFactory } from "../../github/client.js";
 import { removeRepositoryConnection } from "../../github/repository-connections.js";
+import { projectNativePreviewsEnabled } from "../../workspaces/project-native-previews.js";
 import {
   AnyObject,
   DateValue,
@@ -28,7 +29,12 @@ const ProjectSchema = z.object({
   status: z.string(),
   createdAt: DateValue,
   updatedAt: DateValue,
+  nativePreviews: z.object({ enabled: z.boolean(), available: z.boolean() }),
 });
+
+const ProjectSettings = z
+  .object({ nativePreviewsEnabled: z.boolean().optional() })
+  .catchall(z.unknown());
 
 const RepositorySchema = z.object({
   id: z.string(),
@@ -45,6 +51,14 @@ const RepositorySchema = z.object({
 
 export async function registerProjectRoutes(app: FastifyInstance, context: V1RouteContext) {
   const { db } = context;
+  const presentProject = (row: Awaited<ReturnType<typeof loadProject>>) => ({
+    ...row,
+    nativePreviews: {
+      enabled: projectNativePreviewsEnabled(row.settings),
+      available:
+        context.config.nativePreviews === true && context.config.workspaceDriver === "vercel",
+    },
+  });
 
   app.get(
     "/v1/projects",
@@ -61,13 +75,14 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       const filters = [eq(projects.orgId, actor.orgId)];
       if (query.status) filters.push(eq(projects.status, query.status));
       if (actor.projectId) filters.push(eq(projects.id, actor.projectId));
-      return db
+      const rows = await db
         .select(projectColumns)
         .from(projects)
         .where(and(...filters))
         .orderBy(asc(projects.name), asc(projects.id))
         .limit(query.limit)
         .offset(query.offset);
+      return rows.map(presentProject);
     },
   );
 
@@ -80,7 +95,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
           name: z.string().min(1).max(160),
           slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
           description: z.string().max(2_000).optional(),
-          settings: AnyObject.optional(),
+          settings: ProjectSettings.optional(),
         }),
         response: { 200: ProjectSchema },
       },
@@ -107,7 +122,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
           .returning(projectColumns)
       )[0];
       if (!row) throw new ApiError(500, "insert_failed", "Could not create project");
-      return row;
+      return presentProject(row);
     },
   );
 
@@ -117,7 +132,8 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       config: { permission: "projects:read" },
       schema: { params: IdParams, response: { 200: ProjectSchema } },
     },
-    async (request) => loadProject(db, principal(request).orgId, projectId(request)),
+    async (request) =>
+      presentProject(await loadProject(db, principal(request).orgId, projectId(request))),
   );
 
   app.patch(
@@ -126,11 +142,19 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       config: { permission: "projects:write", auditAction: "project.updated", idempotent: true },
       schema: {
         params: IdParams,
-        body: z.object({
-          name: z.string().min(1).max(160).optional(),
-          description: z.string().max(2_000).nullable().optional(),
-          settings: AnyObject.optional(),
-        }),
+        body: z
+          .object({
+            name: z.string().min(1).max(160).optional(),
+            description: z.string().max(2_000).nullable().optional(),
+            settings: ProjectSettings.optional(),
+            nativePreviewsEnabled: z.boolean().optional(),
+          })
+          .refine(
+            (body) => body.settings === undefined || body.nativePreviewsEnabled === undefined,
+            {
+              message: "Use settings or nativePreviewsEnabled, not both",
+            },
+          ),
         response: { 200: ProjectSchema },
       },
     },
@@ -141,16 +165,29 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
         name?: string;
         description?: string | null;
         settings?: Record<string, unknown>;
+        nativePreviewsEnabled?: boolean;
       };
+      const { nativePreviewsEnabled, ...fields } = body;
       const row = (
         await db
           .update(projects)
-          .set(definedFields({ ...body, updatedAt: new Date() }))
+          .set(
+            definedFields({
+              ...fields,
+              // The narrow UI update preserves unrelated settings, including concurrent writes.
+              ...(nativePreviewsEnabled === undefined
+                ? {}
+                : {
+                    settings: sql`${projects.settings} || ${JSON.stringify({ nativePreviewsEnabled })}::jsonb`,
+                  }),
+              updatedAt: new Date(),
+            }),
+          )
           .where(and(eq(projects.orgId, actor.orgId), eq(projects.id, id)))
           .returning(projectColumns)
       )[0];
       if (!row) throw notFound("Project not found");
-      return row;
+      return presentProject(row);
     },
   );
 

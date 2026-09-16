@@ -490,6 +490,8 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         domain.backlog,
         config.previewSites ?? [],
         { orgId: actor.orgId, projectId, storyId },
+        new Date(),
+        config.nativePreviews,
       );
       reply.header("cache-control", "private, no-store");
       return { ...storyResponse(value), lifecycle };
