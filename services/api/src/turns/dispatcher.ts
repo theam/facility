@@ -408,11 +408,17 @@ export class TurnDispatcher {
     } catch (error) {
       await health?.sample();
       if (liveEvents) {
-        await liveEvents.finish(
-          error instanceof AgentEngineError && Array.isArray(error.details.events)
-            ? (error.details.events as AgentTurnResult["events"])
-            : [],
-        );
+        await liveEvents
+          .finish(
+            error instanceof AgentEngineError && Array.isArray(error.details.events)
+              ? (error.details.events as AgentTurnResult["events"])
+              : [],
+          )
+          .catch(() => {
+            console.warn(
+              JSON.stringify({ event: "turn.final_events_persistence_failed", turnId: turn.id }),
+            );
+          });
       }
       if (startedGitEvidence && !gitEvidenceCompleted) {
         await this.evidence.complete(startedGitEvidence).catch(() => undefined);
@@ -484,8 +490,18 @@ export class TurnDispatcher {
       await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
       return { claimed: true as const, state: "failed" as const, error: detail };
     } finally {
-      await health?.stop();
-      leaseHeartbeat.stop();
+      try {
+        await health?.stop();
+      } finally {
+        leaseHeartbeat.stop();
+      }
+      await this.storiesService
+        .suspendFailedWorkspace(input.orgId, input.projectId, turn.storyId)
+        .catch(() => {
+          console.warn(
+            JSON.stringify({ event: "workspace.suspend_reconciliation_failed", turnId: turn.id }),
+          );
+        });
     }
   }
 

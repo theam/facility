@@ -21,8 +21,9 @@ import {
 } from "@facility/db";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { StoryServiceError, StoryWorkspaceService } from "../src/stories/service.js";
+import { appendTurnEvent } from "../src/turns/events.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 
 const databaseUrl =
@@ -417,6 +418,170 @@ describe("persistent story workspace lifecycle", async () => {
     expect(merged.story.status).toBe("done");
     expect(merged.workspace?.state).toBe("sleeping");
     expect(await runtime.read(locator, "repos/app/HEAD")).toBe("commit-a");
+  });
+
+  it("suspends failed idle workspaces, retains files, and respects explicit wake", async () => {
+    const result = await service.start(startInput(`issue-${randomUUID()}`));
+    const turnId = result.queued.turn?.id;
+    if (!turnId) throw new Error("turn fixture missing");
+    const workspace = result.workspace;
+    if (!workspace?.externalRef) throw new Error("workspace fixture missing");
+    const locator = {
+      id: workspace.id,
+      externalRef: workspace.externalRef,
+      volumeRef: workspace.volumeRef,
+      image: "facility-runner:test",
+    };
+    await runtime.exec(locator, {
+      command: "sh",
+      args: ["-c", "printf 'recoverable changes' > partial-work.txt"],
+    });
+    await service.failTurn({ orgId, projectId, turnId, error: "observation unavailable" });
+    await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+      true,
+    );
+    expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+      "sleeping",
+    );
+    expect(await runtime.read(locator, "partial-work.txt")).toBe("recoverable changes");
+    await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+      false,
+    );
+    await service.restore(orgId, projectId, result.story.id);
+    await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+      false,
+    );
+    expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe("running");
+  });
+
+  it("retries a failed suspension without claiming the machine stopped", async () => {
+    const result = await service.start(startInput(`issue-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("turn fixture missing");
+    await service.failTurn({ orgId, projectId, turnId: result.queued.turn.id, error: "failed" });
+    const stop = vi
+      .spyOn(runtime, "suspend")
+      .mockRejectedValueOnce(new Error("provider unavailable"));
+    try {
+      await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+        false,
+      );
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "running",
+      );
+      expect(await service.suspendFailedWorkspaces()).toBeGreaterThanOrEqual(1);
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "sleeping",
+      );
+    } finally {
+      stop.mockRestore();
+    }
+  });
+
+  it("denies cross-tenant cleanup and leaves queued or running work alone", async () => {
+    const result = await service.start(startInput(`issue-${randomUUID()}`));
+    const stop = vi.spyOn(runtime, "suspend");
+    try {
+      await expect(
+        service.suspendFailedWorkspace(otherOrgId, otherProjectId, result.story.id),
+      ).rejects.toThrow();
+      await expect(
+        service.suspendFailedWorkspace(orgId, otherProjectId, result.story.id),
+      ).rejects.toThrow();
+      await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+        false,
+      );
+      if (!result.queued.turn) throw new Error("turn fixture missing");
+      await db.update(turns).set({ state: "running" }).where(eq(turns.id, result.queued.turn.id));
+      await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+        false,
+      );
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      stop.mockRestore();
+    }
+  });
+
+  it("does not treat a health event as a worker heartbeat", async () => {
+    const result = await service.start(startInput(`issue-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("turn fixture missing");
+    const stale = new Date(Date.now() - 600_000);
+    await db
+      .update(turns)
+      .set({ state: "running", updatedAt: stale })
+      .where(eq(turns.id, result.queued.turn.id));
+    await appendTurnEvent(db, {
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      turnId: result.queued.turn.id,
+      type: "workspace.health",
+      data: { probe: "unavailable" },
+    });
+    const [turn] = await db.select().from(turns).where(eq(turns.id, result.queued.turn.id));
+    expect(turn?.updatedAt).toEqual(stale);
+    await expect(
+      service.recoverInterruptedTurn({
+        orgId,
+        projectId,
+        turnId: result.queued.turn.id,
+        staleBefore: new Date(Date.now() - 120_000),
+      }),
+    ).resolves.toBe(true);
+    await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+      true,
+    );
+  });
+
+  it("serializes suspension with a new task and protects an already queued successor", async () => {
+    const result = await service.start(startInput(`issue-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("turn fixture missing");
+    await service.failTurn({ orgId, projectId, turnId: result.queued.turn.id, error: "failed" });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = runtime.suspend.bind(runtime);
+    const stop = vi.spyOn(runtime, "suspend").mockImplementationOnce(async (workspace) => {
+      await gate;
+      await original(workspace);
+    });
+    const cleanup = service.suspendFailedWorkspace(orgId, projectId, result.story.id);
+    let queued = false;
+    try {
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+      const next = service
+        .queueMessage({
+          orgId,
+          projectId,
+          storyId: result.story.id,
+          body: "Continue retained work",
+          dedupeKey: randomUUID(),
+          agent: builder,
+          actor: { type: "user", id: "user_test" },
+          trigger: { type: "manual" },
+        })
+        .then((value) => {
+          queued = true;
+          return value;
+        });
+      expect(queued).toBe(false);
+      release();
+      expect(await cleanup).toBe(true);
+      expect((await next).turn?.state).toBe("queued");
+      // Even if the machine is manually running, queued work wins over old failure.
+      await db
+        .update(workspaces)
+        .set({ state: "running", updatedAt: new Date(0) })
+        .where(eq(workspaces.storyId, result.story.id));
+      await expect(service.suspendFailedWorkspace(orgId, projectId, result.story.id)).resolves.toBe(
+        false,
+      );
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      stop.mockRestore();
+      await cleanup;
+    }
   });
 
   it("does not let a late turn result override archive or merge", async () => {

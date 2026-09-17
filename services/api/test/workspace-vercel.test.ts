@@ -279,15 +279,25 @@ describe("Vercel persistent workspace runtime", () => {
     [18_000_001, 18_000_000],
     [86_400_000, 18_000_000],
   ])("bounds command timeout %s to the provider limit", async (requested, expected) => {
+    const frames = [
+      { stream: "stdout", data: "ready" },
+      { stream: "stderr", data: "warning" },
+    ].map(
+      (event, seq) =>
+        `${JSON.stringify({ seq, stream: event.stream, data: Buffer.from(event.data).toString("base64") })}\n`,
+    );
     const runCommand = vi.fn().mockResolvedValue({
       logs: async function* () {
-        yield { stream: "stdout", data: "ready" };
-        yield { stream: "stderr", data: "warning" };
+        for (const data of frames) yield { stream: "stdout", data };
       },
       wait: async () => ({ exitCode: 0, durationMs: 12 }),
     });
     const asUser = vi.fn().mockReturnValue({ runCommand });
-    sandboxApi.get.mockResolvedValue({ ...fakeSandbox(), asUser });
+    sandboxApi.get.mockResolvedValue({
+      ...fakeSandbox(),
+      asUser,
+      currentSession: () => ({ readFileToBuffer: async () => Buffer.from(frames.join("")) }),
+    });
     const onOutput = vi.fn();
     await expect(
       new VercelWorkspaceRuntime().exec(input, {

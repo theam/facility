@@ -29,6 +29,14 @@ function provider(
           { type: "item.completed", item: { type: "agent_message", text: "ready" } },
           { type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } },
         ];
+  const frames = events.map(
+    (event, seq) =>
+      `${JSON.stringify({ seq, stream: "stdout", data: Buffer.from(`${JSON.stringify(event)}\n`).toString("base64") })}\n`,
+  );
+  if (exitCode)
+    frames.push(
+      `${JSON.stringify({ seq: frames.length, stream: "stderr", data: Buffer.from("command terminated").toString("base64") })}\n`,
+    );
   const wait = vi.fn().mockResolvedValue({ exitCode, durationMs: 10 });
   const runCommand = vi.fn(async (params: { timeoutMs?: number; detached?: boolean }) => {
     // Reproduce the provider contract that rejected the real default engine request.
@@ -40,9 +48,8 @@ function provider(
       kill,
       logs: async function* () {
         onLog?.();
-        for (const event of events) yield { stream: "stdout", data: `${JSON.stringify(event)}\n` };
+        for (const data of frames) yield { stream: "stdout", data };
         if (logError) throw logError;
-        if (exitCode) yield { stream: "stderr", data: "command terminated" };
       },
       wait,
     };
@@ -50,7 +57,10 @@ function provider(
   const getCommand = vi.fn().mockResolvedValue({ exitCode, durationMs: 10 });
   sandboxApi.get.mockResolvedValue({
     asUser: () => ({ runCommand }),
-    currentSession: () => ({ getCommand }),
+    currentSession: () => ({
+      getCommand,
+      readFileToBuffer: async () => Buffer.from(frames.join("")),
+    }),
   });
   return { runCommand, kill, wait };
 }
@@ -160,6 +170,8 @@ describe.each(["claude_code", "codex"] as const)("%s through the Vercel runtime"
     await expect(
       createEngine().run({ ...request(engine), signal: controller.signal }),
     ).rejects.toMatchObject({ code: "workspace_command_canceled" });
-    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM", {
+      abortSignal: expect.any(AbortSignal),
+    });
   });
 });

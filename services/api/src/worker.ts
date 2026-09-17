@@ -9,6 +9,7 @@ import { StoryIntegrationNotifications } from "./stories/integration-notificatio
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
+import { configureTurnQueue } from "./turn-queue.js";
 import { ecsTaskProtection, WorkerTurnGuard } from "./worker-task-protection.js";
 
 const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
@@ -42,6 +43,7 @@ export async function startWorker() {
   for (const queue of queues) {
     await boss.createQueue(queue);
   }
+  await configureTurnQueue(boss);
   // A provider hiccup retries a few times; the story keeps its provisional title meanwhile.
   await boss.updateQueue("stories.title", {
     name: "stories.title",
@@ -79,9 +81,19 @@ export async function startWorker() {
       let result: Record<string, unknown> | undefined;
       if (queue === "turns.dispatch") {
         const dispatched = await turnGuard.run(() =>
-          storyDomain.dispatcher.dispatch(
-            data as { orgId: string; projectId: string; turnId: string },
-          ),
+          storyDomain.dispatcher
+            .dispatch(data as { orgId: string; projectId: string; turnId: string })
+            .catch((error: unknown) => {
+              logger.error(
+                {
+                  event: "worker.turn_dispatch_failed",
+                  turnId: (data as { turnId: string }).turnId,
+                  jobId,
+                },
+                "turn dispatch escaped terminal handling; lease recovery will reconcile it",
+              );
+              throw error;
+            }),
         );
         // Agent output belongs in scoped, redacted turn events, not infrastructure logs.
         result = {
@@ -126,6 +138,7 @@ export async function startWorker() {
         const recoveredTurns = await recoverQueuedTurns(db, (name, payload) =>
           boss.send(name, payload),
         );
+        const suspendedWorkspaces = await storyDomain.stories.suspendFailedWorkspaces();
         const pendingTitles = await recoverPendingTitles(storyDomain.titles, (name, payload) =>
           boss.send(name, payload),
         );
@@ -133,6 +146,7 @@ export async function startWorker() {
           ...(await storyDomain.scheduler.tick()),
           interruptedTurns,
           recoveredTurns,
+          suspendedWorkspaces,
           pendingTitles,
         };
       }

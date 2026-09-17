@@ -57,7 +57,44 @@ visible and require a continuation. Corrupt native sessions retain the existing
 explicit replacement workflow. No automatic Git reset, workspace deletion, clean
 setup, or replay of external writes is performed.
 
+## Failed commands and idle compute
+
+Long-running Vercel agent commands write a private, ordered output journal under
+`/workspace/.facility/command-output/` before publishing each log frame. Sequence
+numbers and byte encoding make reconnection independent of provider log history
+and chunk boundaries. If the stream disconnects or is truncated, observation reads
+the journal on the original VM and continues without submitting another command.
+A final journal read includes output lost at command completion. These files contain
+raw engine output, have mode `0600`, and remain with the workspace: treat them as
+sensitive recovery evidence, not public issue attachments. Include them in the
+workspace's storage retention policy.
+
+Terminal observation failures request termination of the original command. Process
+cleanup never resumes stopped compute. A failed turn with no active turn, queued
+turn, or pending message suspends its workspace while retaining the volume. The
+worker reconciles missed or failed suspensions on its minute schedule, recording
+`workspace.suspended` or `workspace.suspend_failed` with the failed turn identifier.
+A provider error leaves suspension eligible for retry, rather than reporting a
+machine as stopped. A deliberate operator wake after failure takes precedence;
+successful previews keep their existing lifecycle.
+
+Suspension and new message submission share a story lock. New work is either
+already present and prevents suspension, or starts after suspension and resumes
+the retained workspace. Cleanup uses organization and project scope throughout.
+
+Health/event writes do not renew the worker lease. A final telemetry flush failure
+is reported as `turn.final_events_persistence_failed` and cannot prevent closing an
+otherwise failed turn. `worker.turn_dispatch_failed` exposes failures that escape
+terminal handling, without including transcript or database error text.
+
 ## Operational limits
+
+Dispatch jobs use a 23-hour queue expiration, below pg-boss's 24-hour ceiling.
+The default 15-minute queue timer can stop awaiting a callback without canceling
+its agent; it must not be used for long turns. Database turn leases remain the
+crash-recovery authority. Queue expiration is not an engine cancellation deadline;
+configure total preparation and execution budgets within this queue window.
+
 
 Database lease writes run every two seconds without overlapping. Job logs report
 `turn.heartbeat_unconfirmed` on failed writes or a write pending for 30 seconds,
@@ -68,7 +105,7 @@ the database no longer confirms ownership and the observer cancels the turn.
 
 ECS workers acquire the maximum 48-hour task-protection lease before claiming a
 turn, renew it while running, and release it when dispatch finishes. The initial
-lease covers the engine's 24-hour command window plus preparation even when ECS
+lease covers agent execution plus preparation even when ECS
 rejects renewal during a deployment with `DEPLOYMENT_BLOCKED`. Protection responses
 must confirm the requested duration. Renewal and release failures log an allowlisted
 reason, HTTP status, and remaining lease time, without provider response bodies.
@@ -84,6 +121,10 @@ lose an in-flight batch, and a database outage prevents new evidence from becomi
 durable. Event writes retry pending batches in order; turn completion fails visibly
 if the final evidence cannot be saved. Workspace files require retained provider
 storage and the existing backup workflow; session checkpoints do not replace it.
+
+Vercel commands have a five-hour provider limit. Observation also has a local
+deadline (the command limit plus 30 seconds) so repeated bounded waits cannot keep
+a failed command and its worker lease alive indefinitely.
 
 Health samples add at most two regular probes per minute per active Vercel turn.
 Include turn-event tables in database backup, capacity, retention, and access-control

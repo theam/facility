@@ -100,7 +100,10 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     command: WorkspaceCommand,
   ): Promise<WorkspaceCommandResult> {
-    const handle = await this.wake(workspace);
+    const handle =
+      command.resume === false ? await this.inspect(workspace) : await this.wake(workspace);
+    if (handle.state !== "running" || !handle.computeRef)
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
     const container = this.docker.getContainer(handle.computeRef);
     const startedAt = performance.now();
     const execution = await container.exec({

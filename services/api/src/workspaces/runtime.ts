@@ -31,6 +31,8 @@ export type WorkspaceHandle = WorkspaceLocator & {
 };
 
 export type WorkspaceCommand = {
+  /** Observation and cleanup must not restart stopped compute. */
+  resume?: boolean;
   command: string;
   args?: string[];
   cwd?: string;

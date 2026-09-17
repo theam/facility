@@ -36,6 +36,7 @@ import {
   type AgentTurnResult,
 } from "../src/turns/engines.js";
 import { TurnGitEvidenceService } from "../src/turns/git-evidence.js";
+import { LiveTurnEvents } from "../src/turns/live-events.js";
 import { recoverInterruptedTurns, recoverQueuedTurns } from "../src/worker.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import {
@@ -651,6 +652,43 @@ environment:
         "Continue after the native session was lost",
       ]),
     );
+  });
+
+  it("closes a failed turn even when its final telemetry flush fails", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `flush-failure-${suffix}`,
+      title: "Retain the primary failure",
+      agent: builder,
+      message: "Implement the change",
+      messageDedupeKey: `flush-failure-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected turn");
+    engine.failNextRun = true;
+    const original = LiveTurnEvents.prototype.finish;
+    const finish = vi.spyOn(LiveTurnEvents.prototype, "finish").mockImplementation(async function (
+      this: LiveTurnEvents,
+      events,
+    ) {
+      await original.call(this, events);
+      throw new Error("telemetry unavailable");
+    });
+    try {
+      await expect(
+        dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+      ).resolves.toMatchObject({ state: "failed" });
+      const current = await storiesService.get(orgId, projectId, started.story.id);
+      expect(current.turns.find((turn) => turn.id === started.queued.turn?.id)?.state).toBe(
+        "failed",
+      );
+      expect(current.workspace?.state).toBe("sleeping");
+    } finally {
+      finish.mockRestore();
+    }
   });
 
   it("records engine events when a turn fails, with project secrets redacted", async () => {

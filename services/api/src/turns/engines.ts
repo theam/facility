@@ -238,6 +238,7 @@ export async function stopInterruptedEngineProcess(
     throw new AgentEngineError("turn_id_invalid", "interrupted engine turn id is invalid");
   }
   const result = await runtime.exec(workspace, {
+    resume: false,
     command: "sh",
     args: ["-lc", INTERRUPTED_PROCESS_CLEANUP],
     env: { FACILITY_INTERRUPTED_TURN_ID: turnId },

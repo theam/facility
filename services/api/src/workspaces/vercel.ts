@@ -1,6 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { Sandbox } from "@vercel/sandbox";
-import { CommandLogReplay, retryObservation } from "./command-observation.js";
+import {
+  COMMAND_JOURNAL_SEGMENT_BYTES,
+  COMMAND_JOURNAL_WRAPPER,
+  CommandJournal,
+} from "./command-journal.js";
+import {
+  CommandLogReplay,
+  isTransientObservationError,
+  retryObservation,
+} from "./command-observation.js";
 import {
   parseWorkspaceHealth,
   WORKSPACE_HEALTH_COMMAND,
@@ -86,7 +97,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
         "Vercel workspace commands do not support stdin; pass data as an argument or file",
       );
     }
-    const sandbox = await this.get(workspace, true);
+    const sandbox = await this.get(workspace, command.resume !== false);
+    if (command.resume === false && sandbox.status !== "running") {
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
+    }
+    const session = sandbox.currentSession();
     const stdoutStream = new PassThrough();
     const stderrStream = new PassThrough();
     const stdout: Buffer[] = [];
@@ -99,32 +114,129 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       stderr.push(chunk);
       command.onOutput?.({ stream: "stderr", data: chunk.toString("utf8") });
     });
-    const running = await sandbox.asUser("node").runCommand({
-      cmd: command.command,
-      args: command.args,
+    const journalPath = command.onOutput
+      ? `/workspace/.facility/command-output/${randomUUID()}.ndjson`
+      : undefined;
+    const submission = {
+      cmd: journalPath ? "node" : command.command,
+      args: journalPath
+        ? ["-e", COMMAND_JOURNAL_WRAPPER, journalPath, command.command, ...(command.args ?? [])]
+        : command.args,
       cwd: command.cwd ?? "/workspace",
       env: { ...persistentWorkspaceEnvironment(), ...(command.env ?? {}) },
       timeoutMs:
         command.timeoutMs === undefined
           ? undefined
           : Math.min(command.timeoutMs, MAX_COMMAND_TIMEOUT_MS),
-      detached: true,
-    });
+      detached: true as const,
+    };
+    const running =
+      command.resume === false
+        ? await session.runCommand({
+            ...submission,
+            cmd: "sudo",
+            args: ["-u", "node", "--", submission.cmd, ...(submission.args ?? [])],
+          })
+        : await sandbox.asUser("node").runCommand(submission);
     const observation = new AbortController();
+    const logsFinished = new AbortController();
+    const deadline = setTimeout(
+      () =>
+        observation.abort(
+          new WorkspaceRuntimeError(
+            "workspace_command_timeout",
+            "Workspace command exceeded its observation deadline",
+          ),
+        ),
+      Math.min(command.timeoutMs ?? MAX_COMMAND_TIMEOUT_MS, MAX_COMMAND_TIMEOUT_MS) + 30_000,
+    );
+    deadline.unref();
+    let completed = false;
+    let killRequested = false;
+    const kill = async () => {
+      if (killRequested) return;
+      killRequested = true;
+      await running.kill("SIGTERM", { abortSignal: AbortSignal.timeout(10_000) });
+    };
     let canceled = command.signal?.aborted ?? false;
     const cancel = () => {
       canceled = true;
       observation.abort();
-      void running.kill("SIGTERM").catch(() => undefined);
+      void kill().catch(() => undefined);
     };
     command.signal?.addEventListener("abort", cancel, { once: true });
     if (canceled) cancel();
     const logs = (async () => {
+      if (journalPath) {
+        const journal = new CommandJournal(({ stream, data }) => {
+          (stream === "stdout" ? stdoutStream : stderrStream).write(data);
+        });
+        let journalSegment = 0;
+        const readJournal = async () => {
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              // Bind reads to the original VM: diagnostics must never resume a stopped one.
+              const data = await session.readFileToBuffer(
+                { path: `${journalPath}.${journalSegment}` },
+                { signal: AbortSignal.any([observation.signal, AbortSignal.timeout(10_000)]) },
+              );
+              observation.signal.throwIfAborted();
+              if (!data) {
+                if (completed && journalSegment === 0)
+                  throw new Error("Command journal is unavailable");
+                return;
+              }
+              journal.restart();
+              journal.push(data.toString("utf8"));
+              if (data.length >= COMMAND_JOURNAL_SEGMENT_BYTES && data.at(-1) === 10) {
+                journalSegment += 1;
+                attempt = -1;
+                continue;
+              }
+              return;
+            } catch (error) {
+              await retryObservation(error, attempt, observation.signal);
+            }
+          }
+        };
+        try {
+          for await (const log of running.logs({
+            signal: AbortSignal.any([observation.signal, logsFinished.signal]),
+          })) {
+            observation.signal.throwIfAborted();
+            if (log.stream === "stdout") journal.push(log.data);
+          }
+        } catch (error) {
+          if (observation.signal.aborted) throw error;
+          const status =
+            (error as { status?: number; response?: { status?: number } })?.status ??
+            (error as { response?: { status?: number } })?.response?.status;
+          // Never turn a denied read into an alternate privileged request.
+          if (status && !isTransientObservationError(error)) throw error;
+          console.info(
+            JSON.stringify({
+              event: "workspace.command_journal_recovery",
+              commandId: running.cmdId,
+              workspaceId: workspace.id,
+            }),
+          );
+        }
+        // The volume is authoritative, including a lost final log chunk. A
+        // truncated/replayed provider stream never causes command resubmission.
+        do {
+          await readJournal();
+          if (!completed) await delay(2_000, undefined, { signal: observation.signal });
+        } while (!completed);
+        await readJournal();
+        journal.finish();
+        return;
+      }
       const replay = new CommandLogReplay();
       for (let attempt = 0; ; attempt += 1) {
         replay.restart();
         try {
           for await (const log of running.logs({ signal: observation.signal })) {
+            observation.signal.throwIfAborted();
             const fresh = replay.append(log.stream, log.data);
             if (!fresh) continue;
             if (log.stream === "stdout") stdoutStream.write(fresh);
@@ -142,9 +254,12 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       for (let attempt = 0; ; attempt += 1) {
         const timeout = AbortSignal.timeout(30_000);
         try {
-          return await running.wait({
+          const result = await running.wait({
             signal: AbortSignal.any([observation.signal, timeout]),
           });
+          completed = true;
+          logsFinished.abort();
+          return result;
         } catch (error) {
           if (timeout.aborted && !observation.signal.aborted) {
             attempt = -1;
@@ -159,14 +274,25 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       [result] = await Promise.all([completion, logs]);
       if (canceled) throw new Error("command canceled");
     } catch (error) {
+      observation.abort();
+      if (!completed) {
+        await kill().catch(() => {
+          console.warn(
+            JSON.stringify({ event: "workspace.command_cleanup_failed", commandId: running.cmdId }),
+          );
+        });
+      }
       if (canceled) {
         throw new WorkspaceRuntimeError(
           "workspace_command_canceled",
           "workspace command was canceled",
         );
       }
+      if (observation.signal.reason instanceof WorkspaceRuntimeError)
+        throw observation.signal.reason;
       throw error;
     } finally {
+      clearTimeout(deadline);
       observation.abort();
       command.signal?.removeEventListener("abort", cancel);
       stdoutStream.end();
@@ -302,8 +428,9 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     try {
-      const sandbox = await this.get(workspace, false);
-      if (sandbox.status !== "stopped") await sandbox.stop();
+      const signal = AbortSignal.timeout(60_000);
+      const sandbox = await this.get(workspace, false, undefined, signal);
+      if (sandbox.status !== "stopped") await sandbox.stop({ signal });
     } catch (error) {
       if (!isVercelNotFound(error)) throw error;
     }
