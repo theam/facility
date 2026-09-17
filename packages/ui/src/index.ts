@@ -13,6 +13,7 @@ export {
   PillTag,
   StatusDot,
   toneFor,
+  VisuallyHidden,
 } from "./primitives";
 export type { TerminalLine } from "./terminal";
 export { Terminal } from "./terminal";
