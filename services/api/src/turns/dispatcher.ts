@@ -179,6 +179,18 @@ export class TurnDispatcher {
           type: "turn.phase",
           data: { phase: "workspace" },
         });
+        // Persist wake intent before the provider call: its acknowledgement or
+        // environment setup can fail after compute has already resumed.
+        await this.db
+          .update(workspaces)
+          .set({ state: "running", error: null, updatedAt: new Date() })
+          .where(
+            and(
+              eq(workspaces.orgId, input.orgId),
+              eq(workspaces.projectId, input.projectId),
+              eq(workspaces.id, workspace.id),
+            ),
+          );
         const recovered = await this.runtime.wake(workspaceLocator(workspace));
         await appendTurnEvent(this.db, {
           ...eventBase,

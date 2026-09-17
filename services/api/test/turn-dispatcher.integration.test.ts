@@ -20,6 +20,7 @@ import {
   turnGitEvidence,
   turns,
   turnUsage,
+  workspaces,
 } from "@facility/db";
 import { and, asc, eq } from "drizzle-orm";
 import postgres from "postgres";
@@ -652,6 +653,63 @@ environment:
         "Continue after the native session was lost",
       ]),
     );
+  });
+
+  it.each([
+    "wake",
+    "prepare",
+  ] as const)("suspends retained compute when %s fails after a sleeping workspace resumes", async (phase) => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `resume-${phase}-${suffix}`,
+      title: "Recover a retained workspace",
+      agent: builder,
+      message: "Continue the retained work",
+      messageDedupeKey: `resume-${phase}-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    const workspace = started.workspace;
+    const turn = started.queued.turn;
+    if (!workspace?.externalRef || !turn) throw new Error("expected workspace and turn");
+    const locator = {
+      id: workspace.id,
+      image: "facility-runner:test",
+      externalRef: workspace.externalRef,
+      volumeRef: workspace.volumeRef,
+    };
+    await runtime.exec(locator, {
+      command: "sh",
+      args: ["-lc", "printf retained > retained-work"],
+    });
+    await runtime.suspend(locator);
+    await db.update(workspaces).set({ state: "sleeping" }).where(eq(workspaces.id, workspace.id));
+    const requestsBefore = engine.requests.length;
+    const originalWake = runtime.wake.bind(runtime);
+    const failure =
+      phase === "wake"
+        ? vi.spyOn(runtime, "wake").mockImplementationOnce(async (input) => {
+            await originalWake(input);
+            throw new Error("wake acknowledgement lost");
+          })
+        : vi
+            .spyOn(ProjectEnvironmentService.prototype, "prepare")
+            .mockRejectedValueOnce(new Error("setup failed"));
+    try {
+      await expect(
+        dispatcher.dispatch({ orgId, projectId, turnId: turn.id }),
+      ).resolves.toMatchObject({ state: "failed" });
+      expect(engine.requests).toHaveLength(requestsBefore);
+      expect((await storiesService.get(orgId, projectId, started.story.id)).workspace?.state).toBe(
+        "sleeping",
+      );
+      expect((await runtime.inspect(locator)).state).toBe("sleeping");
+      expect((await runtime.read(locator, "retained-work")).toString()).toBe("retained");
+    } finally {
+      failure.mockRestore();
+    }
   });
 
   it("closes a failed turn even when its final telemetry flush fails", async () => {
