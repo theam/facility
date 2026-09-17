@@ -36,6 +36,25 @@ describe("Vercel persistent workspace runtime", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
+  it("preflights creation constraints synchronously without contacting the provider", () => {
+    const runtime = new VercelWorkspaceRuntime();
+    expect(() => runtime.validateCreate({ image: "runner:test" })).not.toThrow();
+    expect(() =>
+      runtime.validateCreate({
+        image: "runner:test",
+        resources: { cpu: 4, memoryMb: 8192 },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      runtime.validateCreate({
+        image: "runner:test",
+        resources: { cpu: 4, memoryMb: 4096 },
+      }),
+    ).toThrow(/2048 MiB per vCPU/);
+    expect(sandboxApi.getOrCreate).not.toHaveBeenCalled();
+    expect(sandboxApi.get).not.toHaveBeenCalled();
+  });
+
   it("passes an explicit project size to Vercel without ignoring memory", async () => {
     sandboxApi.getOrCreate.mockResolvedValue(fakeSandbox());
     await new VercelWorkspaceRuntime().create({

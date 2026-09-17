@@ -50,8 +50,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     },
   ) {}
 
-  async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
-    assertWorkspaceId(input.id);
+  validateCreate(input: Omit<CreateWorkspace, "id">): void {
     const cpu = input.resources?.cpu ?? 2;
     if (
       !Number.isInteger(cpu) ||
@@ -64,6 +63,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
         "Vercel requires 1–32 integer vCPUs with exactly 2048 MiB per vCPU; account limits also apply",
       );
     }
+  }
+
+  async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
+    assertWorkspaceId(input.id);
+    this.validateCreate(input);
     const ports = validateWorkspacePorts(input.ports);
     const gatewayPorts = previewGatewayPorts(ports);
     const bootstrapCommand = workspaceBootstrapCommand(input);
@@ -81,7 +85,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       snapshotExpiration: 0,
       keepLastSnapshots: { count: 1, expiration: 0, deleteEvicted: true },
       timeout: SESSION_TIMEOUT_MS,
-      resources: { vcpus: cpu },
+      resources: { vcpus: input.resources?.cpu ?? 2 },
       ports: gatewayPorts.map(({ gatewayPort }) => gatewayPort),
       env: { ...persistentWorkspaceEnvironment(), ...(input.environment ?? {}) },
       tags: { facility: "workspace" },

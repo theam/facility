@@ -211,6 +211,9 @@ export class StoryWorkspaceService {
           .limit(1)
       )[0];
       if (!workspace) {
+        // Reject invalid creation settings before committing them to this identity.
+        // Existing workspaces keep their recorded configuration, even if the manifest changes.
+        this.runtime.validateCreate?.(input.workspace);
         const workspaceId = newId("ws");
         workspace = (
           await tx

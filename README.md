@@ -191,8 +191,10 @@ environment:
 `resources` is optional. Omitting it retains the existing 2 vCPU / 4096 MiB default.
 Both fields are required when present: `cpu` is an integer from 1 to 32 and
 `memory_mb` is an integer from 512 to 65536. Provider/account limits still apply.
-Vercel allocates exactly 2048 MiB per vCPU, so it rejects mismatched pairs instead
-of silently ignoring the memory request. Docker applies both limits independently.
+Vercel allocates exactly 2048 MiB per vCPU, so it rejects mismatched pairs before
+new workspace configuration is committed, rather than silently ignoring the memory
+request. Correct the manifest and retry the same story; a rejected pair does not
+pin that story to invalid settings. Docker applies both limits independently.
 These values apply to **new story workspaces** across API/UI/MCP, GitHub and scheduled
 starts. Existing workspaces keep their original allocation across resume, retries
 and Clean setup; editing the manifest does not resize them or discard their data.

@@ -78,6 +78,8 @@ export type WorkspaceBackup = {
 
 export interface WorkspaceRuntime {
   readonly provider: WorkspaceProvider;
+  /** Pure creation preflight: no provider calls or mutations, safe inside a DB transaction. */
+  validateCreate?(input: Omit<CreateWorkspace, "id">): void;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
   wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle>;
   exec(workspace: WorkspaceLocator, command: WorkspaceCommand): Promise<WorkspaceCommandResult>;
