@@ -130,3 +130,5 @@ Health samples add at most two regular probes per minute per active Vercel turn.
 Include turn-event tables in database backup, capacity, retention, and access-control
 policies. Sampling is currently implemented for Vercel; other runtimes still retain
 live engine events and native session checkpoints.
+
+The dispatcher records wake intent before contacting the workspace provider. A lost wake acknowledgement or failed environment setup therefore remains eligible for failed-turn suspension, including when the workspace was previously recorded as sleeping.
