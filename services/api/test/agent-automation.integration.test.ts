@@ -170,6 +170,7 @@ describe("agent automations use persistent story workspaces", async () => {
     version: 1,
     repositories: { primary: `acme/app-${suffix}`, related: [] },
     environment: {
+      resources: { cpu: 4, memory_mb: 8192 },
       start: "true",
       secrets: [],
       variables: [],
@@ -285,6 +286,13 @@ describe("agent automations use persistent story workspaces", async () => {
     expect(storyRows).toHaveLength(1);
     const story = storyRows[0];
     if (!story) throw new Error("expected triggered story");
+    const [configuredWorkspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.storyId, story.id));
+    expect(configuredWorkspace?.environment).toMatchObject({
+      resources: { cpu: 4, memoryMb: 8192 },
+    });
     expect(await db.select().from(workspaces).where(eq(workspaces.storyId, story.id))).toHaveLength(
       1,
     );
@@ -917,6 +925,13 @@ describe("agent automations use persistent story workspaces", async () => {
         )
     )[0];
     if (!scheduledStory) throw new Error("expected scheduled story");
+    const [scheduledWorkspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.storyId, scheduledStory.id));
+    expect(scheduledWorkspace?.environment).toMatchObject({
+      resources: { cpu: 4, memoryMb: 8192 },
+    });
     expect(
       await db.select().from(workspaces).where(eq(workspaces.storyId, scheduledStory.id)),
     ).toHaveLength(1);

@@ -14,6 +14,7 @@ import { IntegrationStateBody, updateIntegrationState } from "../../stories/inte
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
 import type { AppConfig } from "../../types.js";
+import { projectWorkspaceInput } from "../../workspaces/project-environment.js";
 import {
   parseWorkspaceVariables,
   WorkspaceVariablesInput,
@@ -419,15 +420,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           messageDedupeKey: body.idempotency_key,
           actor: principalActor(actor),
           trigger: { type: surface },
-          workspace: {
-            image: projectManifest.environment.image ?? config.workspaceImage,
-            ports: Object.entries(projectManifest.environment.services).map(([service, value]) => ({
-              service,
-              port: value.port,
-              protocol: value.protocol,
-              websocket: value.websocket,
-            })),
-          },
+          workspace: projectWorkspaceInput(projectManifest, config.workspaceImage),
         }),
       );
       if (result.story.titleSource === "pending") {

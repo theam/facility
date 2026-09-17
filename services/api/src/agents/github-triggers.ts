@@ -12,7 +12,10 @@ import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
-import type { ProjectManifest, ProjectManifestSource } from "../workspaces/project-environment.js";
+import {
+  type ProjectManifestSource,
+  projectWorkspaceInput,
+} from "../workspaces/project-environment.js";
 import { type AgentCatalogService, manifestFromProjection } from "./catalog.js";
 import { githubIssueCommandMatches, githubSenderCanStartAgent } from "./github-command-policy.js";
 
@@ -254,7 +257,7 @@ export class GithubAgentTriggerService {
         message: eventPrompt(event, owner, name, trigger.name),
         messageDedupeKey: `github:${event.id}:${manifest.name}:${trigger.name}`,
         actor: { type: "service", id: `github:${sender(event.payload)}` },
-        workspace: workspaceInput(projectManifest, this.defaultImage),
+        workspace: projectWorkspaceInput(projectManifest, this.defaultImage),
         trigger: { type: "github", key: `${event.eventType}:${trigger.name}` },
       });
       if (eventIdentity.pullRequestNumber) {
@@ -511,18 +514,6 @@ function safeBranch(branch: string | undefined) {
     return undefined;
   }
   return branch;
-}
-
-function workspaceInput(manifest: ProjectManifest, defaultImage: string) {
-  return {
-    image: manifest.environment.image ?? defaultImage,
-    ports: Object.entries(manifest.environment.services).map(([service, value]) => ({
-      service,
-      port: value.port,
-      protocol: value.protocol,
-      websocket: value.websocket,
-    })),
-  };
 }
 
 function object(value: unknown): GithubObject {

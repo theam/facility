@@ -14,6 +14,7 @@ import type {
 import { appendWorkspaceEvent } from "./events.js";
 import { isSafeGitBranch } from "./git-branch.js";
 import type {
+  CreateWorkspace,
   PreviewEndpoint,
   WorkspaceCommandResult,
   WorkspaceLocator,
@@ -56,6 +57,13 @@ export const ProjectManifestSchema = z
     environment: z
       .object({
         image: z.string().min(1).max(500).optional(),
+        resources: z
+          .object({
+            cpu: z.number().int().min(1).max(32),
+            memory_mb: z.number().int().min(512).max(65_536),
+          })
+          .strict()
+          .optional(),
         setup: z.string().min(1).max(4_000).optional(),
         start: z.string().min(1).max(4_000),
         ready: z.string().min(1).max(4_000).optional(),
@@ -71,6 +79,24 @@ export const ProjectManifestSchema = z
   .strict();
 
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema> & { hash: string };
+
+/** One creation contract for API/UI/MCP, GitHub triggers and scheduled stories. */
+export function projectWorkspaceInput(
+  manifest: ProjectManifest,
+  defaultImage: string,
+): Omit<CreateWorkspace, "id"> {
+  const resources = manifest.environment.resources;
+  return {
+    image: manifest.environment.image ?? defaultImage,
+    ...(resources ? { resources: { cpu: resources.cpu, memoryMb: resources.memory_mb } } : {}),
+    ports: Object.entries(manifest.environment.services).map(([service, value]) => ({
+      service,
+      port: value.port,
+      protocol: value.protocol,
+      websocket: value.websocket,
+    })),
+  };
+}
 
 export class ProjectEnvironmentError extends Error {
   constructor(
