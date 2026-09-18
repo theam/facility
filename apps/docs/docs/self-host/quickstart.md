@@ -4,7 +4,8 @@ title: Quickstart
 
 # Self-host quickstart
 
-This path runs Facility from source for local evaluation and development. Use the [production
+This path runs Facility from source for local evaluation and development. To run the product
+without a source toolchain, use the [Compose bundle](bundle.md) instead. Use the [production
 guide](production.md) before exposing an instance to other users or repositories.
 
 ## Prerequisites
