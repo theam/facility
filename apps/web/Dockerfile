@@ -3,7 +3,7 @@
 #   docker build -f apps/web/Dockerfile -t facility/web .
 FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
-ARG DEBIAN_SECURITY_REFRESH=20260828
+ARG DEBIAN_SECURITY_REFRESH=20260915
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \

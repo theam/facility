@@ -17,7 +17,7 @@ export async function appendTurnEvent(
   const allocated = (
     await db
       .update(turns)
-      .set({ nextEventSeq: sql`${turns.nextEventSeq} + 1`, updatedAt: new Date() })
+      .set({ nextEventSeq: sql`${turns.nextEventSeq} + 1` })
       .where(
         and(
           eq(turns.orgId, input.orgId),

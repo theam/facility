@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { mintSessionCookie } from "../app.js";
 import { type AuthTransaction, ExternalIdentityProvider } from "../auth/identity-provider.js";
+import { safeReturnTo } from "../auth/return-to.js";
 import { ApiError } from "../errors.js";
 import type { AppConfig, ExternalIdentity } from "../types.js";
 
@@ -275,9 +276,4 @@ function cookieOptions(config: AppConfig, maxAge: number) {
     secure: callback.startsWith("https://"),
     maxAge,
   };
-}
-
-function safeReturnTo(value: string | undefined) {
-  if (!value || value === "/") return "/";
-  return /^\/oauth\/interaction\/[A-Za-z0-9_-]+$/.test(value) ? value : "/";
 }

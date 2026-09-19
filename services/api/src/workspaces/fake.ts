@@ -64,7 +64,10 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     command: WorkspaceCommand,
   ): Promise<WorkspaceCommandResult> {
-    const handle = await this.wake(workspace);
+    const record = command.resume === false ? await this.record(workspace) : undefined;
+    if (record && record.state !== "running")
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
+    const handle = record ? this.handle(record) : await this.wake(workspace);
     const cwd = this.commandDirectory(handle.volumeRef, command.cwd);
     const startedAt = performance.now();
     const controller = new AbortController();

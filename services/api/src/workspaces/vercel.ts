@@ -1,5 +1,23 @@
+import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { Sandbox } from "@vercel/sandbox";
+import {
+  COMMAND_JOURNAL_SEGMENT_BYTES,
+  COMMAND_JOURNAL_WRAPPER,
+  CommandJournal,
+} from "./command-journal.js";
+import {
+  CommandLogReplay,
+  isTransientObservationError,
+  retryObservation,
+} from "./command-observation.js";
+import {
+  parseWorkspaceHealth,
+  WORKSPACE_HEALTH_COMMAND,
+  type WorkspaceDiagnostics,
+} from "./diagnostics.js";
+import { nativePreviewOrigin } from "./native-preview.js";
 import {
   assertWorkspaceId,
   type CreateWorkspace,
@@ -25,10 +43,31 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
 
   constructor(
     private readonly credentials?: { token: string; teamId: string; projectId: string },
+    private readonly nativePreview?: {
+      apiUrl: string;
+      webUrl: string;
+      enabledForWorkspace: (workspaceId: string) => Promise<boolean>;
+    },
   ) {}
+
+  validateCreate(input: Omit<CreateWorkspace, "id">): void {
+    const cpu = input.resources?.cpu ?? 2;
+    if (
+      !Number.isInteger(cpu) ||
+      cpu < 1 ||
+      cpu > 32 ||
+      (input.resources && input.resources.memoryMb !== cpu * 2_048)
+    ) {
+      throw new WorkspaceRuntimeError(
+        "workspace_resources_invalid",
+        "Vercel requires 1–32 integer vCPUs with exactly 2048 MiB per vCPU; account limits also apply",
+      );
+    }
+  }
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
     assertWorkspaceId(input.id);
+    this.validateCreate(input);
     const ports = validateWorkspacePorts(input.ports);
     const gatewayPorts = previewGatewayPorts(ports);
     const bootstrapCommand = workspaceBootstrapCommand(input);
@@ -46,7 +85,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       snapshotExpiration: 0,
       keepLastSnapshots: { count: 1, expiration: 0, deleteEvicted: true },
       timeout: SESSION_TIMEOUT_MS,
-      resources: { vcpus: Math.max(1, Math.ceil(input.resources?.cpu ?? 2)) },
+      resources: { vcpus: input.resources?.cpu ?? 2 },
       ports: gatewayPorts.map(({ gatewayPort }) => gatewayPort),
       env: { ...persistentWorkspaceEnvironment(), ...(input.environment ?? {}) },
       tags: { facility: "workspace" },
@@ -74,7 +113,11 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
         "Vercel workspace commands do not support stdin; pass data as an argument or file",
       );
     }
-    const sandbox = await this.get(workspace, true);
+    const sandbox = await this.get(workspace, command.resume !== false);
+    if (command.resume === false && sandbox.status !== "running") {
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
+    }
+    const session = sandbox.currentSession();
     const stdoutStream = new PassThrough();
     const stderrStream = new PassThrough();
     const stdout: Buffer[] = [];
@@ -87,44 +130,158 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       stderr.push(chunk);
       command.onOutput?.({ stream: "stderr", data: chunk.toString("utf8") });
     });
-    const running = await sandbox.asUser("node").runCommand({
-      cmd: command.command,
-      args: command.args,
+    const journalPath = command.onOutput
+      ? `/workspace/.facility/command-output/${randomUUID()}.ndjson`
+      : undefined;
+    const submission = {
+      cmd: journalPath ? "node" : command.command,
+      args: journalPath
+        ? ["-e", COMMAND_JOURNAL_WRAPPER, journalPath, command.command, ...(command.args ?? [])]
+        : command.args,
       cwd: command.cwd ?? "/workspace",
       env: { ...persistentWorkspaceEnvironment(), ...(command.env ?? {}) },
       timeoutMs:
         command.timeoutMs === undefined
           ? undefined
           : Math.min(command.timeoutMs, MAX_COMMAND_TIMEOUT_MS),
-      detached: true,
-    });
+      detached: true as const,
+    };
+    const running =
+      command.resume === false
+        ? await session.runCommand({
+            ...submission,
+            cmd: "sudo",
+            args: ["-u", "node", "--", submission.cmd, ...(submission.args ?? [])],
+          })
+        : await sandbox.asUser("node").runCommand(submission);
     const observation = new AbortController();
+    const logsFinished = new AbortController();
+    const deadline = setTimeout(
+      () =>
+        observation.abort(
+          new WorkspaceRuntimeError(
+            "workspace_command_timeout",
+            "Workspace command exceeded its observation deadline",
+          ),
+        ),
+      Math.min(command.timeoutMs ?? MAX_COMMAND_TIMEOUT_MS, MAX_COMMAND_TIMEOUT_MS) + 30_000,
+    );
+    deadline.unref();
+    let completed = false;
+    let killRequested = false;
+    const kill = async () => {
+      if (killRequested) return;
+      killRequested = true;
+      await running.kill("SIGTERM", { abortSignal: AbortSignal.timeout(10_000) });
+    };
     let canceled = command.signal?.aborted ?? false;
     const cancel = () => {
       canceled = true;
       observation.abort();
-      void running.kill("SIGTERM").catch(() => undefined);
+      void kill().catch(() => undefined);
     };
     command.signal?.addEventListener("abort", cancel, { once: true });
     if (canceled) cancel();
     const logs = (async () => {
-      for await (const log of running.logs({ signal: observation.signal })) {
-        if (log.stream === "stdout") stdoutStream.write(log.data);
-        else stderrStream.write(log.data);
+      if (journalPath) {
+        const journal = new CommandJournal(({ stream, data }) => {
+          (stream === "stdout" ? stdoutStream : stderrStream).write(data);
+        });
+        let journalSegment = 0;
+        const readJournal = async () => {
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              // Bind reads to the original VM: diagnostics must never resume a stopped one.
+              const data = await session.readFileToBuffer(
+                { path: `${journalPath}.${journalSegment}` },
+                { signal: AbortSignal.any([observation.signal, AbortSignal.timeout(10_000)]) },
+              );
+              observation.signal.throwIfAborted();
+              if (!data) {
+                if (completed && journalSegment === 0)
+                  throw new Error("Command journal is unavailable");
+                return;
+              }
+              journal.restart();
+              journal.push(data.toString("utf8"));
+              if (data.length >= COMMAND_JOURNAL_SEGMENT_BYTES && data.at(-1) === 10) {
+                journalSegment += 1;
+                attempt = -1;
+                continue;
+              }
+              return;
+            } catch (error) {
+              await retryObservation(error, attempt, observation.signal);
+            }
+          }
+        };
+        try {
+          for await (const log of running.logs({
+            signal: AbortSignal.any([observation.signal, logsFinished.signal]),
+          })) {
+            observation.signal.throwIfAborted();
+            if (log.stream === "stdout") journal.push(log.data);
+          }
+        } catch (error) {
+          if (observation.signal.aborted) throw error;
+          const status =
+            (error as { status?: number; response?: { status?: number } })?.status ??
+            (error as { response?: { status?: number } })?.response?.status;
+          // Never turn a denied read into an alternate privileged request.
+          if (status && !isTransientObservationError(error)) throw error;
+          console.info(
+            JSON.stringify({
+              event: "workspace.command_journal_recovery",
+              commandId: running.cmdId,
+              workspaceId: workspace.id,
+            }),
+          );
+        }
+        // The volume is authoritative, including a lost final log chunk. A
+        // truncated/replayed provider stream never causes command resubmission.
+        do {
+          await readJournal();
+          if (!completed) await delay(2_000, undefined, { signal: observation.signal });
+        } while (!completed);
+        await readJournal();
+        journal.finish();
+        return;
+      }
+      const replay = new CommandLogReplay();
+      for (let attempt = 0; ; attempt += 1) {
+        replay.restart();
+        try {
+          for await (const log of running.logs({ signal: observation.signal })) {
+            observation.signal.throwIfAborted();
+            const fresh = replay.append(log.stream, log.data);
+            if (!fresh) continue;
+            if (log.stream === "stdout") stdoutStream.write(fresh);
+            else stderrStream.write(fresh);
+          }
+          return;
+        } catch (error) {
+          await retryObservation(error, attempt, observation.signal);
+        }
       }
     })();
     const completion = (async () => {
       // Metadata reads do not reliably include an exit status. Bound each wait
       // on this original command so no HTTP request lasts for the whole agent run.
-      while (true) {
+      for (let attempt = 0; ; attempt += 1) {
         const timeout = AbortSignal.timeout(30_000);
         try {
-          return await running.wait({
+          const result = await running.wait({
             signal: AbortSignal.any([observation.signal, timeout]),
           });
+          completed = true;
+          logsFinished.abort();
+          return result;
         } catch (error) {
-          if (timeout.aborted && !observation.signal.aborted) continue;
-          throw error;
+          if (timeout.aborted && !observation.signal.aborted) {
+            attempt = -1;
+            continue;
+          }
+          await retryObservation(error, attempt, observation.signal);
         }
       }
     })();
@@ -133,14 +290,25 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       [result] = await Promise.all([completion, logs]);
       if (canceled) throw new Error("command canceled");
     } catch (error) {
+      observation.abort();
+      if (!completed) {
+        await kill().catch(() => {
+          console.warn(
+            JSON.stringify({ event: "workspace.command_cleanup_failed", commandId: running.cmdId }),
+          );
+        });
+      }
       if (canceled) {
         throw new WorkspaceRuntimeError(
           "workspace_command_canceled",
           "workspace command was canceled",
         );
       }
+      if (observation.signal.reason instanceof WorkspaceRuntimeError)
+        throw observation.signal.reason;
       throw error;
     } finally {
+      clearTimeout(deadline);
       observation.abort();
       command.signal?.removeEventListener("abort", cancel);
       stdoutStream.end();
@@ -154,9 +322,54 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     };
   }
 
+  async previewOrigins(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
+    if (!this.nativePreview || !(await this.nativePreview.enabledForWorkspace(workspace.id)))
+      return {};
+    // The gateway is initialized by create/wake, independently of the app.
+    // Reuse its credentialed binding check, without publishing lifecycle facts.
+    const endpoints = await this.expose(workspace, ports);
+    return Object.fromEntries(
+      endpoints
+        .filter((endpoint) => endpoint.access === "native")
+        .map((endpoint) => [endpoint.service, endpoint.url]),
+    );
+  }
+
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
     const sandbox = await this.get(workspace, true);
-    return this.endpoints(sandbox, validateWorkspacePorts(ports));
+    const endpoints = this.endpoints(sandbox, validateWorkspacePorts(ports));
+    if (!this.nativePreview || !(await this.nativePreview.enabledForWorkspace(workspace.id)))
+      return endpoints;
+    const verified: PreviewEndpoint[] = [];
+    for (const endpoint of endpoints) {
+      const native = { ...endpoint, access: "native" as const };
+      const origin = nativePreviewOrigin([native], endpoint.service);
+      if (!origin)
+        throw new WorkspaceRuntimeError(
+          "native_preview_origin_invalid",
+          "Invalid native preview origin",
+        );
+      const response = await fetch(`${origin}/.facility/health`, {
+        headers: {
+          "x-facility-preview-token": workspace.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN ?? "",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok)
+        throw new WorkspaceRuntimeError(
+          "native_preview_unavailable",
+          "Native preview gateway is not ready",
+        );
+      const result = (await response.json()) as { native?: boolean; origin?: string };
+      if (result.native !== true || result.origin !== origin)
+        throw new WorkspaceRuntimeError(
+          "native_preview_binding_invalid",
+          "Native preview gateway binding mismatch",
+        );
+      verified.push(native);
+    }
+    return verified;
   }
 
   async inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection> {
@@ -165,7 +378,12 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       return {
         id: workspace.id,
         provider: this.provider,
-        state: sandbox.status === "running" ? "running" : "sleeping",
+        state:
+          sandbox.status === "running"
+            ? "running"
+            : ["failed", "aborted"].includes(sandbox.status)
+              ? "error"
+              : "sleeping",
         computeRef: sandbox.status === "running" ? sandbox.currentSession().sessionId : undefined,
         volumeRef: sandbox.currentSnapshotId ?? workspace.volumeRef,
         endpoints:
@@ -191,10 +409,44 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     }
   }
 
+  async diagnostics(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<WorkspaceDiagnostics> {
+    const sandbox = await this.get(workspace, false, undefined, signal);
+    const session = sandbox.currentSession();
+    const result: WorkspaceDiagnostics = {
+      provider: this.provider,
+      state: sandbox.status,
+      computeRef: session.sessionId,
+    };
+    if (sandbox.status !== "running") return result;
+    try {
+      // Bind to this VM, not Sandbox.runCommand, which can implicitly resume compute.
+      const command = await session.runCommand({
+        cmd: "sudo",
+        args: ["-u", "node", "--", "node", "-e", WORKSPACE_HEALTH_COMMAND, cwd],
+        cwd: "/",
+        timeoutMs: 5_000,
+        signal,
+      });
+      if (command.exitCode !== 0) return { ...result, probe: "unavailable" };
+      return {
+        ...result,
+        probe: "ok",
+        health: parseWorkspaceHealth(await command.stdout({ signal })),
+      };
+    } catch {
+      return { ...result, probe: "unavailable" };
+    }
+  }
+
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     try {
-      const sandbox = await this.get(workspace, false);
-      if (sandbox.status !== "stopped") await sandbox.stop();
+      const signal = AbortSignal.timeout(60_000);
+      const sandbox = await this.get(workspace, false, undefined, signal);
+      if (sandbox.status !== "stopped") await sandbox.stop({ signal });
     } catch (error) {
       if (!isVercelNotFound(error)) throw error;
     }
@@ -213,6 +465,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     resume: boolean,
     onResume?: (sandbox: Sandbox) => Promise<void>,
+    signal?: AbortSignal,
   ) {
     assertWorkspaceId(workspace.id);
     if (workspace.externalRef !== workspace.id) {
@@ -225,6 +478,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       ...this.credentials,
       name: workspace.externalRef,
       resume,
+      ...(signal ? { signal } : {}),
       ...(onResume ? { onResume } : {}),
     });
   }
@@ -249,7 +503,17 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     try {
       await initializeSandbox(
         sandbox,
-        bootstrapCommand,
+        this.nativePreview && (await this.nativePreview.enabledForWorkspace(input.id))
+          ? workspaceBootstrapCommand(input, {
+              ...this.nativePreview,
+              origins: Object.fromEntries(
+                this.endpoints(sandbox, input.ports).map((endpoint) => [
+                  endpoint.service,
+                  endpoint.url,
+                ]),
+              ),
+            })
+          : bootstrapCommand,
         input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN,
       );
       return this.handle(input, sandbox);
@@ -297,7 +561,10 @@ async function initializeSandbox(
   }
 }
 
-function workspaceBootstrapCommand(input: CreateWorkspace) {
+function workspaceBootstrapCommand(
+  input: CreateWorkspace,
+  native?: { apiUrl: string; webUrl: string; origins: Record<string, string> },
+) {
   const gatewayToken = input.environment?.FACILITY_PREVIEW_GATEWAY_TOKEN;
   if ((input.ports?.length ?? 0) > 0 && (!gatewayToken || gatewayToken.length < 32)) {
     throw new WorkspaceRuntimeError(
@@ -349,7 +616,18 @@ done`,
     "chown root:node /var/run/docker.sock",
     "chmod 0660 /var/run/docker.sock",
     ...gatewayPorts.map(({ port, gatewayPort }) => {
+      const nativeConfig = native
+        ? JSON.stringify({
+            version: 1,
+            apiUrl: native.apiUrl,
+            webUrl: native.webUrl,
+            workspaceId: input.id,
+            service: port.service,
+            origin: native.origins[port.service],
+          })
+        : "";
       const gatewayCommand = `set -eu
+export FACILITY_NATIVE_PREVIEW=${shellQuote(nativeConfig)}
 pid_file=/workspace/.facility/preview-${gatewayPort}.pid
 # A retained PID is only a hint: verify the full gateway invocation before signaling it.
 gateway_action="$(node - "$pid_file" ${gatewayPort} ${port.port} <<'NODE'
@@ -364,7 +642,9 @@ try {
       argv[4] === "--target" && argv[5] === process.argv[4] && argv[6] === "") {
     const environment = fs.readFileSync("/proc/" + pid + "/environ", "utf8").split("\\0");
     const credential = environment.find((entry) => entry.startsWith("FACILITY_PREVIEW_GATEWAY_TOKEN="));
-    if (credential === "FACILITY_PREVIEW_GATEWAY_TOKEN=" + process.env.FACILITY_PREVIEW_GATEWAY_TOKEN) {
+    const native = environment.find((entry) => entry.startsWith("FACILITY_NATIVE_PREVIEW=")) ?? "FACILITY_NATIVE_PREVIEW=";
+    if (credential === "FACILITY_PREVIEW_GATEWAY_TOKEN=" + process.env.FACILITY_PREVIEW_GATEWAY_TOKEN &&
+        native === "FACILITY_NATIVE_PREVIEW=" + process.env.FACILITY_NATIVE_PREVIEW) {
       const response = await fetch("http://127.0.0.1:" + process.argv[3] + "/", {
         redirect: "manual", signal: AbortSignal.timeout(1000),
       }).catch(() => null);
@@ -395,6 +675,21 @@ until test "$(curl --silent --output /dev/null --write-out "%{http_code}" --max-
   sleep 0.1
 done
 kill -0 "$pid" 2>/dev/null || { echo "Preview gateway on port ${gatewayPort} exited during startup" >&2; exit 1; }
+${
+  native
+    ? `node - ${gatewayPort} <<'NODE'
+const config = JSON.parse(process.env.FACILITY_NATIVE_PREVIEW);
+fetch("http://127.0.0.1:" + process.argv[2] + "/.facility/health", {
+  headers: { "x-facility-preview-token": process.env.FACILITY_PREVIEW_GATEWAY_TOKEN },
+  signal: AbortSignal.timeout(5000),
+}).then(async (r) => {
+  if (!r.ok) throw new Error("Native preview gateway image required");
+  const result = await r.json();
+  if (result.native !== true || result.origin !== config.origin) throw new Error("Native preview binding mismatch");
+}).catch(() => { console.error("Native preview gateway capability check failed"); process.exitCode = 1; });
+NODE`
+    : ""
+}
 `;
       return `runuser --user node --preserve-environment -- sh -lc ${shellQuote(gatewayCommand)}`;
     }),
@@ -403,8 +698,18 @@ kill -0 "$pid" 2>/dev/null || { echo "Preview gateway on port ${gatewayPort} exi
 
 function isVercelNotFound(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; status?: unknown; statusCode?: unknown };
-  return value.code === "not_found" || value.status === 404 || value.statusCode === 404;
+  const value = error as {
+    code?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return (
+    value.code === "not_found" ||
+    value.status === 404 ||
+    value.statusCode === 404 ||
+    value.response?.status === 404
+  );
 }
 
 function shellQuote(value: string): string {

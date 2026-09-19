@@ -14,6 +14,7 @@ import type {
 import { appendWorkspaceEvent } from "./events.js";
 import { isSafeGitBranch } from "./git-branch.js";
 import type {
+  CreateWorkspace,
   PreviewEndpoint,
   WorkspaceCommandResult,
   WorkspaceLocator,
@@ -56,6 +57,13 @@ export const ProjectManifestSchema = z
     environment: z
       .object({
         image: z.string().min(1).max(500).optional(),
+        resources: z
+          .object({
+            cpu: z.number().int().min(1).max(32),
+            memory_mb: z.number().int().min(512).max(65_536),
+          })
+          .strict()
+          .optional(),
         setup: z.string().min(1).max(4_000).optional(),
         start: z.string().min(1).max(4_000),
         ready: z.string().min(1).max(4_000).optional(),
@@ -71,6 +79,24 @@ export const ProjectManifestSchema = z
   .strict();
 
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema> & { hash: string };
+
+/** One creation contract for API/UI/MCP, GitHub triggers and scheduled stories. */
+export function projectWorkspaceInput(
+  manifest: ProjectManifest,
+  defaultImage: string,
+): Omit<CreateWorkspace, "id"> {
+  const resources = manifest.environment.resources;
+  return {
+    image: manifest.environment.image ?? defaultImage,
+    ...(resources ? { resources: { cpu: resources.cpu, memoryMb: resources.memory_mb } } : {}),
+    ports: Object.entries(manifest.environment.services).map(([service, value]) => ({
+      service,
+      port: value.port,
+      protocol: value.protocol,
+      websocket: value.websocket,
+    })),
+  };
+}
 
 export class ProjectEnvironmentError extends Error {
   constructor(
@@ -312,6 +338,24 @@ export class ProjectEnvironmentService {
       preparedInput.workspace,
       services(preparedInput.manifest),
     );
+    const setupOrigins = preparedInput.credentials.environment.FACILITY_PREVIEW_ORIGINS;
+    if (setupOrigins) {
+      const origins = JSON.parse(setupOrigins) as Record<string, string>;
+      for (const [service, origin] of Object.entries(origins)) {
+        if (
+          !endpoints.some(
+            (endpoint) =>
+              endpoint.service === service &&
+              endpoint.access === "native" &&
+              endpoint.url === origin,
+          )
+        )
+          throw new ProjectEnvironmentError(
+            "project_preview_origin_changed",
+            "Preview origin changed during setup; refusing to publish a mismatched application",
+          );
+      }
+    }
     await this.db
       .update(workspaces)
       .set({
@@ -440,11 +484,23 @@ export class ProjectEnvironmentService {
       workspaceId: input.workspace.id,
     });
     const names = [...input.manifest.environment.variables, ...input.manifest.environment.secrets];
+    const originsName = "FACILITY_PREVIEW_ORIGINS";
+    const origins = names.includes(originsName)
+      ? await this.runtime.previewOrigins?.(input.workspace, services(input.manifest))
+      : undefined;
+    const originsValue =
+      origins && Object.keys(origins).length ? JSON.stringify(origins) : undefined;
     const values: Record<string, string> = {};
     const missing: Array<{ name: string; operatorName: string }> = [];
     for (const name of names) {
       const operatorName = projectEnvironmentVariableName(input.projectId, name);
-      const value = managed[name] ?? this.environmentValue(input.projectId, name);
+      // This reserved value comes only from the scoped runtime, never operator,
+      // managed or repository credentials. Unsupported/opted-out providers fail
+      // only manifests that explicitly request it; legacy projects are unchanged.
+      const value =
+        name === originsName
+          ? originsValue
+          : (managed[name] ?? this.environmentValue(input.projectId, name));
       if (value === undefined) missing.push({ name, operatorName });
       else values[name] = value;
     }
@@ -455,6 +511,9 @@ export class ProjectEnvironmentService {
         { missing },
       );
     }
+    const environment = { ...input.credentials.environment, ...values, ...managed };
+    delete environment[originsName];
+    if (originsValue !== undefined) environment[originsName] = originsValue;
     return {
       ...input,
       manifest: {
@@ -466,7 +525,7 @@ export class ProjectEnvironmentService {
       },
       credentials: {
         ...input.credentials,
-        environment: { ...input.credentials.environment, ...values, ...managed },
+        environment,
       },
     };
   }
@@ -553,7 +612,6 @@ export class ProjectEnvironmentService {
       input.credentials.environment,
       input.manifest.environment.secrets,
     );
-    if (result.exitCode !== 0) throw commandFailure(phase, script, safeResult);
     await appendWorkspaceEvent(this.db, input.workspace.id, input.orgId, phase, {
       command: script,
       exitCode: result.exitCode,
@@ -561,6 +619,7 @@ export class ProjectEnvironmentService {
       stderr: tail(safeResult.stderr),
       durationMs: result.durationMs,
     });
+    if (result.exitCode !== 0) throw commandFailure(phase, script, safeResult);
     return result;
   }
 

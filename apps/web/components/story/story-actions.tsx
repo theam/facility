@@ -28,6 +28,7 @@ export function StoryActions({
   workspace,
   agents,
   canExecute,
+  canPreview = canExecute,
   canWrite,
   computeState,
   activeTurn,
@@ -39,6 +40,7 @@ export function StoryActions({
   workspace: StoryWorkspace | null;
   agents: StoryAgent[];
   canExecute: boolean;
+  canPreview?: boolean;
   canWrite: boolean;
   computeState?: StoryWorkspace["state"];
   activeTurn: Turn | null;
@@ -101,6 +103,7 @@ export function StoryActions({
           story={story}
           workspace={workspace}
           canExecute={canExecute}
+          canPreview={canPreview}
           canWrite={canWrite}
           computeState={computeState}
         />

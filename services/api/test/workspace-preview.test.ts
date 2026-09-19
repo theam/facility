@@ -1,4 +1,4 @@
-import type { FacilityDb } from "@facility/db";
+import { type FacilityDb, projects, stories, workspaces } from "@facility/db";
 import { describe, expect, it, vi } from "vitest";
 import type { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import type { AppConfig } from "../src/types.js";
@@ -34,26 +34,54 @@ const input = {
   service: "app",
 };
 
-function fixture(state: string, setupChecksum: string | null) {
+function fixture(
+  state: string,
+  setupChecksum: string | null,
+  native = false,
+  projectSettings: Record<string, unknown> = { nativePreviewsEnabled: native },
+) {
   const story = { id: input.storyId, branch: "facility/story-test", deletedAt: null };
   const workspace = {
     id: "ws_test",
+    provider: native ? "vercel" : "fake",
     state,
     setupChecksum,
     externalRef: "compute-test",
     volumeRef: "retained-volume",
     environment: { image: "runner:test" },
   };
-  const rows = [story, workspace];
+  // Resolve reads by table: native open checks the project both before and after preparation.
+  const rows = new Map<unknown, unknown>([
+    [stories, story],
+    [workspaces, workspace],
+    [projects, { settings: projectSettings }],
+  ]);
   const insert = vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) }));
   const db = {
     select: vi.fn(() => ({
-      from: () => ({ where: () => ({ limit: async () => [rows.shift()] }) }),
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () => {
+            if (!rows.has(table)) throw new Error("Unexpected preview fixture table");
+            return [rows.get(table)];
+          },
+        }),
+      }),
     })),
     insert,
   } as unknown as FacilityDb;
   const runtime = { wake: vi.fn().mockResolvedValue({ state: "running" }) };
-  const result = { endpoints: [{ service: "app", port: 3000, url: "http://127.0.0.1:3000" }] };
+  const result = {
+    endpoints: [
+      {
+        service: "app",
+        port: 3000,
+        ...(native
+          ? { access: "native", url: "https://native-one.vercel.run" }
+          : { url: "http://127.0.0.1:3000" }),
+      },
+    ],
+  };
   const environment = {
     prepare: vi.fn().mockResolvedValue(result),
     startPrepared: vi.fn().mockResolvedValue(result),
@@ -62,7 +90,8 @@ function fixture(state: string, setupChecksum: string | null) {
     db,
     {
       publicUrl: "https://api.example.com",
-      previewUrl: "https://preview.example.net",
+      previewUrl: native ? undefined : "https://preview.example.net",
+      nativePreviews: native,
     } as AppConfig,
     runtime as unknown as WorkspaceRuntime,
     { issue: async () => credentials } as unknown as GithubWorkspaceCredentialBroker,
@@ -73,6 +102,47 @@ function fixture(state: string, setupChecksum: string | null) {
 }
 
 describe("preview workspace preparation", () => {
+  it("prepares the first native preview without requiring an existing site or launch session", async () => {
+    const f = fixture("running", null, true);
+    await expect(f.service.open(input)).resolves.toEqual({
+      url: "https://native-one.vercel.run",
+      expiresAt: null,
+    });
+    expect(f.environment.prepare).toHaveBeenCalledOnce();
+    expect(f.insert).not.toHaveBeenCalled();
+  });
+  it.each([
+    {},
+    { nativePreviewsEnabled: false },
+    { nativePreviewsEnabled: "true" },
+  ])("does not prepare a native preview without explicit project opt-in: %j", async (settings) => {
+    const f = fixture("running", null, true, settings);
+    await expect(f.service.open(input)).rejects.toMatchObject({
+      code: "preview_origin_unavailable",
+    });
+    expect(f.runtime.wake).not.toHaveBeenCalled();
+    expect(f.environment.prepare).not.toHaveBeenCalled();
+    expect(f.environment.startPrepared).not.toHaveBeenCalled();
+    expect(f.insert).not.toHaveBeenCalled();
+  });
+  it("rechecks project opt-in after preparing a native preview", async () => {
+    const settings = { nativePreviewsEnabled: true };
+    const f = fixture("running", null, true, settings);
+    f.environment.prepare.mockImplementationOnce(async () => {
+      settings.nativePreviewsEnabled = false;
+      return {
+        endpoints: [
+          { service: "app", port: 3000, access: "native", url: "https://native-one.vercel.run" },
+        ],
+      };
+    });
+    await expect(f.service.open(input)).rejects.toMatchObject({
+      code: "preview_origin_unavailable",
+    });
+    expect(f.runtime.wake).toHaveBeenCalledOnce();
+    expect(f.environment.prepare).toHaveBeenCalledOnce();
+    expect(f.insert).not.toHaveBeenCalled();
+  });
   it.each([
     "running",
     "sleeping",
@@ -181,5 +251,85 @@ describe("preview workspace preparation", () => {
       }),
     ).rejects.toMatchObject({ code: "project_environment_missing" });
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A preview session outlives the request that opened it, so `authorize` re-reads
+ * the opening permission on every use. These drive that read directly: the
+ * integration suite covers the same ground against Postgres, and skips itself
+ * when Postgres is unreachable.
+ */
+function accessFixture(permissions: string[] | undefined) {
+  const session = {
+    id: "psess_0123456789abcdef",
+    orgId: input.orgId,
+    projectId: input.projectId,
+    storyId: input.storyId,
+    userId: input.userId,
+    workspaceId: "ws_test",
+    service: input.service,
+  };
+  // `authorize` reads the session first, then `assertPreviewAccess` reads the
+  // member row behind it. `undefined` stands for no active membership at all.
+  const rows = [session, permissions ? { permissions } : undefined];
+  const chain = () => {
+    const step = {
+      from: () => step,
+      innerJoin: () => step,
+      where: () => step,
+      limit: async () => {
+        const row = rows.shift();
+        return row ? [row] : [];
+      },
+    };
+    return step;
+  };
+  const db = { select: vi.fn(chain) } as unknown as FacilityDb;
+  const service = new WorkspacePreviewService(
+    db,
+    {
+      publicUrl: "https://api.example.com",
+      previewUrl: "https://preview.example.net",
+    } as AppConfig,
+    { wake: vi.fn() } as unknown as WorkspaceRuntime,
+    { issue: async () => credentials } as unknown as GithubWorkspaceCredentialBroker,
+    { load: async () => manifest },
+    {} as unknown as ProjectEnvironmentService,
+  );
+  return { service, session };
+}
+
+describe("preview session authorization", () => {
+  it("authorizes a session whose role still grants workspace execution", async () => {
+    const f = accessFixture(["workspaces:execute"]);
+    await expect(f.service.authorize(f.session.id, "token")).resolves.toMatchObject({
+      storyId: input.storyId,
+    });
+  });
+
+  it.each([["workspaces:*"], ["*"]])("accepts the %s wildcard grant", async (grant) => {
+    const f = accessFixture([grant]);
+    await expect(f.service.authorize(f.session.id, "token")).resolves.toMatchObject({
+      storyId: input.storyId,
+    });
+  });
+
+  it("denies a session whose role lost workspace execution", async () => {
+    // Membership and user stay active; only the permission is gone. Reading the
+    // row and not reading its permissions is what let a demoted member keep
+    // proxying into a live workspace for the rest of the session's hour.
+    const f = accessFixture(["previews:read"]);
+    await expect(f.service.authorize(f.session.id, "token")).rejects.toMatchObject({
+      code: "preview_access_invalid",
+      statusCode: 401,
+    });
+  });
+
+  it("denies a session with no active membership behind it", async () => {
+    const f = accessFixture(undefined);
+    await expect(f.service.authorize(f.session.id, "token")).rejects.toMatchObject({
+      code: "preview_access_invalid",
+    });
   });
 });

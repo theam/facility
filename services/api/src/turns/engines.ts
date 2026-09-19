@@ -1,5 +1,9 @@
 import type { AgentManifest } from "@facility/agents";
-import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
+import type {
+  WorkspaceCommandResult,
+  WorkspaceLocator,
+  WorkspaceRuntime,
+} from "../workspaces/runtime.js";
 
 export type AgentTurnRequest = {
   turnId: string;
@@ -11,6 +15,7 @@ export type AgentTurnRequest = {
   timeoutMs?: number;
   signal?: AbortSignal;
   environment?: Record<string, string>;
+  onEvent?: (event: AgentTurnEvent) => void;
 };
 
 export type AgentTurnEvent = {
@@ -70,17 +75,38 @@ abstract class CliAgentEngine implements AgentEngine {
     args: string[],
     parser: EngineEventParser,
   ): Promise<AgentTurnResult> {
-    const result = await this.runtime.exec(request.workspace, {
-      command: "sh",
-      args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
-      cwd: request.cwd,
-      env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
-      timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
-      signal: request.signal,
-      onOutput: ({ stream, data }) => {
-        if (stream === "stdout") parser.push(data);
-      },
-    });
+    const startedAt = Date.now();
+    parser.onEvent = request.onEvent;
+    let result: WorkspaceCommandResult;
+    try {
+      result = await this.runtime.exec(request.workspace, {
+        command: "sh",
+        args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
+        cwd: request.cwd,
+        env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
+        timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
+        signal: request.signal,
+        onOutput: ({ stream, data }) => {
+          if (stream === "stdout") parser.push(data);
+        },
+      });
+    } catch (error) {
+      if (request.signal?.aborted) throw error;
+      parser.finish();
+      const parsed = parser.result();
+      throw new AgentEngineError(
+        "agent_observation_failed",
+        `${this.name} command observation failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          engine: this.name,
+          nativeSessionId: parsed.sessionId,
+          failure: workspaceFailure(error),
+          events: parsed.events,
+          usage: parsed.usage,
+          durationMs: Date.now() - startedAt,
+        },
+      );
+    }
     parser.finish(result.stdout);
     const parsed = parser.result();
     if (result.exitCode !== 0) {
@@ -212,6 +238,7 @@ export async function stopInterruptedEngineProcess(
     throw new AgentEngineError("turn_id_invalid", "interrupted engine turn id is invalid");
   }
   const result = await runtime.exec(workspace, {
+    resume: false,
     command: "sh",
     args: ["-lc", INTERRUPTED_PROCESS_CLEANUP],
     env: { FACILITY_INTERRUPTED_TURN_ID: turnId },
@@ -251,6 +278,7 @@ type ParsedEngineEvents = {
 abstract class EngineEventParser {
   private buffer = "";
   protected readonly events: AgentTurnEvent[] = [];
+  onEvent?: (event: AgentTurnEvent) => void;
 
   push(chunk: string) {
     this.buffer += chunk;
@@ -279,7 +307,9 @@ abstract class EngineEventParser {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new AgentEngineError("agent_output_invalid", "agent CLI emitted a non-object event");
     }
+    const before = this.events.length;
     this.accept(value as Record<string, unknown>);
+    for (const event of this.events.slice(before)) this.onEvent?.(event);
   }
 
   protected abstract accept(value: Record<string, unknown>): void;
@@ -432,4 +462,49 @@ function nonNegativeInteger(value: unknown) {
 
 function nonNegativeNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Provider responses are reduced to an allowlist; never copy response bodies or headers. */
+function workspaceFailure(error: unknown) {
+  const failure = error as {
+    code?: unknown;
+    status?: unknown;
+    response?: { status?: unknown };
+  } | null;
+  const status = failure?.status ?? failure?.response?.status;
+  return {
+    category: status === 410 ? "workspace_session_lost" : "command_observation_failed",
+    ...(typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599
+      ? { httpStatus: status }
+      : {}),
+  };
+}
+
+export function nativeSessionFromEvent(event: AgentTurnEvent): string | undefined {
+  const value =
+    event.engine === "codex" && event.type === "thread.started"
+      ? event.data.thread_id
+      : event.engine === "claude_code"
+        ? event.data.session_id
+        : undefined;
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(value) ? value : undefined;
+}
+
+export function observationFailureEvidence(value: unknown) {
+  const data = objectValue(value);
+  if (
+    !data ||
+    typeof data.category !== "string" ||
+    !["workspace_session_lost", "command_observation_failed"].includes(data.category)
+  )
+    return undefined;
+  return {
+    category: data.category,
+    ...(typeof data.httpStatus === "number" &&
+    Number.isInteger(data.httpStatus) &&
+    data.httpStatus >= 400 &&
+    data.httpStatus <= 599
+      ? { httpStatus: data.httpStatus }
+      : {}),
+  };
 }

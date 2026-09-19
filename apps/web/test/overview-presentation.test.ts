@@ -5,6 +5,7 @@ import {
   attentionQueue,
   budgetReading,
   environmentsLine,
+  insightsSpendReading,
   relativeTime,
   reviewState,
   spendReading,
@@ -303,5 +304,55 @@ describe("spend readings", () => {
         lastActivityAt: null,
       }),
     ).toBe("No retained workspaces.");
+  });
+});
+
+describe("insights cost coverage", () => {
+  const reading = (
+    succeeded: number,
+    failed: number,
+    canceled: number,
+    measured: number,
+    unpriced: number,
+  ) =>
+    insightsSpendReading({
+      turns: {
+        total: succeeded + failed + canceled + 2,
+        queued: 1,
+        running: 1,
+        succeeded,
+        failed,
+        canceled,
+        successRate: null,
+      },
+      usage: {
+        turns: measured,
+        unpricedTurns: unpriced,
+        costCents: 125,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        durationMs: 0,
+      },
+    });
+  it("labels partial totals when completed turns did not report usage", () => {
+    expect(reading(1, 2, 1, 1, 0)).toMatchObject({
+      kind: "partial",
+      amount: "at least $1.25",
+      note: "1 priced · 3 without a price",
+    });
+  });
+  it("does not count queued or running turns as missing completed usage", () => {
+    expect(reading(1, 0, 0, 1, 0)).toMatchObject({ kind: "known", amount: "$1.25" });
+  });
+  it("combines unpriced measurements with missing usage without double counting", () => {
+    expect(reading(2, 1, 0, 2, 1)).toMatchObject({ note: "1 priced · 2 without a price" });
+  });
+  it("does not present wholly unmeasured work as zero cost", () => {
+    expect(reading(0, 1, 0, 0, 0)).toMatchObject({ kind: "unknown", amount: "unknown" });
+  });
+  it("keeps coverage nonnegative when measurements span a period boundary", () => {
+    expect(reading(0, 0, 0, 1, 0)).toMatchObject({ kind: "known" });
   });
 });

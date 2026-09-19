@@ -188,6 +188,33 @@ it("starts the real authenticated gateway through the SDK user switch without ex
   expect(fixture.stop).not.toHaveBeenCalled();
 });
 
+it("boots the native gateway with a provider origin and redirects visitors to Facility login", async () => {
+  const { gatewayPort, appPort, fixture } = await localProvider(false);
+  fixture.domain = () => "https://native-bootstrap.vercel.run";
+  const runtime = new VercelWorkspaceRuntime(undefined, {
+    apiUrl: "https://api.example.test",
+    webUrl: "https://app.example.test",
+    enabledForWorkspace: async () => true,
+  });
+  await runtime.create({
+    id: fixture.name,
+    image: "runner:test",
+    ports: [{ service: "web", port: appPort }],
+    environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: "x".repeat(32) },
+  });
+  const response = await fetch(`http://127.0.0.1:${gatewayPort}/`, {
+    headers: { accept: "text/html" },
+    redirect: "manual",
+  });
+  expect(response.status).toBe(302);
+  const login = new URL(response.headers.get("location") ?? "");
+  expect(login.origin).toBe("https://app.example.test");
+  expect(login.pathname).toBe(`/api/workspace-preview-login/${fixture.name}/web`);
+  expect(login.searchParams.get("challenge")).toHaveLength(43);
+  expect(response.headers.getSetCookie()[0]).toContain("__Host-facility-preview-login=");
+  expect(fixture.stop).not.toHaveBeenCalled();
+});
+
 it("fails initialization and stops newly allocated compute when the background gateway exits", async () => {
   const { appPort, fixture } = await localProvider(true);
   await expect(

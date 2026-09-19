@@ -472,6 +472,11 @@ export const stories = pgTable(
     pullRequestUrl: text("pull_request_url"),
     titleSource: text("title_source").notNull().default("user"),
     titleGeneration: jsonb("title_generation"),
+    integrationState: jsonb("integration_state")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    integrationStateRevision: integer("integration_state_revision").notNull().default(0),
     createdBy: jsonb("created_by").notNull(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
@@ -494,6 +499,11 @@ export const stories = pgTable(
     ),
     check("stories_provider_check", sql`${table.provider} in ('github', 'manual', 'schedule')`),
     check(
+      "stories_integration_state_check",
+      sql`jsonb_typeof(${table.integrationState}) = 'object' and octet_length(${table.integrationState}::text) <= 16384`,
+    ),
+    check("stories_integration_state_revision_check", sql`${table.integrationStateRevision} >= 0`),
+    check(
       "stories_title_source_check",
       sql`${table.titleSource} in ('user', 'github', 'schedule', 'pending', 'generated', 'fallback')`,
     ),
@@ -511,6 +521,48 @@ export const stories = pgTable(
         projectRepositories.id,
       ],
     }),
+  ],
+);
+
+/** Durable, coalesced lifecycle notification cursor; never project-owned data. */
+export const storyIntegrationNotifications = pgTable(
+  "story_integration_notifications",
+  {
+    storyId: text("story_id")
+      .primaryKey()
+      .references(() => stories.id),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyRevision: text("story_revision"),
+    workspaceRevision: text("workspace_revision"),
+    pending: jsonb("pending")
+      .$type<
+        Array<{
+          eventId: string;
+          type: "story.updated" | "workspace.updated";
+          occurredAt: string;
+          workspaceId: string | null;
+        }>
+      >()
+      .notNull()
+      .default([]),
+    leaseToken: text("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .notNull()
+      .default(sql`'1970-01-01'::timestamptz`),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull().default(0),
+    lastErrorCode: text("last_error_code"),
+    lastDeliveredAt: timestamp("last_delivered_at", { withTimezone: true }),
+  },
+  (table) => [
+    foreignKey({
+      name: "story_integration_notifications_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    index("story_integration_notifications_due_idx").on(table.nextAttemptAt, table.observedAt),
   ],
 );
 
@@ -714,6 +766,7 @@ export const turns = pgTable(
     triggerType: text("trigger_type").notNull(),
     triggerKey: text("trigger_key"),
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
+    retryAfter: timestamp("retry_after", { withTimezone: true }),
     error: text("error"),
     nextEventSeq: bigint("next_event_seq", { mode: "number" }).notNull().default(1),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -1115,6 +1168,8 @@ export const previewSessions = pgTable(
       .references(() => users.id),
     service: text("service").notNull(),
     tokenHash: text("token_hash").notNull(),
+    nativeOrigin: text("native_origin"),
+    browserChallenge: text("browser_challenge"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),

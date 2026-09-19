@@ -3,6 +3,7 @@ import { BudgetForm } from "@/components/insights/budget-form";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
+import { insightsSpendReading } from "@/lib/overview-presentation";
 
 export const metadata = { title: "insights" };
 
@@ -16,6 +17,7 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
     return overview.offline ? <Offline /> : <ErrorNotice message={overview.message} />;
   if (!budget.ok) return budget.offline ? <Offline /> : <ErrorNotice message={budget.message} />;
   const data = overview.data;
+  const spend = insightsSpendReading(data);
   const totalTokens =
     data.usage.inputTokens +
     data.usage.outputTokens +
@@ -43,11 +45,7 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
       </header>
 
       <section className="grid gap-px border border-(--line) bg-(--line) sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCell
-          label="cost · 30d"
-          value={money(data.usage.costCents)}
-          hint={`${data.usage.unpricedTurns} unpriced turns`}
-        />
+        <MetricCell label="cost · 30d" value={spend.amount} hint={spend.note} />
         <MetricCell
           label="tokens · 30d"
           value={compact(totalTokens)}

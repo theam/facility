@@ -79,6 +79,17 @@ function describe(
     };
   }
   switch (type) {
+    case "turn.phase":
+      return { kind: "lifecycle", title: "Run phase", text: text(data.phase) };
+    case "workspace.health":
+      return {
+        kind: data.probe === "unavailable" ? "error" : "lifecycle",
+        title:
+          data.probe === "unavailable"
+            ? "Workspace health probe unavailable"
+            : "Workspace health recorded",
+        text: JSON.stringify(data),
+      };
     case "turn.started":
       return { kind: "lifecycle", title: "Run started", text: null };
     case "turn.succeeded":

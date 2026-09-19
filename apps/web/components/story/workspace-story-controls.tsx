@@ -9,14 +9,15 @@ import { clientApi } from "@/lib/client-api";
 /**
  * Environment actions from the top of the story: previews and browser checks
  * for everyday work, maintenance and deletion set apart so they never compete
- * with it. Permissions, confirmations and the one-time preview grant behave
- * exactly as before; only the arrangement changed.
+ * with it. Preview readers can open prepared native previews without gaining
+ * permission to wake compute, run browser tests or change the environment.
  */
 export function WorkspaceControls({
   projectId,
   story,
   workspace,
   canExecute,
+  canPreview = canExecute,
   canWrite,
   computeState,
 }: {
@@ -24,6 +25,7 @@ export function WorkspaceControls({
   story: WorkspaceStory;
   workspace: StoryWorkspace | null;
   canExecute: boolean;
+  canPreview?: boolean;
   canWrite: boolean;
   computeState?: StoryWorkspace["state"];
 }) {
@@ -135,7 +137,7 @@ export function WorkspaceControls({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        {canExecute
+        {canPreview
           ? services.map((service) => (
               <Button
                 key={service.service}
@@ -222,7 +224,7 @@ export function WorkspaceControls({
           This workspace was permanently deleted. Its conversation and metadata remain as history.
         </p>
       ) : null}
-      {previewService && canExecute && !workspaceDeleted ? (
+      {previewService && canPreview && !workspaceDeleted ? (
         <button
           type="button"
           onClick={() => openPreview(previewService)}

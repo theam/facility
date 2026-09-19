@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { WorkspaceDiagnostics } from "./diagnostics.js";
 
 export type WorkspaceProvider = "docker" | "vercel" | "fake";
 export type WorkspaceState = "creating" | "running" | "sleeping" | "error" | "destroyed";
@@ -30,6 +31,8 @@ export type WorkspaceHandle = WorkspaceLocator & {
 };
 
 export type WorkspaceCommand = {
+  /** Observation and cleanup must not restart stopped compute. */
+  resume?: boolean;
   command: string;
   args?: string[];
   cwd?: string;
@@ -49,7 +52,7 @@ export type WorkspaceCommandResult = {
   durationMs: number;
 };
 
-export type PreviewEndpoint = WorkspacePort & { url: string };
+export type PreviewEndpoint = WorkspacePort & { url: string; access?: "native" };
 
 export type WorkspaceInspection = {
   id: string;
@@ -75,11 +78,23 @@ export type WorkspaceBackup = {
 
 export interface WorkspaceRuntime {
   readonly provider: WorkspaceProvider;
+  /** Pure creation preflight: no provider calls or mutations, safe inside a DB transaction. */
+  validateCreate?(input: Omit<CreateWorkspace, "id">): void;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
   wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle>;
   exec(workspace: WorkspaceLocator, command: WorkspaceCommand): Promise<WorkspaceCommandResult>;
   expose(workspace: WorkspaceLocator, ports: WorkspacePort[]): Promise<PreviewEndpoint[]>;
+  /** Optional setup metadata; does not publish endpoints or mark the application ready. */
+  previewOrigins?(
+    workspace: WorkspaceLocator,
+    ports: WorkspacePort[],
+  ): Promise<Record<string, string>>;
   inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection>;
+  diagnostics?(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<WorkspaceDiagnostics>;
   suspend(workspace: WorkspaceLocator): Promise<void>;
   destroy(workspace: WorkspaceLocator): Promise<void>;
 }

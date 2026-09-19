@@ -114,6 +114,14 @@ command lets Facility reuse healthy services; otherwise it runs `environment.sta
 A sleeping workspace wakes with its retained files. First-time preparation still runs normally;
 use **Clean setup** to apply repository or setup changes that require preparation again.
 
+Opt-in native Vercel previews (`FACILITY_NATIVE_PREVIEWS=1`) use the Sandbox URL
+and Facility login. A user with `previews:read` can open an already-running,
+prepared native preview without execution permission; that action never wakes
+compute or runs setup/start. `workspaces:execute` retains preparation/wake behavior.
+There is no per-story preview ACL. Application authentication remains separate.
+Native URL stability across suspend/resume must be verified with the provider;
+the story lifecycle reports the latest verified origin for callback reconciliation.
+
 ### Clean setup
 
 Prepares the existing workspace with setup forced even when the checksum matches. It does not

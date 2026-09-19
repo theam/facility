@@ -7,6 +7,27 @@ const validEnv = {
 };
 
 describe("Facility 0.12 configuration", () => {
+  it("keeps native previews opt-in and requires HTTPS Vercel configuration", () => {
+    expect(readConfig(validEnv).nativePreviews).toBe(false);
+    const native = {
+      ...validEnv,
+      FACILITY_NATIVE_PREVIEWS: "1",
+      FACILITY_WORKSPACE_DRIVER: "vercel",
+      PUBLIC_URL: "https://api.example.test",
+      WEB_URL: "https://app.example.test",
+    };
+    expect(readConfig(native).nativePreviews).toBe(true);
+    expect(() => readConfig({ ...native, FACILITY_WORKSPACE_DRIVER: "docker" })).toThrow(
+      "Vercel workspace driver",
+    );
+    for (const WEB_URL of [
+      "http://app.example.test",
+      "https://app.example.test/path",
+      "https://app.example.test/",
+      "https://app.vercel.run",
+    ])
+      expect(() => readConfig({ ...native, WEB_URL })).toThrow("HTTPS control-plane origins");
+  });
   it("requires an exact 32-byte base64 master key", () => {
     expect(readConfig(validEnv).secretMasterKey).toBe(validEnv.SECRET_MASTER_KEY);
     for (const value of ["bad", `${validEnv.SECRET_MASTER_KEY}!`]) {

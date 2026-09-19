@@ -2,7 +2,7 @@
 
 import { cx } from "@facility/ui";
 import { useState } from "react";
-import { AiIdentity } from "@/components/ai-identity";
+import { AiMark } from "@/components/ai-identity";
 import { engineIdentity, modelIdentity, modelProductLabel } from "@/lib/ai-identity";
 import type { StoryMessageAuthor, StoryTurnSummary } from "@/lib/api";
 import { authorDescription, initials } from "@/lib/story-presentation";
@@ -74,11 +74,11 @@ export function AgentLine({
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       <span
-        className="inline-flex size-7 shrink-0 items-center justify-center border border-(--accent)/60 bg-(--card)"
+        className="inline-flex size-7 shrink-0 items-center justify-center border border-(--accent)/60 bg-(--card) p-0.5"
         aria-hidden="true"
       >
-        {engine ? (
-          <AiIdentity identity={{ brand: engine.brand, label: "" }} iconClassName="size-4" />
+        {engine?.brand ? (
+          <AiMark brand={engine.brand} className="size-full" />
         ) : (
           <span className="font-mono text-[10px] font-semibold text-(--accent)">AI</span>
         )}

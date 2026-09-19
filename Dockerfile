@@ -8,7 +8,7 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 # Keep a digest-pinned base while still making a reviewed Debian security
 # refresh invalidate BuildKit's cached package layer.
-ARG DEBIAN_SECURITY_REFRESH=20260828
+ARG DEBIAN_SECURITY_REFRESH=20260915
 # The slim base has Node's bundled trust roots but not the system CA package.
 # Bootstrap HTTPS with those roots; apt then installs the maintained OS bundle.
 RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recursive:true}); fs.writeFileSync('/etc/ssl/certs/ca-certificates.crt', require('node:tls').rootCertificates.join('\\n'))" \

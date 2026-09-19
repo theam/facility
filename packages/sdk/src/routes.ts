@@ -42,6 +42,7 @@ export const FACILITY_V1_ROUTES = [
   "PATCH /v1/projects/:projectId/environment/variables",
   "PATCH /v1/projects/:projectId/story-agents/:agentName",
   "PATCH /v1/projects/:projectId/workspace-stories/:storyId/environment/variables",
+  "PATCH /v1/projects/:projectId/workspace-stories/:storyId/integration-state",
   "PATCH /v1/roles/:roleId",
   "POST /v1/keys",
   "POST /v1/members",
