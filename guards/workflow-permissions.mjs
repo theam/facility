@@ -10,21 +10,67 @@ import { applyAllowlist, listFiles, readText } from "./_kit.mjs";
 // is justified; document why.
 const ALLOWLIST = {};
 
+/**
+ * Check whether workflow YAML content declares explicit top-level permissions.
+ *
+ * Top-level permissions must be declared as a root mapping key (at column 0,
+ * unindented). Permissions declared only inside individual jobs (indented under
+ * `jobs.<job>.permissions`) do not protect newly added or unspecified jobs from
+ * inheriting default repository token scopes, and are not accepted as a
+ * substitute for top-level permissions.
+ */
+export function hasTopLevelPermissions(content) {
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].replace(/\r$/, "");
+
+    // Top-level key must start at column 0 without leading whitespace
+    const match = line.match(/^([a-zA-Z0-9_-]+)\s*:(.*)$/);
+    if (!match) continue;
+
+    const key = match[1];
+    if (key !== "permissions") continue;
+
+    const rest = match[2].trim();
+    // Strip comments from the line
+    const valueWithoutComment = rest.replace(/#.*$/, "").trim();
+
+    if (valueWithoutComment.length > 0) {
+      // Inline permissions (e.g. "permissions: contents: read", "permissions: {}", "permissions: read-all")
+      return true;
+    }
+
+    // Block mapping: check subsequent non-empty, non-comment lines
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const nextLine = lines[j].replace(/\r$/, "");
+      const trimmed = nextLine.trim();
+      if (trimmed === "" || trimmed.startsWith("#")) continue;
+
+      // If the next meaningful line is indented, it's a child of permissions
+      if (/^[ \t]/.test(nextLine)) {
+        return true;
+      }
+      // If it drops back to column 0, the permissions block was empty
+      break;
+    }
+    return false;
+  }
+  return false;
+}
+
 export default {
   name: "workflow-permissions",
   description: "every GitHub Actions workflow declares explicit top-level permissions",
-  run() {
+  run(workflowsDir = ".github/workflows") {
     const violations = [];
-    for (const file of listFiles(".github/workflows", [".yml", ".yaml"])) {
+    for (const file of listFiles(workflowsDir, [".yml", ".yaml"])) {
       const content = readText(file);
-      const lines = content.split("\n");
-      const hasTopLevel = lines.some((line) => /^permissions:\s*/.test(line));
-
-      if (!hasTopLevel) {
+      if (!hasTopLevelPermissions(content)) {
+        const normalizedFile = file.replace(/\\/g, "/");
         violations.push({
-          file,
+          file: normalizedFile,
           line: 1,
-          key: file,
+          key: normalizedFile,
           message:
             'workflow does not declare explicit top-level permissions (e.g. "permissions: contents: read" or "permissions: {}")',
         });
