@@ -57,6 +57,12 @@ Agents share the conversation and files, but each turn still records which agent
 from `architect` to `builder` does not create another workspace or copy a summary into a separate
 thread.
 
+Each turn's prompt bounds the shared conversation to a fixed character budget. Below that budget,
+the full conversation is included. Above it, Facility keeps an opening anchor — the oldest
+messages, where the original request lives — plus the most recent messages, and states what it
+left out instead of cutting a message in half. This matters most when the transcript is the only
+continuity available: switching agents, or resuming after a corrupt native session is replaced.
+
 Native engine continuation is compatible-session specific. Facility resumes the active session for
 the same workspace, agent name, engine, and model. Choosing another agent or changing its engine or
 model starts or resumes that configuration's own session while retaining every prior session and
