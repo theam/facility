@@ -24,6 +24,9 @@ const KIND = "workspace-v2";
 export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "docker" as const;
 
+  /** Workspace container name → the container start already proven ready. */
+  private readonly readyStarts = new Map<string, string>();
+
   constructor(private readonly docker = new Docker()) {}
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
@@ -35,7 +38,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     if (existing) {
       this.assertOwned(existing, input.id, names.volume);
       if (!existing.State?.Running) await this.docker.getContainer(existing.Id).start();
-      await this.waitUntilReady(this.docker.getContainer(existing.Id));
+      await this.ensureReady(names.container, this.docker.getContainer(existing.Id));
       return this.handle(input, existing.Id, names);
     }
 
@@ -79,7 +82,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     });
     try {
       await container.start();
-      await this.waitUntilReady(container);
+      await this.ensureReady(names.container, container);
     } catch (error) {
       await container.remove({ force: true, v: false }).catch(() => undefined);
       throw error;
@@ -92,7 +95,9 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     const existing = await this.inspectContainer(names.container);
     if (!existing) return this.create(workspace);
     this.assertOwned(existing, workspace.id, names.volume);
-    if (!existing.State?.Running) await this.docker.getContainer(existing.Id).start();
+    const container = this.docker.getContainer(existing.Id);
+    if (!existing.State?.Running) await container.start();
+    await this.ensureReady(names.container, container);
     return this.handle(workspace, existing.Id, names);
   }
 
@@ -244,6 +249,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
 
   async destroy(workspace: WorkspaceLocator): Promise<void> {
     const names = this.assertLocator(workspace);
+    this.readyStarts.delete(names.container);
     const current = await this.inspectContainer(names.container);
     if (current) {
       this.assertOwned(current, workspace.id, names.volume);
@@ -402,6 +408,26 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     await killer.start({}).catch(() => undefined);
   }
 
+  /**
+   * A started container is not yet a usable workspace: the bootstrap removes its
+   * readiness marker on every start, then brings up dockerd, the socket
+   * permissions and the preview gateways. Readiness only ever moves forward
+   * within one start, so each start is proven once and then remembered.
+   */
+  private async ensureReady(containerName: string, container: Docker.Container) {
+    const state = await container.inspect();
+    if (!state.State.Running) {
+      throw new WorkspaceRuntimeError(
+        "workspace_initialize_failed",
+        `workspace bootstrap exited with status ${state.State.ExitCode}`,
+      );
+    }
+    const start = `${state.Id}:${state.State.StartedAt}`;
+    if (this.readyStarts.get(containerName) === start) return;
+    await this.waitUntilReady(container);
+    this.readyStarts.set(containerName, start);
+  }
+
   private async waitUntilReady(container: Docker.Container) {
     const deadline = Date.now() + 180_000;
     while (Date.now() < deadline) {
@@ -461,7 +487,15 @@ function workspaceBootstrapCommand(input: CreateWorkspace) {
     "rm -f /workspace/.facility/runtime-ready",
     "mkdir -p /workspace/.facility/home /workspace/.facility/claude /workspace/.facility/codex /workspace/.facility/docker",
     "chown -R node:node /workspace",
-    "rm -f /var/run/docker.sock",
+    // A stopped container keeps its writable layer, so the previous start's
+    // runtime state is still on disk when it is woken. dockerd refuses to boot
+    // while /var/run/docker.pid exists, and its exec root holds containerd's
+    // stale socket and pidfile too — the daemon would wait for a peer that
+    // stopped with the container. Nothing is running yet, because this script
+    // is the container's own entrypoint, so all of it is stale by construction.
+    // Compute replacement never hit this: it discards the layer. Suspend and
+    // wake reuse it, which is the path this clears.
+    "rm -rf /var/run/docker /var/run/docker.pid /var/run/docker.sock",
     "dockerd --host=unix:///var/run/docker.sock --data-root=/workspace/.facility/docker --storage-driver=vfs >/workspace/.facility/dockerd.log 2>&1 &",
     "attempt=0; until docker info >/dev/null 2>&1; do attempt=$((attempt + 1)); test $attempt -lt 120; sleep 1; done",
     "chown root:node /var/run/docker.sock",
