@@ -64,7 +64,7 @@ Use `facility_get_story` to inspect status and `next_operations`. Use
 `facility_get_conversation` with its cursor for durable message history. Each agent message is the
 run's final response; progress messages and logs live in the run's activity
 (`/turns/:turnId/activity`). The UI renders the same conversation as request-and-response
-exchanges and can continue it under the current user's project membership.
+exchanges and can continue it under the current user's organization role.
 
 The story timeline is the review path across the whole delivery. It shows which agent, model,
 session, workspace, branch, and initial SHA started each turn; the final SHA, commits, files, and
