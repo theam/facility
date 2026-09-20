@@ -318,7 +318,7 @@ Restart `pnpm dev` after changing `.env`. For production authentication, configu
 OIDC and bind the first owner and GitHub installation:
 
 ```bash
-pnpm exec facility instance bootstrap \
+node packages/cli/bin/facility.mjs instance bootstrap \
   --org-name "My Org" --org-slug my-org \
   --owner-email you@example.com --owner-name "Your Name" \
   --github-user-id <user-id> --github-login <login> \
@@ -363,14 +363,14 @@ The pull request adds the repository contracts Facility needs:
 The local CLI writes the same files:
 
 ```bash
-pnpm exec facility init \
+node packages/cli/bin/facility.mjs init \
   --repo=acme/app \
   --provision='pnpm install --frozen-lockfile' \
   --start='docker compose up -d' \
   --preview-readiness-command='curl --fail http://localhost:3000/health' \
   --service-port=3000
 
-pnpm exec facility doctor
+node packages/cli/bin/facility.mjs doctor
 ```
 
 Existing files are preserved unless `--force` is explicit.
