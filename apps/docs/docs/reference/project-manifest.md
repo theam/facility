@@ -127,8 +127,9 @@ Facility's preview handoff provides authenticated browser access.
 ## Browser test artifacts
 
 When `browser_test` runs, Facility sets `FACILITY_ARTIFACT_DIR`. Write screenshots, traces, logs,
-and reports beneath that directory. Facility records the resulting files as story artifacts and
-returns their identifiers and URIs with the operation result.
+and reports beneath that directory. Facility records the resulting files as story artifacts,
+including files written before a failed command. Failed-test artifacts remain on the story timeline
+for retrieval afterward; successful operations also return their identifiers and URIs.
 
 ## Validation
 
