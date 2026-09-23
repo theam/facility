@@ -56,7 +56,7 @@ function checkAgent(dir, name) {
   if (!source.startsWith("---\n") || !/\n---\n[\s\S]*\S/.test(source)) return failed(relative, "invalid frontmatter or empty prompt");
   if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(source)) return failed(relative, `name must be ${name}`);
   if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(source)) return failed(relative, "engine must be claude_code or codex");
-  if (!/^model:\s*\S+\s*$/m.test(source)) return failed(relative, "model is missing");
+  if (!agentModel(source)) return failed(relative, "model is missing or invalid");
   if (!/^triggers:\s*$/m.test(source) || !/^\s{2}- type:\s*(?:manual|schedule|github)\s*$/m.test(source)) {
     return failed(relative, "at least one supported trigger is required");
   }
@@ -70,6 +70,44 @@ function passed(label, detail) {
 
 function failed(label, detail) {
   return { label, ok: false, detail };
+}
+
+const MODEL_MAX = 160;
+
+function agentModel(source) {
+  const match = /^model:\s*(.*)$/m.exec(source);
+  if (!match) return null;
+  const value = yamlStringScalar(match[1]);
+  if (value === null || value.length < 1 || value.length > MODEL_MAX) return null;
+  return value;
+}
+
+function yamlStringScalar(raw) {
+  const source = raw.trim();
+  if (!source || source.startsWith("#")) return null;
+  if (source.startsWith('"')) return yamlDoubleQuoted(source);
+  if (source.startsWith("'")) return yamlSingleQuoted(source);
+  if (source.startsWith("|") || source.startsWith(">")) return null;
+  const comment = /[\t ]#/.exec(source);
+  const plain = (comment ? source.slice(0, comment.index) : source).trim();
+  return plain || null;
+}
+
+function yamlDoubleQuoted(source) {
+  const match = /^("(?:\\.|[^"\\\n])*")\s*(?:#.*)?$/.exec(source);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function yamlSingleQuoted(source) {
+  const match = /^('(?:[^']|'')*')\s*(?:#.*)?$/.exec(source);
+  if (!match) return null;
+  return match[1].slice(1, -1).replaceAll("''", "'");
 }
 
 function escapeRegExp(value) {
