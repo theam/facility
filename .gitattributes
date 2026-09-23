@@ -1,0 +1,18 @@
+# Normalize line endings to LF for every tracked text file, regardless of a
+# contributor's local core.autocrlf setting. Several guards and tests compare
+# file content or hash it (e.g. guards/markdown-links.mjs, patches applied via
+# pnpm, CI-workflow regex assertions in scripts/release*.test.mjs) and break or
+# silently diverge when a checkout introduces CRLF bytes that were not in the
+# reviewed source.
+* text=auto eol=lf
+
+# Explicitly binary — never subject to line-ending normalization or diffing.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

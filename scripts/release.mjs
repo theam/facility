@@ -129,7 +129,7 @@ export function inspectTarball(tarball, { exec = execFileSync } = {}) {
   let manifest;
   try {
     manifest = JSON.parse(
-      exec("tar", ["-xOf", absolute, "package/package.json"], { encoding: "utf8" }),
+      exec("tar", ["--force-local", "-xOf", absolute, "package/package.json"], { encoding: "utf8" }),
     );
   } catch (error) {
     throw new Error(`cannot read package/package.json from ${absolute}: ${error.message}`);
