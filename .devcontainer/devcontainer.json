@@ -1,0 +1,34 @@
+{
+  "name": "Facility Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24-bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:1": {
+      "version": "latest",
+      "moby": true
+    }
+  },
+
+  "forwardPorts": [3400, 4400, 3500, 5461],
+  "portsAttributes": {
+    "3400": { "label": "Web App", "onAutoForward": "notify" },
+    "4400": { "label": "API Server", "onAutoForward": "notify" },
+    "3500": { "label": "Documentation", "onAutoForward": "notify" },
+    "5461": { "label": "PostgreSQL", "onAutoForward": "ignore" }
+  },
+
+  "postCreateCommand": "sudo npm install -g pnpm@11.20.0 && pnpm install --frozen-lockfile",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "biomejs.biome",
+        "dbaeumer.vscode-eslint",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens"
+      ]
+    }
+  },
+
+  "remoteUser": "node"
+}
