@@ -1,23 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import { Sandbox } from "@vercel/sandbox";
-import {
-  COMMAND_JOURNAL_SEGMENT_BYTES,
-  COMMAND_JOURNAL_WRAPPER,
-  CommandJournal,
-} from "./command-journal.js";
-import {
-  CommandLogReplay,
-  isTransientObservationError,
-  retryObservation,
-} from "./command-observation.js";
+import { COMMAND_JOURNAL_WRAPPER } from "./command-journal.js";
+import { CommandLogReplay, retryObservation } from "./command-observation.js";
 import {
   parseWorkspaceHealth,
   WORKSPACE_HEALTH_COMMAND,
   type WorkspaceDiagnostics,
 } from "./diagnostics.js";
 import { nativePreviewOrigin } from "./native-preview.js";
+import { observeJournalCommand } from "./observe-journal-command.js";
 import {
   assertWorkspaceId,
   type CreateWorkspace,
@@ -155,7 +147,6 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
           })
         : await sandbox.asUser("node").runCommand(submission);
     const observation = new AbortController();
-    const logsFinished = new AbortController();
     const deadline = setTimeout(
       () =>
         observation.abort(
@@ -182,71 +173,55 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     };
     command.signal?.addEventListener("abort", cancel, { once: true });
     if (canceled) cancel();
-    const logs = (async () => {
-      if (journalPath) {
-        const journal = new CommandJournal(({ stream, data }) => {
-          (stream === "stdout" ? stdoutStream : stderrStream).write(data);
+    if (journalPath) {
+      try {
+        const result = await observeJournalCommand({
+          command: running,
+          session,
+          path: journalPath,
+          signal: observation.signal,
+          onOutput: ({ stream, data }) =>
+            (stream === "stdout" ? stdoutStream : stderrStream).write(data),
+          onObservation: (event) => {
+            console.info(
+              JSON.stringify({
+                event: "workspace.command_observation",
+                workspaceId: workspace.id,
+                commandId: running.cmdId,
+                ...event,
+              }),
+            );
+            command.onObservation?.(event);
+          },
         });
-        let journalSegment = 0;
-        const readJournal = async () => {
-          for (let attempt = 0; ; attempt += 1) {
-            try {
-              // Bind reads to the original VM: diagnostics must never resume a stopped one.
-              const data = await session.readFileToBuffer(
-                { path: `${journalPath}.${journalSegment}` },
-                { signal: AbortSignal.any([observation.signal, AbortSignal.timeout(10_000)]) },
-              );
-              observation.signal.throwIfAborted();
-              if (!data) {
-                if (completed && journalSegment === 0)
-                  throw new Error("Command journal is unavailable");
-                return;
-              }
-              journal.restart();
-              journal.push(data.toString("utf8"));
-              if (data.length >= COMMAND_JOURNAL_SEGMENT_BYTES && data.at(-1) === 10) {
-                journalSegment += 1;
-                attempt = -1;
-                continue;
-              }
-              return;
-            } catch (error) {
-              await retryObservation(error, attempt, observation.signal);
-            }
-          }
+        completed = true;
+        return {
+          ...result,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
         };
-        try {
-          for await (const log of running.logs({
-            signal: AbortSignal.any([observation.signal, logsFinished.signal]),
-          })) {
-            observation.signal.throwIfAborted();
-            if (log.stream === "stdout") journal.push(log.data);
-          }
-        } catch (error) {
-          if (observation.signal.aborted) throw error;
-          const status =
-            (error as { status?: number; response?: { status?: number } })?.status ??
-            (error as { response?: { status?: number } })?.response?.status;
-          // Never turn a denied read into an alternate privileged request.
-          if (status && !isTransientObservationError(error)) throw error;
-          console.info(
-            JSON.stringify({
-              event: "workspace.command_journal_recovery",
-              commandId: running.cmdId,
-              workspaceId: workspace.id,
-            }),
+      } catch (error) {
+        observation.abort(error);
+        await kill().catch(() => {
+          console.warn(
+            JSON.stringify({ event: "workspace.command_cleanup_failed", commandId: running.cmdId }),
           );
-        }
-        // The volume is authoritative, including a lost final log chunk. A
-        // truncated/replayed provider stream never causes command resubmission.
-        do {
-          await readJournal();
-          if (!completed) await delay(2_000, undefined, { signal: observation.signal });
-        } while (!completed);
-        await readJournal();
-        journal.finish();
-        return;
+        });
+        if (canceled)
+          throw new WorkspaceRuntimeError(
+            "workspace_command_canceled",
+            "workspace command was canceled",
+          );
+        throw observation.signal.reason;
+      } finally {
+        clearTimeout(deadline);
+        observation.abort();
+        command.signal?.removeEventListener("abort", cancel);
+        stdoutStream.end();
+        stderrStream.end();
       }
+    }
+    const logs = (async () => {
       const replay = new CommandLogReplay();
       for (let attempt = 0; ; attempt += 1) {
         replay.restart();
@@ -274,7 +249,6 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
             signal: AbortSignal.any([observation.signal, timeout]),
           });
           completed = true;
-          logsFinished.abort();
           return result;
         } catch (error) {
           if (timeout.aborted && !observation.signal.aborted) {

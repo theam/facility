@@ -11,6 +11,7 @@ describe("command observation recovery", () => {
     new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }),
     { response: { status: 503 } },
     { status: 429 },
+    new DOMException("The operation was aborted due to timeout", "TimeoutError"),
   ])("recognizes recoverable read failures", (error) => {
     expect(isTransientObservationError(error)).toBe(true);
   });
@@ -22,6 +23,8 @@ describe("command observation recovery", () => {
     new SyntaxError("invalid provider response"),
     new TypeError("invalid argument"),
     { name: "StreamError", code: "session_stopped" },
+    new DOMException("Canceled", "AbortError"),
+    Object.assign(new DOMException("Timed out", "TimeoutError"), { status: 403 }),
   ])("preserves denial and permanent errors", (error) => {
     expect(isTransientObservationError(error)).toBe(false);
   });

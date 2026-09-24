@@ -345,7 +345,14 @@ describe("Vercel persistent workspace runtime", () => {
     sandboxApi.get.mockResolvedValue({
       ...fakeSandbox(),
       asUser,
-      currentSession: () => ({ readFileToBuffer: async () => Buffer.from(frames.join("")) }),
+      currentSession: () => ({
+        readFileToBuffer: async () =>
+          Buffer.from(
+            frames.join("") +
+              JSON.stringify({ seq: frames.length, type: "exit", exitCode: 0, durationMs: 12 }) +
+              "\n",
+          ),
+      }),
     });
     const onOutput = vi.fn();
     await expect(

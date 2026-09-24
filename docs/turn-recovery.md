@@ -64,10 +64,38 @@ Long-running Vercel agent commands write a private, ordered output journal under
 numbers and byte encoding make reconnection independent of provider log history
 and chunk boundaries. If the stream disconnects or is truncated, observation reads
 the journal on the original VM and continues without submitting another command.
-A final journal read includes output lost at command completion. These files contain
+The wrapper also saves an ordered exit event with its exit code and duration. A
+complete streamed journal finishes observation without another file read or a
+successful metadata request. After a dropped or incomplete stream, journal reads
+recover missing events by sequence without delivering the same bytes twice. If the
+wrapper is killed before writing its exit event, provider completion remains a
+fallback; a successful provider exit with a missing journal exit is reported as
+incomplete evidence, not silent success. These files contain
 raw engine output, have mode `0600`, and remain with the workspace: treat them as
 sensitive recovery evidence, not public issue attachments. Include them in the
 workspace's storage retention policy.
+
+Individual journal reads have a 30-second request deadline. Timeouts and transient
+network/server errors retry the same read with backoff capped at 30 seconds until
+the existing total command deadline or explicit cancellation. The deadline of one
+read does not terminate the command. Silence in the stream is not a failure, and
+expiration of a bounded completion long poll simply renews that poll.
+
+`engine.observation` records recovery, restored observation and permanent read
+failures in the conversation's run details. The evidence includes operation,
+attempt, elapsed time, next sequence and an allowlisted reason or HTTP status;
+provider bodies, headers, paths and command arguments are excluded. Repeated
+recovery notices are limited to one per operation per 30 seconds. Infrastructure
+logs mirror these transitions as `workspace.command_observation`. Observation
+recovery does not renew the turn lease independently of the worker heartbeat.
+
+HTTP authorization failures and missing/expired sessions remain terminal, even
+when their nested cause looks transient. Malformed durable output and missing
+sequences are also terminal. Recovery never retries command submission, resumes a
+stopped VM or switches to a new session. Temporary read failure can leave a command
+working without visible progress until observation returns; the configured total
+execution deadline still bounds this period and its compute cost. It does not
+promise to survive loss of the worker or the workspace volume.
 
 Terminal observation failures request termination of the original command. Process
 cleanup never resumes stopped compute. A failed turn with no active turn, queued

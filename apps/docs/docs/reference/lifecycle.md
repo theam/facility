@@ -82,11 +82,16 @@ therefore cannot reuse runc process state from an earlier VM, while Docker's per
 in `/workspace/.facility/docker`. Container restart policies still apply: a container deliberately
 stopped with `unless-stopped` remains stopped. A missing or malformed boot ID prevents startup.
 
-Vercel agent commands start once and are tracked by bounded completion requests to the same command
-while their output streams. Each wait is limited to 30 seconds; an expired wait is renewed
-without restarting the command. Tracking does not hold one HTTP request open for the entire
-agent run, so a long command can finish within its configured provider timeout. Cancel still
-signals the existing command; a failed status or output read is reported without resubmitting it.
+Vercel agent commands start once and emit sequenced output and exit events to both a live stream
+and a durable journal in their workspace. An exit event can complete observation even when the
+provider's status endpoint is unavailable. If streaming disconnects, Facility reads the journal
+and skips events already delivered, preserving output order without restarting the command.
+
+Each journal read and completion wait is limited to 30 seconds. An expired completion wait is
+renewed; transient read failures retry with backoff until the command's overall deadline or an
+explicit cancellation. A read timeout alone does not stop the agent. Permanent access failures
+and invalid journal data remain errors. Run details record when observation is recovering or
+restored, including the operation, retry count, elapsed time, and next sequence number.
 
 ## Operations
 

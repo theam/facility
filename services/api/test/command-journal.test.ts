@@ -5,6 +5,32 @@ const frame = (seq: number, stream: string, data: Buffer | string) =>
   `${JSON.stringify({ seq, stream, data: Buffer.from(data).toString("base64") })}\n`;
 
 describe("durable command output", () => {
+  it("recovers the completion event in order and tolerates replay without duplicating output", () => {
+    const output: string[] = [];
+    const journal = new CommandJournal(({ data }) => output.push(data));
+    const events =
+      frame(0, "stdout", "done") +
+      `${JSON.stringify({ seq: 1, type: "exit", exitCode: 7, durationMs: 123 })}\n`;
+    journal.push(events);
+    journal.restart();
+    journal.push(events);
+    journal.finish();
+    expect(journal.result).toEqual({ exitCode: 7, durationMs: 123 });
+    expect(journal.nextSequence).toBe(2);
+    expect(output).toEqual(["done"]);
+    expect(() => journal.push(frame(2, "stdout", "late"))).toThrow("after exit");
+  });
+
+  it.each([
+    { seq: 0, type: "exit", exitCode: -1, durationMs: 1 },
+    { seq: 0, type: "exit", exitCode: 256, durationMs: 1 },
+    { seq: 0, type: "exit", exitCode: 0, durationMs: -1 },
+    { seq: 0, type: "exit", exitCode: 0 },
+  ])("rejects malformed completion events", (event) => {
+    const journal = new CommandJournal(() => undefined);
+    expect(() => journal.push(`${JSON.stringify(event)}\n`)).toThrow("Invalid");
+    expect(journal.result).toBeUndefined();
+  });
   it("replays frames across changing chunks without repeating text or breaking UTF-8", () => {
     const output: string[] = [];
     const journal = new CommandJournal(({ data }) => output.push(data));
