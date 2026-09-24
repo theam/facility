@@ -70,9 +70,10 @@ export class CommandReadObserver {
         return result;
       } catch (error) {
         this.signal.throwIfAborted();
-        // A long poll naturally expires while the command is still working.
-        if (operation === "completion" && timeout.signal.aborted) continue;
         const transient = isTransientObservationError(error);
+        // A long poll naturally expires while the command is still working.
+        // A simultaneous permanent response must still take precedence.
+        if (operation === "completion" && timeout.signal.aborted && transient) continue;
         if (!transient || Date.now() - lastReport >= 30_000) {
           const failure = error as { status?: number; response?: { status?: number } };
           const status = failure?.status ?? failure?.response?.status;
