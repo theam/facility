@@ -73,6 +73,32 @@ the same policy and records path-based skips only when execution boundaries are 
 
 ## UI and browser verification
 
+The workspace lifecycle has two Chromium suites. Install the browser once with
+`pnpm --filter @facility/web exec playwright install chromium`, then run:
+
+```bash
+pnpm --filter @facility/sdk build
+pnpm --filter @facility/web test:e2e
+pnpm exec turbo run build --filter='@facility/api^...'
+DATABASE_URL=postgres://facility:facility@127.0.0.1:5461/facility_test \
+pnpm --filter @facility/web test:e2e:integration
+```
+
+The first suite starts the real Next app and a loopback HTTP fixture for permission-based
+visibility, creation, continuation after suspension, archive/restore, deletion confirmation,
+and failed-operation retries. The second uses the real API, session authorization, PostgreSQL,
+and `FakeWorkspaceRuntime`: it checks on-disk untracked files and Claude/Codex session markers
+before and after UI operations. Catalog and manifest reads and turn execution are deterministic
+fakes; this does not prove hosted engine resume or the 14-day retention soak tracked by #284.
+
+Use a disposable local `facility_test` or `facility_ws` database; the integration fixture refuses
+other database names and non-loopback hosts. It migrates/seeds that database and adds isolated
+fixture users/projects. Run the suites sequentially because both use the web app's `.next` output.
+Ports 3491/4491 and 3492/4492 must be free. The suites start their own servers, do not reuse a live
+development session, and need no provider credentials or internet access after dependencies and
+Chromium are installed. CI runs both in the verification job. Failure traces are in
+`apps/web/test-results`; inspect them with `pnpm --filter @facility/web exec playwright show-trace`.
+
 Type checking and rendering tests do not prove a user flow. For a UI change, start `pnpm dev` and
 exercise the changed path in a browser. Cover loading, empty, error, denied, and successful states
 that the change can produce. For story and preview work, use a disposable repository and the actual
