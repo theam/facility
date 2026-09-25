@@ -421,6 +421,12 @@ export type OverviewAttentionItem = ArrayItem<ProjectOverview["attention"]["item
 export type OverviewReviewItem = ArrayItem<ProjectOverview["review"]["items"]>;
 export type OverviewRecentTurn = ArrayItem<ProjectOverview["recent"]["items"]>;
 export type OverviewBacklogStory = ArrayItem<ProjectOverview["backlog"]["ready"]>;
+export type ProjectAttention = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/attention"
+>;
+export type AttentionNotice = ArrayItem<ProjectAttention["items"]>;
+export type AttentionQuery = FacilityGeneratedQuery<"GET", "/v1/projects/{projectId}/attention">;
 export type ProjectBacklog = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}/backlog">;
 export type BacklogItem = ArrayItem<ProjectBacklog["items"]>;
 export type BacklogPhase = BacklogItem["phase"];

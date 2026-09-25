@@ -13,16 +13,28 @@ provider, wakes a suspended machine, or starts a turn.
 
 ## What each section means
 
-**Needs your attention** lists everything that is blocked on a person, in the order to handle it:
+**Needs your attention** counts everything that is blocked on a person and shows the latest five:
 
 - an agent that asked a question and is waiting for a reply;
 - a failed or interrupted agent run that can be retried or dismissed;
 - an open pull request whose checks failed; and
 - a monthly budget that is exhausted or near its warning threshold.
 
-Only open notices appear. Resolved and dismissed notices stay in each story's history. Reply,
-retry, and dismiss use the same operations as the story page and require the
-`workspaces:execute` permission.
+A budget alert comes first because it stops every agent; everything else is newest first. Each
+entry keeps its verb inline: reply, retry, dismiss, or open the pull request or budget. **View all**
+opens the attention page with every notice. Reply, retry, and dismiss use the same operations as
+the story page and require the `workspaces:execute` permission.
+
+## Read every notice
+
+The attention page (`/projects/{projectId}/attention`) lists every notice newest first, 25 per page.
+Search matches the notice and its story title; kind filters narrow it to, for example, agents
+waiting for a reply or failed runs. The **Open** view starts with the pull requests whose checks
+failed and any budget alert, so it holds everything the overview counts. Those entries are live
+state and clear on their own once the checks pass or the budget allows new turns.
+
+The **Resolved** view keeps answered, retried, and dismissed notices readable with how and when
+each one closed. Resolved notices offer no actions; open the story to continue the work.
 
 **Running now** shows agent turns in the `running` state, how long they have been running, and
 what activated them. Queued turns are listed separately: a queued turn is waiting for the
@@ -64,3 +76,11 @@ charges are not included; each story's environment view reports what the provide
 requires `projects:read`; the `spend.agents` and `spend.budget` sections report
 `available: false` with `reason: "permission"` when the principal lacks the matching read
 permission. Every list is scoped to the project and organization of the principal.
+
+`GET /v1/projects/{projectId}/attention` returns the notices behind the attention page, newest
+first. It accepts `status` (`open` by default, `resolved`, or `all`), repeatable or comma-separated
+`kind`, `q` for words, and `limit`/`offset` pagination (25 by default, at most 100). The response
+carries `total` for the filtered set, `counts` of open and resolved notices matching the search
+and kind filters, and `facets.kinds` for the chosen status and search. Each open notice names the
+action it accepts (`reply`, `retry`, or `dismiss`); resolved notices carry `resolution` and
+`resolvedAt` instead. It requires `projects:read`. MCP clients use `facility_list_attention`.

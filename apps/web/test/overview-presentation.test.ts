@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { OverviewReviewItem, ProjectOverview } from "../lib/api";
 import {
   activitySummary,
-  attentionQueue,
+  attentionNotice,
   budgetReading,
   environmentsLine,
   insightsSpendReading,
+  latestAttention,
   relativeTime,
+  resolutionLabel,
   reviewState,
   spendReading,
   storySource,
@@ -69,85 +71,94 @@ describe("overview activity", () => {
   });
 });
 
-describe("attention queue", () => {
-  it("orders facility notices before failing checks and budget alerts, with the right action", () => {
-    const queue = attentionQueue(
+const notice = (
+  id: string,
+  createdAt: string,
+  overrides: Partial<ProjectOverview["attention"]["items"][number]> = {},
+): ProjectOverview["attention"]["items"][number] => ({
+  id,
+  storyId: `story-${id}`,
+  storyTitle: `Story ${id}`,
+  storyStatus: "attention",
+  turnId: `turn-${id}`,
+  kind: "turn_error",
+  title: "builder failed",
+  detail: "Error: fetch failed",
+  createdAt,
+  action: "retry",
+  ...overrides,
+});
+const exceeded: ProjectOverview["spend"] = {
+  agents: { available: false, reason: "permission" },
+  budget: {
+    available: true,
+    state: "exceeded",
+    enabled: true,
+    monthlyLimitCents: 1000,
+    warningPercent: 80,
+    windowStart: "2026-09-01T00:00:00Z",
+    windowEnd: "2026-10-01T00:00:00Z",
+    spentCents: 1200,
+    remainingCents: 0,
+    percentUsed: 120,
+  },
+};
+
+describe("latest attention", () => {
+  it("leads with a blocking budget, then the newest notices and failing checks, each with its verb", () => {
+    const { entries, total } = latestAttention(
       {
         attention: {
           openCount: 2,
           items: [
-            {
-              id: "a1",
-              storyId: "s1",
-              storyTitle: "Story one",
-              storyStatus: "attention",
+            notice("a1", "2026-09-10T11:00:00Z", {
               turnId: null,
               kind: "agent_waiting",
               title: "builder needs a reply",
               detail: "Which database?",
-              createdAt: "2026-09-10T11:00:00Z",
               action: "reply",
-            },
-            {
-              id: "a2",
-              storyId: "s2",
-              storyTitle: "Story two",
-              storyStatus: "attention",
-              turnId: "t2",
-              kind: "turn_error",
-              title: "builder failed",
-              detail: "Error: fetch failed",
-              createdAt: "2026-09-10T10:00:00Z",
-              action: "retry",
-            },
+            }),
+            notice("a2", "2026-09-10T10:00:00Z"),
           ],
         },
         review: {
           total: 2,
           items: [
-            review({ ciState: "failure", ciFailureNames: ["verify"] }),
+            review({
+              ciState: "failure",
+              ciFailureNames: ["verify"],
+              updatedAt: "2026-09-10T10:30:00Z",
+            }),
             review({ ciState: "success", number: 43 }, null),
           ],
         },
-        spend: {
-          agents: { available: false, reason: "permission" },
-          budget: {
-            available: true,
-            state: "exceeded",
-            enabled: true,
-            monthlyLimitCents: 1000,
-            warningPercent: 80,
-            windowStart: "2026-09-01T00:00:00Z",
-            windowEnd: "2026-10-01T00:00:00Z",
-            spentCents: 1200,
-            remainingCents: 0,
-            percentUsed: 120,
-          },
-        },
+        spend: exceeded,
       },
       "p1",
     );
-    expect(queue.map((entry) => entry.key)).toEqual([
-      "attention:a1",
-      "attention:a2",
-      "checks:acme/app:42",
+    expect(total).toBe(4);
+    expect(entries.map((entry) => entry.key)).toEqual([
       "budget",
+      "attention:a1",
+      "checks:acme/app:42",
+      "attention:a2",
     ]);
-    expect(queue[0]).toMatchObject({
+    expect(entries[0]).toMatchObject({
+      tone: "bad",
+      title: "Monthly budget exhausted: new agent turns are blocked",
+      action: { href: "/projects/p1/insights" },
+    });
+    expect(entries[0]?.summary).toContain("$12.00 of $10.00");
+    expect(entries[1]).toMatchObject({
       tone: "human",
       title: "Agent waiting for a reply",
       summary: "Which database?",
-      action: { label: "Reply in the story", href: "/projects/p1/stories/s1#story-composer" },
+      action: { label: "Reply in the story", href: "/projects/p1/stories/story-a1#story-composer" },
       detail: null,
+      resolved: null,
     });
-    expect(queue[1]).toMatchObject({
-      tone: "bad",
-      title: "Agent run failed",
-      action: { label: "Open the story", href: "/projects/p1/stories/s2" },
-      detail: "Error: fetch failed",
-    });
-    expect(queue[1]?.summary).toMatch(/could not connect/);
-    expect(queue[2]).toMatchObject({
+    expect(entries[1]?.item?.id).toBe("a1");
+    expect(entries[2]).toMatchObject({
       tone: "bad",
       title: "Checks failed on pull request #42",
       action: {
@@ -155,18 +166,50 @@ describe("attention queue", () => {
         href: "https://github.com/acme/app/pull/42",
         external: true,
       },
+      item: null,
     });
-    expect(queue[2]?.summary).toContain("verify");
-    expect(queue[3]).toMatchObject({
+    expect(entries[2]?.summary).toContain("verify");
+    expect(entries[3]).toMatchObject({
       tone: "bad",
-      title: "Monthly budget exhausted: new agent turns are blocked",
-      action: { href: "/projects/p1/insights" },
+      title: "Agent run failed",
+      action: { label: "Open the story", href: "/projects/p1/stories/story-a2" },
+      detail: "Error: fetch failed",
     });
-    expect(queue[3]?.summary).toContain("$12.00 of $10.00");
+    expect(entries[3]?.summary).toMatch(/could not connect/);
   });
+
+  it("shows only the newest few but counts every open notice, not just the loaded ones", () => {
+    const items = Array.from({ length: 8 }, (_, index) =>
+      notice(`n${index}`, new Date(Date.UTC(2026, 8, 10, 11, 0) - index * 60_000).toISOString()),
+    );
+    const { entries, total } = latestAttention(
+      {
+        attention: { openCount: 31, items },
+        review: { total: 0, items: [] },
+        spend: noSpend,
+      },
+      "p1",
+    );
+    expect(entries.map((entry) => entry.key)).toEqual([
+      "attention:n0",
+      "attention:n1",
+      "attention:n2",
+      "attention:n3",
+      "attention:n4",
+    ]);
+    expect(total).toBe(31);
+    expect(
+      latestAttention(
+        { attention: { openCount: 31, items }, review: { total: 0, items: [] }, spend: noSpend },
+        "p1",
+        2,
+      ).entries,
+    ).toHaveLength(2);
+  });
+
   it("is empty when nothing is open, whatever the resolved history holds", () => {
     expect(
-      attentionQueue(
+      latestAttention(
         {
           attention: { openCount: 0, items: [] },
           review: { total: 1, items: [review({ ciState: "success" })] },
@@ -174,7 +217,29 @@ describe("attention queue", () => {
         },
         "p1",
       ),
-    ).toEqual([]);
+    ).toEqual({ entries: [], total: 0 });
+  });
+
+  it("describes a resolved notice by how it closed and offers no reply, retry or dismiss", () => {
+    const entry = attentionNotice(
+      {
+        ...notice("r1", "2026-09-10T09:00:00Z", { kind: "agent_waiting", turnId: null }),
+        action: null,
+        status: "resolved",
+        resolution: "replied",
+        resolvedAt: "2026-09-10T11:55:00Z",
+      },
+      "p1",
+    );
+    expect(entry).toMatchObject({
+      tone: "machine",
+      item: null,
+      action: { label: "Open the story", href: "/projects/p1/stories/story-r1" },
+      resolved: { label: "Answered", at: "2026-09-10T11:55:00Z" },
+    });
+    expect(resolutionLabel("dismissed")).toBe("Dismissed");
+    expect(resolutionLabel("successful_retry")).toBe("Retried successfully");
+    expect(resolutionLabel(null)).toBe("Resolved");
   });
 });
 

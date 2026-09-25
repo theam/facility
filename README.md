@@ -214,7 +214,7 @@ reset is required, including when repository or setup changes need to be applied
 
 ## MCP surface
 
-The embedded Streamable HTTP server is available at `POST /mcp`. It exposes twenty tools:
+The embedded Streamable HTTP server is available at `POST /mcp`. It exposes twenty-one tools:
 
 ```text
 facility_list_projects       facility_list_agents
@@ -227,7 +227,8 @@ facility_archive_story       facility_restore_story
 facility_delete_workspace
 facility_get_costs           facility_get_budget
 facility_set_budget          facility_get_observability
-facility_list_backlog        facility_sync_github
+facility_list_backlog        facility_list_attention
+facility_sync_github
 ```
 
 `facility_delete_workspace` is the only operation that destroys durable state. It requires an

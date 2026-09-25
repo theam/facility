@@ -307,6 +307,36 @@ export const toolDefinitions: ToolDefinition[] = [
     }),
   },
   {
+    name: "facility_list_attention",
+    permission: "projects:read",
+    description:
+      "Read what is waiting on a person in a project, newest first: agents waiting for a reply and failed, interrupted, or unstarted runs, each with its story and the action it accepts (reply, retry, dismiss). Resolved notices stay readable with how they were closed. Supports status, kind, and text filters with pagination. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      status: z
+        .enum(["open", "resolved", "all"])
+        .default("open")
+        .describe("Open notices by default; resolved ones keep how they were closed."),
+      kind: z
+        .array(z.string().min(1).max(80))
+        .max(20)
+        .optional()
+        .describe("Notice kinds such as agent_waiting, turn_error, or runtime_error."),
+      q: z.string().max(200).optional().describe("Words in the notice or its story title."),
+      limit: z.number().int().min(1).max(100).default(25),
+      offset: z.number().int().min(0).default(0),
+    },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/attention`,
+    query: (args) => ({
+      status: stringValue(args.status),
+      kind: listValue(args.kind),
+      q: stringValue(args.q),
+      limit: Number(args.limit ?? 25),
+      offset: Number(args.offset ?? 0),
+    }),
+  },
+  {
     name: "facility_sync_github",
     permission: "github:write",
     description:

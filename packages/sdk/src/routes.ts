@@ -14,6 +14,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/org",
   "GET /v1/projects",
   "GET /v1/projects/:projectId",
+  "GET /v1/projects/:projectId/attention",
   "GET /v1/projects/:projectId/audit",
   "GET /v1/projects/:projectId/backlog",
   "GET /v1/projects/:projectId/budget",

@@ -1,4 +1,5 @@
 import type {
+  AttentionQuery,
   BacklogQuery,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
@@ -22,6 +23,8 @@ import { cookies } from "next/headers";
 
 export type {
   ApiKey,
+  AttentionNotice,
+  AttentionQuery,
   BacklogItem,
   BacklogPerson,
   BacklogPhase,
@@ -40,6 +43,7 @@ export type {
   OverviewRecentTurn,
   OverviewReviewItem,
   Project,
+  ProjectAttention,
   ProjectBacklog,
   ProjectBudget,
   ProjectObservability,
@@ -207,6 +211,8 @@ export const api = {
     }),
   projectOverview: (projectId: string) =>
     apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/overview`),
+  projectAttention: (projectId: string, query: AttentionQuery = {}) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/attention`, { query }),
   members: () => apiFetch("GET", "/v1/members"),
   roles: () => apiFetch("GET", "/v1/roles"),
   keys: () => apiFetch("GET", "/v1/keys"),

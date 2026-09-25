@@ -98,40 +98,109 @@ export type AttentionEntry = {
   summary: string;
   at: string | null;
   action: { label: string; href: string; external?: boolean } | null;
-  item: OverviewAttentionItem | null;
+  /** The open notice the reply, retry and dismiss controls act on. */
+  item: Pick<
+    OverviewAttentionItem,
+    "id" | "kind" | "turnId" | "title" | "detail" | "createdAt"
+  > | null;
   detail: string | null;
+  /** How and when a resolved notice was closed; null while it is open. */
+  resolved: { label: string; at: string | null } | null;
 };
 
+/** How many notices the overview shows before pointing at the full list. */
+export const ATTENTION_PREVIEW_LIMIT = 5;
+
 /**
- * Everything that waits for a person, in the order to handle it: agent questions
- * and failed runs first (Facility is blocked on the user), then pull requests
- * whose checks failed, then a budget that blocks or is about to block new work.
+ * The overview's attention block: the newest few things waiting on a person,
+ * and how many there are in total. A budget alert stops every agent, so it
+ * leads; everything else is newest first.
  */
-export function attentionQueue(
+export function latestAttention(
   overview: Pick<ProjectOverview, "attention" | "review" | "spend">,
   projectId: string,
-): AttentionEntry[] {
-  const entries: AttentionEntry[] = overview.attention.items.map((item) => ({
-    key: `attention:${item.id}`,
-    tone: item.kind === "agent_waiting" ? "human" : "bad",
-    title: attentionKindLabel(item.kind),
-    storyId: item.storyId,
-    storyTitle: item.storyTitle,
-    summary:
-      item.kind === "agent_waiting"
-        ? (item.detail ?? "The agent is waiting for your reply.")
-        : errorSummary(item.detail),
-    at: item.createdAt,
+  limit = ATTENTION_PREVIEW_LIMIT,
+) {
+  const signals = attentionSignals(overview, projectId);
+  const entries = [
+    ...overview.attention.items.map((item) => attentionNotice(item, projectId)),
+    ...signals,
+  ].sort(
+    (left, right) =>
+      Number(left.at !== null) - Number(right.at !== null) || timeOf(right.at) - timeOf(left.at),
+  );
+  return {
+    entries: entries.slice(0, limit),
+    total: overview.attention.openCount + signals.length,
+  };
+}
+
+function timeOf(value: string | null) {
+  const time = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+/** One persisted notice: an agent waiting for a reply, or a run that failed or could not start. */
+export function attentionNotice(
+  notice: Omit<OverviewAttentionItem, "action"> & {
+    action: OverviewAttentionItem["action"] | null;
+    status?: "open" | "resolved";
+    resolution?: string | null;
+    resolvedAt?: string | null;
+  },
+  projectId: string,
+): AttentionEntry {
+  const resolved = notice.status === "resolved";
+  const waiting = notice.kind === "agent_waiting";
+  return {
+    key: `attention:${notice.id}`,
+    tone: resolved ? "machine" : waiting ? "human" : "bad",
+    title: attentionKindLabel(notice.kind),
+    storyId: notice.storyId,
+    storyTitle: notice.storyTitle,
+    summary: waiting
+      ? (notice.detail ?? "The agent is waiting for your reply.")
+      : errorSummary(notice.detail),
+    at: notice.createdAt,
     action:
-      item.action === "reply"
+      !resolved && notice.action === "reply"
         ? {
             label: "Reply in the story",
-            href: `${storyHref(projectId, item.storyId)}#story-composer`,
+            href: `${storyHref(projectId, notice.storyId)}#story-composer`,
           }
-        : { label: "Open the story", href: storyHref(projectId, item.storyId) },
-    item,
-    detail: item.kind === "agent_waiting" ? null : item.detail,
-  }));
+        : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
+    item: resolved ? null : notice,
+    detail: waiting ? null : notice.detail,
+    resolved: resolved
+      ? { label: resolutionLabel(notice.resolution ?? null), at: notice.resolvedAt ?? null }
+      : null,
+  };
+}
+
+export function resolutionLabel(resolution: string | null) {
+  switch (resolution) {
+    case "dismissed":
+      return "Dismissed";
+    case "replied":
+      return "Answered";
+    case "successful_retry":
+      return "Retried successfully";
+    case "recovered":
+      return "Recovered";
+    default:
+      return "Resolved";
+  }
+}
+
+/**
+ * Live project state that needs a person without being a stored notice:
+ * pull requests whose checks failed and a budget near or past its limit.
+ */
+export function attentionSignals(
+  overview: Pick<ProjectOverview, "review" | "spend">,
+  projectId: string,
+): AttentionEntry[] {
+  const entries: AttentionEntry[] = [];
   for (const review of overview.review.items) {
     if (review.pullRequest.ciState !== "failure") continue;
     const url = safeExternalUrl(review.pullRequest.url);
@@ -150,6 +219,7 @@ export function attentionQueue(
       action: url ? { label: "Open the pull request", href: url, external: true } : null,
       item: null,
       detail: null,
+      resolved: null,
     });
   }
   const budget = overview.spend.budget;
@@ -175,6 +245,7 @@ export function attentionQueue(
       },
       item: null,
       detail: null,
+      resolved: null,
     });
   }
   return entries;

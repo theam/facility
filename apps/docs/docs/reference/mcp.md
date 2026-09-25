@@ -13,7 +13,7 @@ server. Authorization-server metadata remains available at `/.well-known/oauth-a
 and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
 still require a valid bearer token.
 
-The server exposes twenty task-oriented tools:
+The server exposes twenty-one task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -36,6 +36,7 @@ The server exposes twenty task-oriented tools:
 | `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
 | `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
 | `facility_list_backlog` | Read the unified backlog with phases, activity, assignees, search, filters, and pagination. |
+| `facility_list_attention` | Read what is waiting on a person, newest first, with the action each notice accepts; filter by status, kind, and text. |
 | `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
 
 ## Connect Claude Code or Codex
