@@ -26,21 +26,26 @@ export type CostInput = {
   cacheWriteTokens?: number;
 };
 
-const MODEL_ALIASES: Record<string, keyof typeof MODEL_PRICES_USD_PER_1M> = {
+export const MODEL_ALIASES: Record<string, keyof typeof MODEL_PRICES_USD_PER_1M> = {
   "claude-3-5-haiku": "claude-haiku-4-5",
   "gpt-5.6": "gpt-5.6-sol",
 };
 
 /** Resolve aliases and provider date suffixes to a price-book entry. */
 export function normalizeModel(model: string): keyof typeof MODEL_PRICES_USD_PER_1M | null {
-  if (model in MODEL_PRICES_USD_PER_1M) {
-    return model as keyof typeof MODEL_PRICES_USD_PER_1M;
-  }
-  if (model in MODEL_ALIASES) return MODEL_ALIASES[model] ?? null;
   const undated = model.replace(/-\d{8}$/, "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  return undated in MODEL_PRICES_USD_PER_1M
-    ? (undated as keyof typeof MODEL_PRICES_USD_PER_1M)
-    : null;
+  // Both forms run the same resolution chain, so the two rules compose: an alias
+  // is absent from the price book by definition, and a provider id that carries a
+  // date suffix still has to resolve through it.
+  for (const candidate of new Set([model, undated])) {
+    if (candidate in MODEL_PRICES_USD_PER_1M) {
+      return candidate as keyof typeof MODEL_PRICES_USD_PER_1M;
+    }
+    if (candidate in MODEL_ALIASES) {
+      return MODEL_ALIASES[candidate] ?? null;
+    }
+  }
+  return null;
 }
 
 /** Calculate cents with six decimal places so low-token turns are not rounded away. */
