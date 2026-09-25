@@ -142,7 +142,7 @@ export default async function ProjectAttentionPage({
         {!result.ok ? (
           <ErrorNotice message={`Couldn't load the notices — ${result.message}`} />
         ) : entries.length === 0 ? (
-          <EmptyState projectId={projectId} search={search} />
+          <EmptyState projectId={projectId} search={search} total={total} />
         ) : (
           <>
             <div className="flex flex-col border-b border-(--line)">
@@ -292,7 +292,30 @@ function chipClass(selected: boolean) {
   );
 }
 
-function EmptyState({ projectId, search }: { projectId: string; search: AttentionSearch }) {
+function EmptyState({
+  projectId,
+  search,
+  total,
+}: {
+  projectId: string;
+  search: AttentionSearch;
+  total: number;
+}) {
+  // Handling the last notices of the last page leaves it empty while earlier
+  // pages still hold some.
+  if (total > 0) {
+    return (
+      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+        <p>No notices left on this page.</p>
+        <Link
+          href={attentionHref(projectId, search, { page: 1 })}
+          className="text-(--info) underline-offset-4 hover:underline"
+        >
+          Back to the newest
+        </Link>
+      </div>
+    );
+  }
   if (isFiltered(search)) {
     return (
       <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">

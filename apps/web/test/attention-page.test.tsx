@@ -270,6 +270,20 @@ describe("attention page", () => {
     );
   });
 
+  it("points back to the newest notices when handling them emptied the page", async () => {
+    mocks.attention = {
+      ok: true,
+      data: { ...openPage(), total: 25, offset: 25, items: [] },
+    };
+    const { root, text } = await render({ page: "2" });
+    expect(text).toContain("No notices left on this page.");
+    expect(text).not.toContain("No open notices. When an agent asks a question");
+    const back = [...section(root, "Notices").querySelectorAll("a")].find(
+      (link) => link.textContent === "Back to the newest",
+    );
+    expect(back?.getAttribute("href")).toBe("/projects/project/attention");
+  });
+
   it("reports a failed load without inventing notices", async () => {
     mocks.attention = { ok: false, status: 500, offline: false, message: "boom" };
     const { root, text } = await render();
