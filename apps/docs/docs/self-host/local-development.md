@@ -12,12 +12,14 @@ This guide covers work on the Facility monorepo. If you only want to run the pro
 Install Node.js 24 LTS and pnpm 11.20.0 before running the repository:
 
 ```bash
-corepack install --global pnpm@11.20.0
+npm install --global pnpm@11.20.0
 ```
 
-The root `package.json` also accepts Node.js 22 from 22.13.0. Use the repository `.nvmrc` when
-working with nvm. Do not substitute npm or yarn: the lockfile, workspace filters, and verification
-scripts assume pnpm.
+The root `package.json` also accepts Node.js 22 from 22.13.0. Node.js 25 and later are outside that
+range and no longer bundle Corepack; use the repository `.nvmrc` to select a supported line when
+working with nvm. npm appears above only to install the pinned pnpm, which works on every supported
+release. Do not substitute npm or yarn for pnpm itself: the lockfile, workspace filters, and
+verification scripts assume pnpm.
 
 Clone the repository, then run:
 

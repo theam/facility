@@ -12,7 +12,7 @@ sample builder and scheduled-security agents. It has no network or credential de
 From a clean checkout, run:
 
 ```bash
-corepack install --global pnpm@11.20.0
+npm install --global pnpm@11.20.0
 pnpm install --frozen-lockfile
 docker build -f runner/Dockerfile -t facility-runner:dev .
 FACILITY_E2E_DOCKER=1 \

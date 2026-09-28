@@ -11,14 +11,15 @@ guide](production.md) before exposing an instance to other users or repositories
 
 Install Docker, Node.js 24, and the repository-pinned pnpm version.
 
-Node.js 22 is also supported from 22.13.0. Docker must be running and the current user must be able
-to use it. Local story workspaces require enough disk for repository checkouts, dependencies,
+Node.js 22 is also supported from 22.13.0. Node.js 25 and later are outside the supported range and
+no longer bundle Corepack; use `.nvmrc` to select a supported line. Docker must be running and the
+current user must be able to use it. Local story workspaces require enough disk for repository checkouts, dependencies,
 nested Docker images, and persistent volumes.
 
 ## Start the local stack
 
 ```bash
-corepack install --global pnpm@11.20.0
+npm install --global pnpm@11.20.0
 pnpm install --frozen-lockfile
 cp .env.example .env
 docker build -f runner/Dockerfile -t facility-runner:dev .
