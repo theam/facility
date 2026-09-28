@@ -12,6 +12,19 @@ function event(type: string, data: Record<string, unknown>, seq = 1) {
   return { turnId: "turn_a", seq, type, data, createdAt: at };
 }
 
+it.each([
+  ["recovering", "Recovering command observation"],
+  ["recovered", "Command observation recovered"],
+  ["failed", "Command observation failed"],
+])("presents observation state %s independently from agent output", (state, title) => {
+  const activity = presentTurnEvent(
+    event("engine.observation", { state, operation: "journal", attempt: 1, elapsedMs: 30_000 }),
+  );
+  expect(activity.title).toBe(title);
+  expect(activity.text).toContain("journal");
+  expect(activity.kind).toBe(state === "failed" ? "error" : "lifecycle");
+});
+
 describe("engine final response separation", () => {
   it("keeps only the last Codex agent message as the final response", () => {
     const parser = new CodexEventParser();

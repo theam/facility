@@ -96,6 +96,7 @@ describe("@facility/mcp 0.12", () => {
       "facility_set_budget",
       "facility_get_observability",
       "facility_list_backlog",
+      "facility_list_attention",
       "facility_sync_github",
       "facility_open_preview",
       "facility_suspend_story",
@@ -220,6 +221,56 @@ describe("@facility/mcp 0.12", () => {
     expect(calls[1]?.[2]).toMatchObject({ idempotencyKey: "story-message-13" });
     expect(calls[2]?.[1]).toContain("/preview/web%2Fapp/open");
     expect(calls[3]?.[1]).toMatch(/\/suspend$/);
+    await client.close();
+    await server.close();
+  });
+
+  test("reads what is waiting on a person with the same filters as the web page", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { total: 0, items: [] };
+      },
+    });
+    await client.callTool({ name: "facility_list_attention", arguments: { projectId: "proj_1" } });
+    await client.callTool({
+      name: "facility_list_attention",
+      arguments: {
+        projectId: "proj_1",
+        status: "resolved",
+        kind: ["turn_error", "agent_waiting"],
+        q: "timed out",
+        limit: 10,
+        offset: 20,
+      },
+    });
+    expect(calls).toEqual([
+      [
+        "GET",
+        "/v1/projects/proj_1/attention",
+        {
+          query: { status: "open", kind: undefined, q: undefined, limit: 25, offset: 0 },
+          body: undefined,
+          idempotencyKey: undefined,
+        },
+      ],
+      [
+        "GET",
+        "/v1/projects/proj_1/attention",
+        {
+          query: {
+            status: "resolved",
+            kind: "turn_error,agent_waiting",
+            q: "timed out",
+            limit: 10,
+            offset: 20,
+          },
+          body: undefined,
+          idempotencyKey: undefined,
+        },
+      ],
+    ]);
     await client.close();
     await server.close();
   });

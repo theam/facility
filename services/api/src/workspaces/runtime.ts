@@ -41,6 +41,17 @@ export type WorkspaceCommand = {
   timeoutMs?: number;
   signal?: AbortSignal;
   onOutput?: (output: WorkspaceCommandOutput) => void;
+  onObservation?: (event: CommandObservation) => void;
+};
+
+export type CommandObservation = {
+  state: "recovering" | "recovered" | "failed";
+  operation: "logs" | "journal" | "completion";
+  attempt: number;
+  elapsedMs: number;
+  reason?: "read_timeout" | "read_failed";
+  httpStatus?: number;
+  nextSequence?: number;
 };
 
 export type WorkspaceCommandOutput = { stream: "stdout" | "stderr"; data: string };
@@ -78,6 +89,8 @@ export type WorkspaceBackup = {
 
 export interface WorkspaceRuntime {
   readonly provider: WorkspaceProvider;
+  /** Pure creation preflight: no provider calls or mutations, safe inside a DB transaction. */
+  validateCreate?(input: Omit<CreateWorkspace, "id">): void;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
   wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle>;
   exec(workspace: WorkspaceLocator, command: WorkspaceCommand): Promise<WorkspaceCommandResult>;

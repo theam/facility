@@ -36,6 +36,54 @@ describe("Vercel persistent workspace runtime", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 
+  it("preflights creation constraints synchronously without contacting the provider", () => {
+    const runtime = new VercelWorkspaceRuntime();
+    expect(() => runtime.validateCreate({ image: "runner:test" })).not.toThrow();
+    expect(() =>
+      runtime.validateCreate({
+        image: "runner:test",
+        resources: { cpu: 4, memoryMb: 8192 },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      runtime.validateCreate({
+        image: "runner:test",
+        resources: { cpu: 4, memoryMb: 4096 },
+      }),
+    ).toThrow(/2048 MiB per vCPU/);
+    expect(sandboxApi.getOrCreate).not.toHaveBeenCalled();
+    expect(sandboxApi.get).not.toHaveBeenCalled();
+  });
+
+  it("passes an explicit project size to Vercel without ignoring memory", async () => {
+    sandboxApi.getOrCreate.mockResolvedValue(fakeSandbox());
+    await new VercelWorkspaceRuntime().create({
+      id: "ws_0123456789abcdef",
+      image: "facility-runner:test",
+      resources: { cpu: 4, memoryMb: 8192 },
+    });
+    expect(sandboxApi.getOrCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: { vcpus: 4 } }),
+    );
+  });
+
+  it.each([
+    { cpu: 2, memoryMb: 8192 },
+    { cpu: 4, memoryMb: 4096 },
+    { cpu: 0, memoryMb: 0 },
+    { cpu: 1.5, memoryMb: 3072 },
+    { cpu: 33, memoryMb: 67584 },
+  ])("rejects unsupported resources before provider allocation: %j", async (resources) => {
+    await expect(
+      new VercelWorkspaceRuntime().create({
+        id: "ws_0123456789abcdef",
+        image: "facility-runner:test",
+        resources,
+      }),
+    ).rejects.toMatchObject({ code: "workspace_resources_invalid" });
+    expect(sandboxApi.getOrCreate).not.toHaveBeenCalled();
+  });
+
   it("creates a non-expiring persistent sandbox and initializes it exactly once", async () => {
     const sandbox = fakeSandbox();
     sandboxApi.getOrCreate.mockImplementation(async (options) => {
@@ -69,6 +117,7 @@ describe("Vercel persistent workspace runtime", () => {
         keepLastSnapshots: { count: 1, expiration: 0, deleteEvicted: true },
         resume: true,
         timeout: 24 * 60 * 60 * 1_000,
+        resources: { vcpus: 2 },
       }),
     );
     // The fake invokes the lifecycle hook: a bootstrap in both the hook and runtime would run twice.
@@ -296,7 +345,14 @@ describe("Vercel persistent workspace runtime", () => {
     sandboxApi.get.mockResolvedValue({
       ...fakeSandbox(),
       asUser,
-      currentSession: () => ({ readFileToBuffer: async () => Buffer.from(frames.join("")) }),
+      currentSession: () => ({
+        readFileToBuffer: async () =>
+          Buffer.from(
+            frames.join("") +
+              JSON.stringify({ seq: frames.length, type: "exit", exitCode: 0, durationMs: 12 }) +
+              "\n",
+          ),
+      }),
     });
     const onOutput = vi.fn();
     await expect(

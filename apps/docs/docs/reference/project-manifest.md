@@ -19,6 +19,9 @@ repositories:
     - github.com/acme/contracts
 environment:
   image: ghcr.io/acme/facility-runner:2026-09-01
+  resources:
+    cpu: 4
+    memory_mb: 8192
   setup: corepack enable && pnpm install --frozen-lockfile
   seed: pnpm db:seed
   start: docker compose up -d
@@ -69,6 +72,7 @@ connected to the Facility project and available through its GitHub App installat
 | Field | Required | Contract |
 | --- | --- | --- |
 | `image` | No | Workspace runner image, 1–500 characters. The instance default is used when omitted. |
+| `resources` | No | CPU and memory for new story workspaces; see [workspace resources](#workspace-resources). |
 | `setup` | No | Shell command, 1–4,000 characters. Runs when the setup checksum changes or clean setup is requested. |
 | `start` | Yes | Shell command, 1–4,000 characters. Runs on every environment preparation. |
 | `ready` | No | Shell command polled until it succeeds or readiness times out. |
@@ -90,6 +94,33 @@ setup so a normal wake does not repeatedly seed the environment.
 Make `start` safe to repeat. It should return after bringing services up; use a detached Compose
 command, process manager, or equivalent. Make `ready` fail quickly while the service is unavailable
 and succeed only when a user can exercise it.
+
+## Workspace resources
+
+Use `environment.resources` to choose the size of new workspaces for this project:
+
+```yaml
+environment:
+  resources:
+    cpu: 4
+    memory_mb: 8192
+  start: docker compose up -d
+```
+
+Omitting `resources` retains the default of 2 vCPUs and 4096 MiB. When present, both
+fields are required: `cpu` must be an integer from 1 to 32 and `memory_mb` an integer
+from 512 to 65536. Provider and account limits still apply.
+
+Vercel allocates exactly 2048 MiB per vCPU. It rejects mismatched pairs before
+committing a new workspace's configuration. Correct the manifest and retry the same
+story; the rejected pair does not pin it to invalid settings. Docker applies both
+limits independently.
+
+These values apply to new story workspaces started through the API, UI, MCP,
+GitHub, or schedules. Existing workspaces keep their original allocation across
+resume, retries, and **Clean setup**. Editing the manifest does not resize them or
+discard their data. Review resource changes in the repository: larger machines can
+cost more.
 
 ## Secrets and variables
 

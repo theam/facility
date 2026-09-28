@@ -25,6 +25,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { StoryServiceError, StoryWorkspaceService } from "../src/stories/service.js";
 import { appendTurnEvent } from "../src/turns/events.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import {
+  parseProjectManifest,
+  projectWorkspaceInput,
+} from "../src/workspaces/project-environment.js";
+import type { CreateWorkspace } from "../src/workspaces/runtime.js";
+import { VercelWorkspaceRuntime } from "../src/workspaces/vercel.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
@@ -145,6 +151,75 @@ describe("persistent story workspace lifecycle", async () => {
       },
     };
   }
+
+  it.each([
+    "github",
+    "schedule",
+  ] as const)("recovers the same %s identity after a rejected resource pair without pinning invalid state", async (provider) => {
+    // Exercise the real provider's pure validation with local fake allocation only.
+    const validator = new VercelWorkspaceRuntime();
+    class ValidatedRuntime extends FakeWorkspaceRuntime {
+      validateCreate(input: Omit<CreateWorkspace, "id">) {
+        validator.validateCreate(input);
+      }
+      async create(input: CreateWorkspace) {
+        this.validateCreate(input);
+        return super.create(input);
+      }
+    }
+    const checkedRuntime = new ValidatedRuntime(join(root, `resources-${provider}`));
+    const create = vi.spyOn(checkedRuntime, "create");
+    const preflight = vi.spyOn(checkedRuntime, "validateCreate");
+    const checkedService = new StoryWorkspaceService(db, checkedRuntime);
+    const input = { ...startInput(`resources-${randomUUID()}`), provider };
+    const configuration = (memory: number) =>
+      projectWorkspaceInput(
+        parseProjectManifest(`
+repositories:
+  primary: github.com/acme/app
+environment:
+  start: "true"
+  resources: { cpu: 4, memory_mb: ${memory} }
+`),
+        "runner:test",
+      );
+
+    await expect(
+      checkedService.start({ ...input, workspace: configuration(4096) }),
+    ).rejects.toMatchObject({ code: "workspace_resources_invalid" });
+    expect(create).not.toHaveBeenCalled();
+    expect(
+      await db.select().from(stories).where(eq(stories.externalId, input.externalId)),
+    ).toHaveLength(0);
+
+    // Same identity and dedupe key: only the reviewed resource pair changed.
+    const created = await checkedService.start({ ...input, workspace: configuration(8192) });
+    expect(created.workspace?.state).toBe("running");
+    expect(created.workspace?.environment).toMatchObject({ resources: { cpu: 4, memoryMb: 8192 } });
+    expect(create).toHaveBeenCalledTimes(1);
+    if (!created.queued.turn) throw new Error("expected initial turn");
+    await checkedService.completeTurn({
+      orgId,
+      projectId,
+      turnId: created.queued.turn.id,
+      output: "done",
+      actor: input.actor,
+    });
+    await checkedService.suspend(orgId, projectId, created.story.id);
+    preflight.mockClear();
+
+    // A later bad manifest cannot block or resize an already allocated workspace.
+    const resumed = await checkedService.start({ ...input, workspace: configuration(4096) });
+    expect(resumed.workspace?.id).toBe(created.workspace?.id);
+    expect(resumed.workspace?.state).toBe("running");
+    expect(resumed.workspace?.environment).toMatchObject({ resources: { cpu: 4, memoryMb: 8192 } });
+    expect(preflight).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
+    // Original request plus the completed response; replay adds no new message.
+    expect(
+      await db.select().from(storyMessages).where(eq(storyMessages.storyId, created.story.id)),
+    ).toHaveLength(2);
+  });
 
   async function branchFixture(workspaceId?: string) {
     const result = await service.start({

@@ -58,6 +58,7 @@ activity. MCP and the web application work with the same stories and lifecycle c
 Two contracts live in your repository: [`.facility.yml`](apps/docs/docs/reference/project-manifest.md)
 defines setup, services, and readiness; [`.agents/*.md`](apps/docs/docs/reference/agent-manifest.md)
 defines agent instructions, engines, models, and triggers. The kickstart pull request creates both.
+The project manifest also lets you [choose CPU and memory for new story workspaces](apps/docs/docs/reference/project-manifest.md#workspace-resources).
 
 ## Quick start: run Facility
 
@@ -146,6 +147,7 @@ operating the instance.
 | Install and operate an instance | [Self-hosting](apps/docs/docs/self-host/quickstart.md), [authentication](apps/docs/docs/self-host/authentication.md), and [production](apps/docs/docs/self-host/production.md) |
 | Configure a repository and its agents | [Project manifest](apps/docs/docs/reference/project-manifest.md) and [agent manifest](apps/docs/docs/reference/agent-manifest.md) |
 | Continue, suspend, or archive work | [Story operations](apps/docs/docs/guides/operate-story.md) and [workspace lifecycle](apps/docs/docs/reference/lifecycle.md) |
+| Find stories that need attention | [Project overview and attention queue](apps/docs/docs/guides/project-overview.md) |
 | Connect a client or build an integration | [MCP tools](apps/docs/docs/reference/mcp.md), [REST API](apps/docs/docs/reference/api.md), and [webhooks](apps/docs/docs/reference/webhooks.md) |
 | Check the whole setup on a repository | [End-to-end validation](apps/docs/docs/guides/validate-workspace-loop.md) |
 | Find your way around the code | [Architecture](apps/docs/docs/reference/architecture.md) and [contributor guide](apps/docs/docs/contributors/architecture.md) |

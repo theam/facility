@@ -86,6 +86,8 @@ abstract class CliAgentEngine implements AgentEngine {
         env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
         timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
         signal: request.signal,
+        onObservation: (data) =>
+          parser.record({ engine: this.name, type: "observation", data: { ...data } }),
         onOutput: ({ stream, data }) => {
           if (stream === "stdout") parser.push(data);
         },
@@ -279,6 +281,11 @@ abstract class EngineEventParser {
   private buffer = "";
   protected readonly events: AgentTurnEvent[] = [];
   onEvent?: (event: AgentTurnEvent) => void;
+
+  record(event: AgentTurnEvent) {
+    this.events.push(event);
+    this.onEvent?.(event);
+  }
 
   push(chunk: string) {
     this.buffer += chunk;

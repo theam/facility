@@ -115,7 +115,13 @@ describe("backlog and story creation routes", async () => {
   const projectManifest: ProjectManifest = {
     version: 1,
     repositories: { primary: `acme/app-${suffix}`, related: [] },
-    environment: { start: "true", secrets: [], variables: [], services: {} },
+    environment: {
+      start: "true",
+      secrets: [],
+      variables: [],
+      services: {},
+      resources: { cpu: 4, memory_mb: 8192 },
+    },
     hash: "project-manifest",
   } as ProjectManifest;
   const projectManifests: ProjectManifestSource = { load: async () => projectManifest };
@@ -152,7 +158,7 @@ describe("backlog and story creation routes", async () => {
 
   beforeAll(async () => {
     await migrate(databaseUrl);
-    await seed(databaseUrl);
+    await seed(databaseUrl, { includeDemoData: true });
     await db.insert(projects).values([
       {
         id: projectId,
@@ -273,6 +279,7 @@ describe("backlog and story creation routes", async () => {
     });
     expect(created.statusCode, created.body).toBe(202);
     const body = created.json();
+    expect(body.workspace.environment.resources).toEqual({ cpu: 4, memoryMb: 8192 });
     expect(body.story).toMatchObject({
       title: "Please make the nightly sync retry transient errors before failing the run.",
       titleSource: "pending",
@@ -287,7 +294,8 @@ describe("backlog and story creation routes", async () => {
       data: { orgId: "org_local", projectId, storyId: body.story.id },
     });
 
-    // The same request again (network retry) returns the same story without a second message.
+    // A manifest size change must not resize an existing story on a network retry.
+    projectManifest.environment.resources = { cpu: 8, memory_mb: 16384 };
     const replayed = await app.inject({
       method: "POST",
       url: `/v1/projects/${projectId}/workspace-stories`,
@@ -298,8 +306,10 @@ describe("backlog and story creation routes", async () => {
       },
       payload: request,
     });
+    projectManifest.environment.resources = { cpu: 4, memory_mb: 8192 };
     expect(replayed.statusCode).toBe(202);
     expect(replayed.json().story.id).toBe(body.story.id);
+    expect(replayed.json().workspace.environment.resources).toEqual({ cpu: 4, memoryMb: 8192 });
     expect(
       await db.select().from(storyMessages).where(eq(storyMessages.storyId, body.story.id)),
     ).toHaveLength(1);
