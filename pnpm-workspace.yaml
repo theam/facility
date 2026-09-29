@@ -17,7 +17,8 @@ overrides:
   "brace-expansion@>=2.0.0 <2.1.4": 2.1.4
   "brace-expansion@>=5.0.0 <5.0.9": 5.0.9
   "@fastify/static@<10.1.2": 10.1.2
-  "fast-uri@>=3.0.0 <3.1.6": 3.1.6
+  "fast-uri@>=3.0.0 <3.1.7": 3.1.7
+  "fast-uri@>=4.0.0 <4.1.4": 4.1.4
   "qs@<6.16.0": 6.16.0
   "find-my-way@<9.6.1": 9.7.0
   "js-yaml@>=3.0.0 <3.15.2": 3.15.2
@@ -27,7 +28,8 @@ overrides:
   "body-parser@<1.20.6": 1.20.6
   "@hono/node-server@<2.0.10": 2.0.10
   "hono@<4.13.5": 4.13.5
-  "ip-address@<10.3.1": 10.3.1
+  "ip-address@<10.5.1": 10.5.1
+  "undici@>=7.28.0 <7.29.1": 7.29.1
   "protobufjs@>=7.5.0 <7.6.5": 7.6.5
   "webpack-dev-server@<=5.2.5": 5.2.6
   "dompurify@<=3.4.12": 3.4.13
