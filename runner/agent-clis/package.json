@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "allowScripts": {
-    "@anthropic-ai/claude-code@2.1.215": true
+    "@anthropic-ai/claude-code@2.1.284": true
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.215",
+    "@anthropic-ai/claude-code": "2.1.284",
     "@openai/codex": "0.144.6"
   }
 }
