@@ -51,6 +51,11 @@ codex mcp add facility --url https://facility.example.com/mcp
 codex mcp login facility
 ```
 
+Clients must explicitly request `facility:mcp` for the MCP resource. For offline access, Facility
+collects consent and preserves `offline_access` in the refresh grant even when the client omits
+`prompt=consent`. See [OAuth scopes and renewal recovery](../self-host/authentication.md#mcp-interactive-oauth)
+if a previously authorized connection fails during refresh or rejects the callback issuer.
+
 Claude Code starts its OAuth flow when the server is first used. Codex can also read a service API
 key from an environment variable:
 
