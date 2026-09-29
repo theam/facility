@@ -30,7 +30,8 @@ import { uuidv7 } from "uuidv7";
 import { z } from "zod";
 import { registerAuthorizationServer } from "./auth/authorization-server.js";
 import { readConfig } from "./config.js";
-import { ApiError, sendError } from "./errors.js";
+import { appErrorHandler } from "./error-handler.js";
+import { ApiError } from "./errors.js";
 import { beginIdempotentRequest, completeIdempotentRequest } from "./idempotency.js";
 import { looksLikeJwt, oauthConfigFromApp, verifyAccessToken } from "./oauth.js";
 import {
@@ -112,56 +113,7 @@ export async function buildApp(
     }
   });
 
-  app.setErrorHandler((error, request, reply) => {
-    const err = error as Error & {
-      statusCode?: number;
-      code?: string;
-      validation?: unknown;
-      validationContext?: string;
-      cause?: { code?: string };
-    };
-    if (error instanceof ApiError) {
-      return sendError(reply, error);
-    }
-    const databaseCode = err.code ?? err.cause?.code;
-    if (databaseCode === "23505") {
-      return reply.status(409).send({
-        error: { code: "conflict", message: "A resource with these values already exists" },
-      });
-    }
-    if (databaseCode === "23503") {
-      return reply.status(400).send({
-        error: { code: "invalid_reference", message: "A referenced resource does not exist" },
-      });
-    }
-    if (["23514", "22P02", "22007", "22008"].includes(databaseCode ?? "")) {
-      return reply.status(400).send({
-        error: { code: "bad_request", message: "Request values are invalid" },
-      });
-    }
-    const status = typeof err.statusCode === "number" ? err.statusCode : 500;
-    // Never leak internal error detail on 5xx — log it, return a generic message.
-    if (status >= 500) {
-      request.log.error({ err }, "unhandled server error");
-      return reply
-        .status(status)
-        .send({ error: { code: "internal_error", message: "Internal server error" } });
-    }
-    return reply.status(status).send({
-      error: {
-        code: status === 400 ? (err.validation ? "validation_error" : "bad_request") : "error",
-        message: err.message,
-        ...(err.validation
-          ? {
-              details: {
-                context: err.validationContext,
-                issues: err.validation,
-              },
-            }
-          : {}),
-      },
-    });
-  });
+  app.setErrorHandler(appErrorHandler);
 
   app.setNotFoundHandler((_request, reply) =>
     reply.status(404).send({ error: { code: "not_found", message: "Route not found" } }),
