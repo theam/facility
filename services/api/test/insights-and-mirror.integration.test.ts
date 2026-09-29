@@ -224,6 +224,63 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
       warningPercent: 50,
       enabled: true,
     });
+    // New catalog entries must pass the real budget guard and persist priced
+    // usage without a provider-reported cost. Keep each turn below this budget.
+    const claudeModels = [
+      ["claude-fable-5-1", 0.07275],
+      ["claude-opus-5-5", 0.0292],
+      ["claude-sonnet-5-5", 0.0147],
+      ["claude-opus-5", 0.03675],
+    ] as const;
+    for (const [model, expectedCents] of claudeModels) {
+      await expect(costs.assertTurnAllowed(orgId, projectId, model)).resolves.toMatchObject({
+        state: "ok",
+      });
+      const claudeTurnId = newId("turn");
+      await db.insert(turns).values({
+        id: claudeTurnId,
+        orgId,
+        projectId,
+        storyId,
+        conversationId,
+        agentName: "builder",
+        manifestHash: "hash",
+        manifest: {},
+        engine: "claude_code",
+        model,
+        state: "succeeded",
+        triggerType: "mcp",
+        createdBy: { type: "user", id: "maintainer" },
+      });
+      const claudeRecord = {
+        orgId,
+        projectId,
+        storyId,
+        turnId: claudeTurnId,
+        agentName: "builder",
+        engine: "claude_code",
+        model,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 10,
+          cacheReadTokens: 10,
+          cacheWriteTokens: 10,
+        },
+        durationMs: 10,
+        status: "succeeded" as const,
+      };
+      expect(await costs.record(claudeRecord)).toMatchObject({
+        model,
+        costCents: expectedCents,
+        priced: true,
+        source: "price_book",
+      });
+      expect(await costs.record(claudeRecord)).toBeNull();
+    }
+    expect((await costs.budgetState(orgId, projectId)).spentCents).toBeCloseTo(0.1534, 6);
+    await expect(
+      costs.assertTurnAllowed(orgId, projectId, "private-unpriced-model"),
+    ).rejects.toMatchObject({ code: "budget_model_unpriced" });
     const record = {
       orgId,
       projectId,
@@ -247,6 +304,11 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
     await expect(costs.assertTurnAllowed(orgId, projectId, "gpt-5.6-sol")).rejects.toMatchObject({
       code: "budget_exceeded",
     });
+    for (const [model] of claudeModels) {
+      await expect(costs.assertTurnAllowed(orgId, projectId, model)).rejects.toMatchObject({
+        code: "budget_exceeded",
+      });
+    }
     await expect(
       costs.assertTurnAllowed(orgId, projectId, "private-unpriced-model"),
     ).rejects.toBeInstanceOf(BudgetPolicyError);

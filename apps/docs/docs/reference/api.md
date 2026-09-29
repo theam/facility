@@ -182,6 +182,15 @@ in another client.
 
 Unavailable provider pricing is represented explicitly and must not be interpreted as zero.
 
+The fallback price book includes `claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-opus-5`, and `claude-fable-5-1`, using the
+[published Anthropic rates](https://platform.claude.com/docs/en/about-claude/pricing)
+verified on 2026-09-29. These entries use standard global API pricing and
+5-minute cache writes, not fast mode, batch, regional premiums, or 1-hour cache
+writes. A valid engine-reported cost takes precedence over this fallback.
+An enabled budget still blocks an unpriced model or a project over its limit.
+Updating the catalog does not reprice persisted turns or change agent defaults.
+
 ## Authentication and authorization
 
 Protected routes accept a browser session, a Facility API key as a Bearer token, or an MCP access
