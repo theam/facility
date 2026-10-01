@@ -90,7 +90,17 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   async wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle> {
     const names = this.assertLocator(workspace);
     const existing = await this.inspectContainer(names.container);
-    if (!existing) return this.create(workspace);
+    if (!existing) {
+      // Replacement compute must reattach the retained volume. Creating it here would
+      // present an empty workspace as the resumed story.
+      if (!(await this.volumeExists(names.volume))) {
+        throw new WorkspaceRuntimeError(
+          "workspace_volume_lost",
+          "Docker workspace volume no longer exists; its retained state cannot be resumed",
+        );
+      }
+      return this.create(workspace);
+    }
     this.assertOwned(existing, workspace.id, names.volume);
     if (!existing.State?.Running) await this.docker.getContainer(existing.Id).start();
     return this.handle(workspace, existing.Id, names);
