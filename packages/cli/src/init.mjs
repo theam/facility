@@ -114,23 +114,27 @@ export async function init(flags, pkgRoot, version) {
   return 0;
 }
 
+function yamlScalar(value) {
+  return JSON.stringify(value);
+}
+
 function renderTemplate(source, values) {
-  return Object.entries(values).reduce(
-    (result, [key, value]) => result.replaceAll(`{{${key}}}`, value),
-    source,
-  );
+  return source.replace(/\{\{([A-Z0-9_]+)\}\}/g, (placeholder, name) => {
+    const value = values[name];
+    return value === undefined ? placeholder : yamlScalar(value);
+  });
 }
 
 function formatProjectManifest({ repository, setup, start, ready, servicePort }) {
   return [
     "version: 1",
     "repositories:",
-    `  primary: ${JSON.stringify(`github.com/${repository}`)}`,
+    `  primary: ${yamlScalar(`github.com/${repository}`)}`,
     "  related: []",
     "environment:",
-    ...(setup ? [`  setup: ${JSON.stringify(setup)}`] : []),
-    `  start: ${JSON.stringify(start)}`,
-    ...(ready ? [`  ready: ${JSON.stringify(ready)}`] : []),
+    ...(setup ? [`  setup: ${yamlScalar(setup)}`] : []),
+    `  start: ${yamlScalar(start)}`,
+    ...(ready ? [`  ready: ${yamlScalar(ready)}`] : []),
     "  services:",
     "    app:",
     `      port: ${servicePort}`,

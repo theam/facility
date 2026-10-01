@@ -129,10 +129,137 @@ test("init configures Claude and Codex models in the same agent catalog", (t) =>
     dir,
   );
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(readFileSync(join(dir, ".agents/architect.md"), "utf8"), /model: claude-plan-custom/);
-  assert.match(readFileSync(join(dir, ".agents/pr-reviewer.md"), "utf8"), /model: claude-review-custom/);
-  assert.match(readFileSync(join(dir, ".agents/builder.md"), "utf8"), /model: codex-build-custom/);
-  assert.match(readFileSync(join(dir, ".agents/ci-doctor.md"), "utf8"), /model: codex-plan-custom/);
+  assert.match(readFileSync(join(dir, ".agents/architect.md"), "utf8"), /model: "claude-plan-custom"/);
+  assert.match(readFileSync(join(dir, ".agents/pr-reviewer.md"), "utf8"), /model: "claude-review-custom"/);
+  assert.match(readFileSync(join(dir, ".agents/builder.md"), "utf8"), /model: "codex-build-custom"/);
+  assert.match(readFileSync(join(dir, ".agents/ci-doctor.md"), "utf8"), /model: "codex-plan-custom"/);
+});
+
+test("init quotes hostile model ids and commands so they cannot inject YAML", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const hostileModel = "gpt-5.6-sol\nenabled: false";
+  const hostileStart = 'docker compose up -d && echo "$(id)" && echo "db: ready"';
+  const result = runCli(
+    [
+      "init",
+      "--yes",
+      `--dir=${dir}`,
+      "--repo=acme/demo-app",
+      `--provision=pnpm install --frozen-lockfile && echo 'setup: done'`,
+      `--start=${hostileStart}`,
+      "--preview-readiness-command=curl --fail 'http://localhost:3000/health'",
+      `--review-model=foo"bar # pwned`,
+      "--plan-model=$(id)",
+      `--codex-build-model=${hostileModel}`,
+      "--codex-plan-model=|",
+      "--build-model=claude-fable-5 # not-a-comment",
+    ],
+    dir,
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const environment = readFileSync(join(dir, ".facility.yml"), "utf8");
+  assert.match(environment, /setup: "pnpm install --frozen-lockfile && echo 'setup: done'"/);
+  assert.equal(environment.includes(`start: ${JSON.stringify(hostileStart)}`), true);
+  assert.equal(
+    environment.includes(`ready: ${JSON.stringify("curl --fail 'http://localhost:3000/health'")}`),
+    true,
+  );
+
+  const builder = readFileSync(join(dir, ".agents/builder.md"), "utf8");
+  assert.equal(builder.includes(`model: ${JSON.stringify(hostileModel)}`), true);
+  assert.match(builder, /^enabled: true$/m);
+  assert.doesNotMatch(builder, /^enabled: false$/m);
+
+  assert.equal(
+    readFileSync(join(dir, ".agents/architect.md"), "utf8").includes(`model: ${JSON.stringify("$(id)")}`),
+    true,
+  );
+  assert.equal(
+    readFileSync(join(dir, ".agents/security-audit.md"), "utf8").includes(`model: ${JSON.stringify("$(id)")}`),
+    true,
+  );
+  assert.equal(
+    readFileSync(join(dir, ".agents/pr-reviewer.md"), "utf8").includes(
+      `model: ${JSON.stringify('foo"bar # pwned')}`,
+    ),
+    true,
+  );
+
+  const doctor = readFileSync(join(dir, ".agents/ci-doctor.md"), "utf8");
+  assert.equal(doctor.includes(`model: ${JSON.stringify("|")}`), true);
+  assert.match(doctor, /^options:$/m);
+  assert.match(doctor, /^  reasoning_effort: high$/m);
+
+  const check = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(check.status, 0, check.stdout + check.stderr);
+});
+
+test("init keeps $& and nested placeholders as quoted YAML scalars", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const result = runCli(
+    [
+      "init",
+      "--yes",
+      `--dir=${dir}`,
+      "--repo=acme/demo-app",
+      "--codex-build-model=$&",
+      "--codex-plan-model={{CODEX_PLAN_MODEL}}",
+      "--plan-model=claude-opus-4-8-20260101",
+    ],
+    dir,
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const builder = readFileSync(join(dir, ".agents", "builder.md"), "utf8");
+  assert.equal(builder.includes(`model: ${JSON.stringify("$&")}`), true);
+  assert.equal(builder.includes('model: "{{CODEX_BUILD_MODEL}}"'), false);
+
+  const ciDoctor = readFileSync(join(dir, ".agents", "ci-doctor.md"), "utf8");
+  assert.equal(ciDoctor.includes(`model: ${JSON.stringify("{{CODEX_PLAN_MODEL}}")}`), true);
+  assert.equal(ciDoctor.includes(`model: ${JSON.stringify("claude-opus-4-8-20260101")}`), false);
+
+  const architect = readFileSync(join(dir, ".agents", "architect.md"), "utf8");
+  assert.equal(architect.includes(`model: ${JSON.stringify("claude-opus-4-8-20260101")}`), true);
+
+  const doctor = runCli(["doctor", `--dir=${dir}`], dir);
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr);
+});
+
+test("local doctor rejects comment-only and unclosed quoted models", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const init = runCli(
+    ["init", "--yes", `--dir=${dir}`, "--repo=acme/demo-app", "--start=npm run dev"],
+    dir,
+  );
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+
+  const builderPath = join(dir, ".agents", "builder.md");
+  writeFileSync(
+    builderPath,
+    readFileSync(builderPath, "utf8").replace(/^model: .*$/m, "model: # choose a model"),
+  );
+  const commentOnly = runCli(["doctor", `--dir=${dir}`], dir);
+  assert.equal(commentOnly.status, 1);
+  assert.match(commentOnly.stdout, /model is missing or invalid/);
+
+  writeFileSync(
+    builderPath,
+    readFileSync(builderPath, "utf8").replace(/^model: .*$/m, 'model: "unclosed'),
+  );
+  const unclosed = runCli(["doctor", `--dir=${dir}`], dir);
+  assert.equal(unclosed.status, 1);
+  assert.match(unclosed.stdout, /model is missing or invalid/);
+
+  writeFileSync(
+    builderPath,
+    readFileSync(builderPath, "utf8").replace(/^model: .*$/m, 'model: "gpt-5.6-sol with spaces"'),
+  );
+  const quotedSpaces = runCli(["doctor", `--dir=${dir}`], dir);
+  assert.equal(quotedSpaces.status, 0, quotedSpaces.stdout + quotedSpaces.stderr);
 });
 
 test("init preserves repository-owned files unless force is explicit", (t) => {

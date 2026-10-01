@@ -80,9 +80,14 @@ export function renderWorkspaceKickstart(
   };
 }
 
+function yamlScalar(value: string) {
+  return JSON.stringify(value);
+}
+
 function renderTemplate(template: string, values: Record<string, string>) {
   return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (placeholder, name: string) => {
-    return values[name] ?? placeholder;
+    const value = values[name];
+    return value === undefined ? placeholder : yamlScalar(value);
   });
 }
 
@@ -90,12 +95,12 @@ function projectManifest(answers: WorkspaceKickstartAnswers, servicePort: number
   return [
     "version: 1",
     "repositories:",
-    `  primary: ${JSON.stringify(`github.com/${answers.repository}`)}`,
+    `  primary: ${yamlScalar(`github.com/${answers.repository}`)}`,
     "  related: []",
     "environment:",
-    ...(answers.setup ? [`  setup: ${JSON.stringify(answers.setup)}`] : []),
-    `  start: ${JSON.stringify(answers.start)}`,
-    ...(answers.ready ? [`  ready: ${JSON.stringify(answers.ready)}`] : []),
+    ...(answers.setup ? [`  setup: ${yamlScalar(answers.setup)}`] : []),
+    `  start: ${yamlScalar(answers.start)}`,
+    ...(answers.ready ? [`  ready: ${yamlScalar(answers.ready)}`] : []),
     "  services:",
     "    app:",
     `      port: ${servicePort}`,
