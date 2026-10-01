@@ -16,8 +16,9 @@ generic scheduler and GitHub reconciliation, PostgreSQL, the web UI, and a works
 accounting, budgets, observability, audit events, analytics summaries, and pipeline state live in
 those services. They do not require sidecars or separate control-plane applications.
 
-The single-host Compose file uses Docker named volumes. The [AWS reference deployment](aws.md)
-runs the control plane on ECS and RDS while Vercel Sandbox runs and retains story workspaces.
+The single-host [Compose bundle](bundle.md) uses Docker named volumes. The [AWS reference
+deployment](aws.md) runs the control plane on ECS and RDS while Vercel Sandbox runs and retains
+story workspaces.
 
 Run at least one API, one worker, and one web process. API and worker must use the same release,
 database, master key, GitHub App configuration, workspace provider configuration, and project value
