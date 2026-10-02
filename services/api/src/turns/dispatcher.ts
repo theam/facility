@@ -14,7 +14,7 @@ import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
-import { CostBudgetService } from "../insights/costs.js";
+import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type {
   ProjectEnvironmentService,
@@ -28,6 +28,7 @@ import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.
 import { TurnHealthMonitor } from "./health-monitor.js";
 import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
 import { LiveTurnEvents } from "./live-events.js";
+import { summaryText, turnPrompt } from "./prompt.js";
 
 import { redactEvent as redact, redactString } from "./redaction.js";
 
@@ -46,31 +47,13 @@ export class TurnDispatcher {
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
-    const turn = (
-      await this.db
-        .update(turns)
-        .set({ state: "running", retryAfter: null, startedAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(
-            eq(turns.orgId, input.orgId),
-            eq(turns.projectId, input.projectId),
-            eq(turns.id, input.turnId),
-            eq(turns.state, "queued"),
-            or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
-          ),
-        )
-        .returning()
-    )[0];
-    if (!turn) {
-      const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
-      if (unclaimed?.state === "canceled") {
-        await this.activateQueuedSuccessor({
-          ...input,
-          storyId: unclaimed.storyId,
-        });
-      }
-      return { claimed: false as const };
+    const admission = await this.admit(input);
+    if (admission.kind === "unclaimed") return { claimed: false as const };
+    if (admission.kind === "denied") {
+      return { claimed: true as const, state: "failed" as const, error: admission.error };
     }
+    const turn = admission.turn;
+    let reservationSettled = false;
 
     const cancellation = new AbortController();
     const leaseHeartbeat = new TurnLeaseHeartbeat(
@@ -109,7 +92,7 @@ export class TurnDispatcher {
         });
       }
       await appendTurnEvent(this.db, { ...eventBase, type: "turn.started", data: {} });
-      const [story, workspace, conversation, messages] = await Promise.all([
+      const [story, workspace, conversation] = await Promise.all([
         this.scopedStory(input.orgId, input.projectId, turn.storyId),
         this.activeWorkspace(input.orgId, input.projectId, turn.storyId),
         this.db
@@ -124,17 +107,6 @@ export class TurnDispatcher {
           )
           .limit(1)
           .then((rows) => rows[0]),
-        this.db
-          .select()
-          .from(storyMessages)
-          .where(
-            and(
-              eq(storyMessages.orgId, input.orgId),
-              eq(storyMessages.projectId, input.projectId),
-              eq(storyMessages.storyId, turn.storyId),
-            ),
-          )
-          .orderBy(asc(storyMessages.seq)),
       ]);
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
@@ -142,7 +114,6 @@ export class TurnDispatcher {
       if (manifest.hash !== turn.manifestHash || manifest.name !== turn.agentName) {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
       }
-      await this.costs.assertTurnAllowed(input.orgId, input.projectId, manifest.model);
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.phase",
@@ -299,13 +270,29 @@ export class TurnDispatcher {
         });
       }, turn.id);
       const engine = this.engines.get(manifest.engine);
+      const nativeSessionId = session?.nativeSessionId;
+      const promptMessages = await this.promptMessages({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: story.id,
+        turnId: turn.id,
+        nativeSessionId,
+        summary: conversation.summary,
+      });
       const engineRequest = {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: turnPrompt({
+          manifest,
+          story,
+          summary: conversation.summary,
+          messages: promptMessages,
+          turnId: turn.id,
+          nativeSessionId,
+        }),
         cwd: prepared.primaryCwd,
-        nativeSessionId: session?.nativeSessionId,
+        nativeSessionId,
         environment: prepared.processEnvironment,
         signal: cancellation.signal,
         onEvent: (event: AgentTurnResult["events"][number]) => liveEvents?.append(event),
@@ -327,6 +314,13 @@ export class TurnDispatcher {
         ) {
           throw error;
         }
+        await this.compactConversation({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: story.id,
+          conversationId: conversation.id,
+          turnId: turn.id,
+        });
         await this.db
           .update(engineSessions)
           .set({ status: "corrupt", updatedAt: new Date() })
@@ -358,6 +352,7 @@ export class TurnDispatcher {
         durationMs: result.durationMs,
         status: "succeeded",
       });
+      reservationSettled = true;
       await this.persistSession({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -484,6 +479,9 @@ export class TurnDispatcher {
             durationMs: numberValue(error.details.durationMs) ?? 0,
             status: "failed",
           })
+          .then(() => {
+            reservationSettled = true;
+          })
           .catch(() => undefined);
         if (!liveEvents) await this.persistFailedEngineEvents(error, eventBase, secrets);
       }
@@ -502,6 +500,9 @@ export class TurnDispatcher {
       await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
       return { claimed: true as const, state: "failed" as const, error: detail };
     } finally {
+      if (admission.reservationId && !reservationSettled) {
+        await this.costs.releaseReservation(admission.reservationId).catch(() => undefined);
+      }
       try {
         await health?.stop();
       } finally {
@@ -514,6 +515,75 @@ export class TurnDispatcher {
             JSON.stringify({ event: "workspace.suspend_reconciliation_failed", turnId: turn.id }),
           );
         });
+    }
+  }
+
+  private async admit(input: { orgId: string; projectId: string; turnId: string }): Promise<
+    | { kind: "unclaimed" }
+    | { kind: "denied"; error: string }
+    | {
+        kind: "running";
+        turn: typeof turns.$inferSelect;
+        reservationId: string | null;
+      }
+  > {
+    try {
+      const admitted = await this.db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as FacilityDb;
+        const claimed = (
+          await tx
+            .update(turns)
+            .set({
+              state: "running",
+              retryAfter: null,
+              startedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(turns.orgId, input.orgId),
+                eq(turns.projectId, input.projectId),
+                eq(turns.id, input.turnId),
+                eq(turns.state, "queued"),
+                or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
+              ),
+            )
+            .returning()
+        )[0];
+        if (!claimed) return null;
+        const reservationId = await this.costs.reserveTurn(tx, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: claimed.storyId,
+          turnId: claimed.id,
+          model: claimed.model,
+        });
+        return { turn: claimed, reservationId };
+      });
+      if (!admitted) {
+        const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
+        if (unclaimed?.state === "canceled") {
+          await this.activateQueuedSuccessor({ ...input, storyId: unclaimed.storyId });
+        }
+        return { kind: "unclaimed" };
+      }
+      return { kind: "running", turn: admitted.turn, reservationId: admitted.reservationId };
+    } catch (error) {
+      if (!(error instanceof BudgetPolicyError)) throw error;
+      const queued = await this.turn(input.orgId, input.projectId, input.turnId);
+      if (queued && queued.state === "queued") {
+        await this.storiesService.failTurn({ ...input, error: error.message });
+        await appendTurnEvent(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: queued.storyId,
+          turnId: queued.id,
+          type: "turn.failed",
+          data: { error: error.message.slice(0, 8_000) },
+        });
+        await this.activateQueuedSuccessor({ ...input, storyId: queued.storyId });
+      }
+      return { kind: "denied", error: error.message };
     }
   }
 
@@ -598,6 +668,80 @@ export class TurnDispatcher {
         data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
       });
     }
+  }
+
+  private async promptMessages(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+    nativeSessionId?: string;
+    summary: string | null;
+  }) {
+    if (input.nativeSessionId || input.summary) {
+      const current = await this.currentUserMessage(input);
+      if (!current) throw new Error("turn user message is missing");
+      return [current];
+    }
+    return this.storyMessages(input.orgId, input.projectId, input.storyId);
+  }
+
+  private async compactConversation(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    conversationId: string;
+    turnId: string;
+  }) {
+    const messages = await this.storyMessages(input.orgId, input.projectId, input.storyId);
+    await this.db
+      .update(storyConversations)
+      .set({ summary: summaryText(messages, input.turnId), updatedAt: new Date() })
+      .where(
+        and(
+          eq(storyConversations.orgId, input.orgId),
+          eq(storyConversations.projectId, input.projectId),
+          eq(storyConversations.id, input.conversationId),
+        ),
+      );
+  }
+
+  private async currentUserMessage(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+  }) {
+    return (
+      await this.db
+        .select()
+        .from(storyMessages)
+        .where(
+          and(
+            eq(storyMessages.orgId, input.orgId),
+            eq(storyMessages.projectId, input.projectId),
+            eq(storyMessages.storyId, input.storyId),
+            eq(storyMessages.turnId, input.turnId),
+            eq(storyMessages.role, "user"),
+          ),
+        )
+        .orderBy(asc(storyMessages.seq))
+        .limit(1)
+    )[0];
+  }
+
+  private async storyMessages(orgId: string, projectId: string, storyId: string) {
+    return this.db
+      .select()
+      .from(storyMessages)
+      .where(
+        and(
+          eq(storyMessages.orgId, orgId),
+          eq(storyMessages.projectId, projectId),
+          eq(storyMessages.storyId, storyId),
+        ),
+      )
+      .orderBy(asc(storyMessages.seq));
   }
 
   private async scopedStory(orgId: string, projectId: string, storyId: string) {
@@ -774,42 +918,6 @@ function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator
   };
 }
 
-function buildPrompt(
-  manifest: AgentManifest,
-  story: typeof stories.$inferSelect,
-  summary: string | null,
-  messages: Array<typeof storyMessages.$inferSelect>,
-  turnId: string,
-) {
-  const currentSequence = messages.find(
-    (message) => message.turnId === turnId && message.role === "user",
-  )?.seq;
-  const relevant = messages.filter(
-    (message) => currentSequence === undefined || message.seq <= currentSequence,
-  );
-  const transcript = relevant
-    .map(
-      (message) => `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`,
-    )
-    .join("\n\n");
-  return [
-    manifest.prompt,
-    `# Story\n${story.title}\nExternal identity: ${story.provider}:${story.externalId}`,
-    summary ? `# Conversation summary\n${summary}` : "",
-    `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
-    "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
-    "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function actorLabel(actor: unknown) {
-  if (!actor || typeof actor !== "object") return "unknown";
-  const value = actor as { type?: unknown; id?: unknown };
-  return `${String(value.type ?? "unknown")}:${String(value.id ?? "unknown")}`;
-}
-
 function storyBranch(title: string, storyId: string) {
   const slug =
     title
@@ -846,10 +954,6 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
   return serialized.length <= 64_000
     ? value
     : { truncated: true, payload: `${serialized.slice(0, 63_900)}…` };
-}
-
-function truncateStart(value: string, limit: number) {
-  return value.length <= limit ? value : `[Earlier transcript omitted]\n${value.slice(-limit)}`;
 }
 
 function agentOutcome(output: string): { output: string; attention?: string } {
