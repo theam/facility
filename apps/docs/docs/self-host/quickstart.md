@@ -44,6 +44,10 @@ curl --fail http://localhost:4400/health
 curl --fail http://localhost:4400/readyz
 ```
 
+`/health` checks the API process and database. `/readyz` also requires a worker heartbeat from
+the last minute and no due turn waiting longer than two minutes, so run it after the worker
+process is up.
+
 Open the API schema at `http://localhost:4400/docs`. The documentation development server URL is
 printed by `pnpm dev`.
 

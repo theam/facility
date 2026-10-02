@@ -11,7 +11,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Check API and database health */
+        /** Check API and database liveness */
         get: operations["getHealth"];
         put?: never;
         post?: never;
@@ -28,7 +28,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Check API readiness */
+        /** Check worker heartbeat and queue readiness */
         get: operations["getReadyz"];
         put?: never;
         post?: never;
@@ -1264,6 +1264,11 @@ export interface operations {
                         version: string;
                         /** @enum {string} */
                         db: "ok" | "down";
+                        /** @enum {string} */
+                        worker: "ok" | "down";
+                        /** @enum {string} */
+                        queue: "ok" | "stale";
+                        queueAgeMs: number | null;
                     };
                 };
             };
@@ -1341,6 +1346,11 @@ export interface operations {
                         version: string;
                         /** @enum {string} */
                         db: "ok" | "down";
+                        /** @enum {string} */
+                        worker: "ok" | "down";
+                        /** @enum {string} */
+                        queue: "ok" | "stale";
+                        queueAgeMs: number | null;
                     };
                 };
             };

@@ -5,6 +5,7 @@ import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
+import { beatWorker, operationSample } from "./operations/signals.js";
 import { StoryIntegrationNotifications } from "./stories/integration-notifications.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
@@ -157,9 +158,30 @@ export async function startWorker() {
   await boss.schedule("github.mirror", "*/10 * * * *", {});
   await boss.schedule("stories.integrations", "* * * * *", {});
   logger.info({ queues }, "facility worker started");
+  const workerId = process.env.HOSTNAME || `worker-${process.pid}`;
+  const beat = () =>
+    beatWorker(db, workerId).catch(() => {
+      logger.warn({ event: "worker.heartbeat_failed" }, "worker heartbeat was not recorded");
+    });
+  const publishOperations = () =>
+    operationSample(db)
+      .then((sample) => {
+        logger.info({ event: "facility.operations", ...sample }, "operations sample");
+      })
+      .catch(() => {
+        logger.warn({ event: "facility.operations_failed" }, "operations sample failed");
+      });
+  await beat();
+  void publishOperations();
+  const heartbeatTimer = setInterval(() => void beat(), 15_000);
+  const operationsTimer = setInterval(() => void publishOperations(), 60_000);
+  heartbeatTimer.unref();
+  operationsTimer.unref();
   boss.on("stopped", () => void client.end());
   return {
     stop: () => {
+      clearInterval(heartbeatTimer);
+      clearInterval(operationsTimer);
       turnGuard.close();
       return boss.stop({ graceful: true, timeout: 30_000, close: true });
     },

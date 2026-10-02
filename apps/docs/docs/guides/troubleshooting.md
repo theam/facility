@@ -85,7 +85,7 @@ and the configured budget independently.
 
 ## Health and logs
 
-Use `/health` for process liveness and `/readyz` for readiness. The API includes `x-request-id` on
+Use `/health` for process and database liveness and `/readyz` for worker heartbeat and queue age. The API includes `x-request-id` on
 requests; carry it into API, worker, and provider log searches. In AWS, use the API, worker, web,
 and migration CloudWatch log groups. In Compose, start with `docker compose ps` and
 `docker compose logs <service>`.

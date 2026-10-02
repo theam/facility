@@ -8,6 +8,7 @@ import {
   orgs,
   projectRepositories,
   projects,
+  webhookRejections,
 } from "@facility/db";
 import { eq } from "drizzle-orm";
 import Fastify from "fastify";
@@ -188,6 +189,10 @@ describe("GitHub webhook authentication and tenant binding", async () => {
     expect(malformed.statusCode).toBe(400);
     expect(malformed.json()).toEqual({ ok: false });
     expect(queued).toHaveLength(before);
+    const rejections = await db.select().from(webhookRejections);
+    expect(rejections.some((row) => row.reason === "signature")).toBe(true);
+    expect(rejections.some((row) => row.reason === "payload")).toBe(true);
+    expect(JSON.stringify(rejections)).not.toContain("Webhook test");
   });
 
   it("acknowledges unknown or suspended installations without storing or dispatching them", async () => {
