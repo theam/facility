@@ -897,6 +897,66 @@ export const turnUsage = pgTable(
   ],
 );
 
+/**
+ * Open holds count toward the monthly cap until measured usage replaces them.
+ * Title calls settle in place. Turn calls delete the hold when `turn_usage` is written.
+ */
+export const budgetReservations = pgTable(
+  "budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    turnId: text("turn_id").references(() => turns.id),
+    purpose: text("purpose").notNull(),
+    state: text("state").notNull().default("open"),
+    model: text("model").notNull(),
+    reservedCents: numeric("reserved_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("budget_reservations_turn_uidx")
+      .on(table.turnId)
+      .where(sql`${table.turnId} is not null`),
+    uniqueIndex("budget_reservations_open_title_uidx")
+      .on(table.storyId)
+      .where(sql`${table.purpose} = 'title' and ${table.state} = 'open'`),
+    index("budget_reservations_project_idx").on(table.orgId, table.projectId, table.state),
+    check("budget_reservations_purpose_check", sql`${table.purpose} in ('turn', 'title')`),
+    check("budget_reservations_state_check", sql`${table.state} in ('open', 'settled')`),
+    check("budget_reservations_cents_check", sql`${table.reservedCents} >= 0`),
+    check(
+      "budget_reservations_subject_check",
+      sql`(
+        (${table.purpose} = 'turn' and ${table.turnId} is not null and ${table.state} = 'open')
+        or (${table.purpose} = 'title' and ${table.turnId} is null)
+      )`,
+    ),
+    foreignKey({
+      name: "budget_reservations_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "budget_reservations_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "budget_reservations_turn_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.turnId],
+      foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+  ],
+);
+
 export const auditEvents = pgTable(
   "audit_events",
   {

@@ -71,7 +71,7 @@ export class StoryTitleService {
     private readonly db: FacilityDb,
     private readonly deps: {
       credentials: (orgId: string, projectId: string) => Promise<TitleCredentials>;
-      budget: Pick<CostBudgetService, "budgetState">;
+      budget: Pick<CostBudgetService, "reserveTitle" | "settleTitle" | "releaseReservation">;
       complete?: TitleCompletionCall;
       models?: Partial<Record<TitleProvider, string>>;
       /** Hands the generation to the worker queue; absent in producer-less deployments. */
@@ -140,20 +140,56 @@ export class StoryTitleService {
     const provider = await this.pickProvider(input, credentials);
     if (!provider) return this.settle(input, attempt, null, "credentials_unavailable");
 
-    const budget = await this.deps.budget.budgetState(input.orgId, input.projectId);
-    if (budget.state === "exceeded")
-      return this.settle(input, attempt, provider, "budget_exceeded");
-
     const model = this.deps.models?.[provider] ?? TITLE_MODELS[provider];
     const apiKey = credentials[provider];
     if (!apiKey) return this.settle(input, attempt, provider, "credentials_unavailable");
+    const admission = await this.deps.budget.reserveTitle({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: input.storyId,
+      model,
+    });
+    if (admission.outcome === "exceeded")
+      return this.settle(input, attempt, provider, "budget_exceeded");
+    if (admission.outcome === "unpriced")
+      return this.settle(input, attempt, provider, "budget_model_unpriced");
+    let reservationSettled = false;
+    try {
+      return await this.completeTitle({
+        input,
+        attempt,
+        provider,
+        model,
+        apiKey,
+        request: request.body.slice(0, REQUEST_EXCERPT),
+        reservationId: admission.reservationId,
+        markSettled: () => {
+          reservationSettled = true;
+        },
+      });
+    } finally {
+      if (!reservationSettled) await this.deps.budget.releaseReservation(admission.reservationId);
+    }
+  }
+
+  private async completeTitle(args: {
+    input: { orgId: string; projectId: string; storyId: string };
+    attempt: number;
+    provider: TitleProvider;
+    model: string;
+    apiKey: string;
+    request: string;
+    reservationId: string | null;
+    markSettled: () => void;
+  }): Promise<TitleOutcome> {
+    const { input, attempt, provider, model, apiKey } = args;
     let completion: TitleCompletion;
     try {
       completion = await (this.deps.complete ?? callTitleProvider)({
         provider,
         apiKey,
         model,
-        request: request.body.slice(0, REQUEST_EXCERPT),
+        request: args.request,
       });
     } catch (error) {
       const code = error instanceof TitleProviderError ? error.code : "provider_unavailable";
@@ -174,12 +210,21 @@ export class StoryTitleService {
       return this.settle(input, attempt, provider, code, model);
     }
     const title = sanitizeGeneratedTitle(completion.title);
-    if (!title) return this.settle(input, attempt, provider, "provider_response_invalid", model);
     const cost = costCents({
       model,
       inputTokens: completion.inputTokens,
       outputTokens: completion.outputTokens,
     });
+    await this.deps.budget.settleTitle({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: input.storyId,
+      model,
+      reservationId: args.reservationId,
+      cents: cost ?? 0,
+    });
+    args.markSettled();
+    if (!title) return this.settle(input, attempt, provider, "provider_response_invalid", model);
     // Compare-and-set: a concurrent settle or a user edit wins over a late completion.
     const updated = await this.db
       .update(stories)
