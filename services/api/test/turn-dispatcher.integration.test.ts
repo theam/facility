@@ -16,6 +16,7 @@ import {
   projectBudgets,
   projectRepositories,
   projects,
+  storyConversations,
   storyEvidenceEvents,
   turnEvents,
   turnGitEvidence,
@@ -437,7 +438,13 @@ environment:
     if (!followUp.turn) throw new Error("expected follow-up turn");
     await dispatcher.dispatch({ orgId, projectId, turnId: followUp.turn.id });
     expect(engine.requests[1]?.nativeSessionId).toBe("codex-native-session");
-    expect(engine.requests[1]?.prompt).toContain("Continue with the second part");
+    expect(engine.requests[1]?.prompt).toBe("Continue with the second part");
+    expect(
+      await db
+        .select({ summary: storyConversations.summary })
+        .from(storyConversations)
+        .where(eq(storyConversations.storyId, started.story.id)),
+    ).toEqual([expect.objectContaining({ summary: null })]);
     const firstRequest = engine.requests[0];
     if (!firstRequest) throw new Error("expected first engine request");
     expect(
@@ -697,6 +704,13 @@ environment:
     await expect(
       dispatcher.dispatch({ orgId, projectId, turnId: followUp.turn.id }),
     ).resolves.toMatchObject({ state: "failed" });
+    expect(engine.requests.at(-1)?.prompt).toBe("Continue after the native session was lost");
+    const [compacted] = await db
+      .select({ summary: storyConversations.summary })
+      .from(storyConversations)
+      .where(eq(storyConversations.storyId, started.story.id));
+    expect(compacted?.summary).toContain("Create the initial session");
+    expect(compacted?.summary).toContain("Continue after the native session was lost");
 
     const failed = await storiesService.get(orgId, projectId, started.story.id);
     expect(failed.attention).toEqual([
@@ -745,6 +759,10 @@ environment:
       "codex-native-session",
       undefined,
     ]);
+    expect(engine.requests.at(-1)?.prompt).toContain("# Conversation summary");
+    expect(engine.requests.at(-1)?.prompt).toContain("Create the initial session");
+    expect(engine.requests.at(-1)?.prompt).toContain("Retry requested");
+    expect(engine.requests.at(-1)?.prompt).not.toContain("# Shared conversation");
     expect(
       (await storiesService.conversation(orgId, projectId, started.story.id)).map(
         (row) => row.body,

@@ -28,6 +28,7 @@ import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.
 import { TurnHealthMonitor } from "./health-monitor.js";
 import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
 import { LiveTurnEvents } from "./live-events.js";
+import { summaryText, turnPrompt } from "./prompt.js";
 
 import { redactEvent as redact, redactString } from "./redaction.js";
 
@@ -91,7 +92,7 @@ export class TurnDispatcher {
         });
       }
       await appendTurnEvent(this.db, { ...eventBase, type: "turn.started", data: {} });
-      const [story, workspace, conversation, messages] = await Promise.all([
+      const [story, workspace, conversation] = await Promise.all([
         this.scopedStory(input.orgId, input.projectId, turn.storyId),
         this.activeWorkspace(input.orgId, input.projectId, turn.storyId),
         this.db
@@ -106,17 +107,6 @@ export class TurnDispatcher {
           )
           .limit(1)
           .then((rows) => rows[0]),
-        this.db
-          .select()
-          .from(storyMessages)
-          .where(
-            and(
-              eq(storyMessages.orgId, input.orgId),
-              eq(storyMessages.projectId, input.projectId),
-              eq(storyMessages.storyId, turn.storyId),
-            ),
-          )
-          .orderBy(asc(storyMessages.seq)),
       ]);
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
@@ -280,13 +270,29 @@ export class TurnDispatcher {
         });
       }, turn.id);
       const engine = this.engines.get(manifest.engine);
+      const nativeSessionId = session?.nativeSessionId;
+      const promptMessages = await this.promptMessages({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: story.id,
+        turnId: turn.id,
+        nativeSessionId,
+        summary: conversation.summary,
+      });
       const engineRequest = {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: turnPrompt({
+          manifest,
+          story,
+          summary: conversation.summary,
+          messages: promptMessages,
+          turnId: turn.id,
+          nativeSessionId,
+        }),
         cwd: prepared.primaryCwd,
-        nativeSessionId: session?.nativeSessionId,
+        nativeSessionId,
         environment: prepared.processEnvironment,
         signal: cancellation.signal,
         onEvent: (event: AgentTurnResult["events"][number]) => liveEvents?.append(event),
@@ -308,6 +314,13 @@ export class TurnDispatcher {
         ) {
           throw error;
         }
+        await this.compactConversation({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: story.id,
+          conversationId: conversation.id,
+          turnId: turn.id,
+        });
         await this.db
           .update(engineSessions)
           .set({ status: "corrupt", updatedAt: new Date() })
@@ -657,6 +670,80 @@ export class TurnDispatcher {
     }
   }
 
+  private async promptMessages(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+    nativeSessionId?: string;
+    summary: string | null;
+  }) {
+    if (input.nativeSessionId || input.summary) {
+      const current = await this.currentUserMessage(input);
+      if (!current) throw new Error("turn user message is missing");
+      return [current];
+    }
+    return this.storyMessages(input.orgId, input.projectId, input.storyId);
+  }
+
+  private async compactConversation(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    conversationId: string;
+    turnId: string;
+  }) {
+    const messages = await this.storyMessages(input.orgId, input.projectId, input.storyId);
+    await this.db
+      .update(storyConversations)
+      .set({ summary: summaryText(messages, input.turnId), updatedAt: new Date() })
+      .where(
+        and(
+          eq(storyConversations.orgId, input.orgId),
+          eq(storyConversations.projectId, input.projectId),
+          eq(storyConversations.id, input.conversationId),
+        ),
+      );
+  }
+
+  private async currentUserMessage(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+  }) {
+    return (
+      await this.db
+        .select()
+        .from(storyMessages)
+        .where(
+          and(
+            eq(storyMessages.orgId, input.orgId),
+            eq(storyMessages.projectId, input.projectId),
+            eq(storyMessages.storyId, input.storyId),
+            eq(storyMessages.turnId, input.turnId),
+            eq(storyMessages.role, "user"),
+          ),
+        )
+        .orderBy(asc(storyMessages.seq))
+        .limit(1)
+    )[0];
+  }
+
+  private async storyMessages(orgId: string, projectId: string, storyId: string) {
+    return this.db
+      .select()
+      .from(storyMessages)
+      .where(
+        and(
+          eq(storyMessages.orgId, orgId),
+          eq(storyMessages.projectId, projectId),
+          eq(storyMessages.storyId, storyId),
+        ),
+      )
+      .orderBy(asc(storyMessages.seq));
+  }
+
   private async scopedStory(orgId: string, projectId: string, storyId: string) {
     const row = (
       await this.db
@@ -831,42 +918,6 @@ function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator
   };
 }
 
-function buildPrompt(
-  manifest: AgentManifest,
-  story: typeof stories.$inferSelect,
-  summary: string | null,
-  messages: Array<typeof storyMessages.$inferSelect>,
-  turnId: string,
-) {
-  const currentSequence = messages.find(
-    (message) => message.turnId === turnId && message.role === "user",
-  )?.seq;
-  const relevant = messages.filter(
-    (message) => currentSequence === undefined || message.seq <= currentSequence,
-  );
-  const transcript = relevant
-    .map(
-      (message) => `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`,
-    )
-    .join("\n\n");
-  return [
-    manifest.prompt,
-    `# Story\n${story.title}\nExternal identity: ${story.provider}:${story.externalId}`,
-    summary ? `# Conversation summary\n${summary}` : "",
-    `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
-    "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
-    "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function actorLabel(actor: unknown) {
-  if (!actor || typeof actor !== "object") return "unknown";
-  const value = actor as { type?: unknown; id?: unknown };
-  return `${String(value.type ?? "unknown")}:${String(value.id ?? "unknown")}`;
-}
-
 function storyBranch(title: string, storyId: string) {
   const slug =
     title
@@ -903,10 +954,6 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
   return serialized.length <= 64_000
     ? value
     : { truncated: true, payload: `${serialized.slice(0, 63_900)}…` };
-}
-
-function truncateStart(value: string, limit: number) {
-  return value.length <= limit ? value : `[Earlier transcript omitted]\n${value.slice(-limit)}`;
 }
 
 function agentOutcome(output: string): { output: string; attention?: string } {

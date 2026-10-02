@@ -45,8 +45,9 @@ The worker handles these recurring paths:
 - `github.mirror` for ten-minute reconciliation, with one job per active project; and
 - `agent.schedules` for minute-level schedule evaluation.
 
-Messages and turns are persisted before dispatch. A database claim prevents two workers from
-running the same story turn concurrently, and the budget hold is taken in that same claim.
+Messages and turns are persisted before dispatch. A confirmed native session receives only the
+new user message. A database claim prevents two workers from running the same story turn
+concurrently, and the budget hold is taken in that same claim.
 A rate-limited project mirror waits until GitHub's reset instead of blocking the other projects.
 Every activation resolves the repository catalog, checks the trigger, and snapshots the manifest
 used for history.
