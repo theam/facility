@@ -229,7 +229,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_set_budget",
     permission: "budgets:write",
     description:
-      "Set the project monthly budget. Exhausted budgets block new turns; active provider calls finish and are accounted afterwards. Needs budgets:write.",
+      "Set the project monthly budget. Exhausted budgets block new turns. Starting a turn or title reserves a priced estimate against the limit until measured usage replaces it. Needs budgets:write.",
     inputSchema: {
       projectId,
       monthlyLimitCents: z.number().int().min(0),
