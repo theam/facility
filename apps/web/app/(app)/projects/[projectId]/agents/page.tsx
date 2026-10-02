@@ -1,6 +1,6 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
 import { AgentEditor } from "@/components/agents/agent-editor";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { ErrorNotice, resultFallback } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api, type ProjectSkill, type StoryAgent } from "@/lib/api";
 import { can } from "@/lib/permissions";
@@ -18,7 +18,7 @@ export default async function ProjectAgentsPage({
     api.projectSkills(projectId),
     api.me(),
   ]);
-  if (!result.ok) return result.offline ? <Offline /> : <ErrorNotice message={result.message} />;
+  if (!result.ok) return resultFallback(result);
   const canWrite = me.ok && can(me.data.permissions, "projects:write");
 
   return (

@@ -1,7 +1,7 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { ErrorNotice, resultFallback } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { AttentionActions } from "@/components/story/attention-actions";
 import { EnvironmentLogs } from "@/components/story/environment-logs";
@@ -47,9 +47,8 @@ export default async function StoryPage({
   ]);
 
   if (!detail.ok) {
-    if (detail.offline) return <Offline />;
     if (detail.status === 404) notFound();
-    return <ErrorNotice message={`Couldn't load this story — ${detail.message}`} />;
+    return resultFallback(detail);
   }
 
   const bundle = detail.data;

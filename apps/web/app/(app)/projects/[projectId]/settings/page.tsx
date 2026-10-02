@@ -1,6 +1,7 @@
 import { Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { notFound } from "next/navigation";
+import { ErrorNotice, resultFallback } from "@/components/offline";
 import { DisconnectRepository } from "@/components/project/disconnect-repository";
 import { NativePreviews } from "@/components/project/native-previews";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
@@ -21,11 +22,8 @@ export default async function ProjectSettingsPage({
     api.me(),
   ]);
   if (!project.ok) {
-    return project.offline ? (
-      <Offline />
-    ) : (
-      <ErrorNotice message={`Project not found (${project.status})`} />
-    );
+    if (project.status === 404) notFound();
+    return resultFallback(project);
   }
 
   return (
