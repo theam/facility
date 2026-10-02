@@ -1476,3 +1476,41 @@ export const githubChecks = pgTable(
     }),
   ],
 );
+
+export const workerHeartbeats = pgTable("worker_heartbeats", {
+  id: text("id").primaryKey(),
+  seenAt: timestamp("seen_at", { withTimezone: true }).notNull(),
+});
+
+export const webhookRejections = pgTable(
+  "webhook_rejections",
+  {
+    id: text("id").primaryKey(),
+    reason: text("reason").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("webhook_rejections_received_idx").on(table.receivedAt),
+    check("webhook_rejections_reason_check", sql`${table.reason} in ('signature', 'payload')`),
+  ],
+);
+
+export const mirrorSyncs = pgTable(
+  "mirror_syncs",
+  {
+    projectId: text("project_id")
+      .primaryKey()
+      .references(() => projects.id),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "mirror_syncs_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+  ],
+);

@@ -200,7 +200,7 @@
           }
         },
         "operationId": "getHealth",
-        "summary": "Check API and database health",
+        "summary": "Check API and database liveness",
         "tags": [
           "Operations"
         ],
@@ -229,12 +229,33 @@
                         "ok",
                         "down"
                       ]
+                    },
+                    "worker": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "down"
+                      ]
+                    },
+                    "queue": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "stale"
+                      ]
+                    },
+                    "queueAgeMs": {
+                      "nullable": true,
+                      "type": "number"
                     }
                   },
                   "required": [
                     "ok",
                     "version",
-                    "db"
+                    "db",
+                    "worker",
+                    "queue",
+                    "queueAgeMs"
                   ],
                   "additionalProperties": false
                 }
@@ -330,12 +351,33 @@
                         "ok",
                         "down"
                       ]
+                    },
+                    "worker": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "down"
+                      ]
+                    },
+                    "queue": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "stale"
+                      ]
+                    },
+                    "queueAgeMs": {
+                      "nullable": true,
+                      "type": "number"
                     }
                   },
                   "required": [
                     "ok",
                     "version",
-                    "db"
+                    "db",
+                    "worker",
+                    "queue",
+                    "queueAgeMs"
                   ],
                   "additionalProperties": false
                 }
@@ -344,7 +386,7 @@
           }
         },
         "operationId": "getReadyz",
-        "summary": "Check API readiness",
+        "summary": "Check worker heartbeat and queue readiness",
         "tags": [
           "Operations"
         ],

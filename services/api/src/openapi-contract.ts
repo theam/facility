@@ -206,8 +206,8 @@ function operationId(method: string, path: string) {
 
 function operationSummary(method: string, path: string) {
   const custom: Record<string, string> = {
-    "get /health": "Check API and database health",
-    "get /readyz": "Check API readiness",
+    "get /health": "Check API and database liveness",
+    "get /readyz": "Check worker heartbeat and queue readiness",
     "post /webhooks/github": "Receive a GitHub App webhook",
     "post /v1/projects/{projectId}/workspace-stories": "Start a persistent story workspace",
   };

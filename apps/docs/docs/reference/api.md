@@ -12,8 +12,8 @@ maps the supported resources and cross-cutting behavior.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | Process and database liveness; returns 503 when the database is down. |
-| `GET /readyz` | Readiness probe with the same version and database status shape. |
+| `GET /health` | Process and database liveness. Returns 503 when the database is down. A dead worker does not fail this probe. |
+| `GET /readyz` | Readiness. Returns 503 when the database is down, no worker heartbeat is newer than 60 seconds, or the oldest due turn has been waiting more than two minutes. The body is status fields only. |
 | `POST /webhooks/github` | Signed GitHub App delivery ingress. |
 | `POST /mcp` | Streamable HTTP MCP endpoint. |
 | `GET /.well-known/oauth-protected-resource/mcp` | MCP protected-resource discovery. |
