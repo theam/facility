@@ -146,6 +146,14 @@ export class GithubWorkspaceCredentialBroker {
         GH_TOKEN: primaryToken,
         GITHUB_TOKEN: primaryToken,
         FACILITY_GITHUB_CREDENTIALS: JSON.stringify(credentialMap),
+        FACILITY_DEFAULT_BRANCHES: JSON.stringify(
+          Object.fromEntries(
+            repositories.map((repository) => [
+              `${repository.owner}/${repository.name}`.toLowerCase(),
+              repository.defaultBranch,
+            ]),
+          ),
+        ),
         GIT_CONFIG_COUNT: "2",
         GIT_CONFIG_KEY_0: "credential.helper",
         GIT_CONFIG_VALUE_0: "!facility-git-credential",

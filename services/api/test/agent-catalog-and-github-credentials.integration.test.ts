@@ -632,6 +632,12 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
       [`acme/app-${suffix}`]: "full-installation-token",
       [`acme/shared-${suffix}`]: "full-installation-token",
     });
+    const serializedBranches = issued.environment.FACILITY_DEFAULT_BRANCHES;
+    if (!serializedBranches) throw new Error("expected default branches");
+    expect(JSON.parse(serializedBranches)).toEqual({
+      [`acme/app-${suffix}`]: "main",
+      [`acme/shared-${suffix}`]: "main",
+    });
     expect(issued.environment).toMatchObject({
       GH_TOKEN: "full-installation-token",
       GIT_CONFIG_VALUE_0: "!facility-git-credential",

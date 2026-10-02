@@ -341,6 +341,31 @@ RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packa
 
 COPY --chown=root:root --chmod=0555 runner/facility-git-credential.mjs /usr/local/bin/facility-git-credential
 COPY --chown=root:root --chmod=0555 runner/facility-preview-gateway.mjs /usr/local/bin/facility-preview-gateway
+# git and gh on PATH are one workspace guard for every agent. The real
+# binaries move off PATH. The guard refuses merges, default-branch pushes,
+# and force-push, and still allows an ordinary push to the story branch.
+COPY --chown=root:root --chmod=0555 runner/facility-command-guard.mjs /usr/local/lib/facility/facility-command-guard.mjs
+COPY --chown=root:root --chmod=0555 runner/bin/facility-git /usr/local/bin/git
+COPY --chown=root:root --chmod=0555 runner/bin/facility-gh /usr/local/lib/facility/facility-gh
+RUN set -eu; \
+  mkdir -p /usr/libexec/facility; \
+  mv /usr/local/bin/gh /usr/libexec/facility/gh; \
+  mv /usr/local/lib/facility/facility-gh /usr/local/bin/gh; \
+  real_git="$(readlink -f /usr/bin/git)"; \
+  mv "$real_git" /usr/libexec/facility/git; \
+  ln -sfn /usr/local/bin/git /usr/bin/git; \
+  ln -sfn /usr/local/bin/git /usr/lib/git-core/git; \
+  git --version; \
+  gh --version; \
+  if git push --force origin main >/tmp/facility-guard.err 2>&1; then exit 1; fi; \
+  grep -q "Force-push" /tmp/facility-guard.err; \
+  if git push origin main >/tmp/facility-guard.err 2>&1; then exit 1; fi; \
+  grep -q "default branch" /tmp/facility-guard.err; \
+  if gh pr merge 1 >/tmp/facility-guard.err 2>&1; then exit 1; fi; \
+  grep -q "Merging a pull request" /tmp/facility-guard.err; \
+  if gh api repos/acme/app/pulls/1/merge >/tmp/facility-guard.err 2>&1; then exit 1; fi; \
+  grep -q "merge endpoint" /tmp/facility-guard.err; \
+  rm -f /tmp/facility-guard.err
 RUN mkdir -p /workspace \
   && chown -R node:node /workspace
 ENV HOME=/workspace/.facility/home
