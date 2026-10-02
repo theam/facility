@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
+import process from "node:process";
+
+const isWindows = process.platform === "win32";
+const pnpm = isWindows ? "pnpm.cmd" : "pnpm";
 
 const apiTests = readdirSync(new URL("../services/api/test", import.meta.url))
   .filter((name) => name.endsWith(".test.ts") && name !== "workspace-runtime.integration.test.ts")
@@ -9,18 +13,19 @@ const apiTests = readdirSync(new URL("../services/api/test", import.meta.url))
 
 if (apiTests.length === 0) throw new Error("No API tests discovered");
 
-run("pnpm", ["--filter", "@facility/db", "test"], "facility_test");
-run("pnpm", ["--filter", "@theagilemonkeys/facility", "test"], "facility_test");
+run(pnpm, ["--filter", "@facility/db", "test"], "facility_test");
+run(pnpm, ["--filter", "@theagilemonkeys/facility", "test"], "facility_test");
 // Run each API file in its own Vitest process. Several suites build a complete
 // Fastify application during collection; isolating the processes prevents one
 // suite's hooks and module-level resources from overlapping another suite.
 for (const testFile of apiTests) {
-  run("pnpm", ["--filter", "@facility/api", "exec", "vitest", "run", testFile], "facility_test");
+  run(pnpm, ["--filter", "@facility/api", "exec", "vitest", "run", testFile], "facility_test");
 }
 
 function run(command, args, database) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    shell: isWindows,
     env: {
       ...process.env,
       DATABASE_URL: `postgres://facility:facility@127.0.0.1:5461/${database}`,

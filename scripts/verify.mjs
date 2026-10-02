@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import process from "node:process";
 import {
   DEV_COMPOSE,
   TEST_DATABASES,
   recreateTestDatabase,
 } from "./verify-test-databases.mjs";
+
+const isWindows = process.platform === "win32";
+const pnpm = isWindows ? "pnpm.cmd" : "pnpm";
 
 const wasRunning = output("docker", [
   ...DEV_COMPOSE,
@@ -17,10 +21,10 @@ const wasRunning = output("docker", [
 let startedPostgres = false;
 
 try {
-  step("Lint", "pnpm", ["lint"]);
-  step("Clean generated build outputs", "pnpm", ["clean:outputs"]);
-  step("Typecheck", "pnpm", ["typecheck"]);
-  step("Clean workspace build (Turbo cache disabled)", "pnpm", ["build:clean"]);
+  step("Lint", pnpm, ["lint"]);
+  step("Clean generated build outputs", pnpm, ["clean:outputs"]);
+  step("Typecheck", pnpm, ["typecheck"]);
+  step("Clean workspace build (Turbo cache disabled)", pnpm, ["build:clean"]);
 
   if (!wasRunning) {
     step("Start isolated test Postgres", "docker", [
@@ -37,11 +41,11 @@ try {
     recreateTestDatabase(database, run);
   }
 
-  step("Critical integration tests (direct, uncached, skips forbidden)", "pnpm", ["test:critical"]);
-  step("Remaining tests (Turbo cache disabled)", "pnpm", ["test:uncached"]);
-  step("Removed component references", "pnpm", ["check:unused"]);
-  step("Repository guards", "pnpm", ["guards"]);
-  step("All-severity dependency audit", "pnpm", ["audit", "--audit-level", "low"]);
+  step("Critical integration tests (direct, uncached, skips forbidden)", pnpm, ["test:critical"]);
+  step("Remaining tests (Turbo cache disabled)", pnpm, ["test:uncached"]);
+  step("Removed component references", pnpm, ["check:unused"]);
+  step("Repository guards", pnpm, ["guards"]);
+  step("All-severity dependency audit", pnpm, ["audit", "--audit-level", "low"]);
 } finally {
   if (startedPostgres) {
     run("docker", [...DEV_COMPOSE, "stop", "postgres"], { allowFailure: true });
@@ -54,7 +58,7 @@ function step(label, command, args) {
 }
 
 function output(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+  const result = spawnSync(command, args, { encoding: "utf8", shell: isWindows });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     process.stderr.write(result.stderr ?? "");
@@ -64,7 +68,7 @@ function output(command, args) {
 }
 
 function run(command, args, { allowFailure = false } = {}) {
-  const result = spawnSync(command, args, { stdio: "inherit" });
+  const result = spawnSync(command, args, { stdio: "inherit", shell: isWindows });
   if (result.error) throw result.error;
   if (!allowFailure && result.status !== 0) process.exit(result.status ?? 1);
 }
