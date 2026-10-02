@@ -10,7 +10,7 @@ the workspace volume retains repositories and native engine state.
 The image contains:
 
 - Claude Code and Codex from the locked `runner/agent-clis` package set;
-- Git and GitHub CLI with Facility's installation-token credential helper;
+- Git and GitHub CLI. `git` and `gh` on PATH refuse pull-request merges, pushes to the default branch, and force-push, and Git uses Facility's installation-token credential helper;
 - Chromium, Xvfb, fonts, and browser runtime libraries;
 - Docker Engine, CLI, Compose, Buildx, containerd, runc, RootlessKit, and
   rootless networking/storage support;
