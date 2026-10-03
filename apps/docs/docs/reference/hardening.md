@@ -106,3 +106,11 @@ Run the complete repository verifier and Docker workspace acceptance tier for ch
 authentication, authorization, secrets, budgets, billing, webhooks, previews, GitHub credentials,
 or workspace execution. Require unit and integration coverage for successful and denied paths.
 Build immutable images, scan them, and deploy by digest or immutable tag after migrations succeed.
+
+Consume [dependency security floors](security.md#dependency-security-floors) through
+a frozen-lockfile install and rebuilt images; existing running images do not change
+when the lockfile changes. No data migration or new credentials are required for
+this dependency refresh. `node --test scripts/network-dependencies-security.test.mjs`
+checks the resolved URI/IP libraries and a loopback-only WebSocket peer, including
+valid traffic and malformed compressed input. Run `pnpm verify` for the complete
+regression and audit gate; do not suppress new advisories merely to pass it.

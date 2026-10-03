@@ -13,11 +13,12 @@ overrides:
   # resolves a vulnerable v6 without this floor.
   "serialize-javascript@<=7.0.2": 7.0.7
   "uuid@<11.1.1": 11.1.1
-  "brace-expansion@<1.1.18": 1.1.18
-  "brace-expansion@>=2.0.0 <2.1.4": 2.1.4
-  "brace-expansion@>=5.0.0 <5.0.9": 5.0.9
+  "brace-expansion@<1.1.21": 1.1.21
+  "brace-expansion@>=2.0.0 <2.1.7": 2.1.7
+  "brace-expansion@>=4.0.0 <5.0.12": 5.0.12
   "@fastify/static@<10.1.2": 10.1.2
-  "fast-uri@>=3.0.0 <3.1.6": 3.1.6
+  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  "fast-uri@>=4.0.0 <4.1.5": 4.1.5
   "qs@<6.16.0": 6.16.0
   "find-my-way@<9.6.1": 9.7.0
   "js-yaml@>=3.0.0 <3.15.2": 3.15.2
@@ -26,14 +27,16 @@ overrides:
   "svgo@>=3.0.0 <3.3.5": 3.3.5
   "body-parser@<1.20.6": 1.20.6
   "@hono/node-server@<2.0.10": 2.0.10
-  "hono@<4.13.5": 4.13.5
-  "ip-address@<10.3.1": 10.3.1
+  "hono@<4.13.7": 4.13.7
+  "ip-address@<10.7.1": 10.7.1
+  "@grpc/grpc-js@>=1.14.0 <1.14.5": 1.14.5
+  "undici@>=7.28.0 <7.29.1": 7.29.1
   "protobufjs@>=7.5.0 <7.6.5": 7.6.5
   "webpack-dev-server@<=5.2.5": 5.2.6
-  "dompurify@<=3.4.12": 3.4.13
+  "dompurify@<3.4.16": 3.4.16
   "nanoid@>=3.0.0 <3.3.18": 3.3.18
   "colord@<2.9.4": 2.9.4
-  "joi@>=16.0.0 <17.13.6": 17.13.6
+  "joi@>=16.0.0 <17.13.7": 17.13.7
   "baseline-browser-mapping@>=2.0.0 <2.11.0": 2.11.0
 
 # Postinstall build-script allowlist — nothing builds unless named here.
@@ -50,7 +53,7 @@ allowBuilds:
   ssh2: false
 
 # The advisory database still flags brace-expansion 1.x/2.x for GHSA-mh99-v99m-4gvg,
-# although 1.1.18 and 2.1.4 contain the bounded-expansion backport. Keep this temporary
+# although the patched legacy versions above contain the bounded-expansion backport. Keep this temporary
 # ignore only while those patched legacy lines are required by the current dependency graph.
 # image-size has no upstream fixed release for its zero-length ICNS/HEIF/JXL loops.
 # The local patch adds progress guards, covered by dependencies-security.test.mjs.

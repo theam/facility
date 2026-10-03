@@ -256,6 +256,49 @@ describe("story integration API with persisted lifecycle and real authorization"
     });
     expect((await read()).json().lifecycle.phase).not.toBe("done");
   });
+  it("keeps the lifecycle open after the source repository PR merges, including legacy done rows", async () => {
+    const pullId = newId("ghp");
+    await db.insert(githubPullRequests).values({
+      id: pullId,
+      orgId: "org_local",
+      projectId,
+      repositoryId,
+      number: 32,
+      title: "One part delivered",
+      state: "merged",
+      draft: false,
+      headRef: "facility/story",
+      headSha: "a".repeat(40),
+      baseRef: "main",
+      htmlUrl: "https://github.com/acme/parent/pull/32",
+      closingIssues: [30],
+      syncedAt: new Date(),
+    });
+    await db
+      .update(stories)
+      .set({ status: "done", completedAt: new Date() })
+      .where(eq(stories.id, storyId));
+    try {
+      const lifecycle = (await read()).json().lifecycle;
+      expect(lifecycle.issue.state).toBe("open");
+      expect(lifecycle.pullRequest.state).toBe("merged");
+      expect(lifecycle.phase).not.toBe("done");
+      await db.update(githubIssues).set({ state: "closed" }).where(eq(githubIssues.id, issueId));
+      expect((await read()).json().lifecycle).toMatchObject({
+        phase: "done",
+        reason: "issue_closed",
+      });
+      await db.update(githubIssues).set({ state: "open" }).where(eq(githubIssues.id, issueId));
+      expect((await read()).json().lifecycle.phase).not.toBe("done");
+      for (const spy of [wake, execute, destroy, inspect]) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      await db.delete(githubPullRequests).where(eq(githubPullRequests.id, pullId));
+      await db
+        .update(stories)
+        .set({ status: "working", completedAt: null })
+        .where(eq(stories.id, storyId));
+    }
+  });
   it("refuses to infer cleanup from stale mirrors or missing stories", async () => {
     await db
       .update(githubIssues)

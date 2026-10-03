@@ -4,6 +4,7 @@ import { newId } from "@facility/core";
 import {
   attentionItems,
   type FacilityDb,
+  githubIssues,
   previewSessions,
   stories,
   storyArtifacts,
@@ -30,6 +31,7 @@ import type {
   WorkspaceRuntime,
 } from "../workspaces/runtime.js";
 import { reconcileTurnBranch } from "./branch.js";
+import { isGithubIssueStory } from "./phase.js";
 
 export type StoryActor = { type: "user" | "service" | "system"; id: string };
 
@@ -1679,10 +1681,11 @@ export class StoryWorkspaceService {
     pullRequestUrl: string;
     branch: string;
   }) {
-    await this.db.transaction(async (rawTx) => {
+    const complete = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
+      const complete = !isGithubIssueStory(story);
       if (
         story.pullRequestNumber !== null &&
         (story.pullRequestNumber !== input.pullRequestNumber ||
@@ -1697,17 +1700,116 @@ export class StoryWorkspaceService {
       await tx
         .update(stories)
         .set({
-          status: "done",
+          ...(complete ? { status: "done", completedAt: story.completedAt ?? new Date() } : {}),
           branch: input.branch,
           pullRequestNumber: input.pullRequestNumber,
           pullRequestUrl: input.pullRequestUrl,
-          completedAt: story.completedAt ?? new Date(),
           updatedAt: new Date(),
         })
         .where(and(eq(stories.orgId, input.orgId), eq(stories.id, input.storyId)));
+      return complete;
     });
-    await this.suspend(input.orgId, input.projectId, input.storyId);
+    if (complete) await this.suspend(input.orgId, input.projectId, input.storyId);
     return this.get(input.orgId, input.projectId, input.storyId);
+  }
+
+  /** Reconcile only the exact mirrored source issue; never infer closure from a related PR. */
+  async reconcileIssue(orgId: string, projectId: string, storyId: string) {
+    await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockStory(tx, orgId, projectId, storyId);
+      const story = await scopedStory(tx, orgId, projectId, storyId);
+      if (
+        !isGithubIssueStory(story) ||
+        !story.repositoryId ||
+        story.deletedAt ||
+        story.status === "archived"
+      )
+        return;
+      const issue = (
+        await tx
+          .select()
+          .from(githubIssues)
+          .where(
+            and(
+              eq(githubIssues.orgId, orgId),
+              eq(githubIssues.projectId, projectId),
+              eq(githubIssues.repositoryId, story.repositoryId),
+              eq(githubIssues.number, Number(story.externalId.slice("issue:".length))),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!issue) return;
+      if (issue.state === "open") {
+        // Repairs old PR-derived completion too, without waking or recreating compute.
+        if (story.status === "done" || story.completedAt)
+          await tx
+            .update(stories)
+            .set({
+              status: story.status === "done" ? "working" : story.status,
+              completedAt: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(stories.id, story.id));
+        return;
+      }
+      // A completed story may be explicitly woken for inspection. Repeated mirror
+      // observations must not suspend it again or rewrite completion timestamps.
+      if (story.status === "done" && story.completedAt) return;
+      const active = (
+        await tx
+          .select({ id: turns.id })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, orgId),
+              eq(turns.projectId, projectId),
+              eq(turns.storyId, storyId),
+              inArray(turns.state, ["queued", "running"]),
+            ),
+          )
+          .limit(1)
+      )[0];
+      const pending = (
+        await tx
+          .select({ id: storyMessages.id })
+          .from(storyMessages)
+          .where(
+            and(
+              eq(storyMessages.orgId, orgId),
+              eq(storyMessages.projectId, projectId),
+              eq(storyMessages.storyId, storyId),
+              isNull(storyMessages.turnId),
+              sql`${storyMessages.requestedAgentName} is not null`,
+            ),
+          )
+          .limit(1)
+      )[0];
+      // An issue event must not interrupt work already admitted. The next mirror pass retries.
+      if (active || pending) return;
+      const workspace = await this.activeWorkspace(orgId, projectId, storyId, false, tx);
+      if (workspace && !["sleeping", "destroyed"].includes(workspace.state)) {
+        // Keep the lock through suspension, as with failed-turn cleanup, so new work cannot race it.
+        await this.runtime.suspend(locatorFromRow(workspace));
+        await tx
+          .update(workspaces)
+          .set({ state: "sleeping", updatedAt: new Date() })
+          .where(eq(workspaces.id, workspace.id));
+        await appendWorkspaceEvent(tx, workspace.id, orgId, "workspace.suspended", {
+          reason: "issue_closed",
+        });
+      }
+      if (story.status !== "done" || !story.completedAt)
+        await tx
+          .update(stories)
+          .set({
+            status: "done",
+            completedAt: story.completedAt ?? issue.closedAt ?? new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(stories.id, story.id));
+    });
   }
 
   async associatePullRequest(input: {

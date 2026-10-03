@@ -1,8 +1,8 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
+import { AttentionRow } from "@/components/attention/attention-row";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
-import { AttentionActions } from "@/components/story/attention-actions";
 import { CancelTurnButton } from "@/components/story/workspace-story-controls";
 import {
   api,
@@ -13,12 +13,11 @@ import {
   type ProjectOverview,
 } from "@/lib/api";
 import {
-  type AttentionEntry,
   activitySummary,
-  attentionQueue,
   budgetReading,
   duration,
   environmentsLine,
+  latestAttention,
   money,
   monthLabel,
   relativeTime,
@@ -54,7 +53,8 @@ export default async function ProjectOverviewPage({
   const canExecute = me.ok && can(me.data.permissions, "workspaces:execute");
   const overview = overviewResult.ok ? overviewResult.data : null;
   const activity = overview ? activitySummary(overview.activity) : null;
-  const attention = overview ? attentionQueue(overview, projectId) : [];
+  const attention = overview ? latestAttention(overview, projectId) : { entries: [], total: 0 };
+  const hiddenAttention = attention.total - attention.entries.length;
 
   return (
     <div className="flex flex-col gap-10">
@@ -92,7 +92,7 @@ export default async function ProjectOverviewPage({
             ))}
           </div>
         ) : null}
-        {overview ? <SummaryLine overview={overview} attention={attention.length} /> : null}
+        {overview ? <SummaryLine overview={overview} attention={attention.total} /> : null}
       </header>
 
       {!overview ? (
@@ -106,38 +106,55 @@ export default async function ProjectOverviewPage({
           <section
             aria-label="Needs your attention"
             className={
-              attention.length > 0
+              attention.total > 0
                 ? "border border-(--bad)/50 bg-(--bg-subtle) p-5 sm:p-6"
                 : "border border-(--line) p-5 sm:p-6"
             }
           >
             <div className="flex flex-wrap items-baseline justify-between gap-3">
               <h2 className="font-semibold">
-                Needs your attention{attention.length > 0 ? ` · ${attention.length}` : ""}
+                Needs your attention{attention.total > 0 ? ` · ${attention.total}` : ""}
               </h2>
-              {overview.attention.openCount > overview.attention.items.length ? (
-                <Link href={`${base}/stories?status=attention`} className={linkClass}>
-                  All {overview.attention.openCount} open notices →
-                </Link>
-              ) : null}
+              <Link
+                href={`${base}/attention${attention.total > 0 ? "" : "?status=resolved"}`}
+                className={linkClass}
+              >
+                {attention.total > 0 ? `View all ${attention.total} →` : "Resolved notices →"}
+              </Link>
             </div>
-            {attention.length === 0 ? (
+            {attention.entries.length === 0 ? (
               <p className="mt-2 text-sm text-(--dim)">
-                Nothing is waiting on you. Resolved and dismissed notices stay in each story's
-                history.
+                Nothing is waiting on you. Resolved and dismissed notices stay readable on the
+                attention page and in each story's history.
               </p>
             ) : (
-              <div className="mt-4 flex flex-col">
-                {attention.map((entry) => (
-                  <AttentionRow
-                    key={entry.key}
-                    entry={entry}
-                    projectId={projectId}
-                    now={now}
-                    canExecute={canExecute}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="mt-4 flex flex-col">
+                  {attention.entries.map((entry) => (
+                    <AttentionRow
+                      key={entry.key}
+                      entry={entry}
+                      projectId={projectId}
+                      now={now}
+                      canExecute={canExecute}
+                      compact
+                    />
+                  ))}
+                </div>
+                {hiddenAttention > 0 ? (
+                  <p className="flex flex-wrap items-center justify-between gap-3 border-t border-(--line) pt-4 text-[12px] text-(--mut)">
+                    <span>
+                      Showing the latest {attention.entries.length} of {attention.total}.
+                    </span>
+                    <Link
+                      href={`${base}/attention`}
+                      className="text-(--info) underline-offset-4 hover:underline"
+                    >
+                      Read all {attention.total} →
+                    </Link>
+                  </p>
+                ) : null}
+              </>
             )}
           </section>
 
@@ -320,83 +337,6 @@ function Row({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col gap-2 border-b border-(--line) px-4 py-3.5 last:border-b-0 sm:px-5">
       {children}
     </div>
-  );
-}
-
-function AttentionRow({
-  entry,
-  projectId,
-  now,
-  canExecute,
-}: {
-  entry: AttentionEntry;
-  projectId: string;
-  now: Date;
-  canExecute: boolean;
-}) {
-  return (
-    <article className="flex flex-col gap-2 border-t border-(--line) py-4">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <StatusDot tone={entry.tone} />
-        <p className="font-medium">{entry.title}</p>
-        {entry.at ? (
-          <time dateTime={entry.at} className="text-[11.5px] text-(--dim)">
-            {relativeTime(entry.at, now)}
-          </time>
-        ) : null}
-      </div>
-      {entry.storyId ? (
-        <Link
-          href={storyHref(projectId, entry.storyId)}
-          className="w-fit text-sm text-(--ink) hover:underline"
-        >
-          {entry.storyTitle} →
-        </Link>
-      ) : entry.storyTitle ? (
-        <p className="text-sm text-(--ink)">{entry.storyTitle}</p>
-      ) : null}
-      <p className="max-w-prose text-sm leading-relaxed text-(--mut)">{entry.summary}</p>
-      {entry.detail ? (
-        <details className="text-xs text-(--dim)">
-          <summary className="cursor-pointer">Technical details</summary>
-          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words">
-            {entry.detail}
-          </pre>
-        </details>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] [&>div]:mt-0">
-        {entry.action ? (
-          entry.action.external ? (
-            <a
-              href={entry.action.href}
-              target="_blank"
-              rel="noreferrer"
-              className="text-(--info) hover:underline"
-            >
-              {entry.action.label} ↗
-            </a>
-          ) : (
-            <Link href={entry.action.href} className="text-(--info) hover:underline">
-              {entry.action.label} →
-            </Link>
-          )
-        ) : null}
-        {entry.item && entry.storyId && canExecute ? (
-          <AttentionActions
-            projectId={projectId}
-            storyId={entry.storyId}
-            replyAnchor={false}
-            item={{
-              ...entry.item,
-              status: "open",
-              resolution: null,
-              resolvedBy: null,
-              resolvedAt: null,
-            }}
-          />
-        ) : null}
-      </div>
-    </article>
   );
 }
 

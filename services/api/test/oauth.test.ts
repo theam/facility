@@ -9,17 +9,21 @@ import {
   userIdentities,
   users,
 } from "@facility/db";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
 import {
+  authorizationUrlWithConsent,
   isAuthorizationServerPath,
   oauthBrowserOrigin,
   oauthScopes,
   oidcScopesForConsent,
 } from "../src/auth/authorization-server.js";
 import { pkceChallenge } from "../src/auth/identity-provider.js";
+import { oauthAdapterFactory } from "../src/auth/oauth-adapter.js";
 import {
   AccessTokenError,
   looksLikeJwt,
@@ -34,6 +38,7 @@ const databaseUrl =
 const masterKey = Buffer.alloc(32, 7).toString("base64");
 const issuer = "https://facility.test";
 const audience = "https://mcp.facility.test/mcp";
+const allScopes = "openid offline_access email profile facility:mcp";
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
 const privateJwk = { ...(await exportJWK(privateKey)), kid: "test-key", alg: "ES256", use: "sig" };
 const publicJwk = { ...(await exportJWK(publicKey)), kid: "test-key", alg: "ES256", use: "sig" };
@@ -62,6 +67,7 @@ async function token(
     sub?: string;
     orgId?: string;
     aud?: string;
+    iss?: string;
     exp?: number | false;
     scope?: string;
     key?: SignKey;
@@ -72,7 +78,7 @@ async function token(
     scope: input.scope ?? "facility:mcp",
   })
     .setProtectedHeader({ alg: "ES256", kid: "test-key" })
-    .setIssuer(issuer)
+    .setIssuer(input.iss ?? issuer)
     .setSubject(input.sub ?? "user_test")
     .setAudience(input.aud ?? audience)
     .setIssuedAt();
@@ -146,6 +152,7 @@ describe("Facility OAuth access-token verification", () => {
   it.each([
     ["expired", () => token({ exp: Math.floor(Date.now() / 1000) - 1 })],
     ["wrong audience", () => token({ aud: "https://other.example" })],
+    ["wrong issuer", () => token({ iss: "https://other.example" })],
     ["missing expiry", () => token({ exp: false })],
     ["missing MCP scope", () => token({ scope: "openid" })],
     ["foreign signature", () => token({ key: foreign.privateKey })],
@@ -203,6 +210,40 @@ describe("Facility OAuth browser-origin runtime guard", () => {
   });
 });
 
+describe("offline access consent policy", () => {
+  it.each([undefined, "", "login"])("requires consent when prompt is %j", (prompt) => {
+    const params = new URLSearchParams({ scope: allScopes, state: "state with + and &" });
+    if (prompt !== undefined) params.set("prompt", prompt);
+    const result = new URL(authorizationUrlWithConsent(`/oauth/authorize?${params}`), issuer);
+    expect(result.searchParams.get("prompt")).toBe(prompt ? `${prompt} consent` : "consent");
+    expect(result.searchParams.get("scope")).toBe(allScopes);
+    expect(result.searchParams.get("state")).toBe("state with + and &");
+  });
+
+  it.each([
+    "/oauth/authorize",
+    "/oauth/authorize?scope=openid+facility:mcp",
+    "/oauth/authorize?scope=",
+    "/oauth/authorize?scope=offline_access&prompt=consent",
+    "/oauth/authorize?scope=offline_access&prompt=none",
+    "/oauth/authorize?scope=offline_access&prompt=none+login",
+    "/oauth/authorize?scope=offline_access&prompt=none&prompt=login",
+    "/oauth/authorize?scope=offline_access&scope=openid",
+    "/oauth/token?scope=offline_access",
+    "/oauth/authorize/resume?scope=offline_access",
+  ])("preserves requests that must not be rewritten: %s", (url) => {
+    expect(authorizationUrlWithConsent(url)).toBe(url);
+  });
+
+  it("preserves unsupported prompt values for provider validation", () => {
+    const result = new URL(
+      authorizationUrlWithConsent("/oauth/authorize?scope=offline_access&prompt=unsupported"),
+      issuer,
+    );
+    expect(result.searchParams.get("prompt")).toBe("unsupported consent");
+  });
+});
+
 describe("Facility OAuth consent scopes", () => {
   it("grants every requested advertised OIDC scope in canonical order", () => {
     expect(oidcScopesForConsent(oauthScopes("profile openid email offline_access"))).toBe(
@@ -247,13 +288,17 @@ describe("Facility OAuth resource-server integration", async () => {
   // configured signing keys into the keys the running instance verifies with.
   const app = await buildApp(config);
   const { db, client } = createDb(databaseUrl);
+  const Adapter = oauthAdapterFactory(db, masterKey);
+  const refreshTokens = new Adapter("RefreshToken");
   const userId = newId("user");
   let orgId = "";
 
   beforeAll(async () => {
     await migrate(databaseUrl);
-    await seed(databaseUrl);
+    await seed(databaseUrl, { includeDemoData: true });
     await app.ready();
+    const address = new URL(await app.listen({ port: 0, host: "127.0.0.1" }));
+    config.port = Number(address.port);
     const login = await app.inject({
       method: "POST",
       url: "/__test/session",
@@ -289,6 +334,195 @@ describe("Facility OAuth resource-server integration", async () => {
   afterAll(async () => {
     await app.close();
     await client.end();
+  });
+
+  async function authorizationRequest(scope = allScopes) {
+    const proxyHeaders = { host: "api.facility.test", "x-forwarded-proto": "https" };
+    const redirectUri = "http://127.0.0.1:32127/callback";
+    const registration = await app.inject({
+      method: "POST",
+      url: "/oauth/register",
+      headers: proxyHeaders,
+      payload: {
+        client_name: "OAuth scope contract regression",
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        scope: allScopes,
+      },
+    });
+    expect(registration.statusCode).toBe(201);
+    const clientId = registration.json().client_id as string;
+    const verifier = "scope-contract-verifier-".padEnd(64, "x");
+    const query = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope,
+      resource: audience,
+      state: "scope-contract-state",
+      code_challenge: await pkceChallenge(verifier),
+      code_challenge_method: "S256",
+    });
+    return { app, config, userId, orgId, proxyHeaders, query, clientId, verifier, redirectUri };
+  }
+
+  async function issueTokens(scope = allScopes) {
+    const request = await authorizationRequest(scope);
+    const code = await completePkceConsent(request);
+    const exchange = await tokenRequest(app, request.proxyHeaders, {
+      grant_type: "authorization_code",
+      client_id: request.clientId,
+      code,
+      redirect_uri: request.redirectUri,
+      code_verifier: request.verifier,
+      resource: audience,
+    });
+    expect(exchange.statusCode).toBe(200);
+    const tokens = exchange.json() as {
+      access_token: string;
+      refresh_token: string;
+      scope: string;
+    };
+    return {
+      ...request,
+      ...tokens,
+      refresh: (overrides: Record<string, string> = {}) =>
+        tokenRequest(app, request.proxyHeaders, {
+          grant_type: "refresh_token",
+          client_id: request.clientId,
+          refresh_token: tokens.refresh_token,
+          resource: audience,
+          ...overrides,
+        }),
+    };
+  }
+
+  it.each([
+    ["unknown scope", { scope: `${allScopes} facility:admin` }, "invalid_scope"],
+    ["different resource", { resource: "https://other.example/mcp" }, "invalid_target"],
+    ["malformed token", { refresh_token: "not-a-refresh-token" }, "invalid_grant"],
+  ])("rejects refresh with %s", async (_label, overrides, error) => {
+    const issued = await issueTokens();
+    const denied = await issued.refresh(overrides as Record<string, string>);
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json().error).toBe(error);
+  });
+
+  it("rejects a refresh token presented by another registered client", async () => {
+    const issued = await issueTokens();
+    const other = await authorizationRequest();
+    const denied = await issued.refresh({ client_id: other.clientId });
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json().error).toBe("invalid_grant");
+  });
+
+  it.each(["expired", "revoked"])("rejects %s refresh tokens", async (kind) => {
+    const issued = await issueTokens();
+    if (kind === "expired") {
+      const stored = required(await refreshTokens.find(issued.refresh_token), "refresh artifact");
+      await refreshTokens.upsert(issued.refresh_token, stored, -1);
+    } else {
+      const revoked = await app.inject({
+        method: "POST",
+        url: "/oauth/revoke",
+        headers: { ...issued.proxyHeaders, "content-type": "application/x-www-form-urlencoded" },
+        payload: new URLSearchParams({
+          client_id: issued.clientId,
+          token: issued.refresh_token,
+          token_type_hint: "refresh_token",
+        }).toString(),
+      });
+      expect(revoked.statusCode).toBe(200);
+    }
+    const denied = await issued.refresh();
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json().error).toBe("invalid_grant");
+  });
+
+  it.each([
+    ["openid email profile facility:mcp", allScopes, "offline_access"],
+    ["openid offline_access facility:mcp", allScopes, "email profile"],
+    ["openid offline_access email profile", allScopes, "facility:mcp"],
+  ])("does not expand a refresh grant originally issued for %s", async (scope, requested, missing) => {
+    const issued = await issueTokens(scope);
+    const denied = await issued.refresh({ scope: requested });
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json()).toMatchObject({ error: "invalid_scope", scope: missing });
+    // Includes grants equivalent to legacy tokens that lost offline_access.
+    // An omitted scope preserves them but must never silently upgrade them.
+    const renewed = await issued.refresh();
+    expect(renewed.statusCode).toBe(200);
+    const next = renewed.json();
+    const stored = await refreshTokens.find(next.refresh_token);
+    expect(oauthScopes(stored?.scope)).toEqual(oauthScopes(scope));
+    const expandedAgain = await issued.refresh({
+      refresh_token: next.refresh_token,
+      scope: requested,
+    });
+    expect(expandedAgain.statusCode).toBe(400);
+    expect(expandedAgain.json().error).toBe("invalid_scope");
+  });
+
+  it("does not mint MCP scope when refresh explicitly requests only OIDC scopes", async () => {
+    const issued = await issueTokens();
+    const narrowed = await issued.refresh({ scope: "openid email" });
+    expect(narrowed.statusCode).toBe(200);
+    await expectMcpAccessDenied(app, narrowed.json().access_token, { userId, orgId });
+  });
+
+  it.each([
+    "none",
+    "none consent",
+    "unsupported",
+  ])("keeps silent and invalid authorization requests from granting access (prompt=%s)", async (prompt) => {
+    const request = await authorizationRequest();
+    request.query.set("prompt", prompt);
+    const response = await app.inject({
+      method: "GET",
+      url: `/oauth/authorize?${request.query}`,
+      headers: request.proxyHeaders,
+    });
+    expect(response.statusCode).toBe(303);
+    const callback = new URL(required(response.headers.location, "denied callback"));
+    expect(callback.origin + callback.pathname).toBe(request.redirectUri);
+    expect(callback.searchParams.get("code")).toBeNull();
+    expect(callback.searchParams.get("error")).toBe(
+      prompt === "none" ? "login_required" : "invalid_request",
+    );
+    expect(callback.searchParams.get("iss")).toBe(issuer);
+    expect(callback.searchParams.get("state")).toBe(request.query.get("state"));
+  });
+
+  it("rejects a wrong PKCE verifier after offline consent", async () => {
+    const request = await authorizationRequest();
+    const code = await completePkceConsent(request);
+    const denied = await tokenRequest(app, request.proxyHeaders, {
+      grant_type: "authorization_code",
+      client_id: request.clientId,
+      code,
+      redirect_uri: request.redirectUri,
+      code_verifier: "wrong-verifier-".padEnd(64, "x"),
+    });
+    expect(denied.statusCode).toBe(400);
+    expect(denied.json().error).toBe("invalid_grant");
+  });
+
+  it.each(["scope", "prompt"])("rejects duplicate authorization %s parameters", async (param) => {
+    const request = await authorizationRequest();
+    request.query.append(param, param === "scope" ? "openid" : "none");
+    if (param === "prompt") request.query.append("prompt", "consent");
+    const denied = await app.inject({
+      method: "GET",
+      url: `/oauth/authorize?${request.query}`,
+      headers: request.proxyHeaders,
+    });
+    expect(denied.statusCode).toBe(303);
+    const callback = new URL(required(denied.headers.location, "invalid request callback"));
+    expect(callback.searchParams.get("error")).toBe("invalid_request");
+    expect(callback.searchParams.get("code")).toBeNull();
+    expect(callback.searchParams.get("iss")).toBe(issuer);
   });
 
   it("serves canonical MCP resource discovery alongside the enabled authorization server", async () => {
@@ -429,7 +663,11 @@ describe("Facility OAuth resource-server integration", async () => {
     expect(denied.statusCode).toBe(403);
   });
 
-  it("completes PKCE authorization, rotates refresh tokens, and rejects reuse", async () => {
+  it.each([
+    undefined,
+    "consent",
+    "login",
+  ])("completes PKCE, explicit and omitted refresh scopes, MCP reads and reuse denial (prompt=%j)", async (prompt) => {
     const proxyHeaders = {
       host: "api.facility.test",
       "x-forwarded-host": "api.facility.test",
@@ -461,6 +699,7 @@ describe("Facility OAuth resource-server integration", async () => {
       code_challenge: await pkceChallenge(verifier),
       code_challenge_method: "S256",
     });
+    if (prompt) query.set("prompt", prompt);
     const wrongResource = new URLSearchParams(query);
     wrongResource.set("resource", "https://mcp.facility.test");
     const rejectedResource = await app.inject({
@@ -479,6 +718,12 @@ describe("Facility OAuth resource-server integration", async () => {
       proxyHeaders,
       query,
     });
+    const storedCode = await new Adapter("AuthorizationCode").find(code);
+    expect(oauthScopes(storedCode?.scope)).toEqual(oauthScopes(allScopes));
+    expect(storedCode?.resource).toBe(audience);
+    const storedGrant = await new Adapter("Grant").find(required(storedCode?.grantId, "grant id"));
+    expect(storedGrant?.openid).toEqual({ scope: "openid offline_access email profile" });
+    expect(storedGrant?.resources).toEqual({ [audience]: "facility:mcp" });
     const exchange = await tokenRequest(app, proxyHeaders, {
       grant_type: "authorization_code",
       client_id: clientId,
@@ -492,6 +737,10 @@ describe("Facility OAuth resource-server integration", async () => {
     expect(first.access_token.split(".")).toHaveLength(3);
     expect(first.refresh_token).toBeTypeOf("string");
     expect(decodeJwt(first.access_token).scope).toBe("facility:mcp");
+    expect(first.scope).toBe("facility:mcp");
+    const storedRefresh = await refreshTokens.find(first.refresh_token);
+    expect(oauthScopes(storedRefresh?.scope)).toEqual(oauthScopes(allScopes));
+    expect(storedRefresh?.resource).toBe(audience);
     const persisted = JSON.stringify(await db.select().from(oauthArtifacts));
     expect(persisted).not.toContain(first.refresh_token);
     expect(persisted).not.toContain(first.access_token);
@@ -504,12 +753,14 @@ describe("Facility OAuth resource-server integration", async () => {
       me.statusCode,
       JSON.stringify({ body: me.body, claims: decodeJwt(first.access_token) }),
     ).toBe(200);
+    await expectMcpRead(config.port, first.access_token);
 
     const rotated = await tokenRequest(app, proxyHeaders, {
       grant_type: "refresh_token",
       client_id: clientId,
       refresh_token: first.refresh_token,
       resource: audience,
+      scope: query.get("scope") as string,
     });
     expect(rotated.statusCode, rotated.body).toBe(200);
     const rotatedBody = rotated.json();
@@ -521,6 +772,37 @@ describe("Facility OAuth resource-server integration", async () => {
       headers: { authorization: `Bearer ${rotatedBody.access_token}` },
     });
     expect(refreshedMe.statusCode, refreshedMe.body).toBe(200);
+    await expectMcpRead(config.port, rotatedBody.access_token);
+
+    // Rotation preserves the full authorization even when an individual access
+    // token requests only its resource scope or omits scope/resource entirely.
+    let current = rotatedBody;
+    for (const scope of [
+      undefined,
+      "facility:mcp",
+      "profile facility:mcp offline_access email openid",
+    ]) {
+      const previous = current.refresh_token;
+      const renewed = await tokenRequest(app, proxyHeaders, {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: previous,
+        ...(scope === undefined ? {} : { scope }),
+      });
+      expect(renewed.statusCode).toBe(200);
+      current = renewed.json();
+      expect(current.refresh_token === previous).toBe(false);
+      expect(current.scope).toBe("facility:mcp");
+      await expect(verifyAccessToken(current.access_token, oauthConfig)).resolves.toEqual({
+        userId,
+        orgId,
+        scope: "facility:mcp",
+      });
+      const stored = await refreshTokens.find(current.refresh_token);
+      expect(oauthScopes(stored?.scope)).toEqual(oauthScopes(allScopes));
+      expect(stored?.resource).toBe(audience);
+      expect((await refreshTokens.find(previous))?.consumed).toBeTypeOf("number");
+    }
     const replay = await tokenRequest(app, proxyHeaders, {
       grant_type: "refresh_token",
       client_id: clientId,
@@ -529,6 +811,13 @@ describe("Facility OAuth resource-server integration", async () => {
     });
     expect(replay.statusCode).toBe(400);
     expect(replay.json().error).toBe("invalid_grant");
+    const revokedFamily = await tokenRequest(app, proxyHeaders, {
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: current.refresh_token,
+    });
+    expect(revokedFamily.statusCode).toBe(400);
+    expect(revokedFamily.json().error).toBe("invalid_grant");
   });
 
   it("does not grant MCP access when the client omits the MCP scope", async () => {
@@ -639,6 +928,24 @@ describe("Facility OAuth resource-server integration", async () => {
   });
 });
 
+async function expectMcpRead(port: number, accessToken: string) {
+  const client = new Client({ name: "oauth-refresh-regression", version: "1.0.0" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${accessToken}` } },
+      }),
+    );
+    const result = await client.callTool({ name: "facility_list_projects", arguments: {} });
+    expect(result.isError).not.toBe(true);
+    const content = result.content as Array<{ type: string; text?: string }>;
+    const text = content.find((part) => part.type === "text")?.text;
+    expect(Array.isArray(JSON.parse(required(text, "MCP projects response")))).toBe(true);
+  } finally {
+    await client.close();
+  }
+}
+
 async function expectMcpAccessDenied(
   app: Awaited<ReturnType<typeof buildApp>>,
   accessToken: string,
@@ -664,6 +971,13 @@ async function expectMcpAccessDenied(
   expect(denied.json()).toEqual({
     error: { code: "unauthorized", message: "Invalid access token" },
   });
+  const deniedMcp = await app.inject({
+    method: "POST",
+    url: "/mcp",
+    headers: { authorization: `Bearer ${accessToken}` },
+    payload: {},
+  });
+  expect(deniedMcp.statusCode).toBe(401);
 }
 
 type PkceConsentInput = {
@@ -718,6 +1032,9 @@ async function completePkceConsentCallback(input: PkceConsentInput) {
   expect(interaction.statusCode).toBe(200);
   expect(interaction.body).toContain("Authorize Facility MCP");
   expect(interaction.body).toContain(redirectUri);
+  expect(interaction.body.includes("can renew its access while you are away")).toBe(
+    oauthScopes(input.query.get("scope")).has("offline_access"),
+  );
   const consent = await input.app.inject({
     method: "POST",
     url: interactionPath,

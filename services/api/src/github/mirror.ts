@@ -15,6 +15,7 @@ import {
 } from "@facility/db";
 import { and, asc, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
 import { appendStoryEvidence } from "../stories/evidence.js";
+import { isGithubIssueStory } from "../stories/phase.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import { FacilityGithubClient, type GithubClientFactory } from "./client.js";
 
@@ -396,13 +397,14 @@ export class GithubMirrorService {
       syncedAt: now,
       updatedAt: now,
     };
-    return (
+    const saved =
       (
         await this.db
           .insert(githubIssues)
           .values(values)
           .onConflictDoUpdate({
             target: [githubIssues.repositoryId, githubIssues.number],
+            setWhere: sql`${githubIssues.githubUpdatedAt} is null or excluded.github_updated_at >= ${githubIssues.githubUpdatedAt}`,
             set: {
               title: values.title,
               body: values.body,
@@ -420,8 +422,25 @@ export class GithubMirrorService {
             },
           })
           .returning()
-      )[0] ?? null
-    );
+      )[0] ?? null;
+    if (saved && this.storiesService) {
+      const linked = await this.db
+        .select({ id: stories.id })
+        .from(stories)
+        .where(
+          and(
+            eq(stories.orgId, repository.orgId),
+            eq(stories.projectId, repository.projectId),
+            eq(stories.repositoryId, repository.id),
+            eq(stories.provider, "github"),
+            eq(stories.externalId, `issue:${number}`),
+            isNull(stories.deletedAt),
+          ),
+        );
+      for (const story of linked)
+        await this.storiesService.reconcileIssue(repository.orgId, repository.projectId, story.id);
+    }
+    return saved;
   }
 
   private async upsertPullRequest(repository: RepositoryRow, pull: JsonObject) {
@@ -552,7 +571,7 @@ export class GithubMirrorService {
     if (this.storiesService) {
       if (pull.state === "merged") {
         if (
-          story.status === "done" &&
+          (story.status === "done" || isGithubIssueStory(story)) &&
           story.pullRequestNumber === pull.number &&
           story.pullRequestUrl === pull.url &&
           story.branch === pull.branch

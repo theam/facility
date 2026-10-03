@@ -16,6 +16,7 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   derivePhase,
+  isGithubIssueStory,
   type PhaseReason,
   type PullRequestSummary,
   pickPullRequest,
@@ -483,6 +484,7 @@ export class ProjectBacklogService {
           status: story.status,
           deletedAt: story.deletedAt,
           hasTurns: (turnCountByStory.get(story.id) ?? 0) > 0,
+          issueBacked: isGithubIssueStory(story),
         },
         issue: issue ? { state: issue.state as "open" | "closed" } : null,
         pullRequest: pull,

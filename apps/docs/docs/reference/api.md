@@ -163,6 +163,11 @@ in another client.
   open attention with the action each accepts, pull requests waiting for review, recent results,
   backlog counts, recorded workspace states, and permission-gated agent spend and budget. It reads
   persisted state only and never wakes a workspace. See [Read the project overview](../guides/project-overview.md).
+- `/v1/projects/:projectId/attention` lists the project's notices newest first: agents waiting for a
+  reply and failed, interrupted, or unstarted runs, each with its story and the action it accepts.
+  It accepts `status` (`open`, `resolved`, `all`), repeatable `kind`, `q`, and `limit`/`offset`
+  pagination, and returns open/resolved counts and kind facets. See
+  [Read every notice](../guides/project-overview.md#read-every-notice).
 - `/v1/projects/:projectId/observability` returns operational events and summaries.
 - `/v1/projects/:projectId/backlog` returns the unified backlog: mirrored issues that nobody has
   started, stories, and open pull requests, one item per unit of work, each with its derived work
@@ -176,6 +181,15 @@ in another client.
 - `/v1/projects/:projectId/audit` returns project audit events.
 
 Unavailable provider pricing is represented explicitly and must not be interpreted as zero.
+
+The fallback price book includes `claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-opus-5`, and `claude-fable-5-1`, using the
+[published Anthropic rates](https://platform.claude.com/docs/en/about-claude/pricing)
+verified on 2026-09-29. These entries use standard global API pricing and
+5-minute cache writes, not fast mode, batch, regional premiums, or 1-hour cache
+writes. A valid engine-reported cost takes precedence over this fallback.
+An enabled budget still blocks an unpriced model or a project over its limit.
+Updating the catalog does not reprice persisted turns or change agent defaults.
 
 ## Authentication and authorization
 

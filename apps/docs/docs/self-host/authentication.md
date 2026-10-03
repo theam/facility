@@ -72,11 +72,39 @@ The issuer must be the `WEB_URL` origin and the callback must be exactly its
 `/api/auth/callback`. Production URLs use HTTPS. Facility publishes protected-resource metadata for
 the MCP resource, supports dynamic client registration, uses authorization code with PKCE S256,
 and rotates refresh tokens. Access tokens are resource-bound to the configured MCP URL and carry
-the `facility:mcp` scope.
+the `facility:mcp` scope only when the client explicitly requested it and the user approved it.
+
+Discovery advertises `openid offline_access email profile facility:mcp` for client registration
+and authorization. When an interactive authorization requests `offline_access`, Facility requires
+the consent prompt even if the client omitted `prompt=consent`. The consent page explains that the
+client can renew access while the user is away. Explicit `prompt=none` requests remain silent and
+cannot acquire new consent. Unknown scopes are not granted.
+
+The authorization code and refresh token retain the approved OIDC and resource scopes; the MCP
+access token and token response contain only the resource scope `facility:mcp`. A refresh request
+may omit `scope` to use the original grant, repeat its scopes, or request a subset. Requesting an
+ungranted scope returns `invalid_scope`. Rotation preserves the refresh grant, binds it to the
+same client and resource, and rejects reuse of consumed refresh tokens.
 
 MCP access tokens last 15 minutes, authorization codes 10 minutes, and refresh grants and tokens 30
 days. Browser sessions last seven days. Treat those defaults as maximum persistence, not a reason
 to delay revocation after membership changes.
+
+### Troubleshoot an existing MCP connection
+
+If renewal fails with `invalid_scope: refresh token missing requested scope`, tokens issued by
+older versions may lack `offline_access`: it was dropped when clients omitted `prompt=consent`,
+even though they received a refresh token. After upgrading the authorization server, authorize the
+client again (for Codex, run `codex mcp login facility` and reload its connection). Existing tokens
+are not expanded during refresh; reauthorization records the user's consent for the requested
+scopes. Verify both an initial MCP read and a read after the access token expires and is renewed.
+
+An authorization callback error about a missing or mismatched issuer is a separate check. The
+authorization-server metadata advertises `authorization_response_iss_parameter_supported: true`,
+so code and error callbacks must include `iss` exactly equal to `FACILITY_OAUTH_ISSUER`, alongside
+the original `state`. Check the deployed server version and redirect/proxy path if that parameter
+is missing. Keep issuer validation enabled. Never include tokens, authorization codes, cookies, or
+private signing keys in diagnostic reports.
 
 The [MCP reference](../reference/mcp.md) contains client examples and the full tool contract.
 

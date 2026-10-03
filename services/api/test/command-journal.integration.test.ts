@@ -27,6 +27,8 @@ it("journals an actual child process byte for byte with private file permissions
     journal.push(stdout);
     journal.finish();
     expect(output).toEqual({ stdout: "hello 🌍\n", stderr: "warning\n" });
+    expect(journal.result).toMatchObject({ exitCode: 0 });
+    expect(journal.result?.durationMs).toBeGreaterThanOrEqual(0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -61,6 +63,33 @@ it("rotates large output into bounded journal segments without losing bytes", as
     }
     journal.finish();
     expect(output).toBe("α".repeat(200_000));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("persists a real failed process exit alongside its last output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "command-journal-"));
+  const path = join(root, "output");
+  try {
+    await expect(
+      promisify(execFile)(process.execPath, [
+        "-e",
+        COMMAND_JOURNAL_WRAPPER,
+        path,
+        process.execPath,
+        "-e",
+        'process.stdout.write("last output"); process.exitCode = 7;',
+      ]),
+    ).rejects.toMatchObject({ code: 7 });
+    let output = "";
+    const journal = new CommandJournal((event) => {
+      output += event.data;
+    });
+    journal.push(await readFile(`${path}.0`, "utf8"));
+    journal.finish();
+    expect(output).toBe("last output");
+    expect(journal.result).toMatchObject({ exitCode: 7 });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

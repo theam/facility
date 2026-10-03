@@ -32,11 +32,18 @@ The presentation helpers in `apps/web/lib/story-presentation.ts` keep state inte
 The Stories page is the project backlog. `services/api/src/stories/backlog.ts` merges mirrored
 GitHub issues, stories and open pull requests into one item per unit of work and
 `services/api/src/stories/phase.ts` derives the work phase with a fixed precedence: deleted or
-archived, delivered (merged pull request, completed story, closed issue), a live turn, open
+archived, delivered non-issue work (merged pull request or completed story), a live turn,
+closed source issue, open
 attention (Facility items, failing checks, requested changes), review (open non-draft pull request),
 progress, and finally not started. The phase never inspects a workspace provider, so listing the
 backlog cannot wake compute. Agent activity (`running`, `queued`, `idle`) and the recorded workspace
 state travel alongside the phase instead of being folded into it.
+
+An issue-backed story stays open until its source GitHub issue closes, even if
+an associated PR is already merged. A task can span multiple PRs and repositories.
+Issue closure suspends idle compute but retains workspace data; reopening clears
+completion without automatically waking it. See [story integrations](story-integrations.md#issue-completion-workspace-retention-and-reopen)
+for active-turn handling, GitHub closing keywords and external cleanup boundaries.
 
 `apps/web/lib/backlog-presentation.ts` turns those values into words, the activity line, the URL
 parameters that hold every filter, and the agent choices offered by the composer. Unit tests cover

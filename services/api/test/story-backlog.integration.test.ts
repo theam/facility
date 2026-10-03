@@ -587,7 +587,7 @@ describe("unified project backlog", async () => {
     });
     expect(itemFor(result, `story:${ids.mergedStory}`)).toMatchObject({
       phase: "done",
-      reason: "merged",
+      reason: "issue_closed",
       pullRequest: { number: 218, state: "merged" },
     });
     expect(itemFor(result, `issue:${repositoryId}:3`)).toMatchObject({

@@ -41,6 +41,17 @@ export type WorkspaceCommand = {
   timeoutMs?: number;
   signal?: AbortSignal;
   onOutput?: (output: WorkspaceCommandOutput) => void;
+  onObservation?: (event: CommandObservation) => void;
+};
+
+export type CommandObservation = {
+  state: "recovering" | "recovered" | "failed";
+  operation: "logs" | "journal" | "completion";
+  attempt: number;
+  elapsedMs: number;
+  reason?: "read_timeout" | "read_failed";
+  httpStatus?: number;
+  nextSequence?: number;
 };
 
 export type WorkspaceCommandOutput = { stream: "stdout" | "stderr"; data: string };

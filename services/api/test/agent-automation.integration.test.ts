@@ -732,7 +732,7 @@ describe("agent automations use persistent story workspaces", async () => {
     expect(await persistedCounts()).toEqual(before);
   });
 
-  it("reuses an issue workspace for its pull request and only suspends it after merge", async () => {
+  it("reuses an issue workspace for its pull request without completing or suspending it on merge", async () => {
     const builderAgent = agents.find((agent) => agent.name === "builder");
     if (!builderAgent) throw new Error("expected builder agent");
     const issueStory = await storiesService.start({
@@ -801,8 +801,8 @@ describe("agent automations use persistent story workspaces", async () => {
       }),
     ).resolves.toEqual({ matched: 0, queued: 0, merged: 1 });
     await expect(storiesService.get(orgId, projectId, story.id)).resolves.toMatchObject({
-      story: { status: "done", pullRequestNumber: 91 },
-      workspace: { id: workspace.id, state: "sleeping", destroyedAt: null },
+      story: { status: "working", completedAt: null, pullRequestNumber: 91 },
+      workspace: { id: workspace.id, state: "running", destroyedAt: null },
     });
     await expect(
       runtime.inspect({
@@ -811,7 +811,7 @@ describe("agent automations use persistent story workspaces", async () => {
         externalRef: workspace.externalRef,
         volumeRef: workspace.volumeRef,
       }),
-    ).resolves.toMatchObject({ state: "sleeping", volumeRef: workspace.volumeRef });
+    ).resolves.toMatchObject({ state: "running", volumeRef: workspace.volumeRef });
   });
 
   it("routes review and workflow payloads to the matching standard agents", async () => {

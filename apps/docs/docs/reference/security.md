@@ -50,6 +50,20 @@ host-only preview cookies prevent untrusted application JavaScript from inheriti
 session. HTTP and WebSocket requests are authorized continuously rather than only when a preview
 URL is created.
 
+## Dependency security floors
+
+The workspace pins minimum patched versions for transitive dependencies in
+`pnpm-workspace.yaml`, with the resolved graph committed in `pnpm-lock.yaml`.
+Network dependency floors include `fast-uri` 3.1.7/4.1.4, `ip-address` 10.5.1,
+and `undici` 7.29.1 on the affected 7.x line. These address malformed URI
+authorities, IPv6 special-use classification and compressed WebSocket error
+handling. They do not establish that every dependency advisory is exploitable
+through a Facility route, or replace application authorization and egress policy.
+
+The all-severity audit remains part of `pnpm verify`; the refresh does not add
+audit exceptions or change existing exceptions. For deployment and verification,
+see [release and dependency controls](hardening.md#release-and-dependency-controls).
+
 ## Workspace isolation
 
 Each story has separate provider compute, network context, and durable storage. Docker projects run
