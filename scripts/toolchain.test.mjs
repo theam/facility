@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Add future even-numbered LTS lines only after they have explicit CI coverage.
 const nodeRange = "^22.13.0 || ^24.0.0";
-const packageManager = "pnpm@11.20.0";
+const packageManager = "pnpm@11.28.2";
 
 async function read(path) {
   return readFile(join(root, path), "utf8");
@@ -65,7 +65,7 @@ test("setup documentation installs the package-manager pin", async () => {
     "apps/docs/docs/self-host/local-development.md",
   ]) {
     const documentation = await read(path);
-    assert.match(documentation, /pnpm(?:@| )11\.20\.0/);
-    assert.match(documentation, /corepack install --global pnpm@11\.20\.0/);
+    assert.match(documentation, /pnpm(?:@| )11\.28\.2/);
+    assert.match(documentation, /corepack install --global pnpm@11\.28\.2/);
   }
 });

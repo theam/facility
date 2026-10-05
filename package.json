@@ -9,7 +9,7 @@
   "engines": {
     "node": "^22.13.0 || ^24.0.0"
   },
-  "packageManager": "pnpm@11.20.0",
+  "packageManager": "pnpm@11.28.2",
   "scripts": {
     "build": "turbo run build",
     "clean:outputs": "node scripts/clean-outputs.mjs",

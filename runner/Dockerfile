@@ -219,8 +219,8 @@ FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf23286
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20260924
-ARG CHROMIUM_MIN_VERSION=153.0.8010.52-1~deb13u1
+ARG DEBIAN_SECURITY_REFRESH=20261005
+ARG CHROMIUM_MIN_VERSION=154.0.8037.57-1~deb13u1
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -285,10 +285,10 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
 ARG NPM_VERSION=12.0.2
 RUN npm install --global "npm@${NPM_VERSION}" \
   && npm install --global --omit=dev --ignore-scripts \
-    brace-expansion@5.0.9 \
-    ip-address@10.3.1 \
+    brace-expansion@5.0.12 \
+    ip-address@10.7.1 \
     tar@7.5.21 \
-    undici@6.28.0 \
+    undici@6.28.1 \
   && rm -rf \
     /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     /usr/local/lib/node_modules/npm/node_modules/ip-address \
@@ -334,10 +334,12 @@ RUN corepack enable
 
 # Seed the repository's pinned package-manager release into an immutable layer.
 COPY package.json /tmp/facility-root-package.json
+COPY runner/verify-package-security.mjs /tmp/verify-package-security.mjs
 RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packageManager")" \
   && COREPACK_HOME=/opt/facility-corepack corepack install --global --cache-only "$package_manager" \
+  && node /tmp/verify-package-security.mjs /usr/local/lib/node_modules/npm /opt/facility-corepack \
   && chmod -R a-w /opt/facility-corepack \
-  && rm -f /tmp/facility-root-package.json
+  && rm -f /tmp/facility-root-package.json /tmp/verify-package-security.mjs
 
 COPY --chown=root:root --chmod=0555 runner/facility-git-credential.mjs /usr/local/bin/facility-git-credential
 COPY --chown=root:root --chmod=0555 runner/facility-preview-gateway.mjs /usr/local/bin/facility-preview-gateway

@@ -26,7 +26,7 @@ technical problem on its own terms and the private tracker links to it.
 
 ## Set up the repository
 
-The monorepo recommends Node.js 24 LTS and uses pnpm 11.20.0. Node.js 22 is
+The monorepo recommends Node.js 24 LTS and uses pnpm 11.28.2. Node.js 22 is
 also supported from 22.13.0. Docker is required for the local platform stack
 and workspace end-to-end tests. For nvm users, the repository's `.nvmrc` selects
 the recommended Node.js 24 line with `nvm use`.
@@ -34,7 +34,7 @@ the recommended Node.js 24 line with `nvm use`.
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack install --global pnpm@11.20.0
+corepack install --global pnpm@11.28.2
 pnpm dev
 ```
 

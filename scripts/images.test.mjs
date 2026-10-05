@@ -323,7 +323,7 @@ test("Vercel runner supports SDK user switching without granting node sudo privi
 });
 
 test("runner rejects Chromium packages older than the reviewed security fix", () => {
-  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=153\.0\.8010\.52-1~deb13u1/);
+  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=154\.0\.8037\.57-1~deb13u1/);
   for (const name of ["chromium", "chromium-common"]) {
     assert.ok(
       runnerDockerfile.includes(
@@ -331,4 +331,20 @@ test("runner rejects Chromium packages older than the reviewed security fix", ()
       ),
     );
   }
+});
+
+test("image security refreshes invalidate cached distro layers and audit the cached package manager", () => {
+  for (const path of ["Dockerfile", "apps/web/Dockerfile", "runner/Dockerfile"]) {
+    const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    assert.match(dockerfile, /ARG DEBIAN_SECURITY_REFRESH=20261005/);
+    assert.match(dockerfile, /test -n "\$DEBIAN_SECURITY_REFRESH"/);
+  }
+  assert.match(runnerDockerfile, /brace-expansion@5\.0\.12/);
+  assert.match(runnerDockerfile, /undici@6\.28\.1/);
+  const seed = runnerDockerfile.indexOf(
+    'corepack install --global --cache-only "$package_manager"',
+  );
+  const audit = runnerDockerfile.indexOf("node /tmp/verify-package-security.mjs");
+  const freeze = runnerDockerfile.indexOf("chmod -R a-w /opt/facility-corepack");
+  assert.ok(seed > 0 && audit > seed && freeze > audit);
 });
