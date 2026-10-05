@@ -6,6 +6,7 @@ packages:
 
 # Workspace-wide security floors for transitive dependencies.
 overrides:
+  "http-cache-semantics@<4.3.0": 4.3.0
   "browserslist@<4.28.7": 4.28.7
   "esbuild@>=0.27.3 <0.28.1": 0.28.1
   "postcss@<8.5.23": 8.5.23
