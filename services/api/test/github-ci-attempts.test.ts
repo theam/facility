@@ -31,7 +31,7 @@ describe("GitHub CI attempts", () => {
     ).toEqual({ state: "success", failureNames: [] });
     expect(
       restCiSignal({ state: "pending", total_count: 0, statuses: [] }, { check_runs: [] }),
-    ).toEqual({ state: "pending", failureNames: [] });
+    ).toBeNull();
     expect(
       restCiSignal(
         { state: "pending", total_count: 1, statuses: [] },
