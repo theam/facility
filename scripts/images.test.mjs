@@ -267,6 +267,43 @@ test("every gRPC-bearing source build replaces the vulnerable module", () => {
   }
 });
 
+test("runner compiler assertions match the pinned Go base image", () => {
+  const version = runnerDockerfile.match(
+    /^FROM golang:(\d+\.\d+\.\d+)-[^\n]+ AS go-tools-base$/m,
+  )?.[1];
+  assert.ok(version, "missing pinned Go base image");
+  const assertions = [...runnerDockerfile.matchAll(/test [^\n]+ = "(go\d+\.\d+\.\d+)"/g)];
+  assert.equal(assertions.length, 2, "runc and the copied binaries must verify their compiler");
+  for (const [, expected] of assertions) assert.equal(expected, `go${version}`);
+});
+
+test("the executable compiler audit accepts the pinned version and rejects mismatches", () => {
+  const version = runnerDockerfile.match(/^FROM golang:(\d+\.\d+\.\d+)-/m)?.[1];
+  assert.ok(version);
+  const audit = runnerDockerfile.match(/for binary in \/out\/\*; do[\s\S]*?\n {2}done/);
+  assert.ok(audit, "missing executable compiler audit");
+  const command = `
+    go() {
+      if [ "$3" = "/out/second" ]; then
+        case "$AUDIT_TEST_FAILURE" in
+          outdated) printf '%s: go0.0.0\\n' "$3"; return ;;
+          missing) return ;;
+          error) return 1 ;;
+        esac
+      fi
+      printf '%s: go%s\\n' "$3" "$AUDIT_TEST_VERSION"
+    }
+    ${audit[0].replace("/out/*", "/out/first /out/second").replaceAll(/\\\n/g, " ")}
+  `;
+  for (const failure of ["", "outdated", "missing", "error"]) {
+    const result = spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_VERSION: version, AUDIT_TEST_FAILURE: failure },
+    });
+    assert.equal(result.status, failure ? 1 : 0, `${failure || "matching"}: ${result.stderr}`);
+  }
+});
+
 test("the executable gRPC audit accepts fixed modules and rejects unsafe binaries", () => {
   // Execute the Dockerfile's actual shell loop with deterministic go-version output.
   // This checks the gate itself without requiring registries or a Go toolchain.
