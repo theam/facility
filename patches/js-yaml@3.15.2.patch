@@ -1,0 +1,21 @@
+diff --git a/bin/js-yaml.js b/bin/js-yaml.js
+index e79186be6f56f1d92de9bcd4fa4b10fff9564795..e1c0a90287763ec0bb06117c14bff8d5cb0e9e99 100755
+--- a/bin/js-yaml.js
++++ b/bin/js-yaml.js
+@@ -23,10 +23,15 @@ var yaml = require('..');
+ 
+ var cli = new argparse.ArgumentParser({
+   prog:     'js-yaml',
+-  version:  require('../package.json').version,
+   addHelp:  true
+ });
+ 
++cli.addArgument([ '-v', '--version' ], {
++  action: 'version',
++  version: require('../package.json').version,
++  help: "show program's version number and exit"
++});
++
+ 
+ cli.addArgument([ '-c', '--compact' ], {
+   help:   'Display errors in compact mode',

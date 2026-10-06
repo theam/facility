@@ -6,6 +6,21 @@ packages:
 
 # Workspace-wide security floors for transitive dependencies.
 overrides:
+  "proxy-addr@>=1.1.0 <2.0.8": 2.0.8
+  # Tinypool 2 drops Node 18; Facility already requires Node 22.13+/24.
+  # Exercise both worker pollution vectors and the real docs build in tests.
+  "tinypool@<2.1.2": 2.1.2
+  "source-map-js@>=1.0.0 <1.2.2": 1.2.2
+  "compression@<1.8.2": 1.8.2
+  "postcss-selector-parser@<7.1.6": 7.1.6
+  "prosemirror-view@<1.42.3": 1.42.3
+  # Keep Vue's renderer/compiler/runtime on its coordinated patch release.
+  "vue@>=3.0.0 <3.5.42": 3.5.42
+  "katex@>=0.11.0 <0.18.2": 0.18.2
+  # Argparse 2 retains the legacy CLI API and removes sprintf-js entirely.
+  # Scope the major override to js-yaml 3; exercise its CLI in regression tests.
+  # The CLI-only patch below preserves the legacy --version output.
+  "js-yaml@3>argparse": 2.0.1
   "http-cache-semantics@<4.3.0": 4.3.0
   "browserslist@<4.28.7": 4.28.7
   "esbuild@>=0.27.3 <0.28.1": 0.28.1
@@ -37,7 +52,7 @@ overrides:
   "dompurify@<3.4.16": 3.4.16
   "nanoid@>=3.0.0 <3.3.18": 3.3.18
   "colord@<2.9.4": 2.9.4
-  "joi@>=16.0.0 <17.13.7": 17.13.7
+  "joi@>=16.0.0 <17.13.8": 17.13.8
   "baseline-browser-mapping@>=2.0.0 <2.11.0": 2.11.0
 
 # Postinstall build-script allowlist — nothing builds unless named here.
@@ -73,6 +88,7 @@ minimumReleaseAgeExclude:
 
 patchedDependencies:
   image-size@2.0.2: patches/image-size@2.0.2.patch
+  js-yaml@3.15.2: patches/js-yaml@3.15.2.patch
 
 # Filtered production-image installs intentionally omit the docs-only patched
 # dependency. Keep full repository installs strict and open this exception only
