@@ -63,6 +63,10 @@ auditConfig:
     - GHSA-mh99-v99m-4gvg
     - GHSA-w3rx-r6r6-pgpr
     - GHSA-5p2g-fcmc-qvqq
+    # Temporary accepted risk: docs tooling uses braces 3.0.3; no official fix.
+    # Owner: @alvaroloes; human review by 2026-10-13 (not an automatic expiry).
+    # Remove after an official fix/advisory resolution: https://github.com/theam/facility/issues/450
+    - GHSA-vfj7-8cjw-p6xm
 
 minimumReleaseAgeExclude:
   - '@vercel/sandbox@3.0.0'
