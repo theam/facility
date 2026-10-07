@@ -66,6 +66,6 @@ test("setup documentation installs the package-manager pin", async () => {
   ]) {
     const documentation = await read(path);
     assert.match(documentation, /pnpm(?:@| )11\.28\.2/);
-    assert.match(documentation, /corepack install --global pnpm@11\.28\.2/);
+    assert.match(documentation, /npm install --global pnpm@11\.28\.2/);
   }
 });
