@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   foreignKey,
   index,
   integer,
@@ -15,6 +16,10 @@ import {
   unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -220,10 +225,26 @@ export const projectRepositories = pgTable(
     name: text("name").notNull(),
     defaultBranch: text("default_branch").notNull(),
     role: text("role").notNull().default("related"),
+    /** `github` rows are GitHub App repositories; `local` rows are host Git repositories. */
+    source: text("source").$type<"github" | "local">().notNull().default("github"),
+    /** Canonical host path of a local repository, validated against approved roots. */
+    sourcePath: text("source_path"),
     ...timestamps,
   },
   (table) => [
-    unique("project_repositories_org_owner_name_uidx").on(table.orgId, table.owner, table.name),
+    uniqueIndex("project_repositories_org_owner_name_uidx")
+      .on(table.orgId, table.owner, table.name)
+      .where(sql`${table.source} = 'github'`),
+    uniqueIndex("project_repositories_local_alias_uidx")
+      .on(table.projectId, sql`lower(${table.name})`)
+      .where(sql`${table.source} = 'local'`),
+    uniqueIndex("project_repositories_local_path_uidx")
+      .on(table.projectId, table.sourcePath)
+      .where(sql`${table.source} = 'local'`),
+    index("project_repositories_local_path_idx")
+      .on(table.sourcePath)
+      .where(sql`${table.source} = 'local'`),
+    check("project_repositories_source_check", sql`${table.source} in ('github', 'local')`),
     uniqueIndex("project_repositories_org_project_id_uidx").on(
       table.orgId,
       table.projectId,
@@ -603,6 +624,15 @@ export const storyAssignees = pgTable(
   ],
 );
 
+export type WorkspaceSourceRevision = {
+  /** Commit currently imported as the workspace's source base. */
+  revision: string;
+  /** Commit imported when the workspace repository was first created. */
+  initialRevision: string;
+  branch: string;
+  importedAt: string;
+};
+
 export const workspaces = pgTable(
   "workspaces",
   {
@@ -624,6 +654,11 @@ export const workspaces = pgTable(
     nextEventSeq: bigint("next_event_seq", { mode: "number" }).notNull().default(1),
     environment: jsonb("environment").notNull().default(sql`'{}'::jsonb`),
     endpoints: jsonb("endpoints").notNull().default(sql`'[]'::jsonb`),
+    /** Source commits imported into this workspace, keyed by project repository id. */
+    sourceRevisions: jsonb("source_revisions")
+      .$type<Record<string, WorkspaceSourceRevision>>()
+      .notNull()
+      .default({}),
     error: text("error"),
     lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).defaultNow().notNull(),
     destroyedAt: timestamp("destroyed_at", { withTimezone: true }),
@@ -1467,6 +1502,55 @@ export const githubChecks = pgTable(
     index("github_checks_head_idx").on(table.repositoryId, table.headSha, table.updatedAt.desc()),
     foreignKey({
       name: "github_checks_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const storyExports = pgTable(
+  "story_exports",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => projectRepositories.id),
+    reviewEventId: text("review_event_id")
+      .notNull()
+      .references(() => storyEvidenceEvents.id),
+    branch: text("branch").notNull(),
+    baseSha: text("base_sha").notNull(),
+    headSha: text("head_sha").notNull(),
+    commitCount: integer("commit_count").notNull(),
+    bundle: bytea("bundle").notNull(),
+    bundleSha256: text("bundle_sha256").notNull(),
+    patch: text("patch").notNull(),
+    createdBy: jsonb("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("story_exports_story_created_idx").on(table.orgId, table.storyId, table.createdAt.desc()),
+    check("story_exports_commit_count_check", sql`${table.commitCount} > 0`),
+    foreignKey({
+      name: "story_exports_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_exports_repository_scope_fk",
       columns: [table.orgId, table.projectId, table.repositoryId],
       foreignColumns: [
         projectRepositories.orgId,

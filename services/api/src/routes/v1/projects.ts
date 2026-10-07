@@ -45,6 +45,8 @@ const RepositorySchema = z.object({
   name: z.string(),
   defaultBranch: z.string(),
   role: z.enum(["primary", "related"]),
+  source: z.enum(["github", "local"]),
+  sourcePath: z.string().nullable(),
   createdAt: DateValue,
   updatedAt: DateValue,
 });
@@ -297,19 +299,20 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       return db.transaction(async (transaction) => {
         const tx = transaction as unknown as FacilityDb;
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${actor.orgId}:${id}`}))`);
-        const primary = (
-          await tx
-            .select({ id: projectRepositories.id })
-            .from(projectRepositories)
-            .where(
-              and(
-                eq(projectRepositories.orgId, actor.orgId),
-                eq(projectRepositories.projectId, id),
-                eq(projectRepositories.role, "primary"),
-              ),
-            )
-            .limit(1)
-        )[0];
+        const existing = await tx
+          .select({ role: projectRepositories.role, source: projectRepositories.source })
+          .from(projectRepositories)
+          .where(
+            and(eq(projectRepositories.orgId, actor.orgId), eq(projectRepositories.projectId, id)),
+          );
+        if (existing.some((repository) => repository.source !== "github")) {
+          throw new ApiError(
+            409,
+            "repository_sources_mixed",
+            "This project uses local repositories; create a separate project for GitHub repositories",
+          );
+        }
+        const primary = existing.find((repository) => repository.role === "primary");
         const row = (
           await tx
             .insert(projectRepositories)

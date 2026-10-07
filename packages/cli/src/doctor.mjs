@@ -10,10 +10,15 @@ const AGENTS = [
   "ci-doctor",
   "security-audit",
 ];
+const LOCAL_AGENTS = ["architect", "builder", "reviewer"];
 
 export async function doctor(flags, version) {
   const dir = flags.dir || process.cwd();
-  const checks = [checkProjectManifest(dir), ...AGENTS.map((name) => checkAgent(dir, name))];
+  const local = isLocalManifest(dir);
+  const checks = [
+    checkProjectManifest(dir),
+    ...(local ? LOCAL_AGENTS : AGENTS).map((name) => checkAgent(dir, name)),
+  ];
   const problems = checks.filter((check) => !check.ok).length;
   const result = { mode: "local", ok: problems === 0, problems, checks };
 
@@ -37,8 +42,15 @@ function checkProjectManifest(dir) {
   if (!existsSync(path)) return failed("start command", ".facility.yml is missing");
   const source = readFileSync(path, "utf8");
   if (!/^version:\s*1\s*$/m.test(source)) return failed("start command", "version must be 1");
-  if (!/^\s{2}primary:\s*["']?github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+["']?\s*$/m.test(source)) {
-    return failed("start command", "repositories.primary must be github.com/owner/repository");
+  if (
+    !/^\s{2}primary:\s*["']?(?:github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|local:[A-Za-z0-9][A-Za-z0-9._-]{0,99})["']?\s*$/m.test(
+      source,
+    )
+  ) {
+    return failed(
+      "start command",
+      "repositories.primary must be github.com/owner/repository or local:alias",
+    );
   }
   if (!/^\s{2}start:\s*["']?.+$/m.test(source)) return failed("start command", "environment.start is missing");
   const servicePort = /^\s{6}port:\s*([1-9]\d{0,4})\s*$/m.exec(source);
@@ -46,6 +58,11 @@ function checkProjectManifest(dir) {
     return failed("start command", "a service port between 1 and 65535 is required");
   }
   return passed("start command", ".facility.yml declares the repository and development environment");
+}
+
+function isLocalManifest(dir) {
+  const path = join(dir, ".facility.yml");
+  return existsSync(path) && /^\s{2}primary:\s*["']?local:/m.test(readFileSync(path, "utf8"));
 }
 
 function checkAgent(dir, name) {

@@ -78,6 +78,17 @@ describe("runtime API proxy policy", () => {
     }
   });
 
+  it("records the browser-facing host itself and never forwards a client-supplied one", () => {
+    const spoofed = apiProxyRequestHeaders(
+      new Headers({ host: "attacker.example:3400", "x-facility-original-host": "localhost:3400" }),
+    );
+    expect(spoofed.get("x-facility-original-host")).toBe("attacker.example:3400");
+    const hostless = apiProxyRequestHeaders(
+      new Headers({ "x-facility-original-host": "localhost:3400" }),
+    );
+    expect(hostless.has("x-facility-original-host")).toBe(false);
+  });
+
   it("fails closed when production runtime configuration is missing or invalid", async () => {
     const request = new Request("https://app.example/api/v1/projects");
     const missing = await proxyApiRequest(request, { apiUrl: "", nodeEnv: "production" });

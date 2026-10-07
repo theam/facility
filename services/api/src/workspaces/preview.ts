@@ -10,8 +10,8 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
-import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { assertWorkspacePreviewAvailable } from "../origin-isolation.js";
+import type { RepositoryAccess } from "../repositories/sources.js";
 import type { AppConfig, Principal } from "../types.js";
 import {
   canViewPreview,
@@ -47,7 +47,7 @@ export class WorkspacePreviewService {
     private readonly db: FacilityDb,
     private readonly config: AppConfig,
     private readonly runtime: WorkspaceRuntime,
-    private readonly credentials: GithubWorkspaceCredentialBroker,
+    private readonly credentials: RepositoryAccess,
     private readonly manifests: ProjectManifestSource,
     private readonly environment: ProjectEnvironmentService,
   ) {}

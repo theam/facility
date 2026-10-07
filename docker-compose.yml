@@ -72,7 +72,12 @@ services:
       GITHUB_CLONE_TOKEN: ${GITHUB_CLONE_TOKEN:-}
       FACILITY_WORKSPACE_DRIVER: docker
       FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
-    ports: ["4400:4400"]
+      # Local repositories: mount each approved root at the same path in api and
+      # worker (see apps/docs/docs/self-host/local-mode.md) and list it here.
+      FACILITY_LOCAL_REPOSITORY_ROOTS: ${FACILITY_LOCAL_REPOSITORY_ROOTS:-}
+      FACILITY_LOCAL_REPOSITORY_OWNER_UIDS: ${FACILITY_LOCAL_REPOSITORY_OWNER_UIDS:-}
+    # Published on loopback. Set FACILITY_BIND_ADDRESS=0.0.0.0 for remote access.
+    ports: ["${FACILITY_BIND_ADDRESS:-127.0.0.1}:4400:4400"]
     volumes:
       # The API inspects workspace state through the host Docker daemon.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -110,6 +115,8 @@ services:
       # The Docker provider launches persistent workspaces on the host daemon.
       FACILITY_WORKSPACE_DRIVER: docker
       FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
+      FACILITY_LOCAL_REPOSITORY_ROOTS: ${FACILITY_LOCAL_REPOSITORY_ROOTS:-}
+      FACILITY_LOCAL_REPOSITORY_OWNER_UIDS: ${FACILITY_LOCAL_REPOSITORY_OWNER_UIDS:-}
     volumes:
       # Workspace volumes outlive these API and worker containers.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -125,7 +132,7 @@ services:
     restart: unless-stopped
     environment:
       FACILITY_API_URL: http://api:4400
-    ports: ["3400:3400"]
+    ports: ["${FACILITY_BIND_ADDRESS:-127.0.0.1}:3400:3400"]
     healthcheck:
       test:
         [

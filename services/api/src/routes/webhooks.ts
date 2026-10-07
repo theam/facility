@@ -78,6 +78,7 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
                 .where(
                   and(
                     eq(projectRepositories.orgId, installation.orgId),
+                    eq(projectRepositories.source, "github"),
                     eq(projectRepositories.installationId, installation.id),
                     eq(projectRepositories.owner, repositoryIdentity.owner),
                     eq(projectRepositories.name, repositoryIdentity.name),

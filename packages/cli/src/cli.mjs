@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { init } from "./init.mjs";
 import { doctor } from "./doctor.mjs";
 import { bootstrapInstance } from "./instance.mjs";
+import { addLocalRepository } from "./repos.mjs";
 import { banner, bold, dim, item } from "./ui.mjs";
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -42,11 +43,15 @@ function help() {
   ]);
   item(dim("Run stories through Facility's MCP server or web UI."));
   console.log("");
+  helpGroup("Local repositories", [
+    ["repos add-local <path>", "register a Git repository on the Facility host (no GitHub needed)"],
+  ]);
   helpGroup("Instance administration", [
     ["instance bootstrap", "create the first organization, owner, and GitHub installation"],
   ]);
   console.log("");
-  item(dim("init flags: --yes --force --dir=<path> --repo=<owner/name> --provision=<cmd> --start=<cmd>"));
+  item(dim("init flags: --yes --force --dir=<path> --repo=<owner/name> --local[=<alias>]"));
+  item(dim("            --provision=<cmd> --start=<cmd>"));
   item(dim("            --service-port=<n> --preview-readiness-command=<cmd>"));
   item(dim('            --build-model=<id> --review-model=<id> --plan-model=<id>'));
   item(dim('            --codex-build-model=<id> --codex-plan-model=<id>'));
@@ -87,6 +92,12 @@ export async function main(argv) {
       return init(flags, pkgRoot, version);
     case "doctor":
       return doctor(flags, version);
+    case "repos":
+      if (positional[0] === "add-local") {
+        return addLocalRepository(flags, positional.slice(1), version);
+      }
+      console.error("Usage: facility repos add-local <path> --project=<id> [--alias=<name>] [--branch=<name>]");
+      return 1;
     case "instance":
       if (positional[0] === "bootstrap") return bootstrapInstance(flags);
       console.error("Usage: facility instance bootstrap [options]");
@@ -121,8 +132,10 @@ function validateLocalFlags(command, flags) {
       "plan-model",
       "codex-build-model",
       "codex-plan-model",
+      "local",
       "help",
     ]),
+    repos: new Set(["project", "alias", "branch", "api", "json", "help"]),
     doctor: new Set(["dir", "json", "help"]),
     instance: new Set([
       "org-name",
@@ -147,6 +160,8 @@ function validateLocalFlags(command, flags) {
   const valueNames =
     command === "doctor"
       ? ["dir"]
+      : command === "repos"
+        ? ["project", "alias", "branch", "api"]
       : command === "instance"
         ? [...allowed].filter((name) => !["json", "help"].includes(name))
         : command === "init"

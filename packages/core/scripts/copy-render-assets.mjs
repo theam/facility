@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = join(packageRoot, "../..");
 const destinationRoot = join(packageRoot, "dist/render-assets");
-const assetDirectories = ["packages/cli/templates/agents"];
+const assetDirectories = ["packages/cli/templates/agents", "packages/cli/templates/agents-local"];
 
 mkdirSync(destinationRoot, { recursive: true });
 for (const relativePath of assetDirectories) {

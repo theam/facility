@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import { registeredSite } from "./origin-isolation.js";
+import { parseLocalRepositoryRoots } from "./repositories/local.js";
 import type { AppConfig } from "./types.js";
 import { parsePreviewSites } from "./workspaces/preview-sites.js";
 
@@ -37,6 +38,23 @@ const EnvSchema = z
     DATABASE_URL: z.string().url(),
     SECRET_MASTER_KEY: z.string().min(1),
     PORT: z.coerce.number().int().positive().default(4400),
+    // Loopback by default. Containers and remote deployments opt in to wider binding.
+    FACILITY_LISTEN_HOST: z.string().trim().min(1).default("localhost"),
+    // Directories whose Git repositories may be registered as local project sources.
+    FACILITY_LOCAL_REPOSITORY_ROOTS: z.string().optional(),
+    FACILITY_LOCAL_REPOSITORY_OWNER_UIDS: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z
+        .string()
+        .regex(/^\s*\d+(?:\s*,\s*\d+)*\s*$/, "must be comma-separated numeric user ids")
+        .optional(),
+    ),
+    FACILITY_LOCAL_SNAPSHOT_MAX_BYTES: z.coerce.number().int().positive().optional(),
+    FACILITY_LOCAL_GIT_NAME: OptionalNonEmpty,
+    FACILITY_LOCAL_GIT_EMAIL: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z.string().email().optional(),
+    ),
     PUBLIC_URL: z.string().url().default("http://localhost:4400"),
     WEB_URL: z.string().url().optional(),
     FACILITY_PREVIEW_URL: OptionalUrl,
@@ -285,6 +303,17 @@ export function readConfig(env = process.env): AppConfig {
     databaseUrl: parsed.DATABASE_URL,
     secretMasterKey: parsed.SECRET_MASTER_KEY,
     port: parsed.PORT,
+    listenHost: parsed.FACILITY_LISTEN_HOST,
+    localRepositoryRoots: parseLocalRepositoryRoots(parsed.FACILITY_LOCAL_REPOSITORY_ROOTS),
+    localRepositoryOwnerUids: parsed.FACILITY_LOCAL_REPOSITORY_OWNER_UIDS?.split(",").map(Number),
+    localSnapshotMaxBytes: parsed.FACILITY_LOCAL_SNAPSHOT_MAX_BYTES,
+    localGitIdentity:
+      parsed.FACILITY_LOCAL_GIT_NAME || parsed.FACILITY_LOCAL_GIT_EMAIL
+        ? {
+            name: parsed.FACILITY_LOCAL_GIT_NAME ?? "Facility Agent",
+            email: parsed.FACILITY_LOCAL_GIT_EMAIL ?? "facility-agent@localhost",
+          }
+        : undefined,
     publicUrl: parsed.PUBLIC_URL,
     webUrl,
     previewUrl: parsed.FACILITY_PREVIEW_URL?.replace(/\/$/, ""),

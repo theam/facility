@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 import { type Manifest, manifestFor } from "./fingerprints.js";
 
 export type WorkspaceKickstartAnswers = {
+  /** `owner/name` for GitHub, or the registered alias for a local repository. */
   repository: string;
+  /** Local repositories use `local:alias` and templates without GitHub workflows. */
+  source?: "github" | "local";
   setup?: string;
   start: string;
   ready?: string;
@@ -37,7 +40,12 @@ export function renderWorkspaceKickstart(
   answers: WorkspaceKickstartAnswers,
   existingFiles: Map<string, string> | Record<string, string> = {},
 ): WorkspaceKickstartResult {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(answers.repository)) {
+  const local = answers.source === "local";
+  if (local) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(answers.repository)) {
+      throw new Error("repository must be a local repository alias");
+    }
+  } else if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(answers.repository)) {
     throw new Error("repository must be owner/name");
   }
   if (!answers.start.trim()) throw new Error("environment start command is required");
@@ -51,8 +59,8 @@ export function renderWorkspaceKickstart(
     BUILD_MODEL: answers.models?.build ?? "claude-fable-5",
     REVIEW_MODEL: answers.models?.review ?? "claude-sonnet-5",
     PLAN_MODEL: answers.models?.plan ?? "claude-opus-4-8",
-    CODEX_BUILD_MODEL: answers.models?.codexBuild ?? "gpt-5.6-sol",
-    CODEX_PLAN_MODEL: answers.models?.codexPlan ?? "gpt-5.6-sol",
+    CODEX_BUILD_MODEL: answers.models?.codexBuild ?? "gpt-6-luna",
+    CODEX_PLAN_MODEL: answers.models?.codexPlan ?? "gpt-6-luna",
   };
   const root = templateRoot();
   const candidates = [
@@ -60,12 +68,16 @@ export function renderWorkspaceKickstart(
       path: ".facility.yml",
       content: projectManifest(answers, servicePort),
     },
-    ...["architect", "builder", "pr-reviewer", "address-review", "ci-doctor", "security-audit"].map(
-      (name) => ({
-        path: `.agents/${name}.md`,
-        content: renderTemplate(readFileSync(join(root, "agents", `${name}.md`), "utf8"), models),
-      }),
-    ),
+    ...(local
+      ? ["architect", "builder", "reviewer"]
+      : ["architect", "builder", "pr-reviewer", "address-review", "ci-doctor", "security-audit"]
+    ).map((name) => ({
+      path: `.agents/${name}.md`,
+      content: renderTemplate(
+        readFileSync(join(root, local ? "agents-local" : "agents", `${name}.md`), "utf8"),
+        models,
+      ),
+    })),
   ];
   const files = candidates
     .filter((file) => !existing.has(file.path))
@@ -90,7 +102,11 @@ function projectManifest(answers: WorkspaceKickstartAnswers, servicePort: number
   return [
     "version: 1",
     "repositories:",
-    `  primary: ${JSON.stringify(`github.com/${answers.repository}`)}`,
+    `  primary: ${JSON.stringify(
+      answers.source === "local"
+        ? `local:${answers.repository}`
+        : `github.com/${answers.repository}`,
+    )}`,
     "  related: []",
     "environment:",
     ...(answers.setup ? [`  setup: ${JSON.stringify(answers.setup)}`] : []),

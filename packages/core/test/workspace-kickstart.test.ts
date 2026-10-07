@@ -36,6 +36,37 @@ describe("Facility 0.12 workspace kickstart", () => {
     );
   });
 
+  it("renders a local repository contract without GitHub-only agents or gh workflows", () => {
+    const result = renderWorkspaceKickstart({
+      repository: "payments",
+      source: "local",
+      start: "pnpm dev",
+    });
+
+    expect(result.files.map((file) => file.path).sort()).toEqual([
+      ".agents/architect.md",
+      ".agents/builder.md",
+      ".agents/reviewer.md",
+      ".facility.yml",
+    ]);
+    expect(result.files.find((file) => file.path === ".facility.yml")?.content).toContain(
+      'primary: "local:payments"',
+    );
+    for (const file of result.files.filter((candidate) => candidate.path.startsWith(".agents/"))) {
+      expect(file.content).not.toMatch(/type: github|\bgh (?:pr|issue|api) /);
+      expect(file.content).toMatch(/no\s+GitHub access/);
+      expect(file.content).not.toContain("{{");
+    }
+  });
+
+  it("rejects a local alias that could name a path or a GitHub repository", () => {
+    for (const repository of ["../app", "acme/app", "", ".hidden"]) {
+      expect(() =>
+        renderWorkspaceKickstart({ repository, source: "local", start: "pnpm dev" }),
+      ).toThrow(/local repository alias/);
+    }
+  });
+
   it("never overwrites an existing project-owned contract or agent", () => {
     const result = renderWorkspaceKickstart(
       { repository: "acme/payments", start: "pnpm dev" },

@@ -15,7 +15,7 @@ catalog at an exact commit of the primary repository.
 name: ci-doctor
 description: Diagnoses and repairs failing checks on the current story pull request.
 engine: codex
-model: gpt-5.6-sol
+model: gpt-6-luna
 options:
   reasoning_effort: high
 enabled: true

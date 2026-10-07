@@ -1,5 +1,6 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
 import { AgentEditor } from "@/components/agents/agent-editor";
+import { RefreshAgentsButton } from "@/components/agents/refresh-agents-button";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api, type ProjectSkill, type StoryAgent } from "@/lib/api";
@@ -25,7 +26,10 @@ export default async function ProjectAgentsPage({
     <div className="flex flex-col gap-8">
       <LiveRefresh seconds={30} />
       <header className="flex flex-col gap-2">
-        <Eyebrow>agents as code</Eyebrow>
+        <div className="flex items-start justify-between gap-4">
+          <Eyebrow>agents as code</Eyebrow>
+          <RefreshAgentsButton />
+        </div>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Agents</h1>
         <p className="max-w-2xl text-[13px] leading-relaxed text-(--dim)">
           This catalog is read directly from{" "}

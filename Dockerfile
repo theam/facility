@@ -122,4 +122,7 @@ RUN printf '%s\n' \
 # it proves that its production `postgres` dependency resolves.
 RUN ["facility", "instance", "bootstrap", "--help"]
 EXPOSE 4400
+# Inside a container the API must accept the container network; the host decides
+# what is published (docker-compose.yml publishes on loopback by default).
+ENV FACILITY_LISTEN_HOST=0.0.0.0
 CMD ["node", "dist/start.js"]

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     next_cursor: null,
   } as StoryConversationPage,
   permissions: [] as string[],
+  repoSource: "github" as "github" | "local",
   calls: [] as string[],
 }));
 vi.mock("next/navigation", () => ({
@@ -50,6 +51,10 @@ vi.mock("../lib/api", async () => {
         data: { agents: [{ name: "builder", enabled: true, model: "gpt-5.5", engine: "codex" }] },
       }),
       me: async () => ({ ok: true, data: { permissions: mocks.permissions } }),
+      projectRepos: async () => ({
+        ok: true,
+        data: [{ id: "repo", role: "primary", source: mocks.repoSource }],
+      }),
     },
   };
 });
@@ -72,9 +77,10 @@ function message(seq: number, overrides: Partial<StoryMessage>): StoryMessage {
   };
 }
 
-function setUp(permissions: string[] = []) {
+function setUp(permissions: string[] = [], repoSource: "github" | "local" = "github") {
   mocks.calls.length = 0;
   mocks.permissions = permissions;
+  mocks.repoSource = repoSource;
   mocks.bundle = {
     story: {
       id: "story",
@@ -288,6 +294,19 @@ describe("story overview integration", () => {
     expect(root.textContent).not.toContain("suspend compute");
     expect(root.textContent).not.toContain("send a task");
     expect(root.textContent).not.toContain("open app");
+  });
+
+  it("offers local review and export, folded, only for local repositories", async () => {
+    setUp(["workspaces:execute", "stories:write"], "local");
+    const { root } = await render();
+    const review = root.querySelector("#review details");
+    expect(review?.textContent).toContain("Review and export");
+    expect(review?.hasAttribute("open")).toBe(false);
+    // Opening the page reads no workspace state and wakes nothing.
+    expect(mocks.calls).not.toContain("local-review");
+
+    setUp(["workspaces:execute", "stories:write"], "github");
+    expect((await render()).root.querySelector("#review")).toBeNull();
   });
 
   it("offers the everyday actions from the top for an executor", async () => {

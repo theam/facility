@@ -22,6 +22,7 @@ const MODEL_IDENTITIES: Record<string, AiIdentity> = {
   "gpt-5.6-sol": { brand: "openai", label: "GPT-5.6 Sol" },
   "gpt-5.6-terra": { brand: "openai", label: "GPT-5.6 Terra" },
   "gpt-5.6-luna": { brand: "openai", label: "GPT-5.6 Luna" },
+  "gpt-6-luna": { brand: "openai", label: "GPT-6 Luna" },
 };
 
 const PROVIDER_IDENTITIES: Record<string, AiIdentity> = {

@@ -15,6 +15,9 @@ const AGENTS = [
   "ci-doctor",
   "security-audit",
 ];
+// Local repositories have no GitHub remote: their agents review and export locally.
+const LOCAL_AGENTS = ["architect", "builder", "reviewer"];
+const LOCAL_ALIAS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 export async function init(flags, pkgRoot, version) {
   const dir = flags.dir || process.cwd();
@@ -22,8 +25,13 @@ export async function init(flags, pkgRoot, version) {
   banner(version);
 
   const detected = detect(dir);
+  const local = flags.local !== undefined;
   if (!detected.isGitRepo) {
-    warn(`${dir} is not a git repository. Facility workspaces expect a GitHub repository.`);
+    warn(
+      local
+        ? `${dir} is not a git repository. Local repositories need at least one commit before registration.`
+        : `${dir} is not a git repository. Facility workspaces expect a GitHub repository.`,
+    );
     if (interactive && !(await confirm("Continue anyway?", false))) {
       closePrompts();
       return 1;
@@ -36,12 +44,20 @@ export async function init(flags, pkgRoot, version) {
   item(`setup            ${detected.provision ? bold(detected.provision) : dim("none")}`);
   item(`start            ${detected.start ? bold(detected.start) : dim("not detected")}`);
 
-  const repository =
-    flags.repo ??
-    (interactive
-      ? await ask("Primary GitHub repository (owner/name)?", detected.repository)
-      : detected.repository || `${flags.org || detected.org || "local"}/${basename(dir)}`);
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "")) {
+  const repository = local
+    ? typeof flags.local === "string"
+      ? flags.local
+      : basename(dir).replace(/\.git$/i, "")
+    : (flags.repo ??
+      (interactive
+        ? await ask("Primary GitHub repository (owner/name)?", detected.repository)
+        : detected.repository || `${flags.org || detected.org || "local"}/${basename(dir)}`));
+  if (local && (!LOCAL_ALIAS.test(repository) || /\.git$/i.test(repository))) {
+    throw new Error(
+      "A local repository alias uses letters, digits, '.', '_' or '-'. Pass --local=<alias>.",
+    );
+  }
+  if (!local && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "")) {
     throw new Error("A primary GitHub repository is required as owner/name. Pass --repo=owner/name.");
   }
 
@@ -74,8 +90,8 @@ export async function init(flags, pkgRoot, version) {
     BUILD_MODEL: flags["build-model"] || "claude-fable-5",
     REVIEW_MODEL: flags["review-model"] || "claude-sonnet-5",
     PLAN_MODEL: flags["plan-model"] || "claude-opus-4-8",
-    CODEX_BUILD_MODEL: flags["codex-build-model"] || "gpt-5.6-sol",
-    CODEX_PLAN_MODEL: flags["codex-plan-model"] || "gpt-5.6-sol",
+    CODEX_BUILD_MODEL: flags["codex-build-model"] || "gpt-6-luna",
+    CODEX_PLAN_MODEL: flags["codex-plan-model"] || "gpt-6-luna",
   };
 
   const template = (relativePath) =>
@@ -83,11 +99,11 @@ export async function init(flags, pkgRoot, version) {
   const plan = [
     {
       to: ".facility.yml",
-      content: formatProjectManifest({ repository, setup, start, ready, servicePort }),
+      content: formatProjectManifest({ repository, local, setup, start, ready, servicePort }),
     },
-    ...AGENTS.map((name) => ({
+    ...(local ? LOCAL_AGENTS : AGENTS).map((name) => ({
       to: `.agents/${name}.md`,
-      content: renderTemplate(template(`agents/${name}.md`), models),
+      content: renderTemplate(template(`${local ? "agents-local" : "agents"}/${name}.md`), models),
     })),
   ];
 
@@ -107,8 +123,15 @@ export async function init(flags, pkgRoot, version) {
 
   heading("Done");
   item("Review `.facility.yml`: its commands run with full workspace access.");
-  item("Review `.agents/*.md`: every agent receives the same GitHub maintainer capability.");
-  item("Commit these files, connect the repository to Facility, then start a story through MCP or the UI.");
+  if (local) {
+    item("Review `.agents/*.md`: agents work on a Facility-managed copy with no GitHub access.");
+    item(
+      `Commit these files, then register the repository: facility repos add-local ${dir} --project=<id> --alias=${repository}`,
+    );
+  } else {
+    item("Review `.agents/*.md`: every agent receives the same GitHub maintainer capability.");
+    item("Commit these files, connect the repository to Facility, then start a story through MCP or the UI.");
+  }
   item(dim(`${written} files written; existing project-owned files were preserved.`));
   closePrompts();
   return 0;
@@ -121,11 +144,11 @@ function renderTemplate(source, values) {
   );
 }
 
-function formatProjectManifest({ repository, setup, start, ready, servicePort }) {
+function formatProjectManifest({ repository, local, setup, start, ready, servicePort }) {
   return [
     "version: 1",
     "repositories:",
-    `  primary: ${JSON.stringify(`github.com/${repository}`)}`,
+    `  primary: ${JSON.stringify(local ? `local:${repository}` : `github.com/${repository}`)}`,
     "  related: []",
     "environment:",
     ...(setup ? [`  setup: ${JSON.stringify(setup)}`] : []),

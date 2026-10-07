@@ -19,6 +19,13 @@ export type AppConfig = {
   databaseUrl: string;
   secretMasterKey: string;
   port: number;
+  /** Interface the HTTP server binds; loopback unless explicitly widened. */
+  listenHost?: string;
+  /** Approved host directories for local repositories; empty disables local sources. */
+  localRepositoryRoots?: string[];
+  localRepositoryOwnerUids?: number[];
+  localSnapshotMaxBytes?: number;
+  localGitIdentity?: { name: string; email: string };
   publicUrl: string;
   webUrl?: string;
   // Browser origin used only for proxied preview application content. In
