@@ -15,6 +15,7 @@ import {
   projectBudgets,
   projectRepositories,
   projects,
+  storyConversations,
   storyEvidenceEvents,
   turnEvents,
   turnGitEvidence,
@@ -1294,6 +1295,94 @@ environment:
     });
     expect(enqueued).toEqual([]);
     await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
+  });
+
+  describe("transcript elision under the character budget", () => {
+    // Two ~65k filler turns push the conversation past the 120k budget while
+    // keeping the number of real dispatches (and Docker-backed setup) small.
+    // Built once in beforeAll; the three tests below only assert on its result.
+    const fillerBody = (label: string) => `${label}\n${"f".repeat(65_000)}`;
+    let storyId: string;
+    let finalTurnId: string;
+    let requestsBeforeFinal: number;
+    let finalPrompt: string | undefined;
+
+    beforeAll(async () => {
+      const started = await storiesService.start({
+        orgId,
+        projectId,
+        provider: "manual",
+        externalId: `elision-${randomUUID()}`,
+        title: "Grow a conversation past the transcript budget",
+        agent: builder,
+        message: "OPENING-REQUEST: keep this in view once the transcript is elided",
+        messageDedupeKey: randomUUID(),
+        actor: { type: "user", id: "user_test" },
+        workspace: { image: "facility-runner:test", ports: [] },
+      });
+      storyId = started.story.id;
+      const openTurn = started.queued.turn;
+      if (!openTurn) throw new Error("expected opening turn");
+      await dispatcher.dispatch({ orgId, projectId, turnId: openTurn.id });
+
+      for (const label of ["FILLER-ONE", "FILLER-TWO"]) {
+        const queued = await storiesService.queueMessage({
+          orgId,
+          projectId,
+          storyId,
+          body: fillerBody(label),
+          dedupeKey: randomUUID(),
+          agent: builder,
+          actor: { type: "user", id: "user_test" },
+          trigger: { type: "manual" },
+        });
+        if (!queued.turn) throw new Error("expected filler turn");
+        await dispatcher.dispatch({ orgId, projectId, turnId: queued.turn.id });
+      }
+
+      requestsBeforeFinal = engine.requests.length;
+      const closing = await storiesService.queueMessage({
+        orgId,
+        projectId,
+        storyId,
+        body: "CLOSING-REQUEST: the most recent instruction",
+        dedupeKey: randomUUID(),
+        agent: builder,
+        actor: { type: "user", id: "user_test" },
+        trigger: { type: "manual" },
+      });
+      if (!closing.turn) throw new Error("expected closing turn");
+      finalTurnId = closing.turn.id;
+      await dispatcher.dispatch({ orgId, projectId, turnId: closing.turn.id });
+      finalPrompt = engine.requests.at(-1)?.prompt;
+    });
+
+    it("keeps the opening request and the newest messages when the transcript exceeds its budget", () => {
+      expect(finalPrompt).toContain(
+        "OPENING-REQUEST: keep this in view once the transcript is elided",
+      );
+      expect(finalPrompt).toContain("CLOSING-REQUEST: the most recent instruction");
+      expect(finalPrompt).toMatch(
+        /\[Omitted \d+ earlier messages? \(seq \d+-\d+\) to fit the context budget\]/,
+      );
+      expect(finalPrompt?.length).toBeLessThan(200_000);
+    });
+
+    it("adds no model call and no second usage row when the transcript is elided", async () => {
+      expect(engine.requests.length).toBe(requestsBeforeFinal + 1);
+      expect(
+        await db.select().from(turnUsage).where(eq(turnUsage.turnId, finalTurnId)),
+      ).toHaveLength(1);
+    });
+
+    it("leaves the stored conversation summary untouched", async () => {
+      const [conversation] = await db
+        .select()
+        .from(storyConversations)
+        .where(eq(storyConversations.storyId, storyId));
+      expect(conversation?.summary).toBeNull();
+      expect(finalPrompt).not.toContain("# Conversation summary");
+    });
   });
 });
 
