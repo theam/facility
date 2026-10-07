@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { parseAgentManifest } from "@facility/agents";
+import { newId } from "@facility/core";
+import { createDb, migrate, orgs, projects, turns } from "@facility/db";
 import Docker from "dockerode";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { StoryWorkspaceService } from "../src/stories/service.js";
 import { stopInterruptedEngineProcess } from "../src/turns/engines.js";
 import { DockerWorkspaceRuntime } from "../src/workspaces/docker.js";
 import {
@@ -13,6 +18,98 @@ import {
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it.each([
+    "queued",
+    "running",
+  ] as const)("coordinates %s turns with real container and volume deletion", async (state) => {
+    const databaseUrl =
+      process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_ws";
+    const { db, client } = createDb(databaseUrl);
+    const docker = new Docker();
+    const runtime = new DockerWorkspaceRuntime(docker);
+    const service = new StoryWorkspaceService(db, runtime, async () => undefined);
+    const orgId = newId("org");
+    const projectId = newId("proj");
+    const actor = { type: "system" as const, id: "docker-deletion-regression" };
+    const image = process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized";
+    let workspace: WorkspaceLocator | undefined;
+    try {
+      await migrate(databaseUrl);
+      await db.insert(orgs).values({ id: orgId, name: "Docker deletion", slug: orgId });
+      await db.insert(projects).values({
+        id: projectId,
+        orgId,
+        name: "Docker deletion",
+        slug: projectId,
+      });
+      const started = await service.start({
+        orgId,
+        projectId,
+        provider: "manual",
+        externalId: newId("story"),
+        title: "Docker deletion regression",
+        agent: parseAgentManifest(
+          "---\nname: builder\ndescription: Docker fixture\nengine: codex\nmodel: gpt-5.5\nenabled: true\ntriggers:\n  - type: manual\n---\nTest deletion.\n",
+          "builder.md",
+        ),
+        message: "Queued work",
+        messageDedupeKey: newId("msg"),
+        actor,
+        workspace: { image, ports: [] },
+      });
+      const row = started.workspace;
+      const turn = started.queued.turn;
+      if (!row?.externalRef || !turn) throw new Error("workspace fixture missing");
+      workspace = {
+        id: row.id,
+        image,
+        ports: [],
+        externalRef: row.externalRef,
+        volumeRef: row.volumeRef,
+      };
+      const filters = { label: [`facility.workspace.id=${row.id}`] };
+      const request = { orgId, projectId, storyId: started.story.id, actor, confirm: true };
+      expect(await docker.listContainers({ all: true, filters })).toHaveLength(1);
+      expect((await docker.listVolumes({ filters })).Volumes).toHaveLength(1);
+      if (state === "running") {
+        await db
+          .update(turns)
+          .set({ state: "running", startedAt: new Date() })
+          .where(eq(turns.id, turn.id));
+        await expect(service.deleteWorkspace(request)).rejects.toMatchObject({
+          code: "workspace_busy",
+          statusCode: 409,
+        });
+        await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "running" });
+        expect((await docker.listVolumes({ filters })).Volumes).toHaveLength(1);
+        const alive = await runtime.exec(workspace, {
+          command: "sh",
+          args: ["-lc", "printf still-running"],
+        });
+        expect(alive).toMatchObject({ exitCode: 0, stdout: "still-running" });
+        await service.completeTurn({ orgId, projectId, turnId: turn.id, output: "Done", actor });
+      }
+      const deleted = await service.deleteWorkspace(request);
+      expect(deleted.workspace?.state).toBe("destroyed");
+      expect(deleted.turns.find((item) => item.id === turn.id)?.state).toBe(
+        state === "queued" ? "canceled" : "succeeded",
+      );
+      expect(deleted.attention).toEqual([]);
+      expect(await docker.listContainers({ all: true, filters })).toEqual([]);
+      expect((await docker.listVolumes({ filters })).Volumes ?? []).toEqual([]);
+      expect(await docker.listNetworks({ filters })).toEqual([]);
+      await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "destroyed" });
+      await service.deleteWorkspace(request);
+      expect(await docker.listContainers({ all: true, filters })).toEqual([]);
+    } finally {
+      try {
+        if (workspace) await runtime.destroy(workspace);
+      } finally {
+        await client.end();
+      }
+    }
+  }, 180_000);
+
   it("reattaches the same named volume after its compute is removed", async () => {
     const id = `ws_${randomBytes(12).toString("hex")}`;
     const gatewayToken = randomBytes(32).toString("base64url");

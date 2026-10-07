@@ -19,7 +19,7 @@ import {
   turns,
   workspaces,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GithubMirrorService } from "../src/github/mirror.js";
@@ -962,6 +962,391 @@ environment:
     ).resolves.toMatchObject({ story: { id: result.story.id } });
   });
 
+  it("cancels queued turns and never activates retained messages after deletion", async () => {
+    const result = await service.start(startInput(`delete-queued-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("expected queued turn");
+    const input = {
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: { type: "user" as const, id: "user_test" },
+    };
+    const message = {
+      ...input,
+      body: "Follow up",
+      dedupeKey: randomUUID(),
+      agent: builder,
+      trigger: { type: "manual" as const },
+    };
+    await service.queueMessage(message);
+    await service.deleteWorkspace({ ...input, confirm: true });
+    const bundle = await service.get(orgId, projectId, result.story.id);
+    expect(bundle.turns).toHaveLength(1);
+    expect(bundle.turns[0]).toMatchObject({
+      state: "canceled",
+      error: null,
+      endedAt: expect.any(Date),
+    });
+    expect(bundle.story.activeAgentName).toBeNull();
+    expect(bundle.attention).toEqual([]);
+    await expect(
+      service.flagAttention({
+        ...input,
+        kind: "queued_turn_dispatch_error",
+        title: "Late callback",
+        detail: "Catalog failed during deletion",
+      }),
+    ).resolves.toBeUndefined();
+    expect((await service.get(orgId, projectId, result.story.id)).attention).toEqual([]);
+    expect(bundle.events).toContainEqual(expect.objectContaining({ type: "turn.canceled" }));
+    await expect(
+      service.activateNextMessage({ ...input, agent: builder }),
+    ).resolves.toBeUndefined();
+    await expect(
+      service.queueMessage({ ...message, dedupeKey: randomUUID() }),
+    ).rejects.toMatchObject({ code: "story_workspace_deleted" });
+    // A stale queue delivery cannot claim the canceled turn.
+    expect(
+      await db
+        .update(turns)
+        .set({ state: "running" })
+        .where(and(eq(turns.id, result.queued.turn.id), eq(turns.state, "queued")))
+        .returning(),
+    ).toEqual([]);
+  });
+
+  it("refuses running turns without destroying state, including cross-tenant requests", async () => {
+    const result = await service.start(startInput(`delete-running-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("expected queued turn");
+    const input = {
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: { type: "user" as const, id: "user_test" },
+      confirm: true,
+    };
+    await db
+      .update(turns)
+      .set({ state: "running", startedAt: new Date() })
+      .where(eq(turns.id, result.queued.turn.id));
+    const destroy = vi.spyOn(runtime, "destroy");
+    try {
+      await expect(
+        service.deleteWorkspace({ ...input, orgId: otherOrgId, projectId: otherProjectId }),
+      ).rejects.toMatchObject({ code: "story_not_found", statusCode: 404 });
+      await expect(service.deleteWorkspace(input)).rejects.toMatchObject({
+        code: "workspace_busy",
+        statusCode: 409,
+      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(await service.get(orgId, projectId, result.story.id)).toMatchObject({
+        workspace: { state: "running" },
+        turns: [expect.objectContaining({ state: "running" })],
+      });
+    } finally {
+      destroy.mockRestore();
+    }
+  });
+
+  it("blocks admission while destruction is pending and permits retry after provider failure", async () => {
+    const start = startInput(`delete-failure-${randomUUID()}`);
+    const result = await service.start(start);
+    const input = {
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: { type: "user" as const, id: "user_test" },
+      confirm: true,
+    };
+    const destroy = vi
+      .spyOn(runtime, "destroy")
+      .mockRejectedValueOnce(new Error("provider unavailable"));
+    try {
+      await expect(service.deleteWorkspace(input)).rejects.toThrow("provider unavailable");
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "deleting",
+      );
+      await expect(service.start(start)).rejects.toMatchObject({ code: "story_workspace_deleted" });
+      await expect(
+        service.queueMessage({
+          ...input,
+          body: "Must not run",
+          dedupeKey: randomUUID(),
+          agent: builder,
+          trigger: { type: "manual" },
+        }),
+      ).rejects.toMatchObject({ code: "story_workspace_deleted" });
+      await expect(
+        service.activateNextMessage({ ...input, agent: builder }),
+      ).resolves.toBeUndefined();
+      await expect(service.deleteWorkspace(input)).resolves.toMatchObject({
+        workspace: { state: "destroyed" },
+      });
+    } finally {
+      destroy.mockRestore();
+    }
+  });
+
+  it.each([
+    "manual",
+    "issue closure",
+  ] as const)("does not let an in-flight %s suspension reopen admission during deletion", async (source) => {
+    const input = startInput(`suspend-delete-${randomUUID()}`);
+    const issue = source === "issue closure" ? await issueFixture(7004) : undefined;
+    const result = issue ? issue.result : await service.start(input);
+    if (issue) await issue.finish();
+    let releaseSuspend!: () => void;
+    let enteredSuspend!: () => void;
+    let releaseDestroy!: () => void;
+    let enteredDestroy!: () => void;
+    const suspendHeld = new Promise<void>((resolve) => {
+      releaseSuspend = resolve;
+    });
+    const suspendReady = new Promise<void>((resolve) => {
+      enteredSuspend = resolve;
+    });
+    const destroyHeld = new Promise<void>((resolve) => {
+      releaseDestroy = resolve;
+    });
+    const destroyReady = new Promise<void>((resolve) => {
+      enteredDestroy = resolve;
+    });
+    const originalSuspend = runtime.suspend.bind(runtime);
+    const originalDestroy = runtime.destroy.bind(runtime);
+    const suspend = vi.spyOn(runtime, "suspend").mockImplementationOnce(async (workspace) => {
+      enteredSuspend();
+      await suspendHeld;
+      return originalSuspend(workspace);
+    });
+    const destroy = vi.spyOn(runtime, "destroy").mockImplementationOnce(async (workspace) => {
+      enteredDestroy();
+      await destroyHeld;
+      return originalDestroy(workspace);
+    });
+    const suspending = issue
+      ? issue.observe("closed", "2026-10-05T10:00:00Z")
+      : service.suspend(orgId, projectId, result.story.id);
+    await suspendReady;
+    const deleting = service.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: input.actor,
+      confirm: true,
+    });
+    try {
+      // The old implementation reaches destroy while suspension is paused.
+      // The fixed implementation waits on the shared story lock instead.
+      await vi.waitFor(async () => {
+        const waiting = await db.execute(sql`select 1 from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'
+          and query like '%pg_advisory_xact_lock%'`);
+        expect(destroy.mock.calls.length > 0 || waiting.length > 0).toBe(true);
+      });
+      releaseSuspend();
+      await suspending;
+      await destroyReady;
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "deleting",
+      );
+      await expect(
+        service.queueMessage({
+          orgId,
+          projectId,
+          storyId: result.story.id,
+          actor: input.actor,
+          body: "Must not run during deletion",
+          dedupeKey: randomUUID(),
+          agent: builder,
+          trigger: { type: "manual" },
+        }),
+      ).rejects.toMatchObject({ code: "story_workspace_deleted" });
+    } finally {
+      releaseSuspend();
+      releaseDestroy();
+      await Promise.allSettled([suspending, deleting]);
+      suspend.mockRestore();
+      destroy.mockRestore();
+    }
+    await expect(deleting).resolves.toMatchObject({ workspace: { state: "destroyed" } });
+  });
+
+  it.each([
+    "manual",
+    "issue closure",
+  ] as const)("does not suspend resources via %s once deletion has started or completed", async (source) => {
+    const input = startInput(`delete-suspend-${randomUUID()}`);
+    const issue = source === "issue closure" ? await issueFixture(7005) : undefined;
+    const result = issue ? issue.result : await service.start(input);
+    if (issue) await issue.finish();
+    const suspendWorkspace = async () => {
+      if (issue) {
+        await issue.observe("closed", "2026-10-05T11:00:00Z");
+        return service.get(orgId, projectId, result.story.id);
+      }
+      return service.suspend(orgId, projectId, result.story.id);
+    };
+    const originalDestroy = runtime.destroy.bind(runtime);
+    const suspend = vi.spyOn(runtime, "suspend");
+    const destroy = vi.spyOn(runtime, "destroy").mockImplementationOnce(async (workspace) => {
+      await expect(suspendWorkspace()).resolves.toMatchObject({
+        workspace: { state: "deleting" },
+      });
+      return originalDestroy(workspace);
+    });
+    try {
+      await service.deleteWorkspace({
+        orgId,
+        projectId,
+        storyId: result.story.id,
+        actor: input.actor,
+        confirm: true,
+      });
+      await expect(suspendWorkspace()).resolves.toMatchObject({
+        workspace: { state: "destroyed" },
+      });
+      expect(suspend).not.toHaveBeenCalled();
+    } finally {
+      suspend.mockRestore();
+      destroy.mockRestore();
+    }
+  });
+
+  it("does not wake a workspace deleted after start admission commits", async () => {
+    const input = startInput(`start-delete-gap-${randomUUID()}`);
+    const result = await service.start(input);
+    let first = true;
+    const delayedDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "transaction") return Reflect.get(target, property, receiver);
+        return async (...args: Parameters<typeof db.transaction>) => {
+          const value = await target.transaction(...args);
+          if (first) {
+            first = false;
+            await service.deleteWorkspace({
+              orgId,
+              projectId,
+              storyId: result.story.id,
+              actor: input.actor,
+              confirm: true,
+            });
+          }
+          return value;
+        };
+      },
+    });
+    const wake = vi.spyOn(runtime, "wake");
+    try {
+      await expect(
+        new StoryWorkspaceService(delayedDb, runtime).start(input),
+      ).rejects.toMatchObject({
+        code: "story_workspace_deleted",
+      });
+      expect(wake).not.toHaveBeenCalled();
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "destroyed",
+      );
+    } finally {
+      wake.mockRestore();
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("serializes deletion with an in-flight wake (failure=%s)", async (fails) => {
+    const input = startInput(`start-delete-held-${randomUUID()}`);
+    const result = await service.start(input);
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const originalWake = runtime.wake.bind(runtime);
+    const wake = vi.spyOn(runtime, "wake").mockImplementationOnce(async (locator) => {
+      entered();
+      await held;
+      if (fails) throw new Error("wake unavailable");
+      return originalWake(locator);
+    });
+    const destroy = vi.spyOn(runtime, "destroy");
+    const starting = service.start(input).catch((error: unknown) => error);
+    await ready;
+    const deleting = service.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: input.actor,
+      confirm: true,
+    });
+    try {
+      await vi.waitFor(async () => {
+        const waiting = await db.execute(sql`select 1 from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'
+          and query like '%pg_advisory_xact_lock%'`);
+        expect(waiting.length).toBeGreaterThan(0);
+      });
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await starting;
+      await deleting;
+      wake.mockRestore();
+      destroy.mockRestore();
+    }
+    const final = await service.get(orgId, projectId, result.story.id);
+    expect(final.workspace?.state).toBe("destroyed");
+    expect(final.story.status).toBe("archived");
+    expect(final.story.deletedAt).not.toBeNull();
+  });
+
+  it("observes a concurrent worker claim before deciding whether deletion is safe", async () => {
+    const result = await service.start(startInput(`delete-race-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("expected queued turn");
+    const turnId = result.queued.turn.id;
+    let release!: () => void;
+    let claimed!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const ready = new Promise<void>((resolve) => {
+      claimed = resolve;
+    });
+    const claiming = db.transaction(async (tx) => {
+      await tx
+        .update(turns)
+        .set({ state: "running", startedAt: new Date() })
+        .where(eq(turns.id, turnId));
+      claimed();
+      await held;
+    });
+    await ready;
+    const deleting = service.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: { type: "user", id: "user_test" },
+      confirm: true,
+    });
+    const rejected = expect(deleting).rejects.toMatchObject({ code: "workspace_busy" });
+    try {
+      await vi.waitFor(async () => {
+        const waiting = await db.execute(sql`select 1 from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'
+          and query like '%"turns"%' and query like '%for update%'`);
+        expect(waiting.length).toBeGreaterThan(0);
+      });
+    } finally {
+      release();
+    }
+    await claiming;
+    await rejected;
+    expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe("running");
+  });
+
   it("records runtime failures as visible attention instead of losing the story", async () => {
     class FailingRuntime extends FakeWorkspaceRuntime {
       override async create(): Promise<never> {
@@ -1023,6 +1408,7 @@ environment:
       title: "Builder needs a reply",
       detail: "Which migration policy should be used?",
     });
+    if (!waiting) throw new Error("expected attention");
     await service.dismissAttention({
       orgId,
       projectId,

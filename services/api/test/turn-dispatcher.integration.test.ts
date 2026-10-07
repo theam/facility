@@ -863,6 +863,49 @@ environment:
     expect(engine.requests.at(-1)?.nativeSessionId).toBe("native-before-failure");
   }, 15_000);
 
+  it("ignores stale delivery and retained follow-ups after workspace deletion", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `deleted-${suffix}`,
+      title: "Delete queued work",
+      agent: builder,
+      message: "Never execute",
+      messageDedupeKey: `delete-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected queued turn");
+    await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "Do not activate this follow-up",
+      dedupeKey: `delete-followup-${suffix}`,
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    await storiesService.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      actor: { type: "user", id: "user_test" },
+      confirm: true,
+    });
+    const requests = engine.requests.length;
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+    ).resolves.toEqual({ claimed: false });
+    expect(engine.requests).toHaveLength(requests);
+    const bundle = await storiesService.get(orgId, projectId, started.story.id);
+    expect(bundle.turns).toHaveLength(1);
+    expect(bundle.turns[0]?.state).toBe("canceled");
+    expect(bundle.attention).toEqual([]);
+    expect(bundle.workspace?.state).toBe("destroyed");
+  });
+
   it("cancels a running agent process while preserving the workspace and future turns", async () => {
     engine.blockUntilCanceled = true;
     engine.blockingStarted = false;
