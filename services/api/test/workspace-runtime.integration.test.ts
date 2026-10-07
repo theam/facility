@@ -13,6 +13,55 @@ import {
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it("brings the nested daemon back after a suspend and wake of the same container", async () => {
+    // The suite's other case replaces compute, which discards the container's
+    // writable layer and so never meets the state a stop leaves behind. Suspend
+    // and wake reuse that layer: dockerd finds the pidfile its previous start
+    // wrote and refuses to boot, the readiness probe never passes, and the
+    // bootstrap exits. Nothing short of stopping and starting the real
+    // container observes it.
+    const id = `ws_${randomBytes(12).toString("hex")}`;
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const created = await runtime.create({
+      id,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+      environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: randomBytes(32).toString("base64url") },
+    });
+    const workspace = created as WorkspaceLocator;
+    try {
+      const before = await runtime.exec(workspace, {
+        command: "sh",
+        args: ["-lc", "printf marker > repo-state && docker info --format '{{.Driver}}'"],
+      });
+      expect(before, before.stderr).toMatchObject({ exitCode: 0, stdout: "vfs\n" });
+
+      await runtime.suspend(workspace);
+      await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "sleeping" });
+
+      const resumed = await runtime.wake(workspace);
+      // The same compute, not a replacement: that is the whole point of the case.
+      expect(resumed.computeRef).toBe(created.computeRef);
+
+      const after = await runtime.exec(workspace, {
+        command: "sh",
+        args: ["-lc", "printf '%s|' \"$(cat repo-state)\"; docker info --format '{{.Driver}}'"],
+      });
+      expect(after, after.stderr).toMatchObject({ exitCode: 0, stdout: "marker|vfs\n" });
+
+      // A second cycle, because the first wake writes a pidfile of its own and
+      // a fix that only cleans the original create's state would pass once.
+      await runtime.suspend(workspace);
+      await runtime.wake(workspace);
+      const twice = await runtime.exec(workspace, {
+        command: "docker",
+        args: ["info", "--format", "{{.Driver}}"],
+      });
+      expect(twice, twice.stderr).toMatchObject({ exitCode: 0, stdout: "vfs\n" });
+    } finally {
+      await runtime.destroy(workspace);
+    }
+  }, 300_000);
+
   it("reattaches the same named volume after its compute is removed", async () => {
     const id = `ws_${randomBytes(12).toString("hex")}`;
     const gatewayToken = randomBytes(32).toString("base64url");
