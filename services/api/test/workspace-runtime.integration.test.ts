@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import Docker from "dockerode";
 import { describe, expect, it } from "vitest";
 import { stopInterruptedEngineProcess } from "../src/turns/engines.js";
+import { ENGINE_USAGE_PROCESS, readUsageJournal } from "../src/turns/usage-journal.js";
 import { DockerWorkspaceRuntime } from "../src/workspaces/docker.js";
 import {
   exportWorkspaceBackup,
@@ -13,6 +14,84 @@ import {
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it("retains per-turn usage after the observer exits and compute is replaced", async () => {
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const workspace = await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+    });
+    const usage = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 3, cacheWriteTokens: 2 };
+    const native = {
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_input_tokens: 3,
+      cache_creation_input_tokens: 2,
+    };
+    try {
+      for (const engine of ["codex", "claude_code"] as const) {
+        const turnId = `turn_docker_${engine}`;
+        const event =
+          engine === "codex"
+            ? { type: "turn.completed", usage: native }
+            : { type: "result", usage: native, total_cost_usd: 0.03, result: "private-output" };
+        const launched = await runtime.exec(workspace, {
+          command: "sh",
+          args: [
+            "-lc",
+            'nohup node -e "$FACILITY_USAGE_SCRIPT" node -e "$FACILITY_FAKE_CLI" </dev/null >/dev/null 2>&1 &',
+          ],
+          env: {
+            FACILITY_TURN_ID: turnId,
+            FACILITY_ENGINE: engine,
+            FACILITY_USAGE_SCRIPT: ENGINE_USAGE_PROCESS,
+            FACILITY_FAKE_CLI: `setTimeout(() => console.log(JSON.stringify(${JSON.stringify(event)})), 100);`,
+          },
+        });
+        expect(launched.exitCode, launched.stderr).toBe(0);
+        await waitUntil(
+          async () => (await readUsageJournal(runtime, workspace, turnId, engine)).complete,
+        );
+        expect(await readUsageJournal(runtime, workspace, turnId, engine)).toEqual({
+          complete: true,
+          usage: engine === "codex" ? usage : { ...usage, reportedCostCents: 3 },
+        });
+        const contents = await runtime.exec(workspace, {
+          command: "sh",
+          args: ["-lc", 'cat "$(dirname "$HOME")/engine-usage/$FACILITY_TURN_ID.json"'],
+          env: { FACILITY_TURN_ID: turnId },
+        });
+        expect(contents.stdout).not.toContain("private-output");
+      }
+      const partial = await runtime.exec(workspace, {
+        command: "node",
+        args: [
+          "-e",
+          ENGINE_USAGE_PROCESS,
+          "node",
+          "-e",
+          `console.log(JSON.stringify({type:'assistant',message:{id:'msg-partial',usage:${JSON.stringify(native)}}}))`,
+        ],
+        env: { FACILITY_TURN_ID: "turn_docker_partial", FACILITY_ENGINE: "claude_code" },
+      });
+      expect(partial.exitCode, partial.stderr).toBe(0);
+      expect(
+        await readUsageJournal(runtime, workspace, "turn_docker_partial", "claude_code"),
+      ).toEqual({ complete: false, usage });
+      await runtime.replaceCompute(workspace);
+      expect(await readUsageJournal(runtime, workspace, "turn_docker_codex", "codex")).toEqual({
+        complete: false,
+      });
+      await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "sleeping" });
+      await runtime.wake(workspace);
+      expect(await readUsageJournal(runtime, workspace, "turn_docker_codex", "codex")).toEqual({
+        complete: true,
+        usage,
+      });
+    } finally {
+      await runtime.destroy(workspace);
+    }
+  }, 180_000);
+
   it("reattaches the same named volume after its compute is removed", async () => {
     const id = `ws_${randomBytes(12).toString("hex")}`;
     const gatewayToken = randomBytes(32).toString("base64url");

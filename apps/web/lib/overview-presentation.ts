@@ -223,20 +223,27 @@ export function attentionSignals(
     });
   }
   const budget = overview.spend.budget;
-  if (budget.available && (budget.state === "exceeded" || budget.state === "warning")) {
+  if (
+    budget.available &&
+    (budget.state === "exceeded" || budget.state === "warning" || budget.state === "unconfirmed")
+  ) {
     entries.push({
       key: "budget",
-      tone: budget.state === "exceeded" ? "bad" : "human",
+      tone: budget.state === "warning" ? "human" : "bad",
       title:
-        budget.state === "exceeded"
-          ? "Monthly budget exhausted: new agent turns are blocked"
-          : "Monthly budget warning",
+        budget.state === "unconfirmed"
+          ? "Spending unconfirmed: new model calls are blocked"
+          : budget.state === "exceeded"
+            ? "Monthly budget exhausted: new agent turns are blocked"
+            : "Monthly budget warning",
       storyId: null,
       storyTitle: null,
       summary: `${money(budget.spentCents)} of ${money(budget.monthlyLimitCents ?? 0)} used this month.${
-        budget.state === "exceeded"
-          ? " Raise the limit or wait for the next month to continue."
-          : " New turns are blocked once the limit is reached."
+        budget.state === "unconfirmed"
+          ? " Interrupted usage could not be fully recovered. Raising the limit does not clear this block."
+          : budget.state === "exceeded"
+            ? " Raise the limit or wait for the next month to continue."
+            : " New turns are blocked once the limit is reached."
       }`,
       at: null,
       action: {
@@ -335,6 +342,8 @@ export function budgetReading(budget: ProjectOverview["spend"]["budget"]) {
       return { label: "Budget disabled", tone: "machine" as Tone };
     case "exceeded":
       return { label: "Budget exhausted", tone: "bad" as Tone };
+    case "unconfirmed":
+      return { label: "Spending unconfirmed", tone: "bad" as Tone };
     case "warning":
       return { label: "Budget warning", tone: "human" as Tone };
     default:

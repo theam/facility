@@ -5,7 +5,7 @@ import type { AgentTurnUsage } from "../turns/engines.js";
 
 export class BudgetPolicyError extends Error {
   constructor(
-    readonly code: "budget_exceeded" | "budget_model_unpriced",
+    readonly code: "budget_exceeded" | "budget_model_unpriced" | "budget_usage_unconfirmed",
     message: string,
   ) {
     super(message);
@@ -20,7 +20,7 @@ export type BudgetState = {
   spentCents: number;
   remainingCents: number | null;
   percentUsed: number | null;
-  state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded";
+  state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
 };
 
 export class CostBudgetService {
@@ -29,6 +29,12 @@ export class CostBudgetService {
   async assertTurnAllowed(orgId: string, projectId: string, model: string, now = new Date()) {
     const state = await this.budgetState(orgId, projectId, now);
     if (!state.budget?.enabled) return state;
+    if (state.state === "unconfirmed") {
+      throw new BudgetPolicyError(
+        "budget_usage_unconfirmed",
+        "Project spending is unconfirmed after an interrupted turn; new model calls are blocked while the budget is enabled.",
+      );
+    }
     if (!normalizeModel(model)) {
       throw new BudgetPolicyError(
         "budget_model_unpriced",
@@ -55,53 +61,77 @@ export class CostBudgetService {
     usage?: AgentTurnUsage;
     durationMs: number;
     status: "succeeded" | "failed";
+    /** False means these counters are only a lower bound, never a zero-cost completion. */
+    complete?: boolean;
   }) {
-    if (!input.usage) return null;
-    const calculated = costCents({
-      model: input.model,
-      inputTokens: input.usage.inputTokens,
-      outputTokens: input.usage.outputTokens,
-      cacheReadTokens: input.usage.cacheReadTokens,
-      cacheWriteTokens: input.usage.cacheWriteTokens,
-    });
-    const providerCost = finiteNonNegative(input.usage.reportedCostCents);
-    const cost = providerCost ?? calculated;
-    const row = (
-      await this.db
-        .insert(turnUsage)
-        .values({
-          id: newId("evt"),
-          orgId: input.orgId,
-          projectId: input.projectId,
-          storyId: input.storyId,
-          turnId: input.turnId,
-          agentName: input.agentName,
-          engine: input.engine,
+    if (!input.usage && input.complete !== false) return null;
+    const usage = input.usage ?? {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    const calculated = input.usage
+      ? costCents({
           model: input.model,
-          inputTokens: input.usage.inputTokens,
-          outputTokens: input.usage.outputTokens,
-          cacheReadTokens: input.usage.cacheReadTokens,
-          cacheWriteTokens: input.usage.cacheWriteTokens,
-          costCents: cost,
-          priced: cost !== null,
-          source:
-            providerCost !== undefined
-              ? "provider"
-              : calculated !== null
-                ? "price_book"
-                : "unpriced",
-          durationMs: Math.max(0, Math.round(input.durationMs)),
-          status: input.status,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          cacheWriteTokens: usage.cacheWriteTokens,
         })
-        .onConflictDoNothing({ target: turnUsage.turnId })
-        .returning()
-    )[0];
+      : null;
+    const providerCost = finiteNonNegative(usage.reportedCostCents);
+    const cost = providerCost ?? calculated;
+    const values: typeof turnUsage.$inferInsert = {
+      id: newId("evt"),
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: input.storyId,
+      turnId: input.turnId,
+      agentName: input.agentName,
+      engine: input.engine,
+      model: input.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      costCents: cost,
+      priced: input.complete !== false && cost !== null,
+      source:
+        input.complete === false
+          ? "unpriced"
+          : providerCost !== undefined
+            ? "provider"
+            : calculated !== null
+              ? "price_book"
+              : "unpriced",
+      durationMs: Math.min(2_147_483_647, Math.max(0, Math.round(input.durationMs))),
+      status: input.status,
+    };
+    const insert = this.db.insert(turnUsage).values(values);
+    const { id: _id, ...settled } = values;
+    // A late live dispatcher can also settle the recovery placeholder. Never
+    // overwrite an already priced charge. Confirmed usage enters the budget
+    // when it is accounted, just like an ordinary live-worker completion.
+    const write = input.usage
+      ? insert.onConflictDoUpdate({
+          target: turnUsage.turnId,
+          set: { ...settled, ...(values.priced ? { createdAt: new Date() } : {}) },
+          setWhere: and(
+            eq(turnUsage.orgId, input.orgId),
+            eq(turnUsage.projectId, input.projectId),
+            eq(turnUsage.storyId, input.storyId),
+            eq(turnUsage.priced, false),
+          ),
+        })
+      : insert.onConflictDoNothing({ target: turnUsage.turnId });
+    const row = (await write.returning())[0];
     return row ?? null;
   }
 
   async budgetState(orgId: string, projectId: string, now = new Date()): Promise<BudgetState> {
     const [windowStart, windowEnd] = monthWindow(now);
-    const [budget, totals] = await Promise.all([
+    const [budget, totals, unconfirmed] = await Promise.all([
       this.db
         .select()
         .from(projectBudgets)
@@ -122,6 +152,18 @@ export class CostBudgetService {
           ),
         )
         .then((rows) => rows[0]),
+      // A calendar rollover does not establish the missing provider bill.
+      this.db
+        .select({ id: turnUsage.id })
+        .from(turnUsage)
+        .where(
+          and(
+            eq(turnUsage.orgId, orgId),
+            eq(turnUsage.projectId, projectId),
+            eq(turnUsage.priced, false),
+          ),
+        )
+        .limit(1),
     ]);
     const spentCents = totals?.spentCents ?? 0;
     if (!budget) {
@@ -144,11 +186,13 @@ export class CostBudgetService {
         : (spentCents / budget.monthlyLimitCents) * 100;
     const state = !budget.enabled
       ? "disabled"
-      : spentCents >= budget.monthlyLimitCents
-        ? "exceeded"
-        : percentUsed >= budget.warningPercent
-          ? "warning"
-          : "ok";
+      : unconfirmed.length > 0
+        ? "unconfirmed"
+        : spentCents >= budget.monthlyLimitCents
+          ? "exceeded"
+          : percentUsed >= budget.warningPercent
+            ? "warning"
+            : "ok";
     return { budget, windowStart, windowEnd, spentCents, remainingCents, percentUsed, state };
   }
 

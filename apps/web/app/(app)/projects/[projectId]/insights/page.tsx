@@ -114,9 +114,11 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
           <PillTag>{budget.data.state.replaceAll("_", " ")}</PillTag>
         </div>
         <p className="text-[12px] text-(--dim)">
-          {money(budget.data.spent_cents)} spent this month. New turns are blocked once the limit is
-          reached; a provider call already in progress is allowed to finish and is accounted
-          afterwards.
+          {budget.data.state === "unconfirmed" ? "At least " : ""}
+          {money(budget.data.spent_cents)} recorded this month. New turns are blocked once the limit
+          is reached; a provider call already in progress is allowed to finish and is accounted
+          afterwards. If an interrupted turn's full usage cannot be recovered, spending is shown as
+          a lower bound and new model calls are blocked while the budget is enabled.
         </p>
         <BudgetForm projectId={projectId} budget={budget.data} />
       </section>
@@ -167,6 +169,7 @@ function UsageTable({
     name: string;
     turns: number;
     costCents: number;
+    unpricedTurns?: number;
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
@@ -187,7 +190,10 @@ function UsageTable({
             >
               <span className="truncate font-mono text-(--ink)">{row.name}</span>
               <span className="text-(--dim)">{row.turns} turns</span>
-              <span className="font-mono text-(--mut)">{money(row.costCents)}</span>
+              <span className="font-mono text-(--mut)">
+                {(row.unpricedTurns ?? 0) > 0 ? "≥ " : ""}
+                {money(row.costCents)}
+              </span>
             </div>
           ))
         )}

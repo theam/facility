@@ -143,6 +143,8 @@ export class StoryTitleService {
     const budget = await this.deps.budget.budgetState(input.orgId, input.projectId);
     if (budget.state === "exceeded")
       return this.settle(input, attempt, provider, "budget_exceeded");
+    if (budget.state === "unconfirmed")
+      return this.settle(input, attempt, provider, "budget_usage_unconfirmed");
 
     const model = this.deps.models?.[provider] ?? TITLE_MODELS[provider];
     const apiKey = credentials[provider];

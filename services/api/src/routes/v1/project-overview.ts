@@ -126,7 +126,7 @@ const AgentSpend = z.object({
 });
 const BudgetSpend = z.object({
   available: z.literal(true),
-  state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded"]),
+  state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded", "unconfirmed"]),
   enabled: z.boolean(),
   monthlyLimitCents: z.number().nullable(),
   warningPercent: z.number().nullable(),

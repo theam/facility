@@ -189,6 +189,13 @@ verified on 2026-09-29. These entries use standard global API pricing and
 5-minute cache writes, not fast mode, batch, regional premiums, or 1-hour cache
 writes. A valid engine-reported cost takes precedence over this fallback.
 An enabled budget still blocks an unpriced model or a project over its limit.
+Interrupted turns with incomplete usage return `state: "unconfirmed"` in budget responses.
+Their usage rows have `priced: false`, `source: "unpriced"`, and a nullable cost or a measured
+lower bound. New agent and title-generation model calls are blocked until complete retained
+usage is reconciled or an authorized administrator explicitly disables budget enforcement.
+Raising the limit, resolving attention, and a new calendar month do not clear uncertainty.
+Recovered usage is counted when it is settled, as with live-worker accounting; reconciliation does not double-charge
+already settled rows. The periodic worker retries available journals without waking compute.
 Updating the catalog does not reprice persisted turns or change agent defaults.
 
 ## Authentication and authorization

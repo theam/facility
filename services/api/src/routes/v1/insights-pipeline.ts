@@ -29,7 +29,7 @@ const BudgetResponse = z.object({
   spent_cents: z.number(),
   remaining_cents: z.number().nullable(),
   percent_used: z.number().nullable(),
-  state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded"]),
+  state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded", "unconfirmed"]),
   enforcement: z.literal("block_new_turns"),
 });
 const UsageSummary = z.object({
@@ -102,7 +102,7 @@ const ObservabilityResponse = z.object({
     spentCents: z.number(),
     remainingCents: z.number().nullable(),
     percentUsed: z.number().nullable(),
-    state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded"]),
+    state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded", "unconfirmed"]),
     enforcement: z.literal("block_new_turns"),
   }),
   workspaces: z.object({

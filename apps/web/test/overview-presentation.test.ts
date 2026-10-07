@@ -347,12 +347,17 @@ describe("spend readings", () => {
     expect(budgetReading({ available: false, reason: "permission" }).label).toBe(
       "Not visible for your role",
     );
-    const budget = (state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded") =>
-      ({ available: true, state }) as ProjectOverview["spend"]["budget"];
+    const budget = (
+      state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed",
+    ) => ({ available: true, state }) as ProjectOverview["spend"]["budget"];
     expect(budgetReading(budget("not_configured")).label).toBe("No monthly budget");
     expect(budgetReading(budget("ok"))).toEqual({ label: "Within budget", tone: "ok" });
     expect(budgetReading(budget("warning")).tone).toBe("human");
     expect(budgetReading(budget("exceeded")).tone).toBe("bad");
+    expect(budgetReading(budget("unconfirmed"))).toEqual({
+      label: "Spending unconfirmed",
+      tone: "bad",
+    });
   });
   it("reports recorded workspace states without claiming live inspection", () => {
     expect(

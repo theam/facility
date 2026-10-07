@@ -6074,7 +6074,8 @@
                         "disabled",
                         "ok",
                         "warning",
-                        "exceeded"
+                        "exceeded",
+                        "unconfirmed"
                       ]
                     },
                     "enforcement": {
@@ -6299,7 +6300,8 @@
                         "disabled",
                         "ok",
                         "warning",
-                        "exceeded"
+                        "exceeded",
+                        "unconfirmed"
                       ]
                     },
                     "enforcement": {
@@ -6606,7 +6608,8 @@
                             "disabled",
                             "ok",
                             "warning",
-                            "exceeded"
+                            "exceeded",
+                            "unconfirmed"
                           ]
                         },
                         "enforcement": {
@@ -8999,7 +9002,8 @@
                                     "disabled",
                                     "ok",
                                     "warning",
-                                    "exceeded"
+                                    "exceeded",
+                                    "unconfirmed"
                                   ]
                                 },
                                 "enabled": {
