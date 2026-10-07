@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { newId } from "@facility/core";
+import { costCents, newId } from "@facility/core";
 import {
+  budgetReservations,
   createDb,
   migrate,
   orgs,
@@ -12,7 +13,7 @@ import {
   turns,
   turnUsage,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CostBudgetService } from "../src/insights/costs.js";
@@ -231,6 +232,40 @@ describe("story title generation", async () => {
     ).toEqual({ outcome: "fallback", reason: "budget_exceeded" });
     expect(complete).not.toHaveBeenCalled();
     expect((await storyRow(exhausted))?.titleSource).toBe("fallback");
+    expect(
+      await db.select().from(budgetReservations).where(eq(budgetReservations.storyId, exhausted)),
+    ).toEqual([]);
+  });
+
+  it("settles a title reservation to the measured token cost", async () => {
+    const storyId = await seedStory({ engine: "codex" });
+    await db.insert(projectBudgets).values({
+      id: newId("bud"),
+      orgId,
+      projectId,
+      monthlyLimitCents: 1_000,
+      warningPercent: 80,
+      enabled: true,
+    });
+    await service({
+      complete: async () => ({ title: "Measured title", inputTokens: 100, outputTokens: 10 }),
+    }).generate({ orgId, projectId, storyId });
+    const measured = costCents({ model: "gpt-5.5-mini", inputTokens: 100, outputTokens: 10 });
+    expect(measured).not.toBeNull();
+    const costs = new CostBudgetService(db);
+    expect((await costs.budgetState(orgId, projectId)).spentCents).toBeCloseTo(measured ?? 0, 6);
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(and(eq(budgetReservations.storyId, storyId), eq(budgetReservations.state, "open"))),
+    ).toEqual([]);
+    const settled = await db
+      .select({ cents: budgetReservations.reservedCents })
+      .from(budgetReservations)
+      .where(and(eq(budgetReservations.storyId, storyId), eq(budgetReservations.state, "settled")));
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.cents).toBeCloseTo(measured ?? 0, 6);
   });
 
   it("retries transient provider failures and gives up after the attempt limit", async () => {
