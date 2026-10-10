@@ -49,6 +49,29 @@ export function normalizeModel(model: string): keyof typeof MODEL_PRICES_USD_PER
     : null;
 }
 
+/**
+ * Tokens held against the monthly budget before measured usage replaces them.
+ * Cache writes are included because the first turn of a session pays them;
+ * later turns are usually cheaper, so this estimate blocks work that cannot
+ * afford a full turn rather than a short follow-up.
+ */
+export const TURN_RESERVATION_TOKENS = {
+  inputTokens: 100_000,
+  outputTokens: 8_000,
+  cacheWriteTokens: 100_000,
+} as const;
+
+/** Title calls send a short excerpt and expect a single line back. */
+export const TITLE_RESERVATION_TOKENS = {
+  inputTokens: 8_000,
+  outputTokens: 256,
+} as const;
+
+export function reservationCents(model: string, purpose: "turn" | "title"): number | null {
+  const tokens = purpose === "turn" ? TURN_RESERVATION_TOKENS : TITLE_RESERVATION_TOKENS;
+  return costCents({ model, ...tokens });
+}
+
 /** Calculate cents with six decimal places so low-token turns are not rounded away. */
 export function costCents(input: CostInput): number | null {
   const key = normalizeModel(input.model);
