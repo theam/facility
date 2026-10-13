@@ -1,6 +1,6 @@
 import { Eyebrow, Metric, PillTag, StatusDot } from "@facility/ui";
 import { BudgetForm } from "@/components/insights/budget-form";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { resultFallback } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
 import { insightsSpendReading } from "@/lib/overview-presentation";
@@ -13,9 +13,8 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
     api.projectObservability(projectId),
     api.projectBudget(projectId),
   ]);
-  if (!overview.ok)
-    return overview.offline ? <Offline /> : <ErrorNotice message={overview.message} />;
-  if (!budget.ok) return budget.offline ? <Offline /> : <ErrorNotice message={budget.message} />;
+  if (!overview.ok) return resultFallback(overview);
+  if (!budget.ok) return resultFallback(budget);
   const data = overview.data;
   const spend = insightsSpendReading(data);
   const totalTokens =

@@ -1,4 +1,6 @@
 import { Eyebrow } from "@facility/ui";
+import type React from "react";
+import type { ApiResult } from "@/lib/api";
 
 /** Honest failure state — never fake data when the control plane is down. */
 export function Offline({ detail }: { detail?: string }) {
@@ -23,4 +25,11 @@ export function ErrorNotice({ message }: { message: string }) {
       <p className="font-mono text-[12px] text-(--bad)">{message}</p>
     </div>
   );
+}
+
+/** Shared fallback for any failed ApiResult: offline vs. real error. */
+export function resultFallback(result: ApiResult<unknown>, prefix?: string): React.ReactNode {
+  if (result.ok) return null;
+  if (result.offline) return <Offline detail={result.message} />;
+  return <ErrorNotice message={prefix ? `${prefix}: ${result.message}` : result.message} />;
 }

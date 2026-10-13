@@ -1,6 +1,6 @@
 import { Eyebrow } from "@facility/ui";
 import Link from "next/link";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { ErrorNotice, resultFallback } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { BacklogFilters } from "@/components/story/backlog-filters";
 import { BacklogList, PhaseChips } from "@/components/story/backlog-list";
@@ -39,7 +39,7 @@ export default async function ProjectStoriesPage({
     api.storyAgents(projectId),
     api.me(),
   ]);
-  if (!backlog.ok && backlog.offline) return <Offline />;
+  if (!backlog.ok && backlog.offline) return resultFallback(backlog);
 
   const now = new Date();
   const permissions = me.ok ? me.data.permissions : [];

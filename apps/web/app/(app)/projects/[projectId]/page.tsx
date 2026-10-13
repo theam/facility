@@ -1,7 +1,7 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { AttentionRow } from "@/components/attention/attention-row";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { resultFallback } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { CancelTurnButton } from "@/components/story/workspace-story-controls";
 import {
@@ -46,7 +46,7 @@ export default async function ProjectOverviewPage({
     api.me(),
   ]);
   if (!project.ok) {
-    return project.offline ? <Offline /> : <ErrorNotice message={project.message} />;
+    return resultFallback(project);
   }
   const now = new Date();
   const base = `/projects/${encodeURIComponent(projectId)}`;
@@ -96,11 +96,7 @@ export default async function ProjectOverviewPage({
       </header>
 
       {!overview ? (
-        overviewResult.ok ? null : overviewResult.offline ? (
-          <Offline />
-        ) : (
-          <ErrorNotice message={`Couldn't load the overview — ${overviewResult.message}`} />
-        )
+        resultFallback(overviewResult, "Couldn't load the overview")
       ) : (
         <>
           <section

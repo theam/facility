@@ -1,7 +1,7 @@
 import { cx, Eyebrow } from "@facility/ui";
 import Link from "next/link";
 import { AttentionRow } from "@/components/attention/attention-row";
-import { ErrorNotice, Offline } from "@/components/offline";
+import { ErrorNotice, resultFallback } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api, type ProjectAttention } from "@/lib/api";
 import {
@@ -40,7 +40,7 @@ export default async function ProjectAttentionPage({
     api.me(),
     withSignals ? api.projectOverview(projectId) : null,
   ]);
-  if (!result.ok && result.offline) return <Offline />;
+  if (!result.ok && result.offline) return resultFallback(result);
 
   const now = new Date();
   const base = `/projects/${encodeURIComponent(projectId)}`;
