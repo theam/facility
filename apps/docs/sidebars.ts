@@ -23,6 +23,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "self-host/quickstart",
         "self-host/local-development",
+        "self-host/local-mode",
         "self-host/production",
         "self-host/aws",
         "self-host/authentication",
@@ -36,6 +37,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "guides/kickstart",
         "guides/existing-repo",
+        "guides/local-repository",
         "guides/operate-story",
         "guides/project-overview",
         "guides/validate-workspace-loop",

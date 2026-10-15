@@ -164,7 +164,7 @@ function workspaceKickstartAnswers(
   };
 }
 
-function inferStartCommand(existing: Map<string, string>, packageManager: string) {
+export function inferStartCommand(existing: Map<string, string>, packageManager: string) {
   if (
     ["compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"].some((path) =>
       existing.has(path),
@@ -195,7 +195,7 @@ function inferStartCommand(existing: Map<string, string>, packageManager: string
   return "echo 'Configure environment.start in .facility.yml' >&2; exit 1";
 }
 
-function detectWorkspace(existing: Map<string, string>, defaultBranch: string) {
+export function detectWorkspace(existing: Map<string, string>, defaultBranch: string) {
   const packageManager = existing.has("pnpm-lock.yaml")
     ? "pnpm"
     : existing.has("yarn.lock")

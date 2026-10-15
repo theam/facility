@@ -11,11 +11,27 @@ import {
 import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
 import { CostBudgetService } from "./insights/costs.js";
+import { LocalRepositoryHost } from "./repositories/local.js";
+import { LocalReviewService } from "./repositories/local-review.js";
+import {
+  LocalAgentCatalogSource,
+  LocalProjectManifestSource,
+  LocalRepositorySnapshots,
+  ProjectRepositoryAccess,
+  type RepositoryAccess,
+  SourceAwareAgentCatalogSource,
+  SourceAwareProjectManifestSource,
+} from "./repositories/sources.js";
 import { ProjectBacklogService } from "./stories/backlog.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
-import { AgentEngineRegistry, ClaudeCodeEngine, CodexEngine } from "./turns/engines.js";
+import {
+  type AgentEngine,
+  AgentEngineRegistry,
+  ClaudeCodeEngine,
+  CodexEngine,
+} from "./turns/engines.js";
 import { TurnGitEvidenceService } from "./turns/git-evidence.js";
 import type { AppConfig } from "./types.js";
 import { DockerWorkspaceRuntime } from "./workspaces/docker.js";
@@ -23,6 +39,7 @@ import { WorkspacePreviewService } from "./workspaces/preview.js";
 import {
   GithubProjectManifestSource,
   ProjectEnvironmentService,
+  type ProjectManifestSource,
 } from "./workspaces/project-environment.js";
 import { nativePreviewsEnabledForWorkspace } from "./workspaces/project-native-previews.js";
 import type { WorkspaceRuntime } from "./workspaces/runtime.js";
@@ -33,8 +50,10 @@ export type StoryDomain = {
   runtime: WorkspaceRuntime;
   stories: StoryWorkspaceService;
   catalog: AgentCatalogService;
-  credentials: GithubWorkspaceCredentialBroker;
-  projectManifests: GithubProjectManifestSource;
+  credentials: RepositoryAccess;
+  projectManifests: ProjectManifestSource;
+  localRepositories: LocalRepositorySnapshots;
+  localReview: LocalReviewService;
   environment: ProjectEnvironmentService;
   variables: WorkspaceVariablesService;
   engines: AgentEngineRegistry;
@@ -56,6 +75,9 @@ export function createStoryDomain(input: {
   runtime?: WorkspaceRuntime;
   githubFactory?: GithubClientFactory;
   maintainerTokenFactory?: GithubMaintainerTokenFactory;
+  localRepositoryHost?: LocalRepositoryHost;
+  /** Deterministic engines for tests; production uses Claude Code and Codex. */
+  engines?: AgentEngine[];
 }): StoryDomain {
   const runtime = input.runtime ?? workspaceRuntime(input.config, input.db);
   const githubFactory =
@@ -68,13 +90,35 @@ export function createStoryDomain(input: {
     (input.config.githubAppId && input.config.githubAppPrivateKey
       ? createGithubMaintainerTokenFactory(input.config)
       : unavailableTokenFactory);
+  const localRepositories = new LocalRepositorySnapshots(
+    input.db,
+    input.localRepositoryHost ??
+      new LocalRepositoryHost({
+        roots: input.config.localRepositoryRoots ?? [],
+        ownerUids: input.config.localRepositoryOwnerUids,
+        maxSnapshotBytes: input.config.localSnapshotMaxBytes,
+      }),
+  );
+  // GitHub is one optional repository source. Local projects never mint GitHub credentials.
   const catalog = new AgentCatalogService(
     input.db,
-    new GithubAgentCatalogSource(input.db, githubFactory),
+    new SourceAwareAgentCatalogSource(
+      input.db,
+      new GithubAgentCatalogSource(input.db, githubFactory),
+      new LocalAgentCatalogSource(localRepositories),
+    ),
   );
-  const credentials = new GithubWorkspaceCredentialBroker(input.db, tokenFactory);
+  const credentials = new ProjectRepositoryAccess(
+    input.db,
+    new GithubWorkspaceCredentialBroker(input.db, tokenFactory),
+    input.config.localGitIdentity,
+  );
   const costs = new CostBudgetService(input.db);
-  const projectManifests = new GithubProjectManifestSource(input.db, githubFactory);
+  const projectManifests = new SourceAwareProjectManifestSource(
+    input.db,
+    new GithubProjectManifestSource(input.db, githubFactory),
+    new LocalProjectManifestSource(localRepositories),
+  );
   const variables = new WorkspaceVariablesService(input.db, input.config.secretMasterKey);
   const environment = new ProjectEnvironmentService(
     input.db,
@@ -82,6 +126,14 @@ export function createStoryDomain(input: {
     undefined,
     undefined,
     (scope) => variables.values(scope),
+    localRepositories,
+  );
+  const localReview = new LocalReviewService(
+    input.db,
+    runtime,
+    credentials,
+    projectManifests,
+    environment,
   );
   const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
     await input.enqueue("turns.dispatch", {
@@ -91,10 +143,9 @@ export function createStoryDomain(input: {
     });
   });
   const mirror = new GithubMirrorService(input.db, githubFactory, stories);
-  const engines = new AgentEngineRegistry([
-    new ClaudeCodeEngine(runtime),
-    new CodexEngine(runtime),
-  ]);
+  const engines = new AgentEngineRegistry(
+    input.engines ?? [new ClaudeCodeEngine(runtime), new CodexEngine(runtime)],
+  );
   const evidence = new TurnGitEvidenceService(input.db, runtime);
   const titles = new StoryTitleService(input.db, {
     credentials: async (orgId, projectId) =>
@@ -145,6 +196,8 @@ export function createStoryDomain(input: {
     catalog,
     credentials,
     projectManifests,
+    localRepositories,
+    localReview,
     environment,
     variables,
     engines,

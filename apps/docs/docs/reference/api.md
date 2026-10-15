@@ -49,6 +49,31 @@ at creation; store it as a secret.
 Repository connections are organization- and installation-bound. A project-scoped key requesting
 another project receives 404 rather than a distinguishable authorization error.
 
+### Local repositories
+
+- `GET /v1/local-repositories/status` reports whether local repositories are enabled and the
+  approved roots (`repos:write`).
+- `POST /v1/projects/:projectId/repos/local` registers `{ path, alias?, defaultBranch? }`
+  (`repos:write`). The path must resolve inside an approved root, be owned by a trusted user, and
+  be a repository's top level with at least one commit. Errors include
+  `local_repositories_disabled`, `local_repository_outside_roots`, `local_repository_path_invalid`,
+  `local_repository_empty`, `local_repository_exists`, `local_repository_claimed` (another
+  organization registered the path), and `repository_sources_mixed`.
+- `POST /v1/projects/:projectId/repos/:repoId/local-kickstart` returns starter configuration as a
+  `git apply` patch (`projects:kickstart`). It never writes to the repository.
+- `/v1/projects/:projectId/workspace-stories/:storyId/local-review` returns commits, changed files,
+  uncommitted work, checks for the head commit, approval, and exports (`stories:read`; it wakes a
+  suspended workspace only for callers with `workspaces:execute`). Its sub-routes are `approve`
+  and `request-changes` (`stories:write`); `checks`, `refresh-source`, and `exports`
+  (`workspaces:execute`); and `exports/:exportId/bundle` and `exports/:exportId/patch`
+  (`stories:read`).
+
+Approval names one commit: `review_commit_mismatch` rejects any other, `uncommitted_changes`
+rejects a dirty workspace, and exporting requires an approval of the current head
+(`approval_required`, `approval_stale`). Review actions return `turn_active` while a turn is
+queued or running. A local registered path that later resolves elsewhere returns
+`local_repository_path_changed` or `local_repository_outside_roots` on every use.
+
 ### Disconnect a repository
 
 `DELETE /v1/projects/:projectId/repos/:repoId` requires `repos:write` and returns

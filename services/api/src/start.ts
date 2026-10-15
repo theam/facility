@@ -3,7 +3,7 @@ import { readConfig } from "./config.js";
 
 const config = readConfig();
 const app = await buildApp(config);
-await app.listen({ port: config.port, host: "0.0.0.0" });
+await app.listen({ port: config.port, host: config.listenHost ?? "localhost" });
 
 let closing = false;
 const shutdown = async (signal: NodeJS.Signals) => {

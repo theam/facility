@@ -95,6 +95,31 @@ describe("loopback-only local development login", async () => {
     });
   });
 
+  it("refuses development login from a non-loopback peer or a rebound host name", async () => {
+    const app = await appFor(true);
+    for (const request of [
+      { remoteAddress: "192.168.1.20", headers: { host: "127.0.0.1:4400" } },
+      { remoteAddress: "127.0.0.1", headers: { host: "attacker.example:4400" } },
+      {
+        remoteAddress: "127.0.0.1",
+        headers: { host: "localhost:4400", "x-facility-original-host": "attacker.example:3400" },
+      },
+      { remoteAddress: "127.0.0.1", headers: { host: "127.0.0.1.attacker.example" } },
+    ]) {
+      const response = await app.inject({ method: "GET", url: "/auth/dev-login", ...request });
+      expect(response.statusCode, JSON.stringify(request)).toBe(403);
+      expect(response.json().error.code).toBe("dev_login_loopback_only");
+      expect(response.cookies.find((item) => item.name === "facility_session")).toBeUndefined();
+    }
+    const proxied = await app.inject({
+      method: "GET",
+      url: "/auth/dev-login",
+      remoteAddress: "::1",
+      headers: { host: "localhost:4400", "x-facility-original-host": "localhost:3400" },
+    });
+    expect(proxied.statusCode).toBe(302);
+  });
+
   it("does not register the shortcut when local development login is disabled", async () => {
     const app = await appFor(false);
     const response = await app.inject({ method: "GET", url: "/auth/dev-login" });

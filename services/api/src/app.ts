@@ -360,7 +360,16 @@ export async function buildApp(
         config: { public: true },
         schema: { response: { 302: z.unknown() } },
       },
-      async (_request, reply) => {
+      async (request, reply) => {
+        // An unauthenticated owner login must come from this machine, addressed by a
+        // loopback name: a LAN peer or a DNS-rebound page never receives a session.
+        if (!loopbackDevLoginRequest(request)) {
+          throw new ApiError(
+            403,
+            "dev_login_loopback_only",
+            "Development login is only available from this machine at localhost",
+          );
+        }
         const session = await ensureDevUser(db, "admin@facility.local");
         reply.setCookie(
           "facility_session",
@@ -578,4 +587,28 @@ export async function ensureDevUser(db: ReturnType<typeof createDb>["db"], email
       set: { roleId: role.id, updatedAt: new Date() },
     });
   return { userId, orgId: org.id };
+}
+
+/** Both the TCP peer and every presented Host must be loopback for development login. */
+export function loopbackDevLoginRequest(request: {
+  socket: { remoteAddress?: string };
+  headers: Record<string, string | string[] | undefined>;
+}) {
+  const peer = request.socket.remoteAddress ?? "";
+  if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer)) return false;
+  const hosts = [request.headers.host, request.headers["x-facility-original-host"]].flatMap(
+    (value) => (value === undefined ? [] : Array.isArray(value) ? value : [value]),
+  );
+  return (
+    hosts.length > 0 &&
+    hosts.every((value) => {
+      try {
+        return ["localhost", "127.0.0.1", "[::1]"].includes(
+          new URL(`http://${value}`).hostname.toLowerCase(),
+        );
+      } catch {
+        return false;
+      }
+    })
+  );
 }

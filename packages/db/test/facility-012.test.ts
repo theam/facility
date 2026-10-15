@@ -138,6 +138,68 @@ describe("Facility 0.12 database", () => {
     }
   });
 
+  it("keeps GitHub and local repository identities from masquerading as each other", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const orgId = `org_src_${suffix}`;
+    const projectId = `proj_src_${suffix}`;
+    await db
+      .insert(schema.orgs)
+      .values({ id: orgId, name: "S", slug: `s-${suffix}`, settings: {} });
+    await db
+      .insert(schema.projects)
+      .values({ id: projectId, orgId, name: "S", slug: "project", settings: {} });
+    const base = { orgId, projectId, defaultBranch: "main", role: "related" };
+
+    // Existing rows keep their GitHub identity and behavior.
+    const [github] = await db
+      .insert(schema.projectRepositories)
+      .values({ ...base, id: `repo_gh_${suffix}`, owner: "acme", name: "app" })
+      .returning();
+    expect(github).toMatchObject({ source: "github", sourcePath: null });
+
+    for (const values of [
+      // A local row must use the sentinel owner, a canonical path, and no installation.
+      { source: "local" as const, owner: "acme", name: "a1", sourcePath: "/srv/a1" },
+      { source: "local" as const, owner: "_local", name: "a2", sourcePath: null },
+      { source: "local" as const, owner: "_local", name: "a3", sourcePath: "relative/a3" },
+      // A GitHub row can neither carry a host path nor claim the local owner sentinel.
+      { source: "github" as const, owner: "acme", name: "a4", sourcePath: "/srv/a4" },
+      { source: "github" as const, owner: "_local", name: "a5", sourcePath: null },
+      { source: "svn" as never, owner: "acme", name: "a6", sourcePath: null },
+    ]) {
+      await expect(
+        db
+          .insert(schema.projectRepositories)
+          .values({ ...base, id: `repo_bad_${values.name}_${suffix}`, ...values }),
+      ).rejects.toMatchObject({ cause: { code: "23514" } });
+    }
+
+    const local = {
+      ...base,
+      source: "local" as const,
+      owner: "_local",
+      name: "app",
+      sourcePath: "/srv/app",
+    };
+    await db.insert(schema.projectRepositories).values({ ...local, id: `repo_l1_${suffix}` });
+    for (const duplicate of [
+      { name: "APP", sourcePath: "/srv/other" },
+      { name: "other", sourcePath: "/srv/app" },
+    ]) {
+      await expect(
+        db
+          .insert(schema.projectRepositories)
+          .values({ ...local, ...duplicate, id: `repo_dup_${duplicate.name}_${suffix}` }),
+      ).rejects.toMatchObject({ cause: { code: "23505" } });
+    }
+    // A local alias equal to a GitHub repository name is not a GitHub identity.
+    await expect(
+      db
+        .insert(schema.projectRepositories)
+        .values({ ...base, id: `repo_gh2_${suffix}`, owner: "acme", name: "app" }),
+    ).rejects.toMatchObject({ cause: { code: "23505" } });
+  });
+
   it("rejects cross-organization repository, event, artifact, and preview references", async () => {
     const suffix = randomUUID().replaceAll("-", "");
     const orgA = `org_a_${suffix}`;

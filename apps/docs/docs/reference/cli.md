@@ -34,6 +34,7 @@ values without prompts.
 | `--yes`, `-y` | Run without interactive confirmation. |
 | `--force` | Overwrite the seven Facility-owned targets. |
 | `--repo=<owner/name>` | Set the primary GitHub repository. |
+| `--local[=<alias>]` | Configure a [local repository](../guides/local-repository.md) as `local:<alias>` (default: the directory name) with the local `architect`, `builder`, and `reviewer` agents. |
 | `--provision=<command>` | Set optional `environment.setup`. |
 | `--start=<command>` | Set required `environment.start`. |
 | `--preview-readiness-command=<command>` | Set optional `environment.ready`. |
@@ -56,9 +57,29 @@ Init writes only `.facility.yml` and these manifests:
 It preserves each existing file independently unless `--force` is explicit. Review before using
 force: these files are project-owned configuration, not disposable generated output.
 
+## `facility repos add-local`
+
+Registers a Git repository on the machine running Facility with an existing project:
+
+```bash
+FACILITY_API_KEY=fak_... facility repos add-local ~/code/shop --project=proj_... --alias=shop
+```
+
+| Flag | Purpose |
+| --- | --- |
+| `--project=<id>` | Project to register with; defaults to `FACILITY_PROJECT_ID`. |
+| `--alias=<name>` | Name used as `local:<name>` in `.facility.yml`; defaults to the directory name. |
+| `--branch=<name>` | Default branch; defaults to the branch checked out in the repository. |
+| `--api=<url>` | Facility API origin; defaults to `FACILITY_API_URL` or `http://localhost:4400`. |
+| `--json` | Print the API response or error as JSON. |
+
+The API key is read only from `FACILITY_API_KEY`, never from a flag. Before registering, the command
+lists uncommitted and untracked paths, which Facility never imports.
+
 ## `facility doctor`
 
-Doctor checks the local seven-file kickstart contract and exits non-zero when it finds a problem.
+Doctor checks the local kickstart contract and exits non-zero when it finds a problem. For a
+`local:<alias>` manifest it expects the local `architect`, `builder`, and `reviewer` agents.
 Use `--dir=<path>` to inspect another checkout and `--json` for machine-readable results:
 
 ```bash

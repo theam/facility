@@ -134,6 +134,7 @@ export class GithubAgentTriggerService {
             eq(projectRepositories.orgId, event.orgId),
             event.projectId ? eq(projectRepositories.projectId, event.projectId) : undefined,
             event.repositoryId ? eq(projectRepositories.id, event.repositoryId) : undefined,
+            eq(projectRepositories.source, "github"),
             eq(projectRepositories.owner, owner),
             eq(projectRepositories.name, name),
             eq(projects.status, "active"),

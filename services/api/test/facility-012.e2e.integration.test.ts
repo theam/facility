@@ -30,6 +30,9 @@ import { buildApp } from "../src/app.js";
 import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
+import { LocalRepositoryHost } from "../src/repositories/local.js";
+import { LocalReviewService } from "../src/repositories/local-review.js";
+import { LocalRepositorySnapshots } from "../src/repositories/sources.js";
 import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { StoryTitleService } from "../src/stories/titles.js";
@@ -252,6 +255,8 @@ environment:
       catalog,
       credentials,
       projectManifests: projectManifests as StoryDomain["projectManifests"],
+      localRepositories: new LocalRepositorySnapshots(db, new LocalRepositoryHost({ roots: [] })),
+      localReview: new LocalReviewService(db, runtime, credentials, projectManifests, environment),
       environment,
       engines,
       dispatcher,

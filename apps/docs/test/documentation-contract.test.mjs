@@ -27,6 +27,32 @@ test("repository unlink documents cleanup, retention, permissions and primary re
   assert.match(guide, /Archiving does not remove/);
 });
 
+test("local repositories document the import contract, review, export, and safe operation", () => {
+  const guide = read("apps/docs/docs/guides/local-repository.md");
+  for (const contract of [
+    "committed history from the default branch only",
+    "Uncommitted edits and\nuntracked files",
+    "never writes to your repository",
+    "local:<alias>",
+    "Any later commit makes the approval stale",
+    "not a merge",
+    "Submodules and Git LFS",
+  ]) {
+    assert.ok(guide.includes(contract), contract);
+  }
+  const operator = read("apps/docs/docs/self-host/local-mode.md");
+  for (const contract of [
+    "FACILITY_LOCAL_REPOSITORY_ROOTS",
+    "Leave every `GITHUB_*` value empty",
+    "the connection must come from a loopback address",
+    "pg_dump",
+    "facility-ws-volume-",
+    "SECRET_MASTER_KEY",
+  ]) {
+    assert.ok(operator.includes(contract), contract);
+  }
+});
+
 test("the published navigation covers user, operator, reference, and contributor paths", () => {
   const sidebar = read("apps/docs/sidebars.ts");
   const requiredPages = [
@@ -36,6 +62,7 @@ test("the published navigation covers user, operator, reference, and contributor
     "concepts/agents-as-code",
     "guides/kickstart",
     "guides/existing-repo",
+    "guides/local-repository",
     "guides/operate-story",
     "guides/validate-workspace-loop",
     "guides/troubleshooting",

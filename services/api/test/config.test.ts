@@ -28,6 +28,38 @@ describe("Facility 0.12 configuration", () => {
     ])
       expect(() => readConfig({ ...native, WEB_URL })).toThrow("HTTPS control-plane origins");
   });
+  it("listens on loopback and keeps local repositories disabled unless configured", () => {
+    const defaults = readConfig(validEnv);
+    expect(defaults.listenHost).toBe("localhost");
+    expect(defaults.localRepositoryRoots).toEqual([]);
+    expect(defaults.localGitIdentity).toBeUndefined();
+    const local = readConfig({
+      ...validEnv,
+      FACILITY_LISTEN_HOST: "0.0.0.0",
+      FACILITY_LOCAL_REPOSITORY_ROOTS: "/srv/code:/home/dev/work",
+      FACILITY_LOCAL_REPOSITORY_OWNER_UIDS: "1000, 1001",
+      FACILITY_LOCAL_SNAPSHOT_MAX_BYTES: "1048576",
+      FACILITY_LOCAL_GIT_EMAIL: "agent@example.test",
+    });
+    expect(local).toMatchObject({
+      listenHost: "0.0.0.0",
+      localRepositoryRoots: ["/srv/code", "/home/dev/work"],
+      localRepositoryOwnerUids: [1000, 1001],
+      localSnapshotMaxBytes: 1_048_576,
+      localGitIdentity: { name: "Facility Agent", email: "agent@example.test" },
+    });
+    expect(() => readConfig({ ...validEnv, FACILITY_LOCAL_REPOSITORY_OWNER_UIDS: "root" })).toThrow(
+      "numeric user ids",
+    );
+    expect(
+      readConfig({
+        ...validEnv,
+        FACILITY_LOCAL_REPOSITORY_ROOTS: "/srv/code",
+        FACILITY_LOCAL_REPOSITORY_OWNER_UIDS: "",
+      }).localRepositoryOwnerUids,
+    ).toBeUndefined();
+  });
+
   it("requires an exact 32-byte base64 master key", () => {
     expect(readConfig(validEnv).secretMasterKey).toBe(validEnv.SECRET_MASTER_KEY);
     for (const value of ["bad", `${validEnv.SECRET_MASTER_KEY}!`]) {

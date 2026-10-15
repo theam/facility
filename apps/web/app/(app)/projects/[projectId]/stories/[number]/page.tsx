@@ -5,6 +5,7 @@ import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { AttentionActions } from "@/components/story/attention-actions";
 import { EnvironmentLogs } from "@/components/story/environment-logs";
+import { LocalReview } from "@/components/story/local-review";
 import { StoryActions } from "@/components/story/story-actions";
 import { StoryConversation } from "@/components/story/story-conversation";
 import { StoryTimeline } from "@/components/story/story-timeline";
@@ -38,12 +39,13 @@ export default async function StoryPage({
   params: Promise<{ projectId: string; number: string }>;
 }) {
   const { projectId, number: storyId } = await params;
-  const [detail, conversation, environment, agents, me] = await Promise.all([
+  const [detail, conversation, environment, agents, me, repos] = await Promise.all([
     api.workspaceStory(projectId, storyId),
     api.workspaceStoryConversation(projectId, storyId),
     api.workspaceStoryEnvironment(projectId, storyId),
     api.storyAgents(projectId),
     api.me(),
+    api.projectRepos(projectId),
   ]);
 
   if (!detail.ok) {
@@ -62,6 +64,8 @@ export default async function StoryPage({
   const permissions = me.ok ? me.data.permissions : [];
   const canExecute = can(permissions, "workspaces:execute");
   const canWrite = can(permissions, "projects:write");
+  // Local repositories are reviewed and exported here instead of through a pull request.
+  const localSource = repos.ok && repos.data.some((repo) => repo.source === "local");
   const activeTurn =
     bundle.turns.find((turn) => turn.state === "running") ??
     bundle.turns.find((turn) => turn.state === "queued") ??
@@ -204,6 +208,17 @@ export default async function StoryPage({
           />
         )}
       </section>
+
+      {localSource && bundle.workspace && !story.deletedAt ? (
+        <section id="review" className="scroll-mt-6">
+          <LocalReview
+            projectId={projectId}
+            storyId={story.id}
+            canExecute={canExecute}
+            canReview={can(permissions, "stories:write")}
+          />
+        </section>
+      ) : null}
 
       <section
         id="workspace"

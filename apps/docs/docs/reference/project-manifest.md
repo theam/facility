@@ -56,8 +56,14 @@ environment:
 
 | Field | Required | Contract |
 | --- | --- | --- |
-| `primary` | Yes | `github.com/owner/repository`; an HTTPS prefix and `.git` suffix are accepted and normalized. |
+| `primary` | Yes | `github.com/owner/repository` (an HTTPS prefix and `.git` suffix are accepted and normalized), or `local:<alias>` for a [local repository](../guides/local-repository.md). |
 | `related` | No | Array in the same format; defaults to `[]`. |
+
+A `local:<alias>` reference names a repository by the alias it was registered under, so host paths
+never appear in the manifest. Aliases use letters, digits, `.`, `_`, and `-`, and cannot end in
+`.git`. A project's repositories are all GitHub or all local. Facility imports local repositories
+under `repos/_local/<alias>`, from the commit it read the manifest at, and does not fetch them
+again on later turns.
 
 The primary repository owns `.facility.yml`, `.agents/`, and the story branch. Facility checks out
 each connected repository under `repos/<owner>/<repository>`, fetches updates, and configures a
@@ -79,6 +85,7 @@ connected to the Facility project and available through its GitHub App installat
 | `stop` | No | Accepted stop command. The story lifecycle suspends provider compute and does not invoke it automatically. |
 | `seed` | No | Shell command run after `setup` when setup is due. |
 | `browser_test` | No | Shell command used by the browser-test operation. |
+| `checks` | No | Map of lowercase check names to shell commands, at most 20. Local review runs them in the primary repository and records each result against the tested commit. |
 | `secrets` | No | Array of declared secret names; defaults to `[]`. |
 | `variables` | No | Array of declared non-secret operator-value names; defaults to `[]`. |
 | `services` | No | Named preview services; defaults to `{}`. |

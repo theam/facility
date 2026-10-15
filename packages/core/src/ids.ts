@@ -46,6 +46,7 @@ export const ID_PREFIXES = {
   ghr: "ghr",
   ghc: "ghc",
   asg: "asg",
+  sexp: "sexp",
 } as const;
 
 export type IdPrefix = keyof typeof ID_PREFIXES;

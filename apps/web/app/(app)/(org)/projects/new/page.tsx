@@ -334,6 +334,12 @@ export default function KickstartPage() {
         <p className="text-[12.5px] text-(--dim)">
           pick a repository → preview the assets → open the PR
         </p>
+        <p className="text-[12.5px] text-(--mut)">
+          No GitHub?{" "}
+          <Link className="text-(--info) underline" href="/projects/new/local">
+            Use a Git repository on this machine →
+          </Link>
+        </p>
       </div>
 
       {error ? (

@@ -62,6 +62,10 @@ export function apiTargetUrl(requestUrl: string, apiUrl: string, publicPathPrefi
 
 export function apiProxyRequestHeaders(input: Headers) {
   const headers = new Headers(input);
+  // The browser-facing Host, recorded by this proxy only, lets the API refuse
+  // loopback-only flows reached through a rebound DNS name.
+  const originalHost = input.get("host");
+  headers.delete("x-facility-original-host");
   const connectionTokens = (headers.get("connection") ?? "")
     .split(",")
     .map((value) => value.trim().toLowerCase())
@@ -70,6 +74,7 @@ export function apiProxyRequestHeaders(input: Headers) {
     if (HEADER_NAME.test(name)) headers.delete(name);
   }
   headers.delete("host");
+  if (originalHost) headers.set("x-facility-original-host", originalHost);
   headers.delete("content-length");
   for (const name of UNTRUSTED_FORWARDING_HEADERS) headers.delete(name);
   // Undici transparently decompresses upstream responses. Ask for identity so

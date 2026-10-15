@@ -154,5 +154,12 @@ async function loadRepository(db: FacilityDb, orgId: string, projectId: string, 
       .limit(1)
   )[0];
   if (!repository) throw notFound("Repository not found");
+  if (repository.source !== "github") {
+    throw new ApiError(
+      409,
+      "github_repository_required",
+      "This is a local repository; use its local kickstart patch instead of a pull request",
+    );
+  }
   return repository;
 }

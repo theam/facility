@@ -4,12 +4,17 @@ import type { GithubMaintainerTokenFactory } from "./client.js";
 import type { GithubGitIdentity } from "./git-identity.js";
 
 export type WorkspaceRepository = {
+  /** Project repository id; required for local sources, which are imported by id. */
+  id?: string;
+  /** Omitted for GitHub repositories. */
+  source?: "github" | "local";
   owner: string;
   name: string;
   defaultBranch: string;
   role: "primary" | "related";
 };
 
+/** Repository access for one workspace preparation; local sources carry no credentials. */
 export type GithubWorkspaceCredentials = {
   repositories: WorkspaceRepository[];
   environment: Record<string, string>;
@@ -38,7 +43,11 @@ export class GithubWorkspaceCredentialBroker {
       .select()
       .from(projectRepositories)
       .where(
-        and(eq(projectRepositories.orgId, orgId), eq(projectRepositories.projectId, projectId)),
+        and(
+          eq(projectRepositories.orgId, orgId),
+          eq(projectRepositories.projectId, projectId),
+          eq(projectRepositories.source, "github"),
+        ),
       )
       .orderBy(
         asc(projectRepositories.role),
@@ -137,6 +146,8 @@ export class GithubWorkspaceCredentialBroker {
     return {
       gitIdentity: primaryCredential.gitIdentity,
       repositories: repositories.map((repository) => ({
+        id: repository.id,
+        source: "github" as const,
         owner: repository.owner,
         name: repository.name,
         defaultBranch: repository.defaultBranch,
