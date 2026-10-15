@@ -1,4 +1,5 @@
 import { MobileNav, Sidebar } from "@/components/shell/nav";
+import { MAIN_CONTENT_ID, SkipLink } from "@/components/shell/skip-link";
 import { Topbar } from "@/components/shell/topbar";
 import { api } from "@/lib/api";
 
@@ -8,11 +9,14 @@ export default async function OrgLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-dvh">
+      <SkipLink />
       <Sidebar />
       <div className="min-w-0 flex-1">
         <MobileNav />
         {me.ok ? <Topbar me={me.data} projects={projectList} /> : null}
-        <main className="px-5 py-8 sm:px-8 lg:px-10">{children}</main>
+        <main id={MAIN_CONTENT_ID} tabIndex={-1} className="px-5 py-8 sm:px-8 lg:px-10">
+          {children}
+        </main>
       </div>
     </div>
   );
