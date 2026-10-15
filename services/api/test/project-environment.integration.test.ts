@@ -385,6 +385,69 @@ environment:
     ).toContain("shared");
   });
 
+  it("retains browser artifacts when the browser test fails", async () => {
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    const failingManifest = {
+      ...manifest,
+      environment: {
+        ...manifest.environment,
+        browser_test: `
+          printf screenshot > "$FACILITY_ARTIFACT_DIR/failure.png"
+          printf trace > "$FACILITY_ARTIFACT_DIR/failure-trace.zip"
+          exit 1
+        `,
+      },
+    };
+
+    await environment.prepare({
+      orgId,
+      projectId,
+      workspace,
+      manifest: failingManifest,
+      credentials,
+      branch: "facility/story-environment-browser-failure",
+      cleanSetup: true,
+      readinessTimeoutMs: 2_000,
+    });
+
+    await expect(
+      environment.runBrowserTest({
+        orgId,
+        projectId,
+        storyId,
+        workspace,
+        manifest: failingManifest,
+        credentials,
+      }),
+    ).rejects.toThrow();
+
+    const artifacts = await db
+      .select()
+      .from(storyArtifacts)
+      .where(eq(storyArtifacts.storyId, storyId));
+
+    expect(artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "screenshot", label: "failure.png" }),
+        expect.objectContaining({ kind: "trace", label: "failure-trace.zip" }),
+      ]),
+    );
+
+    const events = await db
+      .select()
+      .from(workspaceEvents)
+      .where(eq(workspaceEvents.workspaceId, workspaceId));
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "environment.browser_test",
+          data: expect.objectContaining({ exitCode: 1 }),
+        }),
+      ]),
+    );
+  });
+
   it("opens previews on the agent's changed workspace without checkout, setup, or reseeding", async () => {
     const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
     const prepared = await environment.prepare({
