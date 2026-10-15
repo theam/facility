@@ -128,3 +128,19 @@ and retention policy must cover both workspace storage and PostgreSQL.
 
 For deployment controls, key rotation, logging, backups, network policy, and incident preparation,
 continue with the [hardening guide](hardening.md).
+
+### Runner Go toolchain security floor
+
+The runner rebuilds its pinned Docker, containerd, RootlessKit, Buildx, Compose,
+runc and GitHub CLI sources with Go 1.26.9. That patch release contains the
+October 2026 standard-library security fixes. Every source build also replaces
+`golang.org/x/net` with v0.60.0, including the Docker CLI and runc builds that
+otherwise use their vendored copies. The image build checks the compiler and
+effective x/net version embedded in each resulting binary.
+
+This updates build dependencies without changing the tool releases, workspace
+permissions, retention behavior or existing scanner exceptions. The release
+image scanner and Docker-backed workspace acceptance tier remain required.
+
+References: [Go security release history](https://go.dev/doc/devel/release) and
+[x/net v0.60.0](https://pkg.go.dev/golang.org/x/net@v0.60.0).

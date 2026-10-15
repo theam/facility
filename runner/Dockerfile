@@ -8,7 +8,7 @@ FROM docker:29-dind-rootless@sha256:8a213afdd096a44dff403aaf8eb58b7a96a63113f18a
 # toolchain that contains the reviewed standard-library fixes. The upstream
 # image still supplies its shell bootstrap and docker-init; every Go binary
 # that crosses into the runner is rebuilt from a checksum-pinned source commit.
-FROM golang:1.26.6-trixie@sha256:b75d466dd608587fd66cca705a307ba65b889827d06ad61d6a75f0482b51b7c7 AS go-tools-base
+FROM golang:1.26.9-trixie@sha256:f06b7122f888680048afb247c4e5f49c0069eb6c4c1ccae0f3f4834527a8d22c AS go-tools-base
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libseccomp-dev pkg-config \
   && rm -rf /var/lib/apt/lists/*
@@ -34,6 +34,7 @@ RUN archive=/tmp/moby.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && VERSION="$MOBY_VERSION" DOCKER_GITCOMMIT="$MOBY_COMMIT" \
@@ -57,9 +58,16 @@ RUN archive=/tmp/docker-cli.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && ln -s /src /go/src/github.com/docker/cli \
   && cd /go/src/github.com/docker/cli \
+  # Docker CLI keeps its reviewed module graph in vendor.mod/vendor.sum. \
+  && cp vendor.mod go.mod \
+  && cp vendor.sum go.sum \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
+  && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
+  && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && VERSION="$DOCKER_CLI_VERSION" GITCOMMIT="$DOCKER_CLI_COMMIT" \
     CGO_ENABLED=0 GO_LINKMODE=static DISABLE_WARN_OUTSIDE_CONTAINER=1 \
-    SOURCE_DATE_EPOCH=1785456000 ./scripts/build/binary \
+    SOURCE_DATE_EPOCH=1785456000 GOFLAGS=-mod=mod ./scripts/build/binary \
   && install -m 0755 "build/docker-linux-$(go env GOARCH)" /out/docker \
   && test "$(/out/docker --version | awk '{print $3}' | tr -d ',')" = "$DOCKER_CLI_VERSION" \
   && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod /go/src/github.com/docker/cli
@@ -76,7 +84,7 @@ RUN archive=/tmp/containerd.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
-  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && make VERSION="v${CONTAINERD_VERSION}" REVISION="$CONTAINERD_COMMIT" STATIC=1 \
@@ -98,7 +106,7 @@ RUN archive=/tmp/rootlesskit.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
-  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.56.0 \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags='-s -w' -o /out/rootlesskit ./cmd/rootlesskit \
   && test "$(/out/rootlesskit --version | awk '{print $3}')" = "3.0.2" \
   && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
@@ -116,6 +124,7 @@ RUN archive=/tmp/buildx.tar.gz \
   && cd /src \
   && go mod edit -replace=github.com/moby/go-archive=github.com/moby/go-archive@v0.3.0 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath \
@@ -138,6 +147,7 @@ RUN archive=/tmp/compose.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 GOMAXPROCS=1 go build -p=1 -mod=mod -trimpath -tags=e2e \
@@ -156,8 +166,10 @@ RUN archive=/tmp/runc.tar.gz \
   && printf '%s  %s\n' "$RUNC_SOURCE_SHA256" "$archive" | sha256sum --check --strict \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
-  && make -C /src runc \
-  && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.26.6" \
+  && cd /src \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
+  && GOFLAGS=-mod=mod make -C /src runc \
+  && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.26.9" \
   && install -m 0755 /src/runc /out/runc \
   && rm -rf /src "$archive" /root/.cache/go-build /go/pkg/mod
 
@@ -173,6 +185,7 @@ RUN archive=/tmp/gh.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
   && CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=mod -trimpath \
@@ -187,11 +200,17 @@ RUN archive=/tmp/gh.tar.gz \
 # vulnerable Go modules did not resolve the reviewed replacements.
 FROM gh-build AS go-tools-audit
 RUN for binary in /out/*; do \
-    test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.26.6" || exit 1; \
+    test "$(go version -m "$binary" | awk 'NR == 1 {print $2}')" = "go1.26.9" || exit 1; \
+  done \
+  && for binary in /out/*; do \
+    go version -m "$binary" | awk \
+      '$1 == "dep" { pending = ($2 == "golang.org/x/net"); if (pending) version = $3; next } \
+       pending && $1 == "=>" { if ($2 != "golang.org/x/net") { bad = 1; exit }; version = $3; pending = 0 } \
+       END { if (bad) exit 1; if (version != "") exit (version != "v0.60.0") }' || exit 1; \
   done \
   && for binary in /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/rootlesskit; do \
     go version -m "$binary" | awk \
-      '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.56.0" { found = 1 } END { exit !found }' || exit 1; \
+      '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.60.0" { found = 1 } END { exit !found }' || exit 1; \
   done \
   && for binary in /out/dockerd /out/containerd /out/rootlesskit /out/docker-buildx /out/docker-compose /out/gh; do \
     go version -m "$binary" | awk \
