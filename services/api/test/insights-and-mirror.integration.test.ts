@@ -24,7 +24,7 @@ import {
   turnUsage,
   workspaces,
 } from "@facility/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GithubMirrorService, restCiSignal, webhookCiSignal } from "../src/github/mirror.js";
@@ -643,6 +643,14 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
     null,
   ])("does not repeatedly fetch unchanged closed CI, including absent checks: %s", async (ciState) => {
     await db
+      .delete(githubCiEvents)
+      .where(
+        and(
+          eq(githubCiEvents.repositoryId, repositoryId),
+          inArray(githubCiEvents.pullNumber, [801, 802]),
+        ),
+      );
+    await db
       .delete(githubPullRequests)
       .where(
         and(eq(githubPullRequests.repositoryId, repositoryId), eq(githubPullRequests.number, 801)),
@@ -675,8 +683,8 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
         return {
           data: {
             state: ciState === "success" ? "pending" : ciState,
-            total_count: 0,
-            statuses: [],
+            total_count: ciState === "pending" ? 1 : 0,
+            statuses: ciState === "pending" ? [{ state: "pending", context: "verify" }] : [],
           },
         };
       if (route.endsWith("/check-runs"))
@@ -729,12 +737,57 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
         )
     )[0];
     expect(closed).toMatchObject({ ciState, ciHeadSha: pulls[0]?.sha });
+    if (ciState === null) {
+      expect(closed?.ciUpdatedAt).toBeInstanceOf(Date);
+      expect(
+        await db
+          .select()
+          .from(githubCiEvents)
+          .where(
+            and(eq(githubCiEvents.repositoryId, repositoryId), eq(githubCiEvents.pullNumber, 801)),
+          ),
+      ).toHaveLength(0);
+    }
     const closedPull = pulls[0];
     if (!closedPull) throw new Error("expected closed pull fixture");
     closedPull.sha = "7".repeat(40);
     request.mockClear();
     await mirror.syncProject(orgId, projectId);
     expect(ciRequests()).toBe(4);
+  });
+
+  it("does not count a merged pull with no CI as CI evidence or a first-pass merge", async () => {
+    const number = 803;
+    const mergedAt = new Date();
+    const insights = new InsightsService(db, new CostBudgetService(db));
+    const before = await insights.overview(orgId, projectId);
+    await db.insert(githubPullRequests).values({
+      id: newId("ghp"),
+      orgId,
+      projectId,
+      repositoryId,
+      number,
+      title: "Merge without configured CI",
+      state: "merged",
+      headRef: "work/no-ci",
+      headSha: "3".repeat(40),
+      baseRef: "main",
+      htmlUrl: `https://github.com/acme/app/pull/${number}`,
+      mergedAt,
+      githubCreatedAt: new Date(mergedAt.getTime() - 60_000),
+    });
+    const after = await insights.overview(orgId, projectId);
+    expect(after.analytics.mergedPullRequests).toBe(before.analytics.mergedPullRequests + 1);
+    expect(after.analytics.ciEvidenceMerges).toBe(before.analytics.ciEvidenceMerges);
+    expect(after.analytics.observedFirstPassMerges).toBe(before.analytics.observedFirstPassMerges);
+    expect(
+      await db
+        .select()
+        .from(githubCiEvents)
+        .where(
+          and(eq(githubCiEvents.repositoryId, repositoryId), eq(githubCiEvents.pullNumber, number)),
+        ),
+    ).toHaveLength(0);
   });
 
   it("recognizes reconciled merged pull requests from merged_at without a merged boolean", async () => {
