@@ -3966,6 +3966,10 @@
                     "properties": {
                       "nativePreviewsEnabled": {
                         "type": "boolean"
+                      },
+                      "developmentBranch": {
+                        "nullable": true,
+                        "type": "string"
                       }
                     },
                     "additionalProperties": {}
@@ -4390,12 +4394,20 @@
                     "properties": {
                       "nativePreviewsEnabled": {
                         "type": "boolean"
+                      },
+                      "developmentBranch": {
+                        "nullable": true,
+                        "type": "string"
                       }
                     },
                     "additionalProperties": {}
                   },
                   "nativePreviewsEnabled": {
                     "type": "boolean"
+                  },
+                  "developmentBranch": {
+                    "nullable": true,
+                    "type": "string"
                   }
                 }
               }

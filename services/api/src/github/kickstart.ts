@@ -3,6 +3,7 @@ import { type FacilityDb, githubInstallations } from "@facility/db";
 import { eq } from "drizzle-orm";
 import type { AppConfig, Principal } from "../types.js";
 import { FacilityGithubClient, type GithubClientFactory, type TreeItem } from "./client.js";
+import { configurationBranch, repositoryDevelopmentBranch } from "./development-branch.js";
 import { readRepoFiles } from "./repo-files.js";
 
 export type KickstartAnswers = {
@@ -28,12 +29,14 @@ export type GithubRepositoryRow = {
   owner: string;
   name: string;
   defaultBranch: string;
+  role?: string;
 };
 
 export async function createGithubClientForRepo(
   db: FacilityDb,
   factory: GithubClientFactory,
   repository: GithubRepositoryRow,
+  developmentBranch?: string,
 ): Promise<FacilityGithubClient> {
   if (!repository.installationId) throw new Error("Repository has no GitHub installation");
   const installation = (
@@ -50,6 +53,7 @@ export async function createGithubClientForRepo(
     owner: repository.owner,
     repo: repository.name,
     defaultBranch: repository.defaultBranch,
+    developmentBranch: developmentBranch ?? (await repositoryDevelopmentBranch(db, repository)),
   });
 }
 
@@ -59,9 +63,11 @@ export async function kickstartPreview(
   repository: GithubRepositoryRow,
   answers: KickstartAnswers,
 ) {
-  const client = await createGithubClientForRepo(db, factory, repository);
-  const existing = await readRepoFiles(client, repository.defaultBranch);
-  const detection = detectWorkspace(existing, answers.defaultBranch ?? repository.defaultBranch);
+  const developmentBranch = await repositoryDevelopmentBranch(db, repository);
+  const client = await createGithubClientForRepo(db, factory, repository, developmentBranch);
+  const commitSha = await client.getBranchSha(developmentBranch);
+  const existing = await readRepoFiles(client, commitSha);
+  const detection = detectWorkspace(existing, developmentBranch);
   const workspaceAnswers = workspaceKickstartAnswers(
     repository,
     answers,
@@ -97,12 +103,16 @@ export async function kickstartRepo(args: {
   repo: GithubRepositoryRow;
   answers: KickstartAnswers;
 }) {
-  const client = await createGithubClientForRepo(args.db, args.factory, args.repo);
-  const existing = await readRepoFiles(client, args.repo.defaultBranch);
-  const detection = detectWorkspace(
-    existing,
-    args.answers.defaultBranch ?? args.repo.defaultBranch,
+  const developmentBranch = await repositoryDevelopmentBranch(args.db, args.repo);
+  const client = await createGithubClientForRepo(
+    args.db,
+    args.factory,
+    args.repo,
+    developmentBranch,
   );
+  const baseSha = await client.getBranchSha(developmentBranch);
+  const existing = await readRepoFiles(client, baseSha);
+  const detection = detectWorkspace(existing, developmentBranch);
   const rendered = renderWorkspaceKickstart(
     workspaceKickstartAnswers(args.repo, args.answers, existing, detection.packageManager),
     existing,
@@ -111,8 +121,11 @@ export async function kickstartRepo(args: {
     throw new Error("Repository already contains the Facility 0.12 kickstart files");
   }
 
-  const branch = "facility/kickstart-0.12";
-  const baseSha = await client.getDefaultBranchSha();
+  const branch = configurationBranch(
+    "facility/kickstart-0.12",
+    developmentBranch,
+    args.repo.defaultBranch,
+  );
   const baseCommit = await client.getCommit(baseSha);
   const treeSha = await client.createTree(
     baseCommit.treeSha,
@@ -130,13 +143,14 @@ export async function kickstartRepo(args: {
     await client.updateBranch(branch, commitSha);
   }
   const existingPullRequest = (
-    await client.listOpenPullRequestsForHead(branch, args.repo.defaultBranch)
+    await client.listOpenPullRequestsForHead(branch, developmentBranch)
   )[0];
   const pr =
     existingPullRequest ??
     (await client.createPullRequest({
       title: "feat!: configure Facility 0.12 story workspaces",
       head: branch,
+      base: developmentBranch,
       body: kickstartPrBody(rendered.files.map((file) => file.path)),
     }));
   return {

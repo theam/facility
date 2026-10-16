@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 import { FacilityGithubClient, type GithubClientFactory } from "../github/client.js";
+import { repositoryDevelopmentBranch } from "../github/development-branch.js";
 import { decodeContent } from "../github/repo-files.js";
 import type {
   GithubWorkspaceCredentials,
@@ -185,7 +186,9 @@ export class GithubProjectManifestSource implements ProjectManifestSource {
       repo: repository.name,
       defaultBranch: repository.defaultBranch,
     });
-    const content = (await client.getContent(".facility.yml", repository.defaultBranch)) as {
+    const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
+    const commitSha = await client.getBranchSha(developmentBranch);
+    const content = (await client.getContent(".facility.yml", commitSha)) as {
       type?: string;
       content?: string;
       encoding?: string;
@@ -557,6 +560,15 @@ export class ProjectEnvironmentService {
     if (!isSafeGitBranch(input.branch)) {
       throw new ProjectEnvironmentError("story_branch_invalid", "story branch is invalid");
     }
+    if (
+      input.branch === repository.defaultBranch ||
+      input.branch === repository.developmentBranch
+    ) {
+      throw new ProjectEnvironmentError(
+        "story_branch_protected",
+        "Use a story branch, not a repository base branch",
+      );
+    }
     const local = await this.runtime.exec(input.workspace, {
       command: "git",
       args: ["show-ref", "--verify", `refs/heads/${input.branch}`],
@@ -576,7 +588,12 @@ export class ProjectEnvironmentService {
         ? ["switch", input.branch]
         : remote.exitCode === 0
           ? ["switch", "-c", input.branch, "--track", `origin/${input.branch}`]
-          : ["switch", "-c", input.branch, `origin/${repository.defaultBranch}`],
+          : [
+              "switch",
+              "-c",
+              input.branch,
+              `origin/${repository.developmentBranch ?? repository.defaultBranch}`,
+            ],
       cwd,
       "git branch",
     );

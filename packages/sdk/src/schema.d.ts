@@ -3707,6 +3707,7 @@ export interface operations {
                     description?: string;
                     settings?: {
                         nativePreviewsEnabled?: boolean;
+                        developmentBranch?: string | null;
                     } & {
                         [key: string]: unknown;
                     };
@@ -4054,10 +4055,12 @@ export interface operations {
                     description?: string | null;
                     settings?: {
                         nativePreviewsEnabled?: boolean;
+                        developmentBranch?: string | null;
                     } & {
                         [key: string]: unknown;
                     };
                     nativePreviewsEnabled?: boolean;
+                    developmentBranch?: string | null;
                 };
             };
         };

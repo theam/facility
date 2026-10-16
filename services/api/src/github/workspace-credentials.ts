@@ -1,12 +1,14 @@
 import { type FacilityDb, githubInstallations, projectRepositories } from "@facility/db";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { GithubMaintainerTokenFactory } from "./client.js";
+import { repositoryDevelopmentBranch } from "./development-branch.js";
 import type { GithubGitIdentity } from "./git-identity.js";
 
 export type WorkspaceRepository = {
   owner: string;
   name: string;
   defaultBranch: string;
+  developmentBranch?: string;
   role: "primary" | "related";
 };
 
@@ -136,12 +138,15 @@ export class GithubWorkspaceCredentialBroker {
     }
     return {
       gitIdentity: primaryCredential.gitIdentity,
-      repositories: repositories.map((repository) => ({
-        owner: repository.owner,
-        name: repository.name,
-        defaultBranch: repository.defaultBranch,
-        role: repository.role as "primary" | "related",
-      })),
+      repositories: await Promise.all(
+        repositories.map(async (repository) => ({
+          owner: repository.owner,
+          name: repository.name,
+          defaultBranch: repository.defaultBranch,
+          developmentBranch: await repositoryDevelopmentBranch(this.db, repository),
+          role: repository.role as "primary" | "related",
+        })),
+      ),
       environment: {
         GH_TOKEN: primaryToken,
         GITHUB_TOKEN: primaryToken,

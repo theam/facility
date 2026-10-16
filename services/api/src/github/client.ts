@@ -111,6 +111,7 @@ export type RepoRef = {
   owner: string;
   repo: string;
   defaultBranch: string;
+  developmentBranch?: string;
 };
 
 export type TreeItem = {
@@ -138,10 +139,14 @@ export class FacilityGithubClient {
   }
 
   async getDefaultBranchSha(): Promise<string> {
+    return this.getBranchSha(this.repo.defaultBranch);
+  }
+
+  async getBranchSha(branch: string): Promise<string> {
     const response = await this.octokit.rest.repos.getBranch({
       owner: this.repo.owner,
       repo: this.repo.repo,
-      branch: this.repo.defaultBranch,
+      branch,
     });
     return response.data.commit.sha;
   }
@@ -272,6 +277,9 @@ export class FacilityGithubClient {
     const normalized = ref.replace(/^refs\/heads\//, "").replace(/^heads\//, "");
     if (normalized === this.repo.defaultBranch) {
       throw new Error(`Refusing to write to default branch ${this.repo.defaultBranch}`);
+    }
+    if (normalized === this.repo.developmentBranch) {
+      throw new Error(`Refusing to write to development branch ${this.repo.developmentBranch}`);
     }
   }
 }

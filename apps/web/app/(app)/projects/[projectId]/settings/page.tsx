@@ -1,6 +1,7 @@
 import { Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { DevelopmentBranch } from "@/components/project/development-branch";
 import { DisconnectRepository } from "@/components/project/disconnect-repository";
 import { NativePreviews } from "@/components/project/native-previews";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
@@ -40,6 +41,25 @@ export default async function ProjectSettingsPage({
           models and triggers are configured together under <code>.agents/</code>.
         </p>
       </div>
+
+      {repos.ok && repos.data.find((repo) => repo.role === "primary") && (
+        <DevelopmentBranch
+          key={`${projectId}-${String(project.data.settings.developmentBranch ?? "")}`}
+          projectId={projectId}
+          branch={
+            typeof project.data.settings.developmentBranch === "string"
+              ? project.data.settings.developmentBranch
+              : null
+          }
+          defaultBranch={
+            repos.data.find((repo) => repo.role === "primary")?.defaultBranch ?? "main"
+          }
+          canWrite={
+            can(me.ok ? me.data.permissions : [], "projects:write") &&
+            can(me.ok ? me.data.permissions : [], "repos:write")
+          }
+        />
+      )}
 
       <WorkspaceVariables
         projectId={projectId}
