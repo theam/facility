@@ -7,6 +7,7 @@ import { parseAgentManifest } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
   attentionItems,
+  budgetReservations,
   createDb,
   engineSessions,
   githubInstallations,
@@ -487,6 +488,12 @@ environment:
     expect(engine.requests).toHaveLength(requestsBefore);
     expect(
       await db.select().from(turnUsage).where(eq(turnUsage.turnId, started.queued.turn.id)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.turnId, started.queued.turn.id)),
     ).toEqual([]);
     await expect(storiesService.get(orgId, projectId, started.story.id)).resolves.toMatchObject({
       story: { status: "attention" },
