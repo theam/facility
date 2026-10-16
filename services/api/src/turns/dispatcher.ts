@@ -560,6 +560,7 @@ export class TurnDispatcher {
     storyId: string;
     turnId: string;
   }) {
+    if (!(await this.activeWorkspace(input.orgId, input.projectId, input.storyId))) return;
     const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
     if (!next?.requestedAgentName) return;
     try {
@@ -579,8 +580,10 @@ export class TurnDispatcher {
         },
       });
     } catch (error) {
+      // Deletion may have committed while catalog resolution was in flight.
+      if (!(await this.activeWorkspace(input.orgId, input.projectId, input.storyId))) return;
       const detail = error instanceof Error ? error.message : String(error);
-      await this.storiesService.flagAttention({
+      const attention = await this.storiesService.flagAttention({
         orgId: input.orgId,
         projectId: input.projectId,
         storyId: input.storyId,
@@ -589,6 +592,7 @@ export class TurnDispatcher {
         title: `Could not dispatch queued ${next.requestedAgentName} turn`,
         detail,
       });
+      if (!attention) return;
       await appendTurnEvent(this.db, {
         orgId: input.orgId,
         projectId: input.projectId,

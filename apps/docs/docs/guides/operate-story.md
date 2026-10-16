@@ -150,7 +150,10 @@ story done and suspends compute. Branch protection and required review remain th
 - **Archive** retains the same data but removes the story from the active workflow.
 - **Restore** makes an archived story active again and wakes compute when work requires it.
 - **Delete workspace** permanently removes the durable workspace. It requires explicit
-  confirmation and a matching idempotency key.
+  confirmation and a matching idempotency key. A running turn blocks deletion with a 409
+  response; wait for it to finish, then retry with a new idempotency key. Deletion cancels queued turns and prevents
+  pending messages or new requests from starting more work. If provider cleanup fails, retry
+  deletion; the workspace remains closed to new work until cleanup succeeds.
 
 Archive a completed story when it may still be useful. Delete only after the pull request, commits,
 artifacts, and any uncommitted files have been preserved elsewhere. See the [lifecycle
