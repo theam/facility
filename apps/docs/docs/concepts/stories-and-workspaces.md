@@ -58,9 +58,11 @@ from `architect` to `builder` does not create another workspace or copy a summar
 thread.
 
 Native engine continuation is compatible-session specific. Facility resumes the active session for
-the same workspace, agent name, engine, and model. Choosing another agent or changing its engine or
-model starts or resumes that configuration's own session while retaining every prior session and
-the shared worktree.
+the same workspace, agent name, engine, and model, and passes only the new user message.
+Choosing another agent or changing its engine or model starts or resumes that configuration's own
+session while retaining every prior session and the shared worktree. The conversation summary is
+written when resume fails, and the replacement session receives that summary instead of the raw
+transcript.
 
 For API-key authentication, Facility passes the current turn's `OPENAI_API_KEY` to native
 `codex exec` as `CODEX_API_KEY`. An explicitly supplied `CODEX_API_KEY` takes precedence. This

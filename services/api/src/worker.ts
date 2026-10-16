@@ -4,12 +4,13 @@ import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
+import { registerGithubMirrorWorker } from "./github/mirror-worker.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
 import { StoryIntegrationNotifications } from "./stories/integration-notifications.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
-import { configureTurnQueue } from "./turn-queue.js";
+import { configureTurnQueue, registerTurnPool } from "./turn-queue.js";
 import { ecsTaskProtection, WorkerTurnGuard } from "./worker-task-protection.js";
 
 const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
@@ -74,12 +75,11 @@ export async function startWorker() {
       );
       continue;
     }
-    await boss.work(queue, async (jobs: PgBoss.Job<unknown>[]) => {
-      const job = jobs[0];
-      const jobId = job?.id;
-      const data = job?.data;
-      let result: Record<string, unknown> | undefined;
-      if (queue === "turns.dispatch") {
+    if (queue === "turns.dispatch") {
+      await registerTurnPool(boss, async (jobs) => {
+        const job = jobs[0];
+        const jobId = job?.id;
+        const data = job?.data;
         const dispatched = await turnGuard.run(() =>
           storyDomain.dispatcher
             .dispatch(data as { orgId: string; projectId: string; turnId: string })
@@ -96,17 +96,32 @@ export async function startWorker() {
             }),
         );
         // Agent output belongs in scoped, redacted turn events, not infrastructure logs.
-        result = {
-          claimed: dispatched.claimed,
-          ...("state" in dispatched ? { state: dispatched.state } : {}),
-          ...("retryAfter" in dispatched ? { retryAfter: dispatched.retryAfter } : {}),
-          orgId: (data as { orgId: string }).orgId,
-          projectId: (data as { projectId: string }).projectId,
-          turnId: (data as { turnId: string }).turnId,
-        };
-      } else if (queue === "github.mirror") {
-        result = await storyDomain.mirror.syncAll();
-      } else if (queue === "stories.integrations" && githubFactory) {
+        logger.info(
+          {
+            queue,
+            jobId,
+            claimed: dispatched.claimed,
+            ...("state" in dispatched ? { state: dispatched.state } : {}),
+            ...("retryAfter" in dispatched ? { retryAfter: dispatched.retryAfter } : {}),
+            orgId: (data as { orgId: string }).orgId,
+            projectId: (data as { projectId: string }).projectId,
+            turnId: (data as { turnId: string }).turnId,
+          },
+          "worker completed job",
+        );
+      });
+      continue;
+    }
+    if (queue === "github.mirror") {
+      await registerGithubMirrorWorker(boss, storyDomain.mirror, logger);
+      continue;
+    }
+    await boss.work(queue, async (jobs: PgBoss.Job<unknown>[]) => {
+      const job = jobs[0];
+      const jobId = job?.id;
+      const data = job?.data;
+      let result: Record<string, unknown> | undefined;
+      if (queue === "stories.integrations" && githubFactory) {
         result = await new StoryIntegrationNotifications(
           db,
           storyDomain.backlog,

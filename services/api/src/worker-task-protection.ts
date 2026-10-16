@@ -1,3 +1,5 @@
+import { TURN_POOL_SIZE } from "./turn-queue.js";
+
 type ProtectionLogger = { warn: (data: Record<string, unknown>, message: string) => void };
 type Protection = { set: (enabled: boolean) => Promise<void>; readonly expiresAt?: number };
 
@@ -128,68 +130,112 @@ export async function ecsTaskProtection(
   };
 }
 
-/** One dispatch consumer per worker; acquire protection before claiming a durable turn. */
+/** Hold ECS task protection for every in-flight turn, and release it only when the pool is idle. */
 export class WorkerTurnGuard {
   private closing = false;
-  private busy = false;
+  private slots = 0;
+  private protectedTask = false;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private renewal: Promise<void> | undefined;
+  private chain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly protection: Protection | undefined,
     private readonly logger: ProtectionLogger,
-  ) {}
+    private readonly capacity = TURN_POOL_SIZE,
+  ) {
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      throw new Error("Turn pool size must be a positive integer");
+    }
+  }
 
   close() {
     this.closing = true;
   }
 
   async run<T>(dispatch: () => Promise<T>): Promise<T> {
-    const protection = this.protection;
-    if (this.closing || this.busy) throw new Error("Worker is not accepting another turn");
-    this.busy = true;
-    let protectedTask = false;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    let renewal: Promise<void> | undefined;
+    if (this.closing || this.slots >= this.capacity) {
+      throw new Error("Worker is not accepting another turn");
+    }
+    this.slots += 1;
     try {
-      if (protection) {
-        await protection.set(true);
-        protectedTask = true;
-      }
+      await this.exclusive(async () => {
+        if (this.closing) throw new Error("Worker is shutting down before turn admission");
+        const protection = this.protection;
+        if (protection && !this.protectedTask) {
+          await protection.set(true);
+          this.protectedTask = true;
+          this.armRenewal();
+        }
+      });
       if (this.closing) throw new Error("Worker is shutting down before turn admission");
-      if (protection) {
-        timer = setInterval(() => {
-          if (renewal) return;
-          renewal = protection
-            .set(true)
-            .catch((error: unknown) =>
-              this.logger.warn(
-                {
-                  event: "worker.protection_renewal_failed",
-                  ...failureEvidence(error, protection),
-                },
-                "ECS worker protection renewal failed",
-              ),
-            )
-            .finally(() => {
-              renewal = undefined;
-            });
-        }, RENEW_MS);
-        timer.unref();
-      }
       return await dispatch();
     } finally {
-      if (timer) clearInterval(timer);
-      await renewal;
-      if (protectedTask && protection) {
-        await protection
-          .set(false)
-          .catch((error: unknown) =>
-            this.logger.warn(
-              { event: "worker.protection_release_failed", ...failureEvidence(error, protection) },
-              "Could not release ECS worker protection; its lease will expire",
-            ),
-          );
-      }
-      this.busy = false;
+      await this.exclusive(async () => {
+        this.slots -= 1;
+        if (this.slots > 0 || !this.protectedTask) return;
+        await this.dropProtection();
+      });
+    }
+  }
+
+  private armRenewal() {
+    const protection = this.protection;
+    if (!protection || this.timer) return;
+    this.timer = setInterval(() => {
+      if (this.renewal) return;
+      this.renewal = protection
+        .set(true)
+        .catch((error: unknown) =>
+          this.logger.warn(
+            {
+              event: "worker.protection_renewal_failed",
+              ...failureEvidence(error, protection),
+            },
+            "ECS worker protection renewal failed",
+          ),
+        )
+        .finally(() => {
+          this.renewal = undefined;
+        });
+    }, RENEW_MS);
+    this.timer.unref();
+  }
+
+  private async dropProtection() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+    await this.renewal;
+    if (this.slots > 0) {
+      this.armRenewal();
+      return;
+    }
+    const protection = this.protection;
+    this.protectedTask = false;
+    if (!protection) return;
+    await protection
+      .set(false)
+      .catch((error: unknown) =>
+        this.logger.warn(
+          { event: "worker.protection_release_failed", ...failureEvidence(error, protection) },
+          "Could not release ECS worker protection; its lease will expire",
+        ),
+      );
+  }
+
+  private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.chain;
+    let release: () => void = () => undefined;
+    this.chain = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
     }
   }
 }

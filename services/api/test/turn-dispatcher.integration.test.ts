@@ -4,9 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
-import { newId } from "@facility/core";
+import { newId, reservationCents } from "@facility/core";
 import {
   attentionItems,
+  budgetReservations,
   createDb,
   engineSessions,
   githubInstallations,
@@ -15,6 +16,7 @@ import {
   projectBudgets,
   projectRepositories,
   projects,
+  storyConversations,
   storyEvidenceEvents,
   turnEvents,
   turnGitEvidence,
@@ -27,6 +29,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/catalog.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
+import { CostBudgetService } from "../src/insights/costs.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
 import {
@@ -435,7 +438,13 @@ environment:
     if (!followUp.turn) throw new Error("expected follow-up turn");
     await dispatcher.dispatch({ orgId, projectId, turnId: followUp.turn.id });
     expect(engine.requests[1]?.nativeSessionId).toBe("codex-native-session");
-    expect(engine.requests[1]?.prompt).toContain("Continue with the second part");
+    expect(engine.requests[1]?.prompt).toBe("Continue with the second part");
+    expect(
+      await db
+        .select({ summary: storyConversations.summary })
+        .from(storyConversations)
+        .where(eq(storyConversations.storyId, started.story.id)),
+    ).toEqual([expect.objectContaining({ summary: null })]);
     const firstRequest = engine.requests[0];
     if (!firstRequest) throw new Error("expected first engine request");
     expect(
@@ -488,6 +497,12 @@ environment:
     expect(
       await db.select().from(turnUsage).where(eq(turnUsage.turnId, started.queued.turn.id)),
     ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.turnId, started.queued.turn.id)),
+    ).toEqual([]);
     await expect(storiesService.get(orgId, projectId, started.story.id)).resolves.toMatchObject({
       story: { status: "attention" },
       attention: [
@@ -498,6 +513,100 @@ environment:
         }),
       ],
     });
+  });
+
+  it("claims one story turn once when two workers dispatch it together", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `pool-claim-${suffix}`,
+      title: "One claim for one story",
+      agent: builder,
+      message: "Run this turn once",
+      messageDedupeKey: `pool-claim-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected queued turn");
+    const input = { orgId, projectId, turnId: started.queued.turn.id };
+    const before = engine.requests.length;
+    const [first, second] = await Promise.all([
+      dispatcher.dispatch(input),
+      dispatcher.dispatch(input),
+    ]);
+    const claimed = [first, second].filter((result) => result.claimed);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]).toMatchObject({ state: "succeeded" });
+    expect(engine.requests).toHaveLength(before + 1);
+  });
+
+  it("admits only the turns a shared budget can hold when they run together", async () => {
+    const estimate = reservationCents(builder.model, "turn");
+    if (estimate === null || estimate <= 0) throw new Error("expected a priced turn reservation");
+    const spent = (await new CostBudgetService(db).budgetState(orgId, projectId)).spentCents;
+    const limit = Math.ceil(spent + estimate);
+    expect(spent + estimate * 2).toBeGreaterThan(limit);
+    await db
+      .insert(projectBudgets)
+      .values({
+        id: newId("bud"),
+        orgId,
+        projectId,
+        monthlyLimitCents: limit,
+        warningPercent: 80,
+        enabled: true,
+      })
+      .onConflictDoUpdate({
+        target: projectBudgets.projectId,
+        set: { monthlyLimitCents: limit, enabled: true },
+      });
+    try {
+      const stories = await Promise.all(
+        ["a", "b"].map((name) =>
+          storiesService.start({
+            orgId,
+            projectId,
+            provider: "manual",
+            externalId: `pool-budget-${name}-${suffix}`,
+            title: `Pooled budget ${name}`,
+            agent: builder,
+            message: `Run pooled turn ${name}`,
+            messageDedupeKey: `pool-budget-${name}-${suffix}`,
+            actor: { type: "user", id: "user_test" },
+            workspace: { image: "facility-runner:test", ports: [] },
+          }),
+        ),
+      );
+      const turnIds = stories.flatMap((started) =>
+        started.queued.turn ? [started.queued.turn.id] : [],
+      );
+      if (turnIds.length !== 2) throw new Error("expected queued turns");
+      const before = engine.requests.length;
+      const results = await Promise.all(
+        turnIds.map((turnId) => dispatcher.dispatch({ orgId, projectId, turnId })),
+      );
+      expect(
+        results.filter((result) => "state" in result && result.state === "succeeded"),
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => "state" in result && result.state === "failed"),
+      ).toHaveLength(1);
+      expect(engine.requests).toHaveLength(before + 1);
+      expect(
+        await db
+          .select()
+          .from(budgetReservations)
+          .where(
+            and(eq(budgetReservations.projectId, projectId), eq(budgetReservations.state, "open")),
+          ),
+      ).toEqual([]);
+    } finally {
+      await db
+        .update(projectBudgets)
+        .set({ enabled: false })
+        .where(eq(projectBudgets.projectId, projectId));
+    }
   });
 
   it("turns an agent wait into typed attention and resolves it when a reply starts", async () => {
@@ -595,6 +704,13 @@ environment:
     await expect(
       dispatcher.dispatch({ orgId, projectId, turnId: followUp.turn.id }),
     ).resolves.toMatchObject({ state: "failed" });
+    expect(engine.requests.at(-1)?.prompt).toBe("Continue after the native session was lost");
+    const [compacted] = await db
+      .select({ summary: storyConversations.summary })
+      .from(storyConversations)
+      .where(eq(storyConversations.storyId, started.story.id));
+    expect(compacted?.summary).toContain("Create the initial session");
+    expect(compacted?.summary).toContain("Continue after the native session was lost");
 
     const failed = await storiesService.get(orgId, projectId, started.story.id);
     expect(failed.attention).toEqual([
@@ -643,6 +759,10 @@ environment:
       "codex-native-session",
       undefined,
     ]);
+    expect(engine.requests.at(-1)?.prompt).toContain("# Conversation summary");
+    expect(engine.requests.at(-1)?.prompt).toContain("Create the initial session");
+    expect(engine.requests.at(-1)?.prompt).toContain("Retry requested");
+    expect(engine.requests.at(-1)?.prompt).not.toContain("# Shared conversation");
     expect(
       (await storiesService.conversation(orgId, projectId, started.story.id)).map(
         (row) => row.body,
