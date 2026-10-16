@@ -1,0 +1,5 @@
+# Keep every text file LF in the working tree, on every platform.
+# Git for Windows ships core.autocrlf=true in its system config, so a default
+# Windows clone materializes CRLF and `pnpm verify` fails Biome before any code
+# is written.
+* text=auto eol=lf
