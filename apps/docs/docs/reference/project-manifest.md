@@ -5,9 +5,37 @@ title: Project manifest
 # `.facility.yml` reference
 
 The primary repository's `.facility.yml` is the complete workspace environment contract. Facility
-loads it from the repository default branch when it starts or prepares a story. The schema is
+loads it from the project's selected development branch when it starts or prepares a story, falling
+back to the GitHub default branch when no override is set. The schema is
 strict: unknown keys, duplicate YAML keys, aliases, invalid names, and wrong value types fail the
 operation.
+
+## Development source
+
+In project settings, select an existing primary-repository branch, or leave the field empty to
+use the connected GitHub default. The API accepts `PATCH /v1/projects/:projectId` with
+`{ "developmentBranch": "develop" }`; use `null` to clear it. Updating this preference requires
+both `projects:write` and `repos:write`. Facility checks the branch using the project's active,
+organization-scoped GitHub App installation before saving. Missing or malformed branches are
+rejected, and unavailable or suspended installations cannot validate changes. Other project
+settings are preserved by this narrow update.
+
+The option is stored as `settings.developmentBranch`, outside this manifest: Facility must choose
+a ref before reading `.facility.yml`. It does not change GitHub's default branch or reinterpret
+legacy `default_branch` settings. Related repositories continue to use their own defaults.
+
+Agents, skills, the workspace manifest, new story branches, and agent-edit/kickstart configuration
+PRs all use the selected source. Proposal branches for an override are scoped to that source,
+so changing it does not rewrite a configuration PR opened against the previous default. GitHub's default and the selected development branch are protected
+from direct configuration writes and story-branch adoption. Existing story branches and worktrees
+are retained when the setting or branch tip changes; no reset or automatic rebase occurs. Queued
+and running turns retain their agent-manifest snapshots. Subsequent catalog refreshes and workspace
+preparations read the current selected source. A branch removed after selection fails source
+refresh/preparation rather than silently reading another branch.
+
+After saving, refresh the catalog and verify its source commit. A source change is not a deployment,
+merge, workspace wake, or approval to modify production. GitHub protections and human PR review
+remain the merge boundary.
 
 ## Complete example
 

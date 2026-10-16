@@ -12,6 +12,14 @@ describe("verified story branch changes", () => {
   it("follows the branch recorded after a completed workspace turn", () => {
     expect(observedStoryBranch(story, evidence, "main")).toBe("chore/story");
   });
+  it("protects the development branch as well as the GitHub default", () => {
+    for (const finalBranch of ["main", "develop"]) {
+      expect(
+        observedStoryBranch(story, { ...evidence, finalBranch }, "main", "develop"),
+      ).toBeNull();
+    }
+    expect(observedStoryBranch(story, evidence, "main", "develop")).toBe("chore/story");
+  });
   it.each([
     ["an existing PR", { ...story, pullRequestNumber: 42 }],
     ["a concurrent branch change", { ...story, branch: "fix/other" }],

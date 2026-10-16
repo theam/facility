@@ -91,6 +91,23 @@ trust model, rotate them after suspected exposure, and use provider-side audit l
 bytes. Protect it separately from the database backup; losing it can make encrypted data
 unrecoverable, while disclosure alongside a database backup defeats that protection.
 
+## Dependency security updates
+
+The reviewed dependency floors include Next.js 16.3.8, MCP SDK 1.31.0, sharp 0.35.5
+with bundled librsvg 2.63.2, and shell-quote 1.11.0. Keep the lockfile and transitive
+overrides together when upgrading; run `pnpm verify`, including the full-severity
+dependency audit and the installed-consumer regression tests. These package updates
+do not change database schemas, permissions, or credentials.
+
+External clients using the SDK's HTTP OAuth support must retain the `issuer` field
+passed to `saveTokens()` and `saveClientInformation()`. Pre-registered credentials
+must identify their issuer; bundled providers must configure `expectedIssuer`.
+Credentials stored before issuer binding need to be bound to their known issuer or
+cleared for a new sign-in. Facility's SDK-based MCP server and stdio clients are
+outside the affected OAuth-client path. See the
+[upstream OAuth advisory](https://github.com/advisories/GHSA-6qxp-vccf-f47h) for the
+client migration requirements.
+
 ## Merge and destructive actions
 
 Agent manifests cannot define a custom permission set. Reviewers and scheduled agents have the

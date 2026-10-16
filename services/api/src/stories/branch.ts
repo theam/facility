@@ -7,6 +7,7 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { repositoryDevelopmentBranch } from "../github/development-branch.js";
 import { isSafeGitBranch } from "../workspaces/git-branch.js";
 import { appendStoryEvidence } from "./evidence.js";
 
@@ -17,6 +18,7 @@ export function observedStoryBranch(
   story: Pick<Story, "branch" | "pullRequestNumber" | "status">,
   evidence: Pick<Evidence, "initialBranch" | "finalBranch" | "captureError" | "completedAt">,
   defaultBranch: string | undefined,
+  developmentBranch?: string,
 ): string | null {
   const branch = evidence.finalBranch;
   if (
@@ -29,6 +31,7 @@ export function observedStoryBranch(
     !branch ||
     branch === story.branch ||
     branch === defaultBranch ||
+    branch === developmentBranch ||
     !isSafeGitBranch(branch)
   )
     return null;
@@ -88,6 +91,8 @@ export async function reconcileTurnBranch(
     await db
       .select({
         id: projectRepositories.id,
+        orgId: projectRepositories.orgId,
+        projectId: projectRepositories.projectId,
         role: projectRepositories.role,
         defaultBranch: projectRepositories.defaultBranch,
       })
@@ -104,7 +109,8 @@ export async function reconcileTurnBranch(
       .limit(1)
   )[0];
   if (!repository) return;
-  const branch = observedStoryBranch(story, observed, repository.defaultBranch);
+  const developmentBranch = await repositoryDevelopmentBranch(db, repository);
+  const branch = observedStoryBranch(story, observed, repository.defaultBranch, developmentBranch);
   if (!branch) return;
   await db.execute(
     sql`SELECT pg_advisory_xact_lock(hashtext(${`facility:story-branch:${story.orgId}:${story.projectId}:${repository.id}:${branch}`}))`,
