@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { parseGithubJson, verifyGithubSignature } from "../github/webhook.js";
+import { recordWebhookRejection } from "../operations/signals.js";
 import type { AppConfig } from "../types.js";
 
 const Response = z.object({ ok: z.boolean(), replayed: z.boolean().optional() });
@@ -22,6 +23,20 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
         schema: { response: { 202: Response, 400: Response, 401: Response } },
       },
       async (request, reply) => {
+        const reject = async (reason: "signature" | "payload") => {
+          request.log.warn(
+            { event: "facility.webhook_rejected", reason },
+            "github webhook rejected",
+          );
+          try {
+            await recordWebhookRejection(app.facilityDb, reason);
+          } catch {
+            request.log.warn(
+              { event: "facility.webhook_rejection_unrecorded", reason },
+              "webhook rejection was not recorded",
+            );
+          }
+        };
         const secret = config.githubAppWebhookSecret;
         const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
         const signature = header(request.headers["x-hub-signature-256"]);
@@ -33,6 +48,7 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
           !eventType ||
           !verifyGithubSignature(rawBody, signature, secret)
         ) {
+          await reject("signature");
           return reply.status(401).send({ ok: false });
         }
 
@@ -40,10 +56,12 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
         try {
           const parsed = parseGithubJson(rawBody);
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            await reject("payload");
             return reply.status(400).send({ ok: false });
           }
           payload = parsed as Record<string, unknown>;
         } catch {
+          await reject("payload");
           return reply.status(400).send({ ok: false });
         }
         const installationNumber = githubInstallationNumber(payload);

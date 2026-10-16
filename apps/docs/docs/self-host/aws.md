@@ -237,7 +237,10 @@ changing the AWS services.
 ## Operations
 
 ECS Container Insights and the four CloudWatch log groups cover infrastructure health and logs.
-Facility's Insights page covers turn outcomes, token use, cost, budget state, workspace state,
+The worker publishes one operations sample per minute with queue age, failed-turn count,
+webhook-rejection count, mirror lag, and the number of exhausted budgets. The AWS module
+alarms on those numbers. Samples do not include turn text or webhook bodies. Facility's
+Insights page covers turn outcomes, token use, cost, budget state, workspace state,
 GitHub delivery health, open attention, and audit activity. The Stories backlog is backed by webhook
 updates plus ten-minute reconciliation.
 

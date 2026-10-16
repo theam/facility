@@ -14,6 +14,7 @@ import {
   turnGitEvidence,
 } from "@facility/db";
 import { and, asc, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { recordMirrorSync } from "../operations/signals.js";
 import { appendStoryEvidence } from "../stories/evidence.js";
 import { isGithubIssueStory } from "../stories/phase.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
@@ -182,6 +183,7 @@ export class GithubMirrorService {
     for (const project of activeProjects) {
       try {
         results.push({ ...project, ...(await this.syncProject(project.orgId, project.projectId)) });
+        await recordMirrorSync(this.db, project);
       } catch (error) {
         results.push({
           ...project,

@@ -83,7 +83,9 @@ tenants, credentials, persistent state, and merge boundary.
 
 Alert on API readiness, worker queue age, failed turns, provider errors, webhook rejection rates,
 GitHub reconciliation lag, database capacity, workspace storage, preview authorization failures,
-cost collection gaps, and budget thresholds.
+cost collection gaps, and budget thresholds. The AWS module raises CloudWatch alarms for queue
+age, failed turns, webhook rejections, mirror lag, and exhausted budgets from those counts and
+ages. Do not add request bodies or turn transcripts to that path.
 
 Retain API, worker, web, migration, provider, GitHub, and identity-provider audit logs for the period
 your incident process needs. Correlate with Facility's `x-request-id`, delivery id, story id, turn
