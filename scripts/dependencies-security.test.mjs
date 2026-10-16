@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,16 +11,16 @@ async function patchedImageSizeModule() {
   const lockfile = await readFile(join(root, "pnpm-lock.yaml"), "utf8");
   const match = lockfile.match(/^  image-size@2\.0\.2: ([a-f0-9]+)$/m);
   assert.ok(match, "image-size 2.0.2 must remain pinned to the reviewed local patch");
-  return join(
-    root,
-    "node_modules",
-    ".pnpm",
-    `image-size@2.0.2_patch_hash=${match[1]}`,
-    "node_modules",
-    "image-size",
-    "dist",
-    "index.mjs",
+
+  const storeDir = join(root, "node_modules", ".pnpm");
+  const entries = await readdir(storeDir);
+  const patchedEntry = entries.find((entry) => /^image-size@2\.0\.2_patch_hash[=_][a-f0-9]+$/.test(entry));
+  assert.ok(
+    patchedEntry,
+    "expected a patched image-size@2.0.2 entry under node_modules/.pnpm — run pnpm install",
   );
+
+  return join(storeDir, patchedEntry, "node_modules", "image-size", "dist", "index.mjs");
 }
 
 function writeBox(buffer, offset, size, name) {
