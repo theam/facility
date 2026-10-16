@@ -131,8 +131,12 @@ Self-hosting gives you control of the Facility services, database, and workspace
 Code and Codex communicate with the model service you configure for the engine. Choose providers
 and credentials that fit your infrastructure requirements.
 
-Project budgets are checked before new provider calls. Usage is recorded afterwards, so an
-in-flight call can take spending beyond the monthly limit. Retained workspaces also need an
+Project budgets are checked before new provider calls. An interrupted worker's usage is
+recovered from retained per-turn journals where possible. Missing
+or incomplete usage pauses new model calls while budget enforcement is enabled; see the
+[budget FAQ](apps/docs/docs/faq.md#does-a-project-budget-delete-or-stop-a-workspace).
+Usage is recorded afterwards, so an in-flight call can take spending beyond the monthly limit.
+Retained workspaces also need an
 explicit storage and deletion policy.
 
 The [hardening guide](apps/docs/docs/reference/hardening.md) covers isolation, credentials,

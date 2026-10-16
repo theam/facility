@@ -1,4 +1,4 @@
-import { createDb, type FacilityDb, turns } from "@facility/db";
+import { createDb, type FacilityDb, turns, turnUsage } from "@facility/db";
 import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
@@ -217,6 +217,33 @@ export async function recoverInterruptedTurns(
   }) => Promise<unknown>,
 ) {
   const staleBefore = new Date(now.getTime() - leaseTimeoutMs);
+  const unsettled = await db
+    .select({ orgId: turns.orgId, projectId: turns.projectId, turnId: turns.id })
+    .from(turns)
+    .leftJoin(
+      turnUsage,
+      and(
+        eq(turns.id, turnUsage.turnId),
+        eq(turns.orgId, turnUsage.orgId),
+        eq(turns.projectId, turnUsage.projectId),
+      ),
+    )
+    .where(
+      and(
+        or(isNull(turnUsage.id), eq(turnUsage.priced, false)),
+        eq(turns.state, "failed"),
+        eq(turns.error, "Worker heartbeat expired before the agent turn completed."),
+      ),
+    )
+    .orderBy(asc(turns.createdAt))
+    .limit(1_000);
+  for (const turn of unsettled)
+    await stories.reconcileInterruptedUsage(turn).catch(() => {
+      // Preserve the accounting block and still recover other dead workers.
+      console.error(
+        JSON.stringify({ event: "turn.usage_reconciliation_failed", turnId: turn.turnId }),
+      );
+    });
   const running = await db
     .select({
       id: turns.id,

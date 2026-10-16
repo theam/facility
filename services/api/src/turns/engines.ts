@@ -4,6 +4,7 @@ import type {
   WorkspaceLocator,
   WorkspaceRuntime,
 } from "../workspaces/runtime.js";
+import { ENGINE_USAGE_PROCESS } from "./usage-journal.js";
 
 export type AgentTurnRequest = {
   turnId: string;
@@ -81,9 +82,22 @@ abstract class CliAgentEngine implements AgentEngine {
     try {
       result = await this.runtime.exec(request.workspace, {
         command: "sh",
-        args: ["-c", ENGINE_PROCESS_WRAPPER, "facility-engine", command, ...args],
+        args: [
+          "-c",
+          ENGINE_PROCESS_WRAPPER,
+          "facility-engine",
+          "node",
+          "-e",
+          ENGINE_USAGE_PROCESS,
+          command,
+          ...args,
+        ],
         cwd: request.cwd,
-        env: { ...(request.environment ?? {}), FACILITY_TURN_ID: request.turnId },
+        env: {
+          ...(request.environment ?? {}),
+          FACILITY_TURN_ID: request.turnId,
+          FACILITY_ENGINE: this.name,
+        },
         timeoutMs: request.timeoutMs ?? 24 * 60 * 60 * 1_000,
         signal: request.signal,
         onObservation: (data) =>

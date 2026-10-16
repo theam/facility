@@ -57,6 +57,21 @@ afterwards; later turns are blocked once the monthly limit is reached. The workt
 and engine sessions remain. Unknown model pricing is rejected while budget enforcement is enabled,
 and unavailable workspace pricing is not reported as zero.
 
+If a worker dies, recovery reads the turn's retained usage journal. Final counters are charged
+once; partial counters are a lower bound. Missing, unreadable, or incomplete usage is marked
+unpriced and the budget state becomes `unconfirmed`: new agent and title-generation model calls
+are blocked while enforcement is enabled. Raising the limit, resolving attention, or starting a
+new month does not confirm the bill. Recovery retries retained journals without waking compute
+or rerunning the agent. A finalized journal clears the block after reconciliation.
+The same recovery pass marks missing bills on worker-interrupted turns failed by older
+Facility versions as unconfirmed; it cannot invent usage that was never retained.
+
+When no final journal can be recovered, inspect the provider bill and retained session files;
+the true charge may exceed the recorded lower bound. There is currently no manual billing
+reconciliation endpoint. An authorized budget administrator can explicitly disable enforcement
+to continue, accepting that spend remains incomplete. Deleting the workspace loses evidence
+and does not clear the accounting block.
+
 To use a newly supported model, update the agent's `model` field and ensure the
 deployed Facility version contains its price-book entry. See
 [cost and budget API behavior](reference/api.md) for the supported additions and
