@@ -33,21 +33,23 @@ starting either process on a new release.
 
 ## Activation and dispatch
 
-One worker consumes turn, webhook, and generic schedule queues. Every activation resolves a
-versioned `.agents/` manifest and calls the same dispatcher. The dispatcher wakes the story
-workspace, provisions repositories and environment state, supplies short-lived credentials, and
-starts or resumes the selected native engine session.
+One worker consumes turn, webhook, and generic schedule queues. The turn queue runs a small pool
+of jobs in that process. Every activation resolves a versioned `.agents/` manifest and calls the
+same dispatcher. The dispatcher wakes the story workspace, provisions repositories and environment
+state, supplies short-lived credentials, and starts or resumes the selected native engine session.
 
 The worker handles these recurring paths:
 
 - `turns.dispatch` for queued agent work;
 - `github.webhook` for verified GitHub deliveries;
-- `github.mirror` for ten-minute reconciliation of configured repositories; and
+- `github.mirror` for ten-minute reconciliation, with one job per active project; and
 - `agent.schedules` for minute-level schedule evaluation.
 
 Messages and turns are persisted before dispatch. A database claim prevents two workers from
-running the same story turn concurrently. Every activation resolves the repository catalog, checks
-the trigger, and snapshots the manifest used for history.
+running the same story turn concurrently, and the budget hold is taken in that same claim.
+A rate-limited project mirror waits until GitHub's reset instead of blocking the other projects.
+Every activation resolves the repository catalog, checks the trigger, and snapshots the manifest
+used for history.
 
 The dispatcher captures the initial Git identity after workspace preparation and before invoking
 Claude Code or Codex. It captures final Git state after the engine settles, including failure and
