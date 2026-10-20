@@ -308,6 +308,47 @@ test("the executable gRPC audit accepts fixed modules and rejects unsafe binarie
   }
 });
 
+test("embedded containerd audit rejects old, missing and substituted modules in every consumer", () => {
+  const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
+    ([loop]) => loop.includes('"github.com/containerd/containerd/v2"'),
+  );
+  assert.ok(audit, "missing executable containerd audit");
+  const binaries = audit[1].split(" ");
+  assert.deepEqual(binaries, ["/out/dockerd", "/out/docker-buildx", "/out/docker-compose"]);
+  const command = `
+    go() {
+      if [ "$3" = "$AUDIT_TEST_BINARY" ]; then
+        case "$AUDIT_TEST_FAILURE" in
+          outdated) printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n'; return ;;
+          stale-replacement) printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n=> github.com/containerd/containerd/v2 v2.3.3\\n'; return ;;
+          substituted) printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n=> example.com/fork v2.3.6\\n'; return ;;
+          missing) printf 'dep example.com/unrelated v2.3.6\\n'; return ;;
+          error) return 1 ;;
+        esac
+      fi
+      printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n=> github.com/containerd/containerd/v2 v2.3.6\\n'
+    }
+    ${audit[0].replaceAll(/\\\n/g, " ")}
+  `;
+  const runAudit = (binary = "", failure = "") =>
+    spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_BINARY: binary, AUDIT_TEST_FAILURE: failure },
+    });
+  const accepted = runAudit();
+  assert.equal(accepted.status, 0, accepted.stderr);
+  for (const binary of binaries) {
+    for (const failure of ["outdated", "stale-replacement", "substituted", "missing", "error"]) {
+      const rejected = runAudit(binary, failure);
+      assert.equal(
+        rejected.status,
+        1,
+        `${binary}: ${failure} must fail closed: ${rejected.stderr}`,
+      );
+    }
+  }
+});
+
 test("Vercel runner supports SDK user switching without granting node sudo privileges", () => {
   const vercelStage = runnerDockerfile
     .split("FROM runner-base AS vercel-runner")[1]
@@ -323,7 +364,7 @@ test("Vercel runner supports SDK user switching without granting node sudo privi
 });
 
 test("runner rejects Chromium packages older than the reviewed security fix", () => {
-  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=154\.0\.8037\.57-1~deb13u1/);
+  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=155\.0\.8059\.79-1~deb13u1/);
   for (const name of ["chromium", "chromium-common"]) {
     assert.ok(
       runnerDockerfile.includes(
@@ -331,12 +372,19 @@ test("runner rejects Chromium packages older than the reviewed security fix", ()
       ),
     );
   }
+  assert.match(runnerDockerfile, /ARG EXPAT_MIN_VERSION=2\.9\.0-1~deb13u1/);
+  assert.ok(
+    runnerDockerfile.includes(
+      `dpkg --compare-versions "$(dpkg-query -W -f='\${Version}' libexpat1)" ge "$EXPAT_MIN_VERSION"`,
+    ),
+  );
 });
 
 test("image security refreshes invalidate cached distro layers and audit the cached package manager", () => {
   for (const path of ["Dockerfile", "apps/web/Dockerfile", "runner/Dockerfile"]) {
     const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-    assert.match(dockerfile, /ARG DEBIAN_SECURITY_REFRESH=20261005/);
+    const epoch = path === "runner/Dockerfile" ? "20261019" : "20261005";
+    assert.ok(dockerfile.includes(`ARG DEBIAN_SECURITY_REFRESH=${epoch}`));
     assert.match(dockerfile, /test -n "\$DEBIAN_SECURITY_REFRESH"/);
   }
   assert.match(runnerDockerfile, /brace-expansion@5\.0\.12/);
