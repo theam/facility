@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import InsightsPage from "../app/(app)/projects/[projectId]/insights/page";
 
-const mocks = vi.hoisted(() => ({ denied: false, measured: 1, failed: 2 }));
+const mocks = vi.hoisted(() => ({
+  denied: false,
+  measured: 1,
+  failed: 2,
+  budgetUnconfirmed: false,
+}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh() {} }) }));
 vi.mock("../components/insights/budget-form", () => ({ BudgetForm: () => null }));
 vi.mock("../lib/api", () => ({
@@ -51,7 +56,10 @@ vi.mock("../lib/api", () => ({
               recentAudit: [],
             },
           },
-    projectBudget: async () => ({ ok: true, data: { state: "not_configured", spent_cents: 0 } }),
+    projectBudget: async () => ({
+      ok: true,
+      data: { state: mocks.budgetUnconfirmed ? "unconfirmed" : "not_configured", spent_cents: 0 },
+    }),
   },
 }));
 
@@ -62,6 +70,14 @@ async function page() {
 }
 
 describe("Insights spend rendering", () => {
+  it("shows interrupted budget spending as a lower bound and explains the model-call block", async () => {
+    mocks.budgetUnconfirmed = true;
+    const html = await page();
+    expect(html).toContain("unconfirmed");
+    expect(html).toContain("At least");
+    expect(html).toContain("new model calls are blocked while the budget is enabled");
+    mocks.budgetUnconfirmed = false;
+  });
   it("shows partial cost and the missing usage in the actual page", async () => {
     mocks.denied = false;
     mocks.measured = 1;

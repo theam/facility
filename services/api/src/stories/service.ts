@@ -13,15 +13,19 @@ import {
   storyEvidenceEvents,
   storyMessages,
   turnEvents,
+  turnGitEvidence,
   turns,
+  turnUsage,
   userIdentities,
   users,
   workspaces,
 } from "@facility/db";
 import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { CostBudgetService } from "../insights/costs.js";
 import { ACTIVITY_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
+import { readUsageJournal } from "../turns/usage-journal.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { shouldSuspendFailedWorkspace } from "../workspaces/failed-turn-policy.js";
 import type {
@@ -645,6 +649,33 @@ export class StoryWorkspaceService {
           .returning()
       )[0];
       if (!updated) return undefined;
+      // Book uncertainty before committing failure or admitting a successor. A
+      // legacy turn without phase evidence may already have charged its provider.
+      const phases = await tx
+        .select({ data: turnEvents.data })
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.orgId, input.orgId),
+            eq(turnEvents.projectId, input.projectId),
+            eq(turnEvents.turnId, turn.id),
+            eq(turnEvents.type, "turn.phase"),
+          ),
+        );
+      const mayHaveSpent = providerMayHaveRun(phases);
+      if (mayHaveSpent)
+        await new CostBudgetService(tx).record({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: turn.storyId,
+          turnId: turn.id,
+          agentName: turn.agentName,
+          engine: turn.engine,
+          model: turn.model,
+          durationMs: turn.startedAt ? now.getTime() - turn.startedAt.getTime() : 0,
+          status: "failed",
+          complete: false,
+        });
       await tx
         .update(stories)
         .set({
@@ -662,14 +693,27 @@ export class StoryWorkspaceService {
         kind: "worker_interrupted",
         title: `${turn.agentName} was interrupted`,
         detail:
-          "The worker heartbeat expired. The message, worktree, and native session files were retained; retry this attention item after inspecting any partial changes.",
+          "The worker heartbeat expired. Retained usage will be reconciled where available. Unconfirmed spending blocks new model calls while the project budget is enabled; inspect the usage and partial work before retrying. The message, worktree, and native session files were retained.",
       });
-      return updated;
+      return { ...updated, mayHaveSpent };
     });
     if (!recovered) return false;
 
     let processCleanup = "workspace unavailable";
     try {
+      const evidence = (
+        await this.db
+          .select({ workspaceId: turnGitEvidence.workspaceId })
+          .from(turnGitEvidence)
+          .where(
+            and(
+              eq(turnGitEvidence.orgId, input.orgId),
+              eq(turnGitEvidence.projectId, input.projectId),
+              eq(turnGitEvidence.turnId, recovered.id),
+            ),
+          )
+          .limit(1)
+      )[0];
       const workspace = (
         await this.db
           .select()
@@ -679,6 +723,7 @@ export class StoryWorkspaceService {
               eq(workspaces.orgId, input.orgId),
               eq(workspaces.projectId, input.projectId),
               eq(workspaces.storyId, recovered.storyId),
+              ...(evidence?.workspaceId ? [eq(workspaces.id, evidence.workspaceId)] : []),
             ),
           )
           .orderBy(desc(workspaces.createdAt))
@@ -690,6 +735,29 @@ export class StoryWorkspaceService {
           locatorFromRow(workspace),
           recovered.id,
         );
+        if (recovered.mayHaveSpent) {
+          const measured = await readUsageJournal(
+            this.runtime,
+            locatorFromRow(workspace),
+            recovered.id,
+            recovered.engine,
+          );
+          await new CostBudgetService(this.db).record({
+            orgId: input.orgId,
+            projectId: input.projectId,
+            storyId: recovered.storyId,
+            turnId: recovered.id,
+            agentName: recovered.agentName,
+            engine: recovered.engine,
+            model: recovered.model,
+            ...measured,
+            durationMs:
+              recovered.startedAt && recovered.endedAt
+                ? recovered.endedAt.getTime() - recovered.startedAt.getTime()
+                : 0,
+            status: "failed",
+          });
+        }
       }
     } catch (error) {
       processCleanup =
@@ -704,6 +772,100 @@ export class StoryWorkspaceService {
       data: { processCleanup: processCleanup.slice(0, 1_000) },
     });
     return true;
+  }
+
+  /** Retry accounting without waking compute or rerunning a provider call. */
+  async reconcileInterruptedUsage(input: { orgId: string; projectId: string; turnId: string }) {
+    const turn = await scopedTurn(this.db, input.orgId, input.projectId, input.turnId);
+    if (
+      turn.state !== "failed" ||
+      turn.error !== "Worker heartbeat expired before the agent turn completed."
+    )
+      return false;
+    const settled = await this.db
+      .select({ priced: turnUsage.priced })
+      .from(turnUsage)
+      .where(
+        and(
+          eq(turnUsage.orgId, input.orgId),
+          eq(turnUsage.projectId, input.projectId),
+          eq(turnUsage.turnId, turn.id),
+        ),
+      )
+      .limit(1);
+    if (settled[0]?.priced) return false;
+    if (!settled[0]) {
+      // Upgrade recovery: old workers marked failure without writing any usage row.
+      const phases = await this.db
+        .select({ data: turnEvents.data })
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.orgId, input.orgId),
+            eq(turnEvents.projectId, input.projectId),
+            eq(turnEvents.turnId, turn.id),
+            eq(turnEvents.type, "turn.phase"),
+          ),
+        );
+      if (!providerMayHaveRun(phases)) return false;
+      await new CostBudgetService(this.db).record({
+        ...input,
+        storyId: turn.storyId,
+        agentName: turn.agentName,
+        engine: turn.engine,
+        model: turn.model,
+        durationMs:
+          turn.startedAt && turn.endedAt ? turn.endedAt.getTime() - turn.startedAt.getTime() : 0,
+        status: "failed",
+        complete: false,
+      });
+    }
+    const evidence = await this.db
+      .select({ workspaceId: turnGitEvidence.workspaceId })
+      .from(turnGitEvidence)
+      .where(
+        and(
+          eq(turnGitEvidence.orgId, input.orgId),
+          eq(turnGitEvidence.projectId, input.projectId),
+          eq(turnGitEvidence.turnId, turn.id),
+        ),
+      )
+      .limit(1);
+    const workspace = (
+      await this.db
+        .select()
+        .from(workspaces)
+        .where(
+          and(
+            eq(workspaces.orgId, input.orgId),
+            eq(workspaces.projectId, input.projectId),
+            eq(workspaces.storyId, turn.storyId),
+            ...(evidence[0]?.workspaceId ? [eq(workspaces.id, evidence[0].workspaceId)] : []),
+          ),
+        )
+        .orderBy(desc(workspaces.createdAt))
+        .limit(1)
+    )[0];
+    if (!workspace?.externalRef) return false;
+    const measured = await readUsageJournal(
+      this.runtime,
+      locatorFromRow(workspace),
+      turn.id,
+      turn.engine,
+    );
+    if (!measured.usage) return false;
+    const recorded = await new CostBudgetService(this.db).record({
+      ...input,
+      storyId: turn.storyId,
+      agentName: turn.agentName,
+      engine: turn.engine,
+      model: turn.model,
+      ...measured,
+      durationMs:
+        turn.startedAt && turn.endedAt ? turn.endedAt.getTime() - turn.startedAt.getTime() : 0,
+      status: "failed",
+    });
+    return recorded?.priced === true;
   }
 
   async flagAttention(input: {
@@ -2294,6 +2456,16 @@ function workspaceConfiguration(input: Omit<CreateWorkspace, "id">) {
     ports: input.ports ?? [],
     resources: input.resources ?? { cpu: 2, memoryMb: 4_096 },
   };
+}
+
+function providerMayHaveRun(phases: Array<{ data: unknown }>) {
+  if (phases.length === 0) return true;
+  return phases.some(({ data }) => {
+    const phase =
+      data && typeof data === "object" ? (data as { phase?: unknown }).phase : undefined;
+    // Only explicit pre-engine phases establish that no provider call began.
+    return !["credentials", "workspace", "environment"].includes(String(phase));
+  });
 }
 
 function workspaceInput(row: typeof workspaces.$inferSelect): Omit<CreateWorkspace, "id"> {
