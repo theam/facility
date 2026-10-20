@@ -24,6 +24,8 @@ const basePermissions = PERMISSION_RESOURCES.flatMap(
 );
 
 export const SPECIAL_PERMISSIONS = [
+  "sessions:control",
+  "sessions:observe",
   "workspaces:execute",
   "keys:issue",
   "projects:kickstart",

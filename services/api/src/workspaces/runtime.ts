@@ -104,6 +104,16 @@ export interface WorkspaceRuntime {
     workspace: WorkspaceLocator,
     file: import("./input-files.js").WorkspaceInputFile,
   ): Promise<void>;
+
+  terminal?(
+    workspace: WorkspaceLocator,
+    input: {
+      socket: string;
+      cols: number;
+      rows: number;
+      onData: (data: Buffer) => void;
+    },
+  ): Promise<WorkspaceTerminal>;
   /** Pure creation preflight: no provider calls or mutations, safe inside a DB transaction. */
   validateCreate?(input: Omit<CreateWorkspace, "id">): void;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
@@ -126,6 +136,13 @@ export interface WorkspaceRuntime {
   retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void>;
   destroy(workspace: WorkspaceLocator): Promise<void>;
 }
+
+export type WorkspaceTerminal = {
+  write(data: Buffer): void;
+  resize(cols: number, rows: number): Promise<void>;
+  close(): void;
+  onClose(callback: () => void): void;
+};
 
 /** Provider-independent, operator-controlled backup of the complete durable workspace volume. */
 export async function exportWorkspaceBackup(

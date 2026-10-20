@@ -58,6 +58,26 @@ export class CostBudgetService {
         exhaustedMessage(state.spentCents, state.budget.monthlyLimitCents),
       );
     }
+    const unpriced = (
+      await this.db
+        .select({ id: turnUsage.id })
+        .from(turnUsage)
+        .where(
+          and(
+            eq(turnUsage.orgId, orgId),
+            eq(turnUsage.projectId, projectId),
+            eq(turnUsage.priced, false),
+            gte(turnUsage.createdAt, state.windowStart),
+            lt(turnUsage.createdAt, state.windowEnd),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (unpriced)
+      throw new BudgetPolicyError(
+        "budget_model_unpriced",
+        "This project has unpriced usage in the current month; its budget cannot safely admit more work",
+      );
     return state;
   }
 

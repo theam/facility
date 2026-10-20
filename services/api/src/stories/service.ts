@@ -7,6 +7,7 @@ import {
   type FacilityDb,
   githubIssues,
   previewSessions,
+  sessionWaiters,
   stories,
   storyArtifacts,
   storyAssignees,
@@ -103,6 +104,7 @@ export type StartStoryInput = {
   branch?: string;
   agent: AgentManifest;
   message: string;
+  context?: string;
   messageDedupeKey: string;
   actor: StoryActor;
   workspace: Omit<CreateWorkspace, "id">;
@@ -118,6 +120,7 @@ export type StoryWorkspaceBundle = Awaited<ReturnType<StoryWorkspaceService["get
 /** How an agent response was recorded; older rows have no metadata and stay combined. */
 export type StoryMessageMetadata = {
   attachments?: InputFileReference[];
+  nativeSessionId?: string;
   content?: "final_response";
   engine?: string;
   model?: string;
@@ -170,6 +173,7 @@ export class StoryServiceError extends Error {
 
 type QueuedMessageInput = {
   expectedGithubBinding?: GithubRepositoryBinding;
+  takeoverTurnId?: string;
   attachmentIds?: string[];
   orgId: string;
   projectId: string;
@@ -186,6 +190,12 @@ type QueuedMessageInput = {
 };
 
 export class StoryWorkspaceService {
+  takeoverSession?: (
+    db: FacilityDb,
+    scope: { orgId: string; projectId: string; storyId: string },
+    userId: string,
+    turnId: string,
+  ) => Promise<void>;
   constructor(
     private readonly db: FacilityDb,
     private readonly runtime: WorkspaceRuntime,
@@ -202,6 +212,15 @@ export class StoryWorkspaceService {
   ) {}
 
   async start(input: StartStoryInput) {
+    const result = await this.startPrepared(input, false);
+    return { ...result, queued: result.queued! };
+  }
+
+  async startInteractive(input: StartStoryInput) {
+    return this.startPrepared(input, true);
+  }
+
+  private async startPrepared(input: StartStoryInput, interactiveOnly: boolean) {
     validateStartInput(input);
     const aggregate = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
@@ -285,6 +304,7 @@ export class StoryWorkspaceService {
               orgId: input.orgId,
               projectId: input.projectId,
               storyId: story.id,
+              summary: input.context,
             })
             .returning()
         )[0];
@@ -388,17 +408,24 @@ export class StoryWorkspaceService {
       );
     }
 
-    const queued = await this.queueMessage({
-      expectedGithubBinding: input.expectedGithubBinding,
-      orgId: input.orgId,
-      projectId: input.projectId,
-      storyId: aggregate.story.id,
-      body: input.message,
-      dedupeKey: input.messageDedupeKey,
-      agent: input.agent,
-      actor: input.actor,
-      trigger: input.trigger ?? { type: "manual" },
-    });
+    if (interactiveOnly)
+      await this.db
+        .update(stories)
+        .set({ activeAgentName: input.agent.name })
+        .where(eq(stories.id, aggregate.story.id));
+    const queued = interactiveOnly
+      ? undefined
+      : await this.queueMessage({
+          expectedGithubBinding: input.expectedGithubBinding,
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: aggregate.story.id,
+          body: input.message,
+          dedupeKey: input.messageDedupeKey,
+          agent: input.agent,
+          actor: input.actor,
+          trigger: input.trigger ?? { type: "manual" },
+        });
     return { ...(await this.get(input.orgId, input.projectId, aggregate.story.id)), queued };
   }
 
@@ -480,6 +507,29 @@ export class StoryWorkspaceService {
       (input.actor.type === "service" && input.trigger.type === "mcp")
     )
       await cancelPendingFollowup(tx, story);
+    if (input.takeoverTurnId) {
+      if (input.actor.type !== "user" || !this.takeoverSession)
+        throw new StoryServiceError(
+          "session_user_required",
+          "Takeover requires a user session",
+          403,
+        );
+      await this.takeoverSession(tx, input, input.actor.id, input.takeoverTurnId);
+    }
+    const waiter = (
+      await tx
+        .select({ id: sessionWaiters.id })
+        .from(sessionWaiters)
+        .where(
+          and(
+            eq(sessionWaiters.storyId, input.storyId),
+            eq(sessionWaiters.waiting, true),
+            gt(sessionWaiters.expiresAt, new Date()),
+          ),
+        )
+        .limit(1)
+    )[0];
+
     const activeTurn = (
       await tx
         .select()
@@ -494,7 +544,7 @@ export class StoryWorkspaceService {
     await recordParticipation(tx, story, input.actor);
     const sequence = await allocateMessageSequence(tx, conversation.id);
     let turn: typeof turns.$inferSelect | undefined;
-    if (!activeTurn && !activePreview && !reviewHeld) {
+    if (!activeTurn && !activePreview && !reviewHeld && (!waiter || input.takeoverTurnId)) {
       turn = (
         await tx
           .insert(turns)
@@ -568,6 +618,12 @@ export class StoryWorkspaceService {
       const initial = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
       await lockStory(tx, input.orgId, input.projectId, initial.storyId);
       const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId, true);
+      if (turn.triggerType === "interactive")
+        throw new StoryServiceError(
+          "interactive_session_control_required",
+          "Leave the native session or confirm a session takeover before canceling it",
+          409,
+        );
       const story = await scopedStory(tx, input.orgId, input.projectId, turn.storyId);
       if (turn.state === "succeeded") {
         await reconcileTurnBranch(tx, story, turn);
@@ -751,6 +807,12 @@ export class StoryWorkspaceService {
       // Admission updates this same row before reserving provider spending. Keep
       // its queued/running classification stable through cancellation and release.
       const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId, true);
+      if (turn.triggerType === "interactive")
+        throw new StoryServiceError(
+          "interactive_session_control_required",
+          "Leave the native session or confirm a session takeover before canceling it",
+          409,
+        );
       if (turn.storyId !== input.storyId) {
         throw new StoryServiceError("turn_not_found", "turn not found", 404);
       }
@@ -1448,6 +1510,20 @@ export class StoryWorkspaceService {
       const tx = rawTx as unknown as FacilityDb;
       await lockWorkflowProject(tx, input);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
+      const waiter = (
+        await tx
+          .select()
+          .from(sessionWaiters)
+          .where(
+            and(
+              eq(sessionWaiters.storyId, input.storyId),
+              eq(sessionWaiters.waiting, true),
+              gt(sessionWaiters.expiresAt, new Date()),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (waiter) return undefined;
       const active = (
         await tx
           .select()
@@ -2248,14 +2324,19 @@ export class StoryWorkspaceService {
   }
 
   async suspend(orgId: string, projectId: string, storyId: string) {
-    const workspace = await this.activeWorkspace(orgId, projectId, storyId);
-    if (!workspace || workspace.state === "destroyed") return this.get(orgId, projectId, storyId);
-    await this.runtime.suspend(locatorFromRow(workspace));
-    await this.db
-      .update(workspaces)
-      .set({ state: "sleeping", updatedAt: new Date() })
-      .where(and(eq(workspaces.orgId, orgId), eq(workspaces.id, workspace.id)));
-    await appendWorkspaceEvent(this.db, workspace.id, orgId, "workspace.suspended", {});
+    await this.db.transaction(async (raw) => {
+      const tx = raw as unknown as FacilityDb;
+      await lockStory(tx, orgId, projectId, storyId);
+      await assertNoInteractiveHolder(tx, storyId);
+      const workspace = await this.activeWorkspace(orgId, projectId, storyId, false, tx);
+      if (!workspace || workspace.state === "destroyed") return;
+      await this.runtime.suspend(locatorFromRow(workspace));
+      await tx
+        .update(workspaces)
+        .set({ state: "sleeping", updatedAt: new Date() })
+        .where(and(eq(workspaces.orgId, orgId), eq(workspaces.id, workspace.id)));
+      await appendWorkspaceEvent(tx, workspace.id, orgId, "workspace.suspended", {});
+    });
     await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
@@ -2264,6 +2345,7 @@ export class StoryWorkspaceService {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, orgId, projectId, storyId);
+      await assertNoInteractiveHolder(tx, storyId);
       const story = await scopedStory(tx, orgId, projectId, storyId);
       if (story.status !== "archived") {
         await cancelPendingFollowup(tx, story);
@@ -2368,7 +2450,15 @@ export class StoryWorkspaceService {
         .where(and(eq(stories.orgId, input.orgId), eq(stories.id, input.storyId)));
       return complete;
     });
-    if (complete) await this.suspend(input.orgId, input.projectId, input.storyId);
+    if (complete) {
+      try {
+        await this.suspend(input.orgId, input.projectId, input.storyId);
+      } catch (error) {
+        // A merge updates the story, but only a person can interrupt its terminal.
+        if (!(error instanceof StoryServiceError) || error.code !== "interactive_session_active")
+          throw error;
+      }
+    }
     return this.get(input.orgId, input.projectId, input.storyId);
   }
 
@@ -2543,6 +2633,7 @@ export class StoryWorkspaceService {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
+      await assertNoInteractiveHolder(tx, input.storyId);
       await tx
         .update(workspaces)
         .set({ state: "deleting", updatedAt: new Date() })
@@ -2751,6 +2842,8 @@ function messageMetadata(value: unknown): StoryMessageMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const record = value as Record<string, unknown>;
   return {
+    nativeSessionId:
+      typeof record.nativeSessionId === "string" ? record.nativeSessionId : undefined,
     content: record.content === "final_response" ? "final_response" : undefined,
     attachments: Array.isArray(record.attachments)
       ? (record.attachments as InputFileReference[])
@@ -2765,6 +2858,8 @@ function messageMetadata(value: unknown): StoryMessageMetadata {
 }
 
 function conversationContent(role: string, metadata: StoryMessageMetadata): ConversationContent {
+  if (metadata.nativeSessionId)
+    return { kind: "text", progressMessages: null, reportedModel: metadata.model ?? null };
   if (role !== "agent") return { kind: "text", progressMessages: null, reportedModel: null };
   if (metadata.content === "final_response") {
     return {
@@ -2972,6 +3067,28 @@ async function activePreviewWriter(
       )
       .limit(1)
   )[0];
+}
+
+async function assertNoInteractiveHolder(db: FacilityDb, storyId: string) {
+  const holder = (
+    await db
+      .select({ id: turns.id })
+      .from(turns)
+      .where(
+        and(
+          eq(turns.storyId, storyId),
+          eq(turns.triggerType, "interactive"),
+          inArray(turns.state, ["queued", "running"]),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (holder)
+    throw new StoryServiceError(
+      "interactive_session_active",
+      "Leave or take over the interactive session before changing its workspace lifecycle",
+      409,
+    );
 }
 
 async function lockIdentity(db: FacilityDb, identity: string) {

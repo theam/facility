@@ -86,12 +86,12 @@ export class WorkspaceVariablesService {
     private readonly masterKey: string,
   ) {}
 
-  async values(scope: Scope): Promise<Record<string, string>> {
-    const row = (await this.db.select().from(workspaces).where(scopeWhere(scope)).limit(1))[0];
+  async values(scope: Scope, db = this.db): Promise<Record<string, string>> {
+    const row = (await db.select().from(workspaces).where(scopeWhere(scope)).limit(1))[0];
     if (!row || row.state === "destroyed" || row.state === "deleting")
       throw new ApiError(404, "not_found", "Workspace not found");
     return {
-      ...(await this.projectValues(scope)),
+      ...(await this.projectValues(scope, db)),
       ...(await this.decode(scope, stored(row.environment))),
     };
   }
@@ -134,9 +134,9 @@ export class WorkspaceVariablesService {
     });
   }
 
-  async projectValues(scope: ProjectScope): Promise<Record<string, string>> {
+  async projectValues(scope: ProjectScope, db = this.db): Promise<Record<string, string>> {
     const row = (
-      await this.db
+      await db
         .select({ environment: projects.environmentSecrets })
         .from(projects)
         .where(projectWhere(scope))

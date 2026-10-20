@@ -42,6 +42,21 @@ are pinned to one project and cannot enumerate others. Organization administrati
 keys. Audit events record successful privileged mutations with actor, target, project, and request
 id.
 
+Docker terminal sessions require a user principal plus `sessions:observe` and, for
+entry or takeover, `sessions:control`. API keys never open this channel. The active
+turn index and a shared story lock admit one writer; a takeover includes explicit
+confirmation of the displayed holder and records both users. A replaced WebSocket
+cannot keep writing or release the new attachment. Membership and role permissions
+are checked while attached, and OAuth sockets reconnect at access-token expiry.
+Native terminal bytes go only to their holder. Other people receive holder metadata
+and the durable conversation; the next phase adds terminal mirroring.
+
+Interactive turns retain an encrypted copy of the injected secret values for
+redaction after a disconnect or API restart. It uses `SECRET_MASTER_KEY`; holder
+responses never expose that state. Native journals and optional terminal recordings
+can contain sensitive repository output. This release imports the journal and
+does not enable terminal recordings. See [terminal sessions](../guides/terminal-sessions.md).
+
 GitHub webhook signatures are verified over the raw body before JSON parsing. The installation id
 must map to one active organization, and delivery ids are deduplicated within that installation.
 

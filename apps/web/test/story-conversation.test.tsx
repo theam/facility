@@ -91,6 +91,35 @@ function exchangeTexts() {
 }
 
 describe("story conversation paging", () => {
+  it("shows every native session exchange in order with no automated-turn cancel action", async () => {
+    const run = { ...turn("interactive", "running"), triggerType: "interactive" };
+    const messages = [1, 2, 3, 4].map((seq) =>
+      message(seq, {
+        role: seq % 2 ? "user" : "agent",
+        body: `Native message ${seq}`,
+        turnId: run.id,
+        turn: run,
+      }),
+    );
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="project"
+          storyId="story"
+          initial={page(messages)}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+    const transcript = container.querySelector('[aria-label="Interactive session transcript"]');
+    expect(transcript?.textContent).toContain("Interactive session open");
+    expect(transcript?.textContent).toMatch(
+      /Native message 1[\s\S]*Native message 2[\s\S]*Native message 3[\s\S]*Native message 4/,
+    );
+    expect(transcript?.querySelector("button")).toBeNull();
+  });
+
   it("reads newest first, with the latest exchange on top and older pages below", async () => {
     const latest = exchange(5, "turn-c");
     const earlier = exchange(3, "turn-b");

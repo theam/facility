@@ -12,13 +12,14 @@ import {
   turns,
   workspaces,
 } from "@facility/db";
-import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { ApiError } from "../errors.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
+import { messagesForNativeResume } from "../sessions/native.js";
 import { type InputFileReference, validateInputFileReferences } from "../stories/input-files.js";
 import type { StoryReviewCycles } from "../stories/review-cycle.js";
 import {
@@ -812,7 +813,7 @@ export class TurnDispatcher {
             ),
           )
           .limit(1);
-        if (!existing) return null;
+        if (!existing || existing.triggerType === "interactive") return null;
         const scope = { orgId: input.orgId, projectId: input.projectId, storyId: existing.storyId };
         if ([REVIEW_TRIGGER, FOLLOWUP_TRIGGER].includes(existing.triggerType))
           await lockWorkflowStory(tx, scope);
@@ -1130,7 +1131,7 @@ export class TurnDispatcher {
     orgId: string;
     projectId: string;
     storyId: string;
-    turnId: string;
+    turnId?: string;
   }) {
     return this.activateQueuedStorySuccessor(input);
   }
@@ -1382,9 +1383,13 @@ function storyBranch(title: string, storyId: string) {
   return `facility/${slug}-${storyId.slice(-8)}`;
 }
 
-function credentialSecrets(environment: Record<string, string>, sensitiveNames: string[] = []) {
+export function credentialSecrets(
+  environment: Record<string, string>,
+  sensitiveNames: string[] = [],
+) {
   const secrets = new Set<string>();
   if (environment.GH_TOKEN) secrets.add(environment.GH_TOKEN);
+  if (environment.GITHUB_TOKEN) secrets.add(environment.GITHUB_TOKEN);
   for (const name of sensitiveNames) {
     const value = environment[name];
     if (value) secrets.add(value);

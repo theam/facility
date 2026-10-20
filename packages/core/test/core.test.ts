@@ -35,6 +35,9 @@ describe("Facility 0.12 core", () => {
     expect(can(roles.get("maintainer") ?? [], "projects:write")).toBe(true);
     expect(can(roles.get("viewer") ?? [], "stories:read")).toBe(true);
     expect(can(roles.get("viewer") ?? [], "stories:write")).toBe(false);
+    expect(can(roles.get("viewer") ?? [], "sessions:observe")).toBe(true);
+    expect(can(roles.get("viewer") ?? [], "sessions:control")).toBe(false);
+    expect(can(roles.get("maintainer") ?? [], "sessions:control")).toBe(true);
     expect(PermissionSchema.safeParse("workspaces:execute").success).toBe(true);
     expect(PermissionSchema.safeParse("receipts:write").success).toBe(false);
   });

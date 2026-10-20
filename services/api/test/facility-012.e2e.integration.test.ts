@@ -273,7 +273,7 @@ environment:
       undefined,
       async () => null,
     );
-    const domain: StoryDomain = {
+    const baseDomain: Omit<StoryDomain, "sessions"> = {
       inputFiles: new StoryInputFileService(db, runtime, config.secretMasterKey),
       variables: new WorkspaceVariablesService(db, config.secretMasterKey),
       runtime,
@@ -329,6 +329,11 @@ environment:
         stories,
         async () => undefined,
       ),
+    };
+    const { StorySessionService } = await import("../src/sessions/service.js");
+    const domain: StoryDomain = {
+      ...baseDomain,
+      sessions: new StorySessionService(db, baseDomain, config.secretMasterKey),
     };
     app = await buildApp(config, {
       storyDomain: domain,
