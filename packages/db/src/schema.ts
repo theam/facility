@@ -767,6 +767,7 @@ export const turns = pgTable(
     triggerKey: text("trigger_key"),
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
     retryAfter: timestamp("retry_after", { withTimezone: true }),
+    interactive: jsonb("interactive"),
     error: text("error"),
     nextEventSeq: bigint("next_event_seq", { mode: "number" }).notNull().default(1),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -793,6 +794,10 @@ export const turns = pgTable(
     index("turns_org_story_created_idx").on(table.orgId, table.storyId, table.createdAt.desc()),
     check("turns_engine_check", sql`${table.engine} in ('claude_code', 'codex')`),
     check("turns_next_event_seq_check", sql`${table.nextEventSeq} > 0`),
+    check(
+      "turns_interactive_check",
+      sql`(${table.triggerType} = 'interactive') = (${table.interactive} is not null)`,
+    ),
     check(
       "turns_state_check",
       sql`${table.state} in ('queued', 'running', 'succeeded', 'failed', 'canceled')`,
@@ -893,6 +898,32 @@ export const turnUsage = pgTable(
       name: "turn_usage_turn_scope_fk",
       columns: [table.orgId, table.projectId, table.storyId, table.turnId],
       foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+  ],
+);
+
+export const sessionWaiters = pgTable(
+  "session_waiters",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    transportId: text("transport_id").notNull(),
+    waiting: boolean("waiting").notNull().default(true),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("session_waiters_story_idx").on(table.storyId, table.createdAt),
+    index("session_waiters_expires_idx").on(table.expiresAt),
+    foreignKey({
+      name: "session_waiters_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
     }),
   ],
 );

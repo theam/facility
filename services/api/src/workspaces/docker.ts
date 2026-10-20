@@ -15,6 +15,7 @@ import {
   type WorkspaceLocator,
   type WorkspaceRuntime,
   WorkspaceRuntimeError,
+  type WorkspaceTerminal,
 } from "./runtime.js";
 
 const WORKSPACE_LABEL = "facility.workspace.id";
@@ -25,6 +26,50 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "docker" as const;
 
   constructor(private readonly docker = new Docker()) {}
+
+  async terminal(
+    workspace: WorkspaceLocator,
+    input: {
+      socket: string;
+      cols: number;
+      rows: number;
+      onData: (data: Buffer) => void;
+    },
+  ): Promise<WorkspaceTerminal> {
+    if (!/^\/workspace\/\.facility\/interactive\/turn_[a-z0-9]+\/tty$/.test(input.socket))
+      throw new WorkspaceRuntimeError("session_socket_invalid", "Invalid session socket");
+    const handle = await this.inspect(workspace);
+    if (handle.state !== "running" || !handle.computeRef)
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace is not running");
+    const execution = await this.docker.getContainer(handle.computeRef).exec({
+      Cmd: ["dtach", "-a", input.socket, "-E", "-r", "winch"],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+      User: "node",
+      WorkingDir: "/workspace",
+      Env: ["TERM=xterm-256color"],
+    });
+    const stream = await execution.start({ hijack: true, stdin: true, Tty: true });
+    stream.on("data", input.onData);
+    // Register errors before returning the stream so a dropped Docker connection
+    // cannot become an unhandled process error. dtach retains the native process.
+    stream.on("error", () => stream.destroy());
+    await execution.resize({ w: input.cols, h: input.rows });
+    return {
+      write: (data) => {
+        stream.write(data);
+      },
+      resize: async (cols, rows) => {
+        await execution.resize({ w: cols, h: rows });
+      },
+      close: () => stream.destroy(),
+      onClose: (callback) => {
+        stream.once("close", callback);
+      },
+    };
+  }
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
     assertWorkspaceId(input.id);

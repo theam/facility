@@ -90,6 +90,15 @@ MCP access tokens last 15 minutes, authorization codes 10 minutes, and refresh g
 days. Browser sessions last seven days. Treat those defaults as maximum persistence, not a reason
 to delay revocation after membership changes.
 
+`facility login <api-origin>` uses this same authorization server, dynamic native-client registration,
+PKCE and a one-use `127.0.0.1` loopback redirect. It validates state and the authorization-response
+issuer. The desktop browser must reach the configured issuer. There is no device grant or separate
+API scope yet; the existing resource-bound token is accepted by the control plane. Terminal access
+additionally requires an active user membership and `sessions:observe` / `sessions:control`.
+API keys cannot attach, even with wildcard permissions. The CLI renews access tokens under a local
+credential lock and reconnects the channel after token expiry. Its OAuth refresh does not renew
+the workspace's short-lived GitHub credentials; that is a later phase.
+
 ### Troubleshoot an existing MCP connection
 
 If renewal fails with `invalid_scope: refresh token missing requested scope`, tokens issued by

@@ -145,7 +145,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_send_message",
     permission: "workspaces:execute",
     description:
-      "Append a message to the shared story conversation and queue the selected repository-defined agent. Needs workspaces:execute.",
+      "Append a message to the shared story conversation and queue the selected repository-defined agent. If a person holds an interactive session, the response identifies the holder and the message waits until it ends. MCP never takes over. Needs workspaces:execute.",
     inputSchema: {
       projectId,
       storyId,

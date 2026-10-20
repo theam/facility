@@ -4,8 +4,8 @@ title: CLI
 
 # CLI
 
-The CLI configures and checks a repository. Runtime automation belongs to MCP; people can also use
-the web UI.
+The CLI configures a repository and attaches people to Docker story sessions.
+Runtime automation and ordinary messages remain available through MCP and the web.
 
 Install or invoke the published package from a repository root:
 
@@ -20,7 +20,24 @@ facility init      write .facility.yml and .agents/*.md
 facility doctor    validate the local workspace contract
 facility instance bootstrap
                    bind the first owner and GitHub installation
+facility login [url]
+                   sign in with a browser and loopback redirect
+facility attach [story]
+                   enter a native story session, or watch the current holder
+facility new <project> ["ask"]
+                   create a story and attach (--agent, --issue)
+facility stories [--needs-you] [--json]
+                   list visible project stories and session holders
+facility preview [story] [service]
+                   print a one-time preview URL
 ```
+
+Session commands accept `--instance <api-origin>` for multiple saved logins.
+Attach accepts `project#number`, a story id, or a story URL. It offers attention
+items when no story is supplied. Ctrl+C while watching confirms takeover;
+Ctrl-] leaves. A terminal is required for `attach` and `new`. See the
+[terminal sessions guide](../guides/terminal-sessions.md) for permissions,
+ownership, accounting, credential storage, provider limits and recovery.
 
 ## `facility init`
 

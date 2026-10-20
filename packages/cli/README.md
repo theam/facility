@@ -1,8 +1,25 @@
 # @theagilemonkeys/facility
 
 The Facility CLI installs and validates the small repository contract used by
-Facility 0.12. Day-to-day story work happens through the Facility MCP server or
-web application.
+Facility 0.12. It also signs in to an instance and attaches to a story's native
+Claude Code or Codex session on Docker.
+
+```bash
+facility login https://api.facility.example
+facility stories --needs-you
+facility attach demo#101
+facility new demo "Investigate the failing test"
+facility new demo --agent builder
+facility preview demo#101 web
+```
+
+Login uses a browser and a loopback redirect on the same computer. Sessions
+require a user principal, `sessions:observe` and `sessions:control`; API keys
+cannot attach. Ctrl+C while watching confirms takeover, and Ctrl-] leaves.
+`--instance <api-origin>` selects another login. `stories --json` supports
+scripts. Vercel sessions remain read-only and report that interactive entry is
+not supported yet. See the [terminal guide](../../apps/docs/docs/guides/terminal-sessions.md)
+for ownership, permissions, persistence, budget, Herdr and recovery behavior.
 
 ```bash
 cd your-repository

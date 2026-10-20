@@ -11,6 +11,7 @@ import {
 import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
 import { CostBudgetService } from "./insights/costs.js";
+import { StorySessionService } from "./sessions/service.js";
 import { ProjectBacklogService } from "./stories/backlog.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
@@ -30,6 +31,7 @@ import { WorkspaceVariablesService } from "./workspaces/variables.js";
 import { VercelWorkspaceRuntime } from "./workspaces/vercel.js";
 
 export type StoryDomain = {
+  sessions: StorySessionService;
   runtime: WorkspaceRuntime;
   stories: StoryWorkspaceService;
   catalog: AgentCatalogService;
@@ -81,7 +83,7 @@ export function createStoryDomain(input: {
     runtime,
     undefined,
     undefined,
-    (scope) => variables.values(scope),
+    (scope, db) => variables.values(scope, db),
   );
   const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
     await input.enqueue("turns.dispatch", {
@@ -139,7 +141,7 @@ export function createStoryDomain(input: {
     mirror,
     githubFactory === unavailableGithubFactory ? undefined : githubFactory,
   );
-  return {
+  const domain = {
     runtime,
     stories,
     catalog,
@@ -158,6 +160,10 @@ export function createStoryDomain(input: {
     titles,
     backlog,
   };
+  const sessions = new StorySessionService(input.db, domain, input.config.secretMasterKey);
+  stories.takeoverSession = (db, scope, userId, turnId) =>
+    sessions.takeoverForMessage(db, scope, userId, turnId);
+  return { ...domain, sessions };
 }
 
 function workspaceRuntime(config: AppConfig, db: FacilityDb): WorkspaceRuntime {

@@ -174,6 +174,37 @@ function ExchangeCard({
   const status = runStatus(turn ?? null, { waitingForReply });
   const agentName = turn?.agentName ?? request?.requestedAgentName ?? "agent";
   const active = turn ? ["queued", "running"].includes(turn.state) : false;
+  if (turn?.triggerType === "interactive") {
+    const transcript = [request, response, ...exchange.extra]
+      .filter((message): message is StoryMessage => Boolean(message))
+      .sort((a, b) => a.seq - b.seq);
+    return (
+      <article
+        aria-label="Interactive session transcript"
+        className="flex flex-col gap-3 border border-(--line) p-4"
+      >
+        <header className="flex flex-wrap justify-between gap-2">
+          <AgentLine name={agentName} turn={turn} reportedModel={null} />
+          <span>{active ? "Interactive session open" : "Interactive session ended"}</span>
+        </header>
+        {transcript.map((message) =>
+          message.role === "agent" ? (
+            <div key={message.id} className="border-t border-dashed border-(--line) pt-3">
+              <ResponseBody message={message} />
+            </div>
+          ) : (
+            <RequestBlock key={message.id} message={message} agentName={agentName} />
+          ),
+        )}
+        <RunActivity
+          projectId={projectId}
+          storyId={storyId}
+          turnId={turn.id}
+          progressMessages={null}
+        />
+      </article>
+    );
+  }
   return (
     <article
       className="flex flex-col border border-(--line) bg-(--bg)"

@@ -37,6 +37,7 @@ test("the published navigation covers user, operator, reference, and contributor
     "guides/kickstart",
     "guides/existing-repo",
     "guides/operate-story",
+    "guides/terminal-sessions",
     "guides/validate-workspace-loop",
     "guides/troubleshooting",
     "reference/architecture",

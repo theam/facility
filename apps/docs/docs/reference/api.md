@@ -116,6 +116,29 @@ credential revocation remains a separate operator action.
 Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
 request can also use the HTTP `Idempotency-Key` behavior described below.
 
+### Terminal sessions (Docker)
+
+`GET .../workspace-stories/:storyId/session/status` and the story bundle's `session` field
+return support, holder and waiting-person metadata. `GET /v1/projects/:projectId/session-holders`
+returns the project's active holder map for terminal lists. These reads require `projects:read`.
+
+`GET .../workspace-stories/:storyId/session?client_id=<uuid>&mode=attach` upgrades to a WebSocket.
+A signed-in user and `sessions:observe` are required; `sessions:control` also permits entry and
+confirmed takeover. API keys cannot open the channel. Bearer credentials belong in the
+Authorization header, never the URL. `mode=observe` never acquires ownership.
+
+The channel carries JSON holder/lifecycle/Facility-event frames and binary native terminal bytes.
+Only the current writer's binary input and validated resize controls reach the terminal. Takeover
+requires `{type:"takeover",turnId:"<displayed-holder>",confirm:true}`; a stale holder returns a
+conflict. `{type:"leave"}` stops and imports the holder's session. Unexpected disconnect retains
+it for reconnection. Vercel answers "not supported yet" and keeps the Facility-event view.
+
+A message may include both `takeover_turn_id` and `confirm_takeover: true`; this requires
+`sessions:control` and a user principal. Without them it queues. `interactive_only: true` on
+story creation prepares a workspace without an automated first turn and requires the same
+control permission. See [terminal sessions](../guides/terminal-sessions.md) for retention,
+timeouts, audit, usage import and the remaining phases.
+
 ### External integrations
 
 The existing story GET includes `lifecycle`: effective phase/activity, GitHub issue

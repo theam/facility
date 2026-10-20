@@ -1,5 +1,5 @@
 import { createDb, type FacilityDb, turns } from "@facility/db";
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
@@ -128,6 +128,7 @@ export async function startWorker() {
         }
         result = { ...outcome, title: undefined };
       } else if (queue === "agent.schedules") {
+        await storyDomain.sessions.reconcile();
         const interruptedTurns = await recoverInterruptedTurns(
           db,
           storyDomain.stories,
@@ -189,6 +190,7 @@ export async function recoverQueuedTurns(
     .where(
       and(
         eq(turns.state, "queued"),
+        sql`${turns.triggerType} <> 'interactive'`,
         or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
       ),
     )
@@ -225,7 +227,13 @@ export async function recoverInterruptedTurns(
       storyId: turns.storyId,
     })
     .from(turns)
-    .where(and(eq(turns.state, "running"), lte(turns.updatedAt, staleBefore)))
+    .where(
+      and(
+        eq(turns.state, "running"),
+        sql`${turns.triggerType} <> 'interactive'`,
+        lte(turns.updatedAt, staleBefore),
+      ),
+    )
     .orderBy(asc(turns.updatedAt))
     .limit(1_000);
   let recovered = 0;

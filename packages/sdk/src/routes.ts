@@ -1,4 +1,5 @@
-/** Every versioned control-plane route exposed by Facility 0.12. */
+/** Every versioned HTTP control-plane route exposed by Facility 0.12.
+ * Native session WebSocket frames are documented separately in the API reference. */
 export const FACILITY_V1_ROUTES = [
   "DELETE /v1/keys/:keyId",
   "DELETE /v1/members/:userId",
@@ -25,6 +26,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/projects/:projectId/overview",
   "GET /v1/projects/:projectId/project-skills",
   "GET /v1/projects/:projectId/repos",
+  "GET /v1/projects/:projectId/session-holders",
   "GET /v1/projects/:projectId/story-agents",
   "GET /v1/projects/:projectId/story-agents/:agentName",
   "GET /v1/projects/:projectId/workspace-stories",
@@ -32,6 +34,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/projects/:projectId/workspace-stories/:storyId/conversation",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/environment",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/environment/variables",
+  "GET /v1/projects/:projectId/workspace-stories/:storyId/session/status",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/timeline",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/activity",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/events/:seq",

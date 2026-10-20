@@ -245,7 +245,7 @@ environment:
       projectManifests,
       environment,
     );
-    const domain: StoryDomain = {
+    const baseDomain: Omit<StoryDomain, "sessions"> = {
       variables: new WorkspaceVariablesService(db, config.secretMasterKey),
       runtime,
       stories,
@@ -274,6 +274,11 @@ environment:
         budget: new CostBudgetService(db),
       }),
       backlog: new ProjectBacklogService(db),
+    };
+    const { StorySessionService } = await import("../src/sessions/service.js");
+    const domain: StoryDomain = {
+      ...baseDomain,
+      sessions: new StorySessionService(db, baseDomain, config.secretMasterKey),
     };
     app = await buildApp(config, {
       storyDomain: domain,

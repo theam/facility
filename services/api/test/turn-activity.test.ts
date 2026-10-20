@@ -8,6 +8,34 @@ import {
 
 const at = new Date("2026-09-10T10:00:00Z");
 
+it("presents native Codex journal tools, results and only exposed reasoning summaries", () => {
+  expect(
+    presentTurnEvent(
+      event("engine.response_item", {
+        payload: { type: "function_call", name: "shell", arguments: "pnpm test" },
+      }),
+    ),
+  ).toMatchObject({ kind: "tool", title: "Used shell", text: "pnpm test" });
+  expect(
+    presentTurnEvent(
+      event("engine.response_item", {
+        payload: { type: "function_call_output", output: "passed" },
+      }),
+    ),
+  ).toMatchObject({ kind: "tool", text: "passed" });
+  const reasoning = presentTurnEvent(
+    event("engine.response_item", {
+      payload: {
+        type: "reasoning",
+        encrypted_content: "not-a-summary",
+        summary: [{ type: "summary_text", text: "Review the test results" }],
+      },
+    }),
+  );
+  expect(reasoning).toMatchObject({ kind: "reasoning", text: "Review the test results" });
+  expect(reasoning.text).not.toContain("not-a-summary");
+});
+
 function event(type: string, data: Record<string, unknown>, seq = 1) {
   return { turnId: "turn_a", seq, type, data, createdAt: at };
 }

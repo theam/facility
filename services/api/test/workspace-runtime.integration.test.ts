@@ -41,6 +41,55 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
       });
       expect(write.exitCode, write.stderr).toBe(0);
 
+      const terminalSocket = "/workspace/.facility/interactive/turn_dockerfixture/tty";
+      const native = await runtime.exec(workspace, {
+        command: "sh",
+        args: [
+          "-lc",
+          'mkdir -p .facility/interactive/turn_dockerfixture && dtach -n .facility/interactive/turn_dockerfixture/tty -E sh -c \'echo $$ > /workspace/.facility/interactive/turn_dockerfixture/pid; while IFS= read -r line; do printf "native:%s:" "$line"; stty size; done\'',
+        ],
+      });
+      expect(native.exitCode, native.stderr).toBe(0);
+      let terminalOutput = "";
+      let terminal = await runtime.terminal(workspace, {
+        socket: terminalSocket,
+        cols: 80,
+        rows: 24,
+        onData: (data) => {
+          terminalOutput += data.toString();
+        },
+      });
+      try {
+        terminal.write(Buffer.from("first\n"));
+        await waitUntil(async () => terminalOutput.includes("native:first:"));
+        await terminal.resize(120, 40);
+        terminal.write(Buffer.from("resized\n"));
+        await waitUntil(async () => terminalOutput.includes("40 120"));
+        terminal.close();
+        terminalOutput = "";
+        terminal = await runtime.terminal(workspace, {
+          socket: terminalSocket,
+          cols: 100,
+          rows: 30,
+          onData: (data) => {
+            terminalOutput += data.toString();
+          },
+        });
+        terminal.write(Buffer.from("reconnected\n"));
+        await waitUntil(async () => terminalOutput.includes("native:reconnected:"));
+        const alive = await runtime.exec(workspace, {
+          command: "sh",
+          args: ["-lc", 'kill -0 "$(cat .facility/interactive/turn_dockerfixture/pid)"'],
+        });
+        expect(alive.exitCode, alive.stderr).toBe(0);
+      } finally {
+        terminal.close();
+        await runtime.exec(workspace, {
+          command: "sh",
+          args: ["-lc", 'kill "$(cat .facility/interactive/turn_dockerfixture/pid)"'],
+        });
+      }
+
       await installReferenceProject(runtime, workspace);
       const compose = await runtime.exec(workspace, {
         command: "sh",

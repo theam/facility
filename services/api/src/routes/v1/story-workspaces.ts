@@ -4,12 +4,13 @@ import {
   AgentTriggerSchema,
   renderAgentManifest,
 } from "@facility/agents";
-import { projectRepositories, workspaceEvents } from "@facility/db";
+import { githubIssues, projectRepositories, workspaceEvents } from "@facility/db";
 import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
+import { assertSessionPrincipal } from "../../sessions/service.js";
 import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
@@ -49,6 +50,7 @@ const UpdateAgentBody = z.object({
   prompt: z.string().trim().min(1).max(200_000),
 });
 const StartStoryBody = z.object({
+  interactive_only: z.boolean().default(false),
   provider: z.enum(["github", "manual"]).default("manual"),
   external_id: z.string().min(1).max(240).optional(),
   /** Repository the GitHub identity belongs to; defaults to the primary repository. */
@@ -60,11 +62,18 @@ const StartStoryBody = z.object({
   message: z.string().min(1).max(200_000),
   idempotency_key: z.string().min(1).max(200),
 });
-const SendMessageBody = z.object({
-  agent: z.string().min(1).max(64).optional(),
-  message: z.string().min(1).max(200_000),
-  idempotency_key: z.string().min(1).max(200),
-});
+const SendMessageBody = z
+  .object({
+    takeover_turn_id: z.string().min(1).max(100).optional(),
+    confirm_takeover: z.literal(true).optional(),
+    agent: z.string().min(1).max(64).optional(),
+    message: z.string().min(1).max(200_000),
+    idempotency_key: z.string().min(1).max(200),
+  })
+  .refine(
+    (body) => Boolean(body.takeover_turn_id) === Boolean(body.confirm_takeover),
+    "Takeover requires a holder and explicit confirmation",
+  );
 const ListStoriesQuery = z.object({
   status: z.enum(["ready", "working", "attention", "review", "done", "archived"]).optional(),
 });
@@ -368,6 +377,8 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       const actor = principal(request);
       const orgId = actor.orgId;
       const surface = requestSurface(request.headers["x-facility-surface"]);
+      if (body.interactive_only)
+        await assertSessionPrincipal(app.facilityDb, actor, "sessions:control");
       const [manifest, projectManifest] = await translate(() =>
         Promise.all([
           selectAgent(domain, orgId, projectId, body.agent, surface),
@@ -396,18 +407,48 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         throw new ApiError(404, "repository_not_found", "Repository not found in this project");
       }
       requireAgentSurface(manifest, surface);
+      const issueNumber =
+        body.provider === "github" ? /^issue:(\d+)$/.exec(body.external_id ?? "")?.[1] : undefined;
+      const issue =
+        issueNumber && repositoryId
+          ? (
+              await app.facilityDb
+                .select()
+                .from(githubIssues)
+                .where(
+                  and(
+                    eq(githubIssues.orgId, orgId),
+                    eq(githubIssues.projectId, projectId),
+                    eq(githubIssues.repositoryId, repositoryId),
+                    eq(githubIssues.number, Number(issueNumber)),
+                  ),
+                )
+                .limit(1)
+            )[0]
+          : undefined;
+      if (body.interactive_only && body.provider === "github" && !issue)
+        throw new ApiError(
+          404,
+          "issue_not_found",
+          "Issue not found in this project's mirrored repository; sync the project first",
+        );
       // A request without a title is stored at once under a provisional title.
       // The AI title arrives asynchronously; the request is never held for it.
-      const titled = body.title !== undefined;
+      const titled = body.title !== undefined || issue !== undefined;
       const generation = titled ? false : await domain.titles.available(orgId, projectId);
       const result = await translate(() =>
-        domain.stories.start({
+        (body.interactive_only
+          ? domain.stories.startInteractive.bind(domain.stories)
+          : domain.stories.start.bind(domain.stories))({
           orgId,
           projectId,
           repositoryId,
           provider: body.provider,
           externalId: body.external_id ?? `manual:${body.idempotency_key}`,
-          title: body.title ?? provisionalTitle(body.message),
+          title: body.title ?? issue?.title ?? provisionalTitle(body.message),
+          context: issue
+            ? `# GitHub issue #${issue.number}\n${issue.title}\n${issue.htmlUrl}\n\n${issue.body ?? ""}`
+            : undefined,
           titleSource: titled
             ? body.provider === "github"
               ? "github"
@@ -487,7 +528,13 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         config.nativePreviews,
       );
       reply.header("cache-control", "private, no-store");
-      return { ...storyResponse(value), lifecycle };
+      return {
+        ...storyResponse(value),
+        lifecycle,
+        ...(!value.story.deletedAt && {
+          session: await domain.sessions.status({ orgId: actor.orgId, projectId, storyId }),
+        }),
+      };
     },
   );
 
@@ -597,8 +644,11 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         selectAgent(domain, orgId, projectId, body.agent, surface),
       );
       requireAgentSurface(manifest, surface);
+      if (body.takeover_turn_id)
+        await assertSessionPrincipal(app.facilityDb, actor, "sessions:control");
       const queued = await translate(() =>
         domain.stories.queueMessage({
+          takeoverTurnId: body.takeover_turn_id,
           orgId,
           projectId,
           storyId,
@@ -610,7 +660,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         }),
       );
       reply.status(202);
-      return { queued };
+      return { queued, session: await domain.sessions.status({ orgId, projectId, storyId }) };
     },
   );
 
@@ -935,6 +985,9 @@ function storyResponse(value: Record<string, unknown>) {
   const { events: _events, timeline: _timeline, ...rest } = value;
   return {
     ...rest,
+    ...(Array.isArray(value.turns)
+      ? { turns: value.turns.map(({ interactive: _interactive, ...turn }) => turn) }
+      : {}),
     ...(events
       ? {
           events: events.map((event) => ({

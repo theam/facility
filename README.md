@@ -119,7 +119,10 @@ That is your first complete workspace loop.
 Use [story operations](apps/docs/docs/guides/operate-story.md) for the next task
 and [end-to-end validation](apps/docs/docs/guides/validate-workspace-loop.md)
 to check the full setup. The [CLI reference](apps/docs/docs/reference/cli.md)
-covers creating the repository configuration from a terminal.
+covers creating the repository configuration from a terminal. The
+[terminal sessions guide](apps/docs/docs/guides/terminal-sessions.md) covers
+`facility login`, `attach`, `new`, `stories` and `preview` for Docker story
+workspaces, including session ownership, takeover and imported usage.
 
 ## Before connecting more repositories
 

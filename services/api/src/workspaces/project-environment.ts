@@ -49,6 +49,10 @@ const EnvironmentName = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/);
 export const ProjectManifestSchema = z
   .object({
     version: z.literal(1).default(1),
+    sessions: z
+      .object({ detached_timeout_minutes: z.number().int().min(1).max(1440).default(15) })
+      .strict()
+      .optional(),
     repositories: z
       .object({
         primary: RepositoryName,
@@ -134,7 +138,7 @@ export function parseProjectManifest(source: string): ProjectManifest {
 }
 
 export interface ProjectManifestSource {
-  load(orgId: string, projectId: string): Promise<ProjectManifest>;
+  load(orgId: string, projectId: string, db?: FacilityDb): Promise<ProjectManifest>;
 }
 
 export class GithubProjectManifestSource implements ProjectManifestSource {
@@ -143,9 +147,9 @@ export class GithubProjectManifestSource implements ProjectManifestSource {
     private readonly factory: GithubClientFactory,
   ) {}
 
-  async load(orgId: string, projectId: string) {
+  async load(orgId: string, projectId: string, db = this.db) {
     const repository = (
-      await this.db
+      await db
         .select()
         .from(projectRepositories)
         .where(
@@ -164,7 +168,7 @@ export class GithubProjectManifestSource implements ProjectManifestSource {
       );
     }
     const installation = (
-      await this.db
+      await db
         .select()
         .from(githubInstallations)
         .where(
@@ -186,7 +190,7 @@ export class GithubProjectManifestSource implements ProjectManifestSource {
       repo: repository.name,
       defaultBranch: repository.defaultBranch,
     });
-    const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
+    const developmentBranch = await repositoryDevelopmentBranch(db, repository);
     const commitSha = await client.getBranchSha(developmentBranch);
     const content = (await client.getContent(".facility.yml", commitSha)) as {
       type?: string;
@@ -212,6 +216,12 @@ type EnvironmentInput = {
   readinessTimeoutMs?: number;
 };
 
+type PrepareEnvironmentInput = EnvironmentInput & {
+  branch: string;
+  previousSetupChecksum?: string | null;
+  cleanSetup?: boolean;
+};
+
 export class ProjectEnvironmentService {
   constructor(
     private readonly db: FacilityDb,
@@ -221,20 +231,31 @@ export class ProjectEnvironmentService {
       projectId,
       name,
     ) => process.env[projectEnvironmentVariableName(projectId, name)],
-    private readonly workspaceValues: (scope: {
-      orgId: string;
-      projectId: string;
-      workspaceId: string;
-    }) => Promise<Record<string, string>> = async () => ({}),
+    private readonly workspaceValues: (
+      scope: {
+        orgId: string;
+        projectId: string;
+        workspaceId: string;
+      },
+      db?: FacilityDb,
+    ) => Promise<Record<string, string>> = async () => ({}),
   ) {}
 
-  async prepare(
-    input: EnvironmentInput & {
-      branch: string;
-      previousSetupChecksum?: string | null;
-      cleanSetup?: boolean;
-    },
-  ) {
+  async prepare(input: PrepareEnvironmentInput, db = this.db) {
+    const service =
+      db === this.db
+        ? this
+        : new ProjectEnvironmentService(
+            db,
+            this.runtime,
+            this.gitBaseUrl,
+            this.environmentValue,
+            this.workspaceValues,
+          );
+    return service.prepareWorkspace(input);
+  }
+
+  private async prepareWorkspace(input: PrepareEnvironmentInput) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
     const preparedInput = await this.withDeclaredEnvironment(input);
     await this.run(preparedInput, "mkdir -p repos", ".", "environment.repositories");
@@ -481,11 +502,14 @@ export class ProjectEnvironmentService {
       credentials: GithubWorkspaceCredentials;
     },
   >(input: T): Promise<T> {
-    const managed = await this.workspaceValues({
-      orgId: input.orgId,
-      projectId: input.projectId,
-      workspaceId: input.workspace.id,
-    });
+    const managed = await this.workspaceValues(
+      {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        workspaceId: input.workspace.id,
+      },
+      this.db,
+    );
     const names = [...input.manifest.environment.variables, ...input.manifest.environment.secrets];
     const originsName = "FACILITY_PREVIEW_ORIGINS";
     const origins = names.includes(originsName)

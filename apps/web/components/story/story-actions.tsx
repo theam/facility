@@ -2,7 +2,7 @@
 
 import { Button, Field, Select, TextArea } from "@facility/ui";
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { COMPOSE_EVENT } from "@/components/story/story-conversation";
 import {
   CancelTurnButton,
@@ -34,6 +34,8 @@ export function StoryActions({
   activeTurn,
   waitingAgent,
   artifacts,
+  session,
+  canControlSession = false,
 }: {
   projectId: string;
   story: WorkspaceStory;
@@ -46,6 +48,8 @@ export function StoryActions({
   activeTurn: Turn | null;
   waitingAgent: string | null;
   artifacts: Artifact[];
+  session?: WorkspaceStoryBundle["session"];
+  canControlSession?: boolean;
 }) {
   const enabled = agents.filter((candidate) => candidate.enabled);
   const canSend = canExecute && story.deletedAt === null && enabled.length > 0;
@@ -67,6 +71,44 @@ export function StoryActions({
 
   return (
     <div className="flex flex-col gap-3">
+      {session ? (
+        <aside className="border border-(--line) p-3 text-sm" aria-label="Session holder">
+          {session.holder ? (
+            <p>
+              {session.holder.kind === "person"
+                ? `${session.holder.name} has an interactive session open`
+                : `${session.holder.agent} is running a Facility turn (${session.holder.trigger})`}{" "}
+              since{" "}
+              <time dateTime={session.holder.since}>
+                {new Date(session.holder.since).toLocaleString()}
+              </time>
+              .
+            </p>
+          ) : (
+            <p>The story session is free.</p>
+          )}
+          {session.waiting.length ? (
+            <p>
+              {session.waiting.map((person) => person.name ?? "A person").join(", ")} is waiting to
+              enter; queued messages run after.
+            </p>
+          ) : null}
+          {!session.supported ? (
+            <p>
+              Interactive sessions are not supported yet on this provider. The conversation remains
+              available read-only.
+            </p>
+          ) : null}
+          {session.supported &&
+          session.holder?.kind === "person" &&
+          canControlSession &&
+          canSend ? (
+            <Button type="button" size="sm" onClick={() => setOpen(true)}>
+              Take over and send a task
+            </Button>
+          ) : null}
+        </aside>
+      ) : null}
       <section className="flex flex-wrap items-center gap-2" aria-label="Story actions">
         {canSend ? (
           <Button
@@ -90,7 +132,7 @@ export function StoryActions({
             pull request #{story.pullRequestNumber} ↗
           </a>
         ) : null}
-        {canExecute && activeTurn ? (
+        {canExecute && activeTurn && activeTurn.triggerType !== "interactive" ? (
           <CancelTurnButton
             projectId={projectId}
             storyId={story.id}
@@ -139,6 +181,7 @@ export function StoryActions({
               preset={preset}
               onDone={() => setOpen(false)}
               onCancel={() => setOpen(false)}
+              canControlSession={canControlSession}
             />
           ) : null}
         </div>
@@ -154,6 +197,7 @@ export function StoryComposer({
   preset,
   onDone,
   onCancel,
+  canControlSession = false,
 }: {
   projectId: string;
   storyId: string;
@@ -161,6 +205,7 @@ export function StoryComposer({
   preset?: string;
   onDone?: () => void;
   onCancel?: () => void;
+  canControlSession?: boolean;
 }) {
   const router = useRouter();
   const [agent, setAgent] = useState(
@@ -173,18 +218,51 @@ export function StoryComposer({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [held, setHeld] = useState<NonNullable<
+    NonNullable<WorkspaceStoryBundle["session"]>["holder"]
+  > | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (held) dialog.current?.showModal?.();
+    else dialog.current?.close?.();
+  }, [held]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setError("");
+    setPending(true);
+    const status = await clientApi<NonNullable<WorkspaceStoryBundle["session"]>>(
+      "GET",
+      storyPath(projectId, storyId, "/session/status"),
+    );
+    setPending(false);
+    if (!status.ok) {
+      setError(status.message);
+      return;
+    }
+    if (status.data.holder?.kind === "person") {
+      setHeld(status.data.holder);
+      return;
+    }
+    await send();
+  }
+
+  async function send(takeover = false) {
     setPending(true);
     setError("");
     const key = `ui-message-${crypto.randomUUID()}`;
     const result = await clientApi<{ queued: { queued: boolean } }>(
       "POST",
       storyPath(projectId, storyId, "/messages"),
-      { agent, message, idempotency_key: key },
+      {
+        agent,
+        message,
+        idempotency_key: key,
+        ...(takeover && held ? { takeover_turn_id: held.turnId, confirm_takeover: true } : {}),
+      },
     );
     setPending(false);
+    setHeld(null);
     if (!result.ok) {
       setError(result.message);
       return;
@@ -206,6 +284,34 @@ export function StoryComposer({
       className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
       aria-label="Send a task"
     >
+      <dialog
+        ref={dialog}
+        onCancel={() => setHeld(null)}
+        aria-label="Session is held"
+        className="border border-(--line) bg-(--bg) p-5 text-(--ink) backdrop:bg-black/50"
+      >
+        {held ? (
+          <>
+            <p>
+              {held.name} has had an interactive session open since{" "}
+              {new Date(held.since).toLocaleString()}.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button type="button" disabled={pending} onClick={() => void send(false)}>
+                Send when it ends
+              </Button>
+              {canControlSession ? (
+                <Button type="button" disabled={pending} onClick={() => void send(true)}>
+                  Take over and send now
+                </Button>
+              ) : null}
+              <Button type="button" disabled={pending} onClick={() => setHeld(null)}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </dialog>
       <Field label="Message" error={error || undefined}>
         <TextArea
           autoFocus

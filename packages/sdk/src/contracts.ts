@@ -239,6 +239,7 @@ export type StoryWorkspace = {
   destroyedAt: string | null;
 };
 export type WorkspaceStoryBundle = {
+  session?: StorySessionStatus;
   story: WorkspaceStory;
   assignees: StoryAssignee[];
   workspace: StoryWorkspace | null;
@@ -249,6 +250,7 @@ export type WorkspaceStoryBundle = {
     engine: string;
     model: string;
     state: string;
+    triggerType?: string;
     error: string | null;
     createdAt: string;
   }>;
@@ -278,6 +280,25 @@ export type WorkspaceStoryBundle = {
   status: WorkspaceStory["status"];
   needs_attention: boolean;
   next_operations: string[];
+};
+
+export type StorySessionStatus = {
+  supported: boolean;
+  phase?: string;
+  completedByMerge?: boolean;
+  holder: {
+    turnId: string;
+    kind: "person" | "facility";
+    userId?: string;
+    name: string;
+    since: string;
+    trigger: string;
+    agent: string;
+    engine: string;
+    state: string;
+    message?: string;
+  } | null;
+  waiting: Array<{ userId: string; name: string | null; since: string }>;
 };
 export type StoryTimelineEntry = {
   id: string;

@@ -17,6 +17,7 @@ function parseFlags(args) {
     const arg = args[index];
     if (arg === "--yes" || arg === "-y") flags.yes = true;
     else if (arg === "--json") flags.json = true;
+    else if (arg === "--needs-you") flags["needs-you"] = true;
     else if (arg === "--force") flags.force = true;
     else if (arg === "--help") flags.help = true;
     else if (arg.startsWith("--") && arg.includes("=")) {
@@ -40,7 +41,13 @@ function help() {
     ["init", "write .facility.yml and the .agents catalog"],
     ["doctor", "verify the workspace contract"],
   ]);
-  item(dim("Run stories through Facility's MCP server or web UI."));
+  helpGroup("Story sessions", [
+    ["login [url]", "sign in with your browser"],
+    ["attach [story]", "attach to a native Claude Code or Codex session"],
+    ["new <project> [ask]", "create a story and attach (--agent, --issue)"],
+    ["stories", "list stories and holders (--needs-you, --json)"],
+    ["preview [story] [service]", "print a preview URL"],
+  ]);
   console.log("");
   helpGroup("Instance administration", [
     ["instance bootstrap", "create the first organization, owner, and GitHub installation"],
@@ -68,6 +75,28 @@ function helpGroup(label, commands) {
 export async function main(argv) {
   const { command, rest } = extractInvocation(argv);
   const { flags, positional } = parseFlags(rest);
+  if (["login", "attach", "new", "stories", "preview"].includes(command)) {
+    const allowed = new Set(["instance", "help", ...(command === "stories" ? ["needs-you", "json"] : command === "new" ? ["agent", "issue"] : [])]);
+    for (const name of Object.keys(flags)) {
+      if (!allowed.has(name)) throw new Error(`Unknown option: --${name}`);
+      if (["instance", "agent", "issue"].includes(name) && (typeof flags[name] !== "string" || !flags[name].trim())) throw new Error(`--${name} requires a value`);
+      if (["needs-you", "json", "help"].includes(name) && flags[name] !== true) throw new Error(`--${name} does not take a value`);
+    }
+    if (flags.issue && !/^[1-9][0-9]*$/.test(flags.issue)) throw new Error("--issue requires a positive issue number");
+    if (flags.help) {
+      console.log({ login: "facility login [url] — browser sign-in with a loopback callback on this computer", attach: "facility attach [project#number|story-id|url] [--instance url] — Ctrl-] leaves; Ctrl+C confirms takeover while watching", new: 'facility new <project> ["ask"] [--agent name] [--issue 123] [--instance url]', stories: "facility stories [--needs-you] [--json] [--instance url]", preview: "facility preview [story] [service] [--instance url]" }[command]);
+      return 0;
+    }
+    if (command === "login") {
+      const { login } = await import("./login.mjs");
+      const { readCredentials } = await import("./credentials.mjs");
+      const value = positional[0] ?? flags.instance ?? (await readCredentials()).current;
+      if (!value) throw new Error("Usage: facility login <instance-api-url>");
+      return login(value);
+    }
+    const { remoteCommand } = await import("./remote.mjs");
+    return remoteCommand(command, positional, flags);
+  }
   const localFlagError = validateLocalFlags(command, flags);
   if (localFlagError) {
     if (flags.json) {

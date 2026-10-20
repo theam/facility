@@ -79,6 +79,16 @@ environment:
 | `version` | No | Must be `1`; omitted values default to `1`. |
 | `repositories` | Yes | Strict repository checkout object. |
 | `environment` | Yes | Strict environment command and service object. |
+| `sessions` | No | Interactive session settings; see below. |
+
+## `sessions`
+
+`detached_timeout_minutes` is an integer from 1 to 1440 and defaults to 15.
+After that interval without an attached holder, Facility closes the native
+terminal, imports its conversation and usage, and releases the story slot.
+The setting does not stop a connected person's idle terminal. See
+[terminal sessions](../guides/terminal-sessions.md) for provider support and
+recovery behavior.
 
 ## `repositories`
 

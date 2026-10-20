@@ -259,6 +259,7 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
     ca-certificates \
     chromium \
     curl \
+    dtach \
     fonts-noto-color-emoji \
     fonts-freefont-ttf \
     fonts-ipafont-gothic \
@@ -372,6 +373,8 @@ RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packa
   && rm -f /tmp/facility-root-package.json /tmp/verify-package-security.mjs
 
 COPY --chown=root:root --chmod=0555 runner/facility-git-credential.mjs /usr/local/bin/facility-git-credential
+COPY --chown=root:root --chmod=0555 runner/facility-session.mjs /usr/local/bin/facility-session
+COPY --chown=root:root --chmod=0555 runner/facility-session-hook.mjs /usr/local/bin/facility-session-hook
 COPY --chown=root:root --chmod=0555 runner/facility-preview-gateway.mjs /usr/local/bin/facility-preview-gateway
 RUN mkdir -p /workspace \
   && chown -R node:node /workspace

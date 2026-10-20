@@ -10,11 +10,12 @@ import {
   turns,
   workspaces,
 } from "@facility/db";
-import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { CostBudgetService } from "../insights/costs.js";
+import { messagesForNativeResume } from "../sessions/native.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type {
   ProjectEnvironmentService,
@@ -56,6 +57,7 @@ export class TurnDispatcher {
             eq(turns.projectId, input.projectId),
             eq(turns.id, input.turnId),
             eq(turns.state, "queued"),
+            ne(turns.triggerType, "interactive"),
             or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
           ),
         )
@@ -303,7 +305,13 @@ export class TurnDispatcher {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: buildPrompt(
+          manifest,
+          story,
+          conversation.summary,
+          messagesForNativeResume(messages, session?.nativeSessionId),
+          turn.id,
+        ),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,
@@ -558,7 +566,7 @@ export class TurnDispatcher {
     orgId: string;
     projectId: string;
     storyId: string;
-    turnId: string;
+    turnId?: string;
   }) {
     const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
     if (!next?.requestedAgentName) return;
@@ -589,14 +597,15 @@ export class TurnDispatcher {
         title: `Could not dispatch queued ${next.requestedAgentName} turn`,
         detail,
       });
-      await appendTurnEvent(this.db, {
-        orgId: input.orgId,
-        projectId: input.projectId,
-        storyId: input.storyId,
-        turnId: input.turnId,
-        type: "queue.activation_failed",
-        data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
-      });
+      if (input.turnId)
+        await appendTurnEvent(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: input.storyId,
+          turnId: input.turnId,
+          type: "queue.activation_failed",
+          data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
+        });
     }
   }
 
@@ -774,7 +783,7 @@ function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator
   };
 }
 
-function buildPrompt(
+export function buildPrompt(
   manifest: AgentManifest,
   story: typeof stories.$inferSelect,
   summary: string | null,
@@ -822,9 +831,13 @@ function storyBranch(title: string, storyId: string) {
   return `facility/${slug}-${storyId.slice(-8)}`;
 }
 
-function credentialSecrets(environment: Record<string, string>, sensitiveNames: string[] = []) {
+export function credentialSecrets(
+  environment: Record<string, string>,
+  sensitiveNames: string[] = [],
+) {
   const secrets = new Set<string>();
   if (environment.GH_TOKEN) secrets.add(environment.GH_TOKEN);
+  if (environment.GITHUB_TOKEN) secrets.add(environment.GITHUB_TOKEN);
   for (const name of sensitiveNames) {
     const value = environment[name];
     if (value) secrets.add(value);

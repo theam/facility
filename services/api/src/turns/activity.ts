@@ -133,6 +133,32 @@ function describeEngineEvent(
   type: string,
   data: Record<string, unknown>,
 ): { kind: ActivityKind; title: string; text: string | null } {
+  if (type === "response_item") {
+    const item = record(data.payload);
+    if (item.type === "function_call")
+      return {
+        kind: "tool",
+        title: `Used ${text(item.name) ?? "tool"}`,
+        text: text(item.arguments),
+      };
+    if (item.type === "function_call_output")
+      return { kind: "tool", title: "Tool result", text: text(item.output) };
+    if (item.type === "message")
+      return {
+        kind: "message",
+        title: item.role === "user" ? "User message" : "Agent message",
+        text: contentText(item.content),
+      };
+    if (item.type === "reasoning")
+      return { kind: "reasoning", title: "Reasoning summary", text: contentText(item.summary) };
+  }
+  if (type === "event_msg") {
+    const payload = record(data.payload);
+    if (["task_started", "task_complete", "turn_aborted"].includes(String(payload.type)))
+      return { kind: "lifecycle", title: humanType(String(payload.type)), text: null };
+    if (payload.type === "token_count")
+      return { kind: "other", title: "Usage updated", text: null };
+  }
   if (type === "observation") {
     const recovered = data.state === "recovered";
     const failed = data.state === "failed";
@@ -312,7 +338,11 @@ function contentText(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .map(record)
-      .map((block) => (block.type === "text" ? text(block.text) : null))
+      .map((block) =>
+        ["text", "input_text", "output_text", "summary_text"].includes(String(block.type))
+          ? text(block.text)
+          : null,
+      )
       .filter(Boolean)
       .join("\n");
   }

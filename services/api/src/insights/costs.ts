@@ -41,6 +41,26 @@ export class CostBudgetService {
         `Project monthly budget is exhausted (${state.spentCents.toFixed(2)} of ${state.budget.monthlyLimitCents} cents)`,
       );
     }
+    const unpriced = (
+      await this.db
+        .select({ id: turnUsage.id })
+        .from(turnUsage)
+        .where(
+          and(
+            eq(turnUsage.orgId, orgId),
+            eq(turnUsage.projectId, projectId),
+            eq(turnUsage.priced, false),
+            gte(turnUsage.createdAt, state.windowStart),
+            lt(turnUsage.createdAt, state.windowEnd),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (unpriced)
+      throw new BudgetPolicyError(
+        "budget_model_unpriced",
+        "This project has unpriced usage in the current month; its budget cannot safely admit more work",
+      );
     return state;
   }
 
@@ -55,47 +75,76 @@ export class CostBudgetService {
     usage?: AgentTurnUsage;
     durationMs: number;
     status: "succeeded" | "failed";
+    cumulative?: boolean;
+    priceBookCostCents?: number | null;
   }) {
     if (!input.usage) return null;
-    const calculated = costCents({
+    const calculated =
+      input.priceBookCostCents !== undefined
+        ? input.priceBookCostCents === null
+          ? null
+          : (finiteNonNegative(input.priceBookCostCents) ?? null)
+        : costCents({
+            model: input.model,
+            inputTokens: input.usage.inputTokens,
+            outputTokens: input.usage.outputTokens,
+            cacheReadTokens: input.usage.cacheReadTokens,
+            cacheWriteTokens: input.usage.cacheWriteTokens,
+          });
+    const providerCost = finiteNonNegative(input.usage.reportedCostCents);
+    const cost = providerCost ?? calculated;
+    const values = {
       model: input.model,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
       cacheReadTokens: input.usage.cacheReadTokens,
       cacheWriteTokens: input.usage.cacheWriteTokens,
+      costCents: cost,
+      priced: cost !== null,
+      source:
+        providerCost !== undefined ? "provider" : calculated !== null ? "price_book" : "unpriced",
+      durationMs: Math.max(0, Math.round(input.durationMs)),
+      status: input.status,
+    };
+    const query = this.db.insert(turnUsage).values({
+      id: newId("evt"),
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: input.storyId,
+      turnId: input.turnId,
+      agentName: input.agentName,
+      engine: input.engine,
+      model: input.model,
+      inputTokens: input.usage.inputTokens,
+      outputTokens: input.usage.outputTokens,
+      cacheReadTokens: input.usage.cacheReadTokens,
+      cacheWriteTokens: input.usage.cacheWriteTokens,
+      costCents: cost,
+      priced: cost !== null,
+      source:
+        providerCost !== undefined ? "provider" : calculated !== null ? "price_book" : "unpriced",
+      durationMs: Math.max(0, Math.round(input.durationMs)),
+      status: input.status,
     });
-    const providerCost = finiteNonNegative(input.usage.reportedCostCents);
-    const cost = providerCost ?? calculated;
     const row = (
-      await this.db
-        .insert(turnUsage)
-        .values({
-          id: newId("evt"),
-          orgId: input.orgId,
-          projectId: input.projectId,
-          storyId: input.storyId,
-          turnId: input.turnId,
-          agentName: input.agentName,
-          engine: input.engine,
-          model: input.model,
-          inputTokens: input.usage.inputTokens,
-          outputTokens: input.usage.outputTokens,
-          cacheReadTokens: input.usage.cacheReadTokens,
-          cacheWriteTokens: input.usage.cacheWriteTokens,
-          costCents: cost,
-          priced: cost !== null,
-          source:
-            providerCost !== undefined
-              ? "provider"
-              : calculated !== null
-                ? "price_book"
-                : "unpriced",
-          durationMs: Math.max(0, Math.round(input.durationMs)),
-          status: input.status,
-        })
-        .onConflictDoNothing({ target: turnUsage.turnId })
-        .returning()
+      await (input.cumulative
+        ? query.onConflictDoUpdate({
+            target: turnUsage.turnId,
+            set: values,
+            setWhere: and(
+              eq(turnUsage.orgId, input.orgId),
+              eq(turnUsage.projectId, input.projectId),
+              sql`${input.usage.inputTokens} >= ${turnUsage.inputTokens}`,
+              sql`${input.usage.outputTokens} >= ${turnUsage.outputTokens}`,
+              sql`${input.usage.cacheReadTokens} >= ${turnUsage.cacheReadTokens}`,
+              sql`${input.usage.cacheWriteTokens} >= ${turnUsage.cacheWriteTokens}`,
+            ),
+          })
+        : query.onConflictDoNothing({ target: turnUsage.turnId })
+      ).returning()
     )[0];
+    if (input.cumulative && !row)
+      throw new Error("Interactive usage counters regressed or changed scope");
     return row ?? null;
   }
 
