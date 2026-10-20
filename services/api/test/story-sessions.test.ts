@@ -152,6 +152,39 @@ describe("native journal accounting", () => {
       }),
     ).toMatchObject({ state: "blocked", message: "Which option?" });
   });
+  it.each([
+    "claude_code",
+    "codex",
+  ])("keeps %s attention after an empty stop hook until a person answers", (engine) => {
+    const message = (role: string, content: string, timestamp: string) =>
+      engine === "codex"
+        ? { type: "response_item", timestamp, payload: { type: "message", role, content } }
+        : { type: role, timestamp, message: { role, content } };
+    const records = [
+      message(
+        "assistant",
+        "<facility-needs-attention>Which option?</facility-needs-attention>",
+        "2026-01-01T00:00:02Z",
+      ),
+    ];
+    const snapshot = {
+      records,
+      hooks: [{ state: "idle" as const, message: "", at: "2026-01-01T00:00:03Z" }],
+      bytes: 0,
+      exited: false,
+      nativeSessionId: "native",
+    };
+    expect(nativeAgentState(engine, snapshot)).toMatchObject({
+      state: "blocked",
+      message: "Which option?",
+    });
+    expect(
+      nativeAgentState(engine, {
+        ...snapshot,
+        records: [...records, message("user", "The first", "2026-01-01T00:00:04Z")],
+      })?.state,
+    ).toBe(engine === "codex" ? "working" : "idle");
+  });
   it("distinguishes unavailable usage from an explicitly reported zero", () => {
     expect(
       hasNativeUsage("codex", [

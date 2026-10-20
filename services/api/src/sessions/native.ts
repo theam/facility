@@ -196,38 +196,39 @@ export function nativeMessage(engine: string, record: Snapshot["records"][number
   return body.trim() ? { role, body: body.slice(0, 200_000) } : null;
 }
 
-/** Codex notify completes a turn; its rollout events also expose prompt start.
- * Newer prompt/permission hooks augment this without relying on terminal parsing. */
+/** Journal prompts and attention markers survive missing hook payloads.
+ * Hooks augment this without relying on terminal parsing. */
 export function nativeAgentState(engine: string, snapshot: Snapshot) {
   let signal: Snapshot["hooks"][number] | undefined;
-  if (engine === "codex")
-    for (const record of snapshot.records) {
-      const payload = object(record.payload);
-      const message = nativeMessage(engine, record);
-      const at = typeof record.timestamp === "string" ? record.timestamp : "";
-      const attention =
-        message?.role === "assistant"
-          ? /<facility-needs-attention>([\s\S]*?)<\/facility-needs-attention>/
-              .exec(message.body)?.[1]
-              ?.trim()
-          : undefined;
-      if (
-        message?.role === "user" ||
-        (record.type === "event_msg" && payload.type === "task_started")
-      )
-        signal = { state: "working", message: "", at };
-      else if (attention) signal = { state: "blocked", message: attention, at };
-      else if (
-        record.type === "event_msg" &&
-        ["task_complete", "turn_aborted"].includes(String(payload.type))
-      )
-        signal = {
-          state: signal?.state === "blocked" ? "blocked" : "idle",
-          message: signal?.state === "blocked" ? signal.message : "",
-          at,
-        };
-    }
+  for (const record of snapshot.records) {
+    const payload = object(record.payload);
+    const message = nativeMessage(engine, record);
+    const at = typeof record.timestamp === "string" ? record.timestamp : "";
+    const attention =
+      message?.role === "assistant"
+        ? /<facility-needs-attention>([\s\S]*?)<\/facility-needs-attention>/
+            .exec(message.body)?.[1]
+            ?.trim()
+        : undefined;
+    if (
+      message?.role === "user" ||
+      (record.type === "event_msg" && payload.type === "task_started")
+    )
+      // Claude's prompt hook owns working; old journal prompts must not mark a resumed TUI busy.
+      signal = engine === "codex" ? { state: "working", message: "", at } : undefined;
+    else if (attention) signal = { state: "blocked", message: attention, at };
+    else if (
+      record.type === "event_msg" &&
+      ["task_complete", "turn_aborted"].includes(String(payload.type))
+    )
+      signal = {
+        state: signal?.state === "blocked" ? "blocked" : "idle",
+        message: signal?.state === "blocked" ? signal.message : "",
+        at,
+      };
+  }
   const hook = snapshot.hooks.at(-1);
+  if (hook?.state === "idle" && signal?.state === "blocked") return signal;
   return hook && (!signal || (Date.parse(hook.at) || 0) >= (Date.parse(signal.at) || 0))
     ? hook
     : signal;

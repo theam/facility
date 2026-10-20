@@ -821,7 +821,9 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         plans,
         previewConvergence,
         completion,
-        session: await domain.sessions.status({ orgId: actor.orgId, projectId, storyId }),
+        ...(!value.story.deletedAt && {
+          session: await domain.sessions.status({ orgId: actor.orgId, projectId, storyId }),
+        }),
       };
     },
   );

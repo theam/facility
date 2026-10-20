@@ -17,6 +17,7 @@ import {
   projectBudgets,
   projects,
   roles,
+  stories,
   storyMessages,
   turnEvents,
   turns,
@@ -398,6 +399,35 @@ describe("interactive story sessions with durable ownership and accounting", {
       expect(sent.statusCode, sent.body).toBe(202);
       expect(sent.json().queued.queued).toBe(false);
       expect((await domain.sessions.holder(scope))?.triggerType).toBe("manual");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("retains deleted story reads for cleanup while refusing terminal entry", async () => {
+    const scope = await fresh();
+    const app = await buildApp(config, { storyDomain: domain, rateLimitMax: 10_000 });
+    try {
+      await app.ready();
+      const cookie = `facility_session=${await mintSessionCookie(config, userIds[0]!, orgId)}`;
+      const url = `/v1/projects/${projectId}/workspace-stories/${scope.storyId}`;
+      const read = () => app.inject({ method: "GET", url, headers: { cookie } });
+      expect((await read()).json().session).toMatchObject({ holder: null });
+      await db.update(stories).set({ deletedAt: new Date() }).where(eq(stories.id, scope.storyId));
+      const retained = await read();
+      expect(retained.statusCode, retained.body).toBe(200);
+      expect(retained.json().story.id).toBe(scope.storyId);
+      expect(retained.json().session).toBeUndefined();
+      const status = await app.inject({
+        method: "GET",
+        url: `${url}/session/status`,
+        headers: { cookie },
+      });
+      expect(status.statusCode).toBe(404);
+      await expect(domain.sessions.enter(scope, person(), clientIdentity())).rejects.toMatchObject({
+        code: "story_not_found",
+      });
+      expect(await domain.sessions.holder(scope)).toBeNull();
     } finally {
       await app.close();
     }
