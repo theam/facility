@@ -128,3 +128,36 @@ and retention policy must cover both workspace storage and PostgreSQL.
 
 For deployment controls, key rotation, logging, backups, network policy, and incident preparation,
 continue with the [hardening guide](hardening.md).
+
+### Runner Go toolchain security floor
+
+The runner rebuilds its pinned Docker, containerd, RootlessKit, Buildx, Compose,
+runc and GitHub CLI sources with Go 1.26.9. That patch release contains the
+October 2026 standard-library security fixes. Every source build also replaces
+`golang.org/x/net` with v0.60.0, including the Docker CLI and runc builds that
+otherwise use their vendored copies. The image build checks the compiler and
+effective x/net version embedded in each resulting binary.
+
+These compiler and module checks preserve workspace permissions, retention
+behavior and existing scanner exceptions. The release
+image scanner and Docker-backed workspace acceptance tier remain required.
+
+References: [Go security release history](https://go.dev/doc/devel/release) and
+[x/net v0.60.0](https://pkg.go.dev/golang.org/x/net@v0.60.0).
+
+### Runner container and distribution security fixes
+
+The runner builds containerd 2.3.6 from a checksum-pinned source commit and
+replaces the containerd module embedded in Docker Engine, Buildx and Compose
+with the same patch release. Its executable build audit rejects a missing,
+older or substituted module in any of those binaries. Updating only the
+standalone containerd executable would leave the embedded copies unchanged.
+
+The reviewed Debian security refresh invalidates the cached package layer.
+The image build requires Chromium and chromium-common at least
+155.0.8059.79-1~deb13u1 and libexpat1 at least 2.9.0-1~deb13u1, failing when
+the configured package repositories cannot provide those fixes. Scanner
+exceptions, workspace permissions and persistence behavior are unchanged.
+
+References: [containerd checkpoint restore advisory](https://github.com/containerd/containerd/security/advisories/GHSA-p7v4-vr35-mj6f)
+and [containerd 2.3.6 release](https://github.com/containerd/containerd/releases/tag/v2.3.6).
