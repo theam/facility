@@ -145,7 +145,7 @@ export async function attach(instance, reference, { stdin = process.stdin, stdou
             if (confirmation && (writer || holder?.turnId !== confirmation.turnId)) { confirmation = null; console.log("\r\nThe holder changed; review it before confirming takeover."); }
             const key = `${holder?.turnId}:${writer}`;
             if (key !== previous) {
-              console.log(`\r\n◆ Facility · ${clean(bundle.story.title)} · ${holder ? `${clean(holder.name)} since ${holder.since}` : "session free"}\r\n${writer ? "Ctrl-] to leave." : "Watching. Ctrl+C to confirm takeover; Ctrl-] to leave."}`);
+              console.log(`\r\n◆ Facility · ${clean(bundle.story.title)} · ${holder ? `${clean(holder.name)}${holder.kind === "facility" ? ` · started by ${clean(holder.trigger ?? "unknown trigger")}` : ""} since ${holder.since}` : "session free"}\r\n${writer ? "Ctrl-] to leave." : "Watching. Ctrl+C to confirm takeover; Ctrl-] to leave."}`);
               previous = key;
             }
             if (lost) { console.log(`\r\n${clean(message.reason ?? "Someone took over. You are watching now.")}`); reporter.state("blocked", message.reason ?? `${holder?.name ?? "Someone"} took over`); }
