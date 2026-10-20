@@ -35,11 +35,21 @@ export class AgentScheduler {
     }
 
     const due = await this.db
-      .select()
+      .select({ schedule: agentSchedules })
       .from(agentSchedules)
-      .where(and(eq(agentSchedules.enabled, true), lte(agentSchedules.nextRunAt, now)));
+      .innerJoin(
+        projects,
+        and(eq(projects.orgId, agentSchedules.orgId), eq(projects.id, agentSchedules.projectId)),
+      )
+      .where(
+        and(
+          eq(agentSchedules.enabled, true),
+          lte(agentSchedules.nextRunAt, now),
+          eq(projects.status, "active"),
+        ),
+      );
     let scheduled = 0;
-    for (const schedule of due) {
+    for (const { schedule } of due) {
       const claimed = await this.claim(schedule, now);
       if (!claimed) continue;
       try {

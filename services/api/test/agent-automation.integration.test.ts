@@ -939,6 +939,30 @@ describe("agent automations use persistent story workspaces", async () => {
       await db.select().from(storyMessages).where(eq(storyMessages.storyId, scheduledStory.id)),
     ).toHaveLength(1);
   });
+
+  it("does not run due schedules of an archived project", async () => {
+    await scheduler.tick(new Date("2026-01-01T00:00:00.000Z"));
+    const dueAt = new Date("2026-01-02T02:00:00.000Z");
+    const nightly = and(
+      eq(agentSchedules.projectId, projectId),
+      eq(agentSchedules.agentName, "security-audit"),
+    );
+    await db.update(agentSchedules).set({ nextRunAt: dueAt }).where(nightly);
+    await db.update(projects).set({ status: "archived" }).where(eq(projects.id, projectId));
+    const messagesBefore = await db
+      .select()
+      .from(storyMessages)
+      .where(eq(storyMessages.projectId, projectId));
+
+    const result = await scheduler.tick(dueAt);
+
+    expect(result.scheduled).toBe(0);
+    expect(
+      await db.select().from(storyMessages).where(eq(storyMessages.projectId, projectId)),
+    ).toHaveLength(messagesBefore.length);
+    const [schedule] = await db.select().from(agentSchedules).where(nightly);
+    expect(schedule?.nextRunAt).toEqual(dueAt);
+  });
 });
 
 function render(agent: ReturnType<typeof manifest>) {
