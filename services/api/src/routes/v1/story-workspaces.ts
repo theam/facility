@@ -15,6 +15,7 @@ import { readStoryDelivery, replaceStoryDelivery } from "../../stories/delivery.
 import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
+import { readStoryPlans } from "../../stories/plans.js";
 import type { AppConfig } from "../../types.js";
 import { projectWorkspaceInput } from "../../workspaces/project-environment.js";
 import {
@@ -23,6 +24,7 @@ import {
   WorkspaceVariablesMetadata,
 } from "../../workspaces/variables.js";
 import { principal } from "./shared.js";
+import { registerStoryPlanRoutes } from "./story-plans.js";
 
 const ProjectParams = z.object({ projectId: z.string() });
 const StoryParams = z.object({ projectId: z.string(), storyId: z.string() });
@@ -102,6 +104,7 @@ const DeleteBody = z.object({
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+  await registerStoryPlanRoutes(app, config);
 
   app.get(
     "/v1/projects/:projectId/workspace-stories/:storyId/delivery",
@@ -552,7 +555,12 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         projectId,
         storyId,
       });
-      return { ...storyResponse(value), lifecycle, delivery };
+      const plans = await readStoryPlans(
+        app.facilityDb,
+        { orgId: actor.orgId, projectId, storyId },
+        { webUrl: config.webUrl ?? config.publicUrl },
+      );
+      return { ...storyResponse(value), lifecycle, delivery, plans };
     },
   );
 

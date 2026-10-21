@@ -116,6 +116,38 @@ credential revocation remains a separate operator action.
 Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
 request can also use the HTTP `Idempotency-Key` behavior described below.
 
+### Versioned plans and interactive decisions
+
+The story bundle includes `plans`. All paths below are under
+`/v1/projects/:projectId/workspace-stories/:storyId/plan`:
+
+| Method and suffix | Behavior | Permission |
+| --- | --- | --- |
+| `GET /` | Current plan/state, bounded pending requests and keyset-paged plan/decision history. | `projects:read` |
+| `GET /revisions/:revision` | One immutable earlier plan and its scope/provenance. | `projects:read` |
+| `GET /repositories` | Scoped repository names for the plan picker; `q`, `limit`, `offset`. No repository administration or GitHub refresh. | `projects:write` |
+| `POST /` | Propose an immutable revision with expected revision and server-resolved repository/agent snapshots. | `projects:write` |
+| `POST /decisions` | Request approval or rejection of exact plan/decision revisions; return an expiring browser link. | `projects:write` |
+| `GET /decisions/:requestId` | Review the requested plan and issue a session-bound confirmation proof when still pending. | Interactive user with `projects:write` |
+| `POST /decisions/:requestId/confirm` | Atomically record a decision, consume the request, increment decision revision and append evidence. | Interactive user with `projects:write` |
+
+All three POST bodies require `idempotency_key` matching `Idempotency-Key`. Proposals accept
+only text, selected repository/agent names, expected revision and optional exact source message;
+actors, digests and scope snapshots are server-owned. Reads are database-only. Proposal resolution
+refreshes the authorized agent catalog and preserves the exact observed source commit, even if
+another refresh later replaces the projection. The observed repository identity is rechecked under the topology lock before recording the plan; network resolution does not hold ledger locks.
+
+Interactive routes require the normally verified browser cookie and reject any Authorization
+header, including a valid OAuth bearer with that same user's cookie. Confirmation proofs are
+short-lived, bind the existing session and full target/intent, and never appear in URLs or evidence.
+The confirm body accepts only proof and idempotency key. The interactive guard and proof check run
+before the HTTP replay hook; current membership and revisions are checked again in the write
+transaction. Expired, consumed, cross-session or superseded requests cannot create another receipt.
+
+Plan and receipt history is retained, including on repository disconnect conflicts. These records
+do not change execution permissions, dispatch turns, activate project policy or establish delivery
+acceptance. The recorded method is `interactive_session`, not a claim to prove human presence.
+
 ### External integrations
 
 The existing story GET includes `lifecycle`: effective phase/activity, GitHub issue

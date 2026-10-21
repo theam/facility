@@ -8,6 +8,7 @@ import { EnvironmentLogs } from "@/components/story/environment-logs";
 import { StoryActions } from "@/components/story/story-actions";
 import { StoryConversation } from "@/components/story/story-conversation";
 import { StoryDeliveryPanel } from "@/components/story/story-delivery";
+import { StoryPlanPanel } from "@/components/story/story-plan";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
@@ -192,6 +193,18 @@ export default async function StoryPage({
         </section>
       ) : null}
 
+      <StoryPlanPanel
+        key={`plan:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.plans}
+        agents={agentRows}
+        defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+        catalogError={agents.ok ? undefined : agents.message}
+        canWrite={canWrite && story.deletedAt === null}
+        userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}
+      />
+
       <StoryDeliveryPanel
         key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
         projectId={projectId}
@@ -216,6 +229,7 @@ export default async function StoryPage({
             initial={conversation.data}
             waitingTurnIds={waitingTurnIds}
             canExecute={canExecute && story.deletedAt === null}
+            canProposePlan={canWrite && story.deletedAt === null}
           />
         )}
       </section>

@@ -23,6 +23,8 @@ import { isAgentManifestPath, isProjectSkillPath, readAgentCatalogFiles } from "
 
 export type AgentCatalogSnapshot = {
   commitSha: string;
+  /** Exact connected repository observed by the canonical source, when available. */
+  repositoryId?: string;
   sources: AgentManifestSource[];
   skills?: ProjectSkillSource[];
 };
@@ -158,7 +160,7 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
         if (oldest !== undefined) this.snapshots.delete(oldest);
       }
       try {
-        return structuredClone(await snapshot);
+        return { ...structuredClone(await snapshot), repositoryId: repository.id };
       } catch (error) {
         // Failures must be retried, and must not erase the last complete DB projection.
         if (this.snapshots.get(key) === snapshot) this.snapshots.delete(key);
@@ -328,8 +330,14 @@ export class AgentCatalogService {
   ) {}
 
   async sync(orgId: string, projectId: string): Promise<AgentManifest[]> {
+    return (await this.refreshSnapshot(orgId, projectId)).manifests;
+  }
+
+  /** Return provenance from this refresh, even if a concurrent refresh replaces the cache. */
+  async refreshSnapshot(orgId: string, projectId: string) {
     const snapshot = await this.source.load(orgId, projectId);
     const manifests = parseAgentCatalog(snapshot.sources);
+    const observedAt = new Date();
     const skills = (snapshot.skills ?? []).flatMap(({ file, source }) => {
       try {
         return [parseProjectSkill(source, file)];
@@ -355,7 +363,7 @@ export class AgentCatalogService {
             path: manifest.file,
             contentHash: manifest.hash,
             manifest,
-            syncedAt: new Date(),
+            syncedAt: observedAt,
           })
           .onConflictDoUpdate({
             target: [agentManifests.projectId, agentManifests.name],
@@ -364,7 +372,7 @@ export class AgentCatalogService {
               path: manifest.file,
               contentHash: manifest.hash,
               manifest,
-              syncedAt: new Date(),
+              syncedAt: observedAt,
               updatedAt: new Date(),
             },
           });
@@ -394,7 +402,7 @@ export class AgentCatalogService {
             directory: skill.directory,
             description: skill.description,
             contentHash: skill.hash,
-            syncedAt: new Date(),
+            syncedAt: observedAt,
           })
           .onConflictDoUpdate({
             target: [projectSkills.projectId, projectSkills.path],
@@ -404,7 +412,7 @@ export class AgentCatalogService {
               directory: skill.directory,
               description: skill.description,
               contentHash: skill.hash,
-              syncedAt: new Date(),
+              syncedAt: observedAt,
               updatedAt: new Date(),
             },
           });
@@ -425,7 +433,12 @@ export class AgentCatalogService {
           : skillScope,
       );
     });
-    return manifests;
+    return {
+      manifests,
+      commitSha: snapshot.commitSha,
+      observedAt,
+      repositoryId: snapshot.repositoryId ?? null,
+    };
   }
 
   async list(orgId: string, projectId: string, options: { refresh?: boolean } = {}) {

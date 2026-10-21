@@ -89,6 +89,9 @@ describe("@facility/mcp 0.12", () => {
       "facility_get_story",
       "facility_get_delivery",
       "facility_set_delivery",
+      "facility_get_plan",
+      "facility_propose_plan",
+      "facility_request_plan_decision",
       "facility_start_story",
       "facility_send_message",
       "facility_get_conversation",
@@ -386,6 +389,123 @@ describe("@facility/mcp 0.12", () => {
     ).toBe(true);
     expect(
       tools.tools.find((tool) => tool.name === "facility_set_delivery")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+    await client.close();
+    await server.close();
+  });
+
+  test("records plans and requests decisions without exposing an interactive confirmation tool", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { request: { confirmationUrl: "https://facility.example/review" } };
+      },
+    });
+    const scope = { projectId: "proj_1", storyId: "story/1" };
+    await client.callTool({
+      name: "facility_get_plan",
+      arguments: { ...scope, beforeRevision: 4, beforeDecisionRevision: 3, limit: 2 },
+    });
+    expect(requests[0]).toMatchObject({
+      method: "GET",
+      path: "/v1/projects/proj_1/workspace-stories/story%2F1/plan",
+      options: { query: { before_revision: 4, before_decision_revision: 3, limit: 2 } },
+    });
+    await client.callTool({ name: "facility_get_plan", arguments: { ...scope, revision: 2 } });
+    expect(requests[1]?.path).toBe(
+      "/v1/projects/proj_1/workspace-stories/story%2F1/plan/revisions/2",
+    );
+    const input = {
+      ...scope,
+      expectedRevision: 2,
+      markdown: "  ## Exact plan\n",
+      repositories: ["example/app"],
+      agents: ["planner"],
+      sourceMessageId: "msg_1",
+      idempotencyKey: "plan-retry-key",
+    };
+    expect(
+      (await client.callTool({ name: "facility_propose_plan", arguments: input })).isError,
+    ).not.toBe(true);
+    expect(requests[2]).toMatchObject({
+      method: "POST",
+      options: {
+        body: {
+          expected_revision: 2,
+          markdown: input.markdown,
+          repositories: input.repositories,
+          agents: input.agents,
+          source_message_id: "msg_1",
+          idempotency_key: input.idempotencyKey,
+        },
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    expect(
+      (
+        await client.callTool({
+          name: "facility_propose_plan",
+          arguments: { ...input, repositories: ["example/app", "Example/APP"] },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(
+      (
+        await client.callTool({
+          name: "facility_request_plan_decision",
+          arguments: {
+            ...scope,
+            expectedRevision: 3,
+            expectedDecisionRevision: 1,
+            intent: "reject",
+            idempotencyKey: "decision-retry-key",
+          },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(requests).toHaveLength(3);
+    expect(
+      (
+        await client.callTool({
+          name: "facility_request_plan_decision",
+          arguments: {
+            ...scope,
+            expectedRevision: 3,
+            expectedDecisionRevision: 1,
+            intent: "reject",
+            reason: "Add regression coverage",
+            idempotencyKey: "decision-retry-key",
+          },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect(requests[3]).toMatchObject({
+      method: "POST",
+      path: "/v1/projects/proj_1/workspace-stories/story%2F1/plan/decisions",
+      options: {
+        body: {
+          expected_revision: 3,
+          expected_decision_revision: 1,
+          intent: "reject",
+          reason: "Add regression coverage",
+          idempotency_key: "decision-retry-key",
+        },
+        idempotencyKey: "decision-retry-key",
+      },
+    });
+    const tools = (await client.listTools()).tools;
+    expect(tools.some((tool) => /confirm/.test(tool.name))).toBe(false);
+    expect(tools.find((tool) => tool.name === "facility_get_plan")?.annotations?.readOnlyHint).toBe(
+      true,
+    );
+    expect(
+      tools.find((tool) => tool.name === "facility_request_plan_decision")?.annotations,
     ).toMatchObject({
       readOnlyHint: false,
       destructiveHint: false,

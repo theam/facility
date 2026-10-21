@@ -99,6 +99,24 @@ When the story needs attention:
 
 Canceling a turn does not roll back files or commits already written in the workspace.
 
+## Agree on a versioned plan
+
+The story's **plan and decisions** panel shows the proposed text, repositories and configured
+agents. Choose **Propose plan** or **Propose revision**, or **Propose as plan** on an agent response.
+Using a response asks before replacing an open draft. Editing its text removes source-message
+attribution. Select scope by readable names and save the proposal; no agent is started.
+
+Choose **Review approval** or **Request changes** (with a reason). The next page shows the exact
+revision, text and scope before the explicit confirmation button. An approval applies to that
+revision only. A newer proposal retains the old receipt as history and awaits its own decision.
+Concurrent edits and decisions require a fresh review; failed saves preserve the draft and reuse
+the same retry key. Open **Plan and decision history** to inspect earlier revisions and receipts.
+
+Decision requests from MCP return the same interactive review link. Open it with an authorized
+Facility browser session before its 15-minute expiry. A service key or OAuth token alone does not
+confirm it. Confirmation records the session's user and server time. It does not start agents,
+enforce an execution gate, approve a GitHub review or accept the delivered result.
+
 ## Review the complete PR set
 
 The story's **delivery** panel lists every registered PR, its required or related role, the

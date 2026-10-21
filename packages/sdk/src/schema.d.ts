@@ -542,6 +542,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get repositories */
+        get: operations["getStoryPlanRepositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get plan */
+        get: operations["getStoryPlans"];
+        put?: never;
+        /** Create plan */
+        post: operations["proposeStoryPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get  revision */
+        get: operations["getStoryPlanRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create decisions */
+        post: operations["requestStoryPlanDecision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/decisions/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get  requestId */
+        get: operations["reviewStoryPlanDecision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/decisions/{requestId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create confirm */
+        post: operations["confirmStoryPlanDecision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery": {
         parameters: {
             query?: never;
@@ -6127,6 +6230,1301 @@ export interface operations {
                             /** Format: date-time */
                             resolvedAt: string | null;
                         }[];
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getStoryPlanRepositories: {
+        parameters: {
+            query?: {
+                q?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            repository: string;
+                            primary: boolean;
+                        }[];
+                        hasMore: boolean;
+                        nextOffset: number | null;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getStoryPlans: {
+        parameters: {
+            query?: {
+                before_revision?: number;
+                before_decision_revision?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        state: {
+                            revision: number;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            status: "none" | "proposed" | "approved" | "rejected";
+                        };
+                        plan: {
+                            revision: number;
+                            digest: string;
+                            markdown: string;
+                            repositories: {
+                                repositoryId: string;
+                                repository: string;
+                            }[];
+                            agents: {
+                                name: string;
+                                manifestHash: string;
+                                /** @enum {string} */
+                                engine: "claude_code" | "codex";
+                                model: string;
+                                repositoryId: string;
+                                catalogCommitSha: string;
+                                observedAt: string;
+                            }[];
+                            proposedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                                name: string | null;
+                            };
+                            proposedAt: string;
+                            source: {
+                                messageId: string;
+                                turnId: string | null;
+                                role: string;
+                            } | null;
+                        } | null;
+                        decision: {
+                            id: string;
+                            decisionRevision: number;
+                            planRevision: number;
+                            planDigest: string;
+                            /** @enum {string} */
+                            intent: "approve" | "reject";
+                            reason: string | null;
+                            confirmedBy: {
+                                /** @enum {string} */
+                                type: "user";
+                                id: string;
+                                name: string | null;
+                            };
+                            confirmedAt: string;
+                            /** @enum {string} */
+                            method: "interactive_session";
+                            requestId: string;
+                        } | null;
+                        history: {
+                            items: {
+                                revision: number;
+                                digest: string;
+                                repositories: {
+                                    repositoryId: string;
+                                    repository: string;
+                                }[];
+                                agents: {
+                                    name: string;
+                                    manifestHash: string;
+                                    /** @enum {string} */
+                                    engine: "claude_code" | "codex";
+                                    model: string;
+                                    repositoryId: string;
+                                    catalogCommitSha: string;
+                                    observedAt: string;
+                                }[];
+                                proposedBy: {
+                                    /** @enum {string} */
+                                    type: "user" | "service";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                proposedAt: string;
+                                source: {
+                                    messageId: string;
+                                    turnId: string | null;
+                                    role: string;
+                                } | null;
+                            }[];
+                            hasMore: boolean;
+                            nextBeforeRevision: number | null;
+                        };
+                        decisions: {
+                            items: {
+                                id: string;
+                                decisionRevision: number;
+                                planRevision: number;
+                                planDigest: string;
+                                /** @enum {string} */
+                                intent: "approve" | "reject";
+                                reason: string | null;
+                                confirmedBy: {
+                                    /** @enum {string} */
+                                    type: "user";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                confirmedAt: string;
+                                /** @enum {string} */
+                                method: "interactive_session";
+                                requestId: string;
+                            }[];
+                            hasMore: boolean;
+                            nextBeforeRevision: number | null;
+                        };
+                        pending: {
+                            items: {
+                                id: string;
+                                planRevision: number;
+                                planDigest: string;
+                                decisionRevision: number;
+                                /** @enum {string} */
+                                intent: "approve" | "reject";
+                                reason: string | null;
+                                requestedBy: {
+                                    /** @enum {string} */
+                                    type: "user" | "service";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                requestedAt: string;
+                                expiresAt: string;
+                                boundUserId: string | null;
+                                /** @enum {string} */
+                                status: "pending" | "expired" | "superseded" | "confirmed";
+                                confirmationUrl: string;
+                            }[];
+                            hasMore: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    proposeStoryPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_revision: number;
+                    markdown: string;
+                    repositories: string[];
+                    agents: string[];
+                    source_message_id?: string;
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        state: {
+                            revision: number;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            status: "none" | "proposed" | "approved" | "rejected";
+                        };
+                        plan: {
+                            revision: number;
+                            digest: string;
+                            markdown: string;
+                            repositories: {
+                                repositoryId: string;
+                                repository: string;
+                            }[];
+                            agents: {
+                                name: string;
+                                manifestHash: string;
+                                /** @enum {string} */
+                                engine: "claude_code" | "codex";
+                                model: string;
+                                repositoryId: string;
+                                catalogCommitSha: string;
+                                observedAt: string;
+                            }[];
+                            proposedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                                name: string | null;
+                            };
+                            proposedAt: string;
+                            source: {
+                                messageId: string;
+                                turnId: string | null;
+                                role: string;
+                            } | null;
+                        } | null;
+                        decision: {
+                            id: string;
+                            decisionRevision: number;
+                            planRevision: number;
+                            planDigest: string;
+                            /** @enum {string} */
+                            intent: "approve" | "reject";
+                            reason: string | null;
+                            confirmedBy: {
+                                /** @enum {string} */
+                                type: "user";
+                                id: string;
+                                name: string | null;
+                            };
+                            confirmedAt: string;
+                            /** @enum {string} */
+                            method: "interactive_session";
+                            requestId: string;
+                        } | null;
+                        history: {
+                            items: {
+                                revision: number;
+                                digest: string;
+                                repositories: {
+                                    repositoryId: string;
+                                    repository: string;
+                                }[];
+                                agents: {
+                                    name: string;
+                                    manifestHash: string;
+                                    /** @enum {string} */
+                                    engine: "claude_code" | "codex";
+                                    model: string;
+                                    repositoryId: string;
+                                    catalogCommitSha: string;
+                                    observedAt: string;
+                                }[];
+                                proposedBy: {
+                                    /** @enum {string} */
+                                    type: "user" | "service";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                proposedAt: string;
+                                source: {
+                                    messageId: string;
+                                    turnId: string | null;
+                                    role: string;
+                                } | null;
+                            }[];
+                            hasMore: boolean;
+                            nextBeforeRevision: number | null;
+                        };
+                        decisions: {
+                            items: {
+                                id: string;
+                                decisionRevision: number;
+                                planRevision: number;
+                                planDigest: string;
+                                /** @enum {string} */
+                                intent: "approve" | "reject";
+                                reason: string | null;
+                                confirmedBy: {
+                                    /** @enum {string} */
+                                    type: "user";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                confirmedAt: string;
+                                /** @enum {string} */
+                                method: "interactive_session";
+                                requestId: string;
+                            }[];
+                            hasMore: boolean;
+                            nextBeforeRevision: number | null;
+                        };
+                        pending: {
+                            items: {
+                                id: string;
+                                planRevision: number;
+                                planDigest: string;
+                                decisionRevision: number;
+                                /** @enum {string} */
+                                intent: "approve" | "reject";
+                                reason: string | null;
+                                requestedBy: {
+                                    /** @enum {string} */
+                                    type: "user" | "service";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                requestedAt: string;
+                                expiresAt: string;
+                                boundUserId: string | null;
+                                /** @enum {string} */
+                                status: "pending" | "expired" | "superseded" | "confirmed";
+                                confirmationUrl: string;
+                            }[];
+                            hasMore: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getStoryPlanRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                storyId: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        revision: number;
+                        digest: string;
+                        markdown: string;
+                        repositories: {
+                            repositoryId: string;
+                            repository: string;
+                        }[];
+                        agents: {
+                            name: string;
+                            manifestHash: string;
+                            /** @enum {string} */
+                            engine: "claude_code" | "codex";
+                            model: string;
+                            repositoryId: string;
+                            catalogCommitSha: string;
+                            observedAt: string;
+                        }[];
+                        proposedBy: {
+                            /** @enum {string} */
+                            type: "user" | "service";
+                            id: string;
+                            name: string | null;
+                        };
+                        proposedAt: string;
+                        source: {
+                            messageId: string;
+                            turnId: string | null;
+                            role: string;
+                        } | null;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    requestStoryPlanDecision: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_revision: number;
+                    expected_decision_revision: number;
+                    /** @enum {string} */
+                    intent: "approve" | "reject";
+                    reason?: string;
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        request: {
+                            id: string;
+                            planRevision: number;
+                            planDigest: string;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            intent: "approve" | "reject";
+                            reason: string | null;
+                            requestedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                                name: string | null;
+                            };
+                            requestedAt: string;
+                            expiresAt: string;
+                            boundUserId: string | null;
+                            /** @enum {string} */
+                            status: "pending" | "expired" | "superseded" | "confirmed";
+                            confirmationUrl: string;
+                        };
+                        state: {
+                            revision: number;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            status: "none" | "proposed" | "approved" | "rejected";
+                        };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reviewStoryPlanDecision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                storyId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        request: {
+                            id: string;
+                            planRevision: number;
+                            planDigest: string;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            intent: "approve" | "reject";
+                            reason: string | null;
+                            requestedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                                name: string | null;
+                            };
+                            requestedAt: string;
+                            expiresAt: string;
+                            boundUserId: string | null;
+                            /** @enum {string} */
+                            status: "pending" | "expired" | "superseded" | "confirmed";
+                            confirmationUrl: string;
+                        };
+                        plan: {
+                            revision: number;
+                            digest: string;
+                            markdown: string;
+                            repositories: {
+                                repositoryId: string;
+                                repository: string;
+                            }[];
+                            agents: {
+                                name: string;
+                                manifestHash: string;
+                                /** @enum {string} */
+                                engine: "claude_code" | "codex";
+                                model: string;
+                                repositoryId: string;
+                                catalogCommitSha: string;
+                                observedAt: string;
+                            }[];
+                            proposedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                                name: string | null;
+                            };
+                            proposedAt: string;
+                            source: {
+                                messageId: string;
+                                turnId: string | null;
+                                role: string;
+                            } | null;
+                        };
+                        state: {
+                            revision: number;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            status: "none" | "proposed" | "approved" | "rejected";
+                        };
+                        decision: {
+                            id: string;
+                            decisionRevision: number;
+                            planRevision: number;
+                            planDigest: string;
+                            /** @enum {string} */
+                            intent: "approve" | "reject";
+                            reason: string | null;
+                            confirmedBy: {
+                                /** @enum {string} */
+                                type: "user";
+                                id: string;
+                                name: string | null;
+                            };
+                            confirmedAt: string;
+                            /** @enum {string} */
+                            method: "interactive_session";
+                            requestId: string;
+                        } | null;
+                        proof: string | null;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    confirmStoryPlanDecision: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                storyId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    proof: string;
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        state: {
+                            revision: number;
+                            decisionRevision: number;
+                            /** @enum {string} */
+                            status: "none" | "proposed" | "approved" | "rejected";
+                        };
+                        plan: {
+                            revision: number;
+                            digest: string;
+                            markdown: string;
+                            repositories: {
+                                repositoryId: string;
+                                repository: string;
+                            }[];
+                            agents: {
+                                name: string;
+                                manifestHash: string;
+                                /** @enum {string} */
+                                engine: "claude_code" | "codex";
+                                model: string;
+                                repositoryId: string;
+                                catalogCommitSha: string;
+                                observedAt: string;
+                            }[];
+                            proposedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                                name: string | null;
+                            };
+                            proposedAt: string;
+                            source: {
+                                messageId: string;
+                                turnId: string | null;
+                                role: string;
+                            } | null;
+                        } | null;
+                        decision: {
+                            id: string;
+                            decisionRevision: number;
+                            planRevision: number;
+                            planDigest: string;
+                            /** @enum {string} */
+                            intent: "approve" | "reject";
+                            reason: string | null;
+                            confirmedBy: {
+                                /** @enum {string} */
+                                type: "user";
+                                id: string;
+                                name: string | null;
+                            };
+                            confirmedAt: string;
+                            /** @enum {string} */
+                            method: "interactive_session";
+                            requestId: string;
+                        } | null;
+                        history: {
+                            items: {
+                                revision: number;
+                                digest: string;
+                                repositories: {
+                                    repositoryId: string;
+                                    repository: string;
+                                }[];
+                                agents: {
+                                    name: string;
+                                    manifestHash: string;
+                                    /** @enum {string} */
+                                    engine: "claude_code" | "codex";
+                                    model: string;
+                                    repositoryId: string;
+                                    catalogCommitSha: string;
+                                    observedAt: string;
+                                }[];
+                                proposedBy: {
+                                    /** @enum {string} */
+                                    type: "user" | "service";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                proposedAt: string;
+                                source: {
+                                    messageId: string;
+                                    turnId: string | null;
+                                    role: string;
+                                } | null;
+                            }[];
+                            hasMore: boolean;
+                            nextBeforeRevision: number | null;
+                        };
+                        decisions: {
+                            items: {
+                                id: string;
+                                decisionRevision: number;
+                                planRevision: number;
+                                planDigest: string;
+                                /** @enum {string} */
+                                intent: "approve" | "reject";
+                                reason: string | null;
+                                confirmedBy: {
+                                    /** @enum {string} */
+                                    type: "user";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                confirmedAt: string;
+                                /** @enum {string} */
+                                method: "interactive_session";
+                                requestId: string;
+                            }[];
+                            hasMore: boolean;
+                            nextBeforeRevision: number | null;
+                        };
+                        pending: {
+                            items: {
+                                id: string;
+                                planRevision: number;
+                                planDigest: string;
+                                decisionRevision: number;
+                                /** @enum {string} */
+                                intent: "approve" | "reject";
+                                reason: string | null;
+                                requestedBy: {
+                                    /** @enum {string} */
+                                    type: "user" | "service";
+                                    id: string;
+                                    name: string | null;
+                                };
+                                requestedAt: string;
+                                expiresAt: string;
+                                boundUserId: string | null;
+                                /** @enum {string} */
+                                status: "pending" | "expired" | "superseded" | "confirmed";
+                                confirmationUrl: string;
+                            }[];
+                            hasMore: boolean;
+                        };
                     };
                 };
             };

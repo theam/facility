@@ -246,9 +246,27 @@ export type ReplaceStoryDelivery = FacilityGeneratedBody<
   "POST",
   "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery"
 >;
+export type StoryPlans = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan"
+>;
+export type StoryPlan = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/revisions/{revision}"
+>;
+export type PlanDecisionReview = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/decisions/{requestId}"
+>;
+export type StoryPlanRepositories = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/repositories"
+>;
 export type WorkspaceStoryBundle = {
   /** Absent on older servers; an absent register never means a complete PR set. */
   delivery?: StoryDelivery;
+  /** Absent on older servers. Missing metadata never implies an approved plan. */
+  plans?: StoryPlans;
   story: WorkspaceStory;
   assignees: StoryAssignee[];
   workspace: StoryWorkspace | null;

@@ -47,7 +47,10 @@ vi.mock("../lib/api", async () => {
       workspaceStoryTurnEvent: async () => record("event", unexpected),
       storyAgents: async () => ({
         ok: true,
-        data: { agents: [{ name: "builder", enabled: true, model: "gpt-5.5", engine: "codex" }] },
+        data: {
+          agents: [{ name: "builder", enabled: true, model: "gpt-5.5", engine: "codex" }],
+          defaults: { ui: "builder", mcp: "builder", manual: "builder" },
+        },
       }),
       me: async () => ({ ok: true, data: { permissions: mocks.permissions } }),
     },

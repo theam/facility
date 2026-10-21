@@ -1,3 +1,4 @@
+import type { PlanActor, PlanAgent, PlanRepository, StoryPlan } from "@facility/core";
 import { sql } from "drizzle-orm";
 import {
   bigint,
@@ -596,6 +597,258 @@ export const storyDeliveryPullRequests = pgTable(
   ],
 );
 
+export const storyPlanRevisions = pgTable(
+  "story_plan_revisions",
+  {
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    revision: integer("revision").notNull(),
+    digest: text("digest").notNull(),
+    markdown: text("markdown").notNull(),
+    repositories: jsonb("repositories").$type<PlanRepository[]>().notNull(),
+    agents: jsonb("agents").$type<PlanAgent[]>().notNull(),
+    proposedBy: jsonb("proposed_by").$type<PlanActor>().notNull(),
+    sourceMessageId: text("source_message_id"),
+    source: jsonb("source").$type<NonNullable<StoryPlan["source"]>>(),
+    proposedAt: timestamp("proposed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storyId, table.revision] }),
+    unique("story_plan_revisions_scope_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.revision,
+    ),
+    unique("story_plan_revisions_digest_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.revision,
+      table.digest,
+    ),
+    check("story_plan_revisions_revision_check", sql`${table.revision} > 0`),
+    check("story_plan_revisions_digest_check", sql`${table.digest} ~ '^[a-f0-9]{64}$'`),
+    check(
+      "story_plan_revisions_markdown_check",
+      sql`length(${table.markdown}) > 0 and octet_length(${table.markdown}) <= 400000`,
+    ),
+    check(
+      "story_plan_revisions_repositories_check",
+      sql`jsonb_typeof(${table.repositories}) = 'array' and jsonb_array_length(${table.repositories}) between 1 and 50 and octet_length(${table.repositories}::text) <= 100000`,
+    ),
+    check(
+      "story_plan_revisions_agents_check",
+      sql`jsonb_typeof(${table.agents}) = 'array' and jsonb_array_length(${table.agents}) between 1 and 20 and octet_length(${table.agents}::text) <= 100000`,
+    ),
+    check(
+      "story_plan_revisions_proposed_by_check",
+      sql`jsonb_typeof(${table.proposedBy}) = 'object' and coalesce(${table.proposedBy}->>'type' in ('user', 'service'), false) and octet_length(${table.proposedBy}::text) <= 2048`,
+    ),
+    check(
+      "story_plan_revisions_source_check",
+      sql`(${table.sourceMessageId} is null and ${table.source} is null) or (${table.sourceMessageId} is not null and ${table.source} is not null and jsonb_typeof(${table.source}) = 'object' and coalesce(${table.source}->>'messageId' = ${table.sourceMessageId}, false) and octet_length(${table.source}::text) <= 2048)`,
+    ),
+    foreignKey({
+      name: "story_plan_revisions_story_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_plan_revisions_source_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.sourceMessageId],
+      foreignColumns: [
+        storyMessages.orgId,
+        storyMessages.projectId,
+        storyMessages.storyId,
+        storyMessages.id,
+      ],
+    }),
+  ],
+);
+
+export const storyPlanRepositoryRefs = pgTable(
+  "story_plan_repository_refs",
+  {
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    revision: integer("revision").notNull(),
+    repositoryId: text("repository_id").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storyId, table.revision, table.repositoryId] }),
+    foreignKey({
+      name: "story_plan_repository_refs_plan_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.revision],
+      foreignColumns: [
+        storyPlanRevisions.orgId,
+        storyPlanRevisions.projectId,
+        storyPlanRevisions.storyId,
+        storyPlanRevisions.revision,
+      ],
+    }),
+    foreignKey({
+      name: "story_plan_repository_refs_repo_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const storyPlanStates = pgTable(
+  "story_plan_states",
+  {
+    storyId: text("story_id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    revision: integer("revision").notNull(),
+    decisionRevision: integer("decision_revision").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    check("story_plan_states_revision_check", sql`${table.revision} > 0`),
+    check("story_plan_states_decision_revision_check", sql`${table.decisionRevision} >= 0`),
+    foreignKey({
+      name: "story_plan_states_current_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.revision],
+      foreignColumns: [
+        storyPlanRevisions.orgId,
+        storyPlanRevisions.projectId,
+        storyPlanRevisions.storyId,
+        storyPlanRevisions.revision,
+      ],
+    }),
+  ],
+);
+
+export const storyPlanRequests = pgTable(
+  "story_plan_requests",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    planDigest: text("plan_digest").notNull(),
+    decisionRevision: integer("decision_revision").notNull(),
+    intent: text("intent").$type<"approve" | "reject">().notNull(),
+    reason: text("reason"),
+    requestedBy: jsonb("requested_by").$type<PlanActor>().notNull(),
+    boundUserId: text("bound_user_id"),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    consumedByUserId: text("consumed_by_user_id"),
+  },
+  (table) => [
+    unique("story_plan_requests_scope_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.id,
+    ),
+    index("story_plan_requests_pending_idx")
+      .on(table.orgId, table.projectId, table.storyId, table.expiresAt)
+      .where(sql`${table.consumedAt} is null`),
+    check("story_plan_requests_plan_revision_check", sql`${table.planRevision} > 0`),
+    check("story_plan_requests_decision_revision_check", sql`${table.decisionRevision} >= 0`),
+    check("story_plan_requests_intent_check", sql`${table.intent} in ('approve', 'reject')`),
+    check(
+      "story_plan_requests_reason_check",
+      sql`${table.reason} is null or octet_length(${table.reason}) <= 8000`,
+    ),
+    check(
+      "story_plan_requests_requested_by_check",
+      sql`jsonb_typeof(${table.requestedBy}) = 'object' and coalesce(${table.requestedBy}->>'type' in ('user', 'service'), false) and octet_length(${table.requestedBy}::text) <= 2048`,
+    ),
+    check("story_plan_requests_expiry_check", sql`${table.expiresAt} > ${table.requestedAt}`),
+    check(
+      "story_plan_requests_rejection_check",
+      sql`${table.intent} <> 'reject' or (${table.reason} is not null and length(${table.reason}) > 0)`,
+    ),
+    check(
+      "story_plan_requests_consumed_check",
+      sql`(${table.consumedAt} is null) = (${table.consumedByUserId} is null)`,
+    ),
+    foreignKey({
+      name: "story_plan_requests_target_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.planRevision, table.planDigest],
+      foreignColumns: [
+        storyPlanRevisions.orgId,
+        storyPlanRevisions.projectId,
+        storyPlanRevisions.storyId,
+        storyPlanRevisions.revision,
+        storyPlanRevisions.digest,
+      ],
+    }),
+  ],
+);
+
+export const storyPlanDecisions = pgTable(
+  "story_plan_decisions",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    planDigest: text("plan_digest").notNull(),
+    decisionRevision: integer("decision_revision").notNull(),
+    requestId: text("request_id").notNull().unique(),
+    intent: text("intent").$type<"approve" | "reject">().notNull(),
+    reason: text("reason"),
+    confirmedBy: jsonb("confirmed_by").$type<PlanActor & { type: "user" }>().notNull(),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }).defaultNow().notNull(),
+    method: text("method").$type<"interactive_session">().notNull().default("interactive_session"),
+  },
+  (table) => [
+    unique("story_plan_decisions_revision_uidx").on(table.storyId, table.decisionRevision),
+    check("story_plan_decisions_plan_revision_check", sql`${table.planRevision} > 0`),
+    check("story_plan_decisions_decision_revision_check", sql`${table.decisionRevision} > 0`),
+    check("story_plan_decisions_intent_check", sql`${table.intent} in ('approve', 'reject')`),
+    check(
+      "story_plan_decisions_reason_check",
+      sql`${table.reason} is null or octet_length(${table.reason}) <= 8000`,
+    ),
+    check(
+      "story_plan_decisions_confirmed_by_check",
+      sql`jsonb_typeof(${table.confirmedBy}) = 'object' and coalesce(${table.confirmedBy}->>'type' = 'user', false) and octet_length(${table.confirmedBy}::text) <= 2048`,
+    ),
+    check("story_plan_decisions_method_check", sql`${table.method} = 'interactive_session'`),
+    check(
+      "story_plan_decisions_rejection_check",
+      sql`${table.intent} <> 'reject' or (${table.reason} is not null and length(${table.reason}) > 0)`,
+    ),
+    foreignKey({
+      name: "story_plan_decisions_target_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.planRevision, table.planDigest],
+      foreignColumns: [
+        storyPlanRevisions.orgId,
+        storyPlanRevisions.projectId,
+        storyPlanRevisions.storyId,
+        storyPlanRevisions.revision,
+        storyPlanRevisions.digest,
+      ],
+    }),
+    foreignKey({
+      name: "story_plan_decisions_request_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.requestId],
+      foreignColumns: [
+        storyPlanRequests.orgId,
+        storyPlanRequests.projectId,
+        storyPlanRequests.storyId,
+        storyPlanRequests.id,
+      ],
+    }),
+  ],
+);
+
 /** Durable, coalesced lifecycle notification cursor; never project-owned data. */
 export const storyIntegrationNotifications = pgTable(
   "story_integration_notifications",
@@ -785,6 +1038,12 @@ export const storyMessages = pgTable(
   },
   (table) => [
     unique("story_messages_conversation_seq_uidx").on(table.conversationId, table.seq),
+    unique("story_messages_scope_identity_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.id,
+    ),
     uniqueIndex("story_messages_conversation_dedupe_uidx")
       .on(table.conversationId, table.dedupeKey)
       .where(sql`${table.dedupeKey} is not null`),

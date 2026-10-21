@@ -171,6 +171,11 @@ export const api = {
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/delivery`,
       ),
     ),
+  reviewStoryPlanDecision: (projectId: string, storyId: string, requestId: string) =>
+    apiFetch(
+      "GET",
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/plan/decisions/${encodeURIComponent(requestId)}`,
+    ),
   workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>
     typed<StoryConversationPage>(
       apiFetch(

@@ -67,8 +67,9 @@ repository workflow: protected branches, required CI, required reviews, and a hu
 merge. Agent prompts describe expected conduct; they are not a security sandbox.
 
 Facility records agent identity, model and session data, Git changes, GitHub delivery state, costs,
-and runtime activity as story evidence. It relies on repository review and merge controls instead
-of a separate internal approval protocol.
+and runtime activity as story evidence. Versioned story plans can record separate interactive
+approval or requested-change receipts for exact text and scope. Those receipts preserve decisions;
+they do not activate an execution gate or replace repository review and merge controls.
 
 ## Persistence is explicit
 

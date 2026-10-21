@@ -13,7 +13,7 @@ server. Authorization-server metadata remains available at `/.well-known/oauth-a
 and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
 still require a valid bearer token.
 
-The server exposes twenty-three task-oriented tools:
+The server exposes twenty-six task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -21,9 +21,12 @@ The server exposes twenty-three task-oriented tools:
 | `facility_list_agents` | Valid `.agents/` catalog with engines, models, and triggers. |
 | `facility_list_skills` | Valid skills installed in `.agents/skills/` or `.claude/skills/`. |
 | `facility_list_stories` | Stories, optionally filtered by status. |
-| `facility_get_story` | Story, workspace, turns, artifacts, attention, delivery PR set, and ordered evidence timeline. |
+| `facility_get_story` | Story, workspace, turns, artifacts, attention, delivery PR set, plans/decisions, and ordered evidence timeline. |
 | `facility_get_delivery` | Read the declared complete PR set, observed heads, CI/reviews and partial merges; optionally search the project's mirrored PRs. |
 | `facility_set_delivery` | Replace delivery links with revision checking and idempotency; does not accept work, merge or run an agent. |
+| `facility_get_plan` | Current plan, immutable scope snapshots and paged plan/decision history; optionally read an earlier revision. |
+| `facility_propose_plan` | Record a revision with server-resolved repository names and fresh agent configuration; no execution. |
+| `facility_request_plan_decision` | Request approval or changes and return an expiring interactive review link; does not record a human confirmation. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
 | `facility_get_conversation` | Read the shared ordered conversation. |
@@ -135,13 +138,44 @@ marker when monetary cost is unavailable.
 branches, pull requests, reviews, and checks. `occurred_at` is the source event time and
 `observed_at` is when Facility stored it; they can differ after reconciliation.
 
-Mutations execute directly after normal authentication and project authorization. They do not
-create an internal approval object. Delete requires `confirm: true` and a matching idempotency key.
+Execution mutations execute directly after normal authentication and project authorization.
+Plan proposals and decision requests record metadata separately; they do not gate or dispatch
+execution. Delete requires `confirm: true` and a matching idempotency key.
 
 When a budget is enabled, Facility checks it before starting a provider call. Usage and cost are
 recorded after the call from provider-reported values when available, otherwise from the built-in
 model price book. A call already running may cross the limit; subsequent turns are blocked. Models
 without a known price are rejected while budget enforcement is enabled.
+
+## Propose and review a plan
+
+Use `facility_get_plan` with `projectId` and `storyId` to read `state.revision` and
+`state.decisionRevision`. Optional `beforeRevision`, `beforeDecisionRevision` and `limit`
+page history; `revision` reads one immutable earlier plan. Reads use the database only.
+
+`facility_propose_plan` accepts `expectedRevision`, exact `markdown` (at most 100,000 characters),
+`repositories` (connected `owner/name` values), `agents` (configured names), optional
+`sourceMessageId` and `idempotencyKey`. The server records the authenticated proposer and resolves
+the repository/agent snapshot from the authorized source. An attributed source message must belong
+to this story and contain exactly the proposed text. Editing it requires omitting the source ID.
+A changed proposal supersedes earlier approval while preserving the old plan and receipts.
+
+To request a decision, call `facility_request_plan_decision` with `expectedRevision`,
+`expectedDecisionRevision`, `intent` (`approve` or `reject`), optional `reason` (required for
+rejection), and `idempotencyKey`. Open the returned `request.confirmationUrl` in Facility, review
+the exact plan and scope, and confirm explicitly. The locator URL contains no confirmation proof.
+The request expires after 15 minutes. OAuth-user requests are bound to that user; service requests
+can be reviewed by an authorized project writer.
+
+There is no MCP confirmation tool. API keys and OAuth bearer identity alone cannot create an
+interactive receipt. The browser confirmation rechecks membership, session proof, expiry, exact
+plan and decision revisions. A concurrent decision or new plan requires a fresh review. Receipts
+record the observed `interactive_session` method; software cannot prove physical human presence.
+
+Reads need `projects:read`; proposals and decision requests need `projects:write`. Retry an
+uncertain identical request with the same key. These records do not start agents, activate
+execution-policy enforcement, merge PRs or accept delivery. Existing execution permissions and
+repository merge controls continue to govern those actions.
 
 ## Record all delivery PRs
 

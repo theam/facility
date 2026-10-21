@@ -10,6 +10,7 @@ import { CancelTurnButton } from "@/components/story/workspace-story-controls";
 import type { StoryConversationPage, StoryMessage } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import { storyConversationPath } from "@/lib/story-paths";
+import { requestPlanProposal } from "@/lib/story-plan-events";
 import {
   type Exchange,
   formatDurationBetween,
@@ -39,12 +40,14 @@ export function StoryConversation({
   initial,
   waitingTurnIds,
   canExecute,
+  canProposePlan = false,
 }: {
   projectId: string;
   storyId: string;
   initial: StoryConversationPage;
   waitingTurnIds: string[];
   canExecute: boolean;
+  canProposePlan?: boolean;
 }) {
   const [shown, setShown] = useState<StoryMessage[]>(() =>
     mergeMessages(initial.messages, initial.related),
@@ -137,6 +140,7 @@ export function StoryConversation({
                 storyId={storyId}
                 waitingForReply={exchange.turn ? waitingTurnIds.includes(exchange.turn.id) : false}
                 canExecute={canExecute}
+                canProposePlan={canProposePlan}
               />
             </li>
           ))}
@@ -163,12 +167,14 @@ function ExchangeCard({
   storyId,
   waitingForReply,
   canExecute,
+  canProposePlan,
 }: {
   exchange: Exchange;
   projectId: string;
   storyId: string;
   waitingForReply: boolean;
   canExecute: boolean;
+  canProposePlan: boolean;
 }) {
   const { turn, request, response } = exchange;
   const status = runStatus(turn ?? null, { waitingForReply });
@@ -219,6 +225,23 @@ function ExchangeCard({
         ) : (
           <p className="text-[13px] leading-relaxed text-(--mut)">{status.detail}</p>
         )}
+        {response && canProposePlan ? (
+          <div>
+            <Button
+              size="sm"
+              onClick={() =>
+                requestPlanProposal({
+                  projectId,
+                  storyId,
+                  messageId: response.id,
+                  markdown: response.body,
+                })
+              }
+            >
+              Propose as plan
+            </Button>
+          </div>
+        ) : null}
         {waitingForReply ? (
           <div className="flex flex-wrap items-center gap-3 border border-(--human)/60 bg-(--bg-subtle) px-4 py-3">
             <p className="text-[13px]">

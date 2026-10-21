@@ -1,4 +1,8 @@
-import { ReplaceStoryDeliveryBody } from "@facility/core";
+import {
+  ProposeStoryPlanBody,
+  ReplaceStoryDeliveryBody,
+  RequestPlanDecisionBody,
+} from "@facility/core";
 import { FacilityApiError, FacilityClient, type QueryParams } from "@facility/sdk";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -151,6 +155,90 @@ export const toolDefinitions: ToolDefinition[] = [
         expected_revision: args.expectedRevision,
         declared_complete: args.declaredComplete,
         pull_requests: args.pullRequests,
+        idempotency_key: args.idempotencyKey,
+      }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+  },
+  {
+    name: "facility_get_plan",
+    permission: "projects:read",
+    description:
+      "Read the current immutable plan, exact repository/agent scope, decision receipts and paged history. Set revision to inspect an earlier plan. Database-only: no agent, GitHub refresh or workspace activity. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      storyId,
+      revision: z.number().int().min(1).max(2_147_483_647).optional(),
+      beforeRevision: z.number().int().min(1).max(2_147_483_647).optional(),
+      beforeDecisionRevision: z.number().int().min(1).max(2_147_483_647).optional(),
+      limit: z.number().int().min(1).max(50).default(10),
+    },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/plan${args.revision === undefined ? "" : `/revisions/${part(args.revision)}`}`,
+    query: (args) =>
+      args.revision === undefined
+        ? {
+            before_revision: numberValue(args.beforeRevision),
+            before_decision_revision: numberValue(args.beforeDecisionRevision),
+            limit: Number(args.limit ?? 10),
+          }
+        : {},
+  },
+  {
+    name: "facility_propose_plan",
+    permission: "projects:write",
+    description:
+      "Record a plan revision with server-resolved repository names and configured agent snapshots. Read the current revision first. A source message must belong to this story and match the exact proposed text. Refreshes the authorized agent catalog; records metadata only and never starts execution. Needs projects:write.",
+    inputSchema: {
+      projectId,
+      storyId,
+      expectedRevision: ProposeStoryPlanBody.shape.expected_revision,
+      markdown: ProposeStoryPlanBody.shape.markdown,
+      repositories: ProposeStoryPlanBody.shape.repositories,
+      agents: ProposeStoryPlanBody.shape.agents,
+      sourceMessageId: ProposeStoryPlanBody.shape.source_message_id,
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/plan`,
+    body: (args) =>
+      ProposeStoryPlanBody.parse({
+        expected_revision: args.expectedRevision,
+        markdown: args.markdown,
+        repositories: args.repositories,
+        agents: args.agents,
+        source_message_id: args.sourceMessageId,
+        idempotency_key: args.idempotencyKey,
+      }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+    openWorld: true,
+  },
+  {
+    name: "facility_request_plan_decision",
+    permission: "projects:write",
+    description:
+      "Request an approve/reject decision for the exact current plan and decision revision. Returns an expiring Facility review link for interactive confirmation. This tool records a request, never a human approval, and does not start execution. Rejection requires a reason. Needs projects:write.",
+    inputSchema: {
+      projectId,
+      storyId,
+      expectedRevision: RequestPlanDecisionBody.shape.expected_revision,
+      expectedDecisionRevision: RequestPlanDecisionBody.shape.expected_decision_revision,
+      intent: RequestPlanDecisionBody.shape.intent,
+      reason: RequestPlanDecisionBody.shape.reason,
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/plan/decisions`,
+    body: (args) =>
+      RequestPlanDecisionBody.parse({
+        expected_revision: args.expectedRevision,
+        expected_decision_revision: args.expectedDecisionRevision,
+        intent: args.intent,
+        reason: args.reason,
         idempotency_key: args.idempotencyKey,
       }),
     idempotencyKey: (args) => stringValue(args.idempotencyKey),

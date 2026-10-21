@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
-import { migrate, seed } from "@facility/db";
+import { newId } from "@facility/core";
+import { migrate, seed, stories } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import postgres from "postgres";
@@ -48,6 +49,8 @@ describe("embedded MCP control plane", async () => {
 
   let app: Awaited<ReturnType<typeof buildApp>>;
   let client: Client;
+  let projectId: string;
+  const storyId = newId("story");
 
   beforeAll(async () => {
     await migrate(databaseUrl);
@@ -86,7 +89,7 @@ describe("embedded MCP control plane", async () => {
       payload: { name: "embedded MCP acceptance", roleId: owner.id },
     });
     const secret = issued.json().secret as string;
-    await app.inject({
+    const createdProject = await app.inject({
       method: "POST",
       url: "/v1/projects",
       headers: { authorization: `Bearer ${secret}` },
@@ -94,6 +97,18 @@ describe("embedded MCP control plane", async () => {
         name: "Embedded MCP acceptance",
         slug: `embedded-mcp-${Date.now()}`,
       },
+    });
+    const project = createdProject.json();
+    projectId = project.id;
+    await app.facilityDb.insert(stories).values({
+      id: storyId,
+      orgId: project.orgId,
+      projectId,
+      provider: "manual",
+      externalId: storyId,
+      title: "MCP plan read fixture",
+      status: "ready",
+      createdBy: { type: "service", id: issued.json().id },
     });
 
     client = new Client({ name: "facility-acceptance", version: "0.12.0" });
@@ -111,9 +126,16 @@ describe("embedded MCP control plane", async () => {
 
   it("serves the reduced tool catalog from the API process", async () => {
     const tools = await client.listTools();
-    expect(tools.tools).toHaveLength(23);
+    expect(tools.tools).toHaveLength(26);
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_start_story");
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_list_skills");
+    for (const name of [
+      "facility_get_plan",
+      "facility_propose_plan",
+      "facility_request_plan_decision",
+    ])
+      expect(tools.tools.map((tool) => tool.name)).toContain(name);
+    expect(tools.tools.map((tool) => tool.name).join(" ")).not.toMatch(/confirm/);
     expect(tools.tools.map((tool) => tool.name).join(" ")).not.toMatch(
       /proposal|receipt|registry|hitl/,
     );
@@ -127,5 +149,23 @@ describe("embedded MCP control plane", async () => {
     expect(text?.type === "text" && text.text ? JSON.parse(text.text) : []).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "Embedded MCP acceptance" })]),
     );
+  });
+
+  it("reads an empty plan through the authenticated MCP/API path without execution", async () => {
+    const result = await client.callTool({
+      name: "facility_get_plan",
+      arguments: { projectId, storyId },
+    });
+    expect(result.isError).not.toBe(true);
+    const text = (result.content as Array<{ type: string; text?: string }>).find(
+      (part) => part.type === "text",
+    )?.text;
+    expect(JSON.parse(text ?? "{}")).toMatchObject({
+      storyId,
+      projectId,
+      plan: null,
+      decision: null,
+      state: { revision: 0, decisionRevision: 0, status: "none" },
+    });
   });
 });
