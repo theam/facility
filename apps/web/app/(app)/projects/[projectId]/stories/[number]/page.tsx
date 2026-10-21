@@ -133,7 +133,13 @@ export default async function StoryPage({
           ) : null}
         </dl>
         <StoryActions
+          key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
           projectId={projectId}
+          draftOwnerId={
+            me.ok && me.data.principal?.type === "user"
+              ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+              : undefined
+          }
           story={story}
           workspace={bundle.workspace}
           agents={agentRows}

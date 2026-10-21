@@ -60,6 +60,23 @@ Send another message with `facility_send_message`. You can select a different co
 the next turn; the conversation, worktree, and native engine state remain attached to the story.
 Messages sent while a turn is active wait in order.
 
+In the web UI, **Reply** reveals the story composer, selects the requested available agent and
+focuses the message without sending it. It preserves text already being written. **Close** hides
+the composer and retains the draft; **discard draft** explicitly clears it. Reopening the composer
+returns to the same text.
+
+When tab storage is available, unsent drafts can be restored for up to 24 hours after their last
+edit in that browser tab. They are scoped to the signed-in person, organization, project and story;
+another person's session or another story does not restore that draft. They are not synchronized
+between devices or tabs. Closing the tab clears its session storage. If browser storage is
+unavailable, the draft remains in memory while the page stays open. Only **send to agent** submits
+it to Facility. Successful sends and explicit discard clear the stored draft.
+
+If the selected agent is removed or disabled, the draft remains available and sending requires
+choosing an available agent. A failed send preserves the text and recipient. Retrying the same
+unchanged request reuses its idempotency key, including after restoring the draft; editing the
+message or choosing a different recipient creates a new request.
+
 Use `facility_get_story` to inspect status and `next_operations`. Use
 `facility_get_conversation` with its cursor for durable message history. Each agent message is the
 run's final response; progress messages and logs live in the run's activity
