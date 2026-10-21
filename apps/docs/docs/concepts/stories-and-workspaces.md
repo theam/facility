@@ -57,6 +57,12 @@ Agents share the conversation and files, but each turn still records which agent
 from `architect` to `builder` does not create another workspace or copy a summary into a separate
 thread.
 
+When an agent asks a blocking question, Facility retains the question with that turn's attention
+history. A rebuilt prompt includes it after the agent's message, including when the attention item
+has been resolved by a reply. A different agent can therefore interpret a brief answer such as
+"No, continue." The stored conversation body remains unchanged. Questions and responses from later
+queued turns are excluded from an earlier turn's context.
+
 Native engine continuation is compatible-session specific. Facility resumes the active session for
 the same workspace, agent name, engine, and model. Choosing another agent or changing its engine or
 model starts or resumes that configuration's own session while retaining every prior session and

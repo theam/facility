@@ -1,5 +1,5 @@
 import type { AgentManifest } from "@facility/agents";
-import type { stories, storyMessages } from "@facility/db";
+import type { attentionItems, stories, storyMessages } from "@facility/db";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/turns/prompt.js";
 
@@ -20,8 +20,21 @@ function message(seq: number, role: "user" | "agent", body: string, turnId: stri
   } as typeof storyMessages.$inferSelect;
 }
 
-function prompt(messages: Array<typeof storyMessages.$inferSelect>, turnId = "reviewer") {
-  return buildPrompt(manifest, story, null, messages, turnId);
+function prompt(
+  messages: Array<typeof storyMessages.$inferSelect>,
+  turnId = "reviewer",
+  attention: Array<typeof attentionItems.$inferSelect> = [],
+) {
+  return buildPrompt(manifest, story, null, messages, turnId, attention);
+}
+
+function question(
+  detail: string | null,
+  turnId: string | null = "builder",
+  status = "resolved",
+  kind = "agent_waiting",
+) {
+  return { kind, turnId, detail, status } as typeof attentionItems.$inferSelect;
 }
 
 describe("turn conversation context", () => {
@@ -97,5 +110,64 @@ describe("turn conversation context", () => {
     expect(prompt([message(1, "agent", "Existing context", "builder")], "missing")).toContain(
       "Existing context",
     );
+  });
+
+  it.each(["open", "resolved"])("anchors a %s question once on its agent response", (status) => {
+    const messages = [
+      message(1, "user", "Build the change", "builder"),
+      message(2, "agent", "I need a decision", "builder"),
+      message(3, "user", "No, continue.", "reviewer"),
+    ];
+    const attention = [question("Keep the legacy export?", "builder", status)];
+    const original = structuredClone({ messages, attention });
+    const result = prompt(messages, "reviewer", attention);
+    expect(result.match(/Keep the legacy export\?/g)).toHaveLength(1);
+    expect(result.indexOf("I need a decision")).toBeLessThan(
+      result.indexOf("Keep the legacy export?"),
+    );
+    expect(result.indexOf("Keep the legacy export?")).toBeLessThan(result.indexOf("No, continue."));
+    expect({ messages, attention }).toEqual(original);
+  });
+
+  it("includes the question of a predecessor that finished after this reply was queued", () => {
+    const result = prompt(
+      [
+        message(1, "user", "Build the change", "builder"),
+        message(2, "user", "No, continue.", "reviewer"),
+        message(3, "agent", "I need a decision", "builder"),
+        message(4, "user", "FUTURE_REQUEST", "future"),
+        message(5, "agent", "FUTURE_RESPONSE", "future"),
+      ],
+      "reviewer",
+      [question("Keep the legacy export?"), question("FUTURE_QUESTION", "future")],
+    );
+    expect(result).toContain("Keep the legacy export?");
+    expect(result.indexOf("Keep the legacy export?")).toBeLessThan(result.indexOf("No, continue."));
+    expect(result).not.toContain("FUTURE_");
+  });
+
+  it("does not attach other attention kinds or unanchored questions to a request", () => {
+    const result = prompt(
+      [message(1, "user", "Build the change", "builder"), message(2, "user", "Reply", "reviewer")],
+      "reviewer",
+      [
+        question("NO_AGENT_RESPONSE"),
+        question("CURRENT_TURN", "reviewer"),
+        question("UNASSIGNED", null),
+        question("UNKNOWN_TURN", "unknown"),
+      ],
+    );
+    expect(result).not.toMatch(/NO_AGENT_RESPONSE|CURRENT_TURN|UNASSIGNED|UNKNOWN_TURN/);
+    expect(
+      prompt(
+        [
+          message(1, "user", "Build the change", "builder"),
+          message(2, "agent", "Done", "builder"),
+          message(3, "user", "Reply", "reviewer"),
+        ],
+        "reviewer",
+        [question("TURN_ERROR", "builder", "open", "turn_error"), question(null), question("")],
+      ),
+    ).not.toContain("Question this turn asked the human:");
   });
 });

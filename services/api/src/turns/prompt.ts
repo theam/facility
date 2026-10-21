@@ -1,5 +1,5 @@
 import type { AgentManifest } from "@facility/agents";
-import type { stories, storyMessages } from "@facility/db";
+import type { attentionItems, stories, storyMessages } from "@facility/db";
 
 export function buildPrompt(
   manifest: AgentManifest,
@@ -7,6 +7,7 @@ export function buildPrompt(
   summary: string | null,
   messages: Array<typeof storyMessages.$inferSelect>,
   turnId: string,
+  attention: Array<typeof attentionItems.$inferSelect> = [],
 ) {
   const currentMessage = messages.find(
     (message) => message.turnId === turnId && message.role === "user",
@@ -29,10 +30,15 @@ export function buildPrompt(
       currentMessage,
     ];
   }
+  const questions = askedQuestions(attention);
   const transcript = relevant
-    .map(
-      (message) => `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`,
-    )
+    .map((message) => {
+      const body = `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`;
+      // User and agent messages share a turn ID. Only the agent asked the question.
+      const asked =
+        message.role === "agent" && message.turnId ? questions.get(message.turnId) : undefined;
+      return asked ? `${body}\n\nQuestion this turn asked the human:\n${asked.join("\n")}` : body;
+    })
     .join("\n\n");
   return [
     manifest.prompt,
@@ -44,6 +50,19 @@ export function buildPrompt(
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function askedQuestions(attention: Array<typeof attentionItems.$inferSelect>) {
+  const questions = new Map<string, string[]>();
+  for (const item of attention) {
+    // Dispatch resolves the question as replied before rebuilding the prompt.
+    // Resolved questions still explain the human's answer to a new native session.
+    if (item.kind !== "agent_waiting" || !item.turnId || !item.detail) continue;
+    const asked = questions.get(item.turnId);
+    if (asked) asked.push(item.detail);
+    else questions.set(item.turnId, [item.detail]);
+  }
+  return questions;
 }
 
 function actorLabel(actor: unknown) {

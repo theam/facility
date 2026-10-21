@@ -1,6 +1,7 @@
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
+  attentionItems,
   engineSessions,
   type FacilityDb,
   stories,
@@ -109,7 +110,7 @@ export class TurnDispatcher {
         });
       }
       await appendTurnEvent(this.db, { ...eventBase, type: "turn.started", data: {} });
-      const [story, workspace, conversation, messages] = await Promise.all([
+      const [story, workspace, conversation, messages, attention] = await Promise.all([
         this.scopedStory(input.orgId, input.projectId, turn.storyId),
         this.activeWorkspace(input.orgId, input.projectId, turn.storyId),
         this.db
@@ -135,6 +136,17 @@ export class TurnDispatcher {
             ),
           )
           .orderBy(asc(storyMessages.seq)),
+        this.db
+          .select()
+          .from(attentionItems)
+          .where(
+            and(
+              eq(attentionItems.orgId, input.orgId),
+              eq(attentionItems.projectId, input.projectId),
+              eq(attentionItems.storyId, turn.storyId),
+            ),
+          )
+          .orderBy(asc(attentionItems.createdAt)),
       ]);
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
@@ -303,7 +315,7 @@ export class TurnDispatcher {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id, attention),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,
