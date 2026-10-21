@@ -1110,6 +1110,7 @@ export function restCiSignal(
   const statuses = array(status.statuses).map(object);
   const checkRuns = latestCheckRuns(array(object(checkRunsResponse).check_runs).map(object));
   const combinedState = ciState(status.state);
+  if (status.total_count === 0 && statuses.length === 0 && checkRuns.length === 0) return null;
   if (!combinedState && statuses.length === 0 && checkRuns.length === 0) return null;
 
   const failedStatusNames = statuses.flatMap((item) => {
