@@ -1,10 +1,11 @@
-import { createDb, type FacilityDb, turns } from "@facility/db";
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { budgetReservations, createDb, type FacilityDb, turns, turnUsage } from "@facility/db";
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
+import { CostBudgetService } from "./insights/costs.js";
 import { StoryIntegrationNotifications } from "./stories/integration-notifications.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
@@ -216,7 +217,50 @@ export async function recoverInterruptedTurns(
     turnId: string;
   }) => Promise<unknown>,
 ) {
+  await new CostBudgetService(db).recoverModelCalls(now);
   const staleBefore = new Date(now.getTime() - leaseTimeoutMs);
+  const unsettled = await db
+    .select({ orgId: turns.orgId, projectId: turns.projectId, turnId: turns.id })
+    .from(turns)
+    .leftJoin(
+      turnUsage,
+      and(
+        eq(turns.id, turnUsage.turnId),
+        eq(turns.orgId, turnUsage.orgId),
+        eq(turns.projectId, turnUsage.projectId),
+      ),
+    )
+    .leftJoin(
+      budgetReservations,
+      and(
+        eq(budgetReservations.turnId, turns.id),
+        eq(budgetReservations.orgId, turns.orgId),
+        eq(budgetReservations.projectId, turns.projectId),
+        eq(budgetReservations.state, "open"),
+      ),
+    )
+    .where(
+      or(
+        and(
+          or(isNull(turnUsage.id), eq(turnUsage.priced, false)),
+          eq(turns.state, "failed"),
+          eq(turns.error, "Worker heartbeat expired before the agent turn completed."),
+        ),
+        and(
+          inArray(turns.state, ["succeeded", "failed", "canceled"]),
+          or(eq(turnUsage.priced, false), isNotNull(budgetReservations.id)),
+        ),
+      ),
+    )
+    .orderBy(asc(turns.createdAt))
+    .limit(1_000);
+  for (const turn of unsettled)
+    await stories.reconcileInterruptedUsage(turn).catch(() => {
+      // Preserve the accounting block and still recover other dead workers.
+      console.error(
+        JSON.stringify({ event: "turn.usage_reconciliation_failed", turnId: turn.turnId }),
+      );
+    });
   const running = await db
     .select({
       id: turns.id,

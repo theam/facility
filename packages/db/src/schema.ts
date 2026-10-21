@@ -1228,6 +1228,157 @@ export const turnUsage = pgTable(
   ],
 );
 
+/**
+ * Open holds count toward the monthly cap until measured usage replaces them.
+ * Title calls settle in place. Turn calls delete the hold when `turn_usage` is written.
+ */
+export const modelCalls = pgTable(
+  "model_calls",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    purpose: text("purpose").notNull(),
+    requestKey: text("request_key").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    reservationId: text("reservation_id").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    state: text("state").notNull().default("reserved"),
+    claimToken: text("claim_token"),
+    estimatedCents: numeric("estimated_cents", { mode: "number" }).notNull(),
+    costCents: numeric("cost_cents", { mode: "number" }),
+    inputTokens: bigint("input_tokens", { mode: "number" }),
+    outputTokens: bigint("output_tokens", { mode: "number" }),
+    cacheReadTokens: bigint("cache_read_tokens", { mode: "number" }),
+    cacheWriteTokens: bigint("cache_write_tokens", { mode: "number" }),
+    errorCode: text("error_code"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("model_calls_scope_uidx").on(table.orgId, table.projectId, table.storyId, table.id),
+    uniqueIndex("model_calls_request_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.purpose,
+      table.requestKey,
+    ),
+    index("model_calls_project_idx").on(table.orgId, table.projectId, table.state),
+    index("model_calls_expiry_idx").on(table.state, table.expiresAt),
+    check("model_calls_purpose_check", sql`${table.purpose} in ('title', 'consultation')`),
+    check("model_calls_provider_check", sql`${table.provider} in ('openai', 'anthropic')`),
+    check(
+      "model_calls_state_check",
+      sql`${table.state} in ('reserved', 'started', 'confirmed', 'unconfirmed', 'unbilled')`,
+    ),
+    check(
+      "model_calls_identity_check",
+      sql`length(${table.requestKey}) between 1 and 200 and length(${table.fingerprint}) = 43 and length(${table.model}) between 1 and 160`,
+    ),
+    check(
+      "model_calls_cost_check",
+      sql`${table.estimatedCents} >= 0 and ${table.estimatedCents} < 'Infinity'::numeric and (${table.costCents} is null or (${table.costCents} >= 0 and ${table.costCents} < 'Infinity'::numeric)) and (${table.state} not in ('confirmed', 'unbilled') or ${table.costCents} is not null)`,
+    ),
+    check(
+      "model_calls_tokens_check",
+      sql`(${table.inputTokens} is null or ${table.inputTokens} between 0 and 9007199254740991) and (${table.outputTokens} is null or ${table.outputTokens} between 0 and 9007199254740991) and (${table.cacheReadTokens} is null or ${table.cacheReadTokens} between 0 and 9007199254740991) and (${table.cacheWriteTokens} is null or ${table.cacheWriteTokens} between 0 and 9007199254740991)`,
+    ),
+    check(
+      "model_calls_phase_check",
+      sql`(${table.startedAt} is null) = (${table.claimToken} is null) and ${table.expiresAt} > ${table.createdAt} and (${table.state} != 'started' or ${table.startedAt} is not null)`,
+    ),
+    check(
+      "model_calls_settlement_check",
+      sql`(${table.settledAt} is null) = (${table.state} in ('reserved', 'started')) and (${table.state} != 'confirmed' or ${table.startedAt} is not null) and (${table.state} != 'unbilled' or (${table.costCents} = 0 and coalesce(${table.inputTokens}, 0) = 0 and coalesce(${table.outputTokens}, 0) = 0 and coalesce(${table.cacheReadTokens}, 0) = 0 and coalesce(${table.cacheWriteTokens}, 0) = 0))`,
+    ),
+    foreignKey({
+      name: "model_calls_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+  ],
+);
+
+export const budgetReservations = pgTable(
+  "budget_reservations",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    turnId: text("turn_id").references(() => turns.id),
+    modelCallId: text("model_call_id"),
+    purpose: text("purpose").notNull(),
+    state: text("state").notNull().default("open"),
+    model: text("model").notNull(),
+    reservedCents: numeric("reserved_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("budget_reservations_turn_uidx")
+      .on(table.turnId)
+      .where(sql`${table.turnId} is not null`),
+    uniqueIndex("budget_reservations_open_title_uidx")
+      .on(table.storyId)
+      .where(sql`${table.purpose} = 'title' and ${table.state} = 'open'`),
+    index("budget_reservations_project_idx").on(table.orgId, table.projectId, table.state),
+    uniqueIndex("budget_reservations_model_call_uidx")
+      .on(table.modelCallId)
+      .where(sql`${table.modelCallId} is not null`),
+    check(
+      "budget_reservations_model_call_check",
+      sql`${table.modelCallId} is null or ${table.purpose} = 'title'`,
+    ),
+    check("budget_reservations_purpose_check", sql`${table.purpose} in ('turn', 'title')`),
+    check("budget_reservations_state_check", sql`${table.state} in ('open', 'settled')`),
+    check("budget_reservations_cents_check", sql`${table.reservedCents} >= 0`),
+    check(
+      "budget_reservations_subject_check",
+      sql`(
+        (${table.purpose} = 'turn' and ${table.turnId} is not null and ${table.state} = 'open')
+        or (${table.purpose} = 'title' and ${table.turnId} is null)
+      )`,
+    ),
+    foreignKey({
+      name: "budget_reservations_project_scope_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.id],
+    }),
+    foreignKey({
+      name: "budget_reservations_model_call_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.modelCallId],
+      foreignColumns: [modelCalls.orgId, modelCalls.projectId, modelCalls.storyId, modelCalls.id],
+    }),
+    foreignKey({
+      name: "budget_reservations_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "budget_reservations_turn_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.turnId],
+      foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+  ],
+);
+
 export const auditEvents = pgTable(
   "audit_events",
   {

@@ -190,7 +190,11 @@ in another client.
 ## Costs, budgets, operations, and delivery
 
 - `/v1/projects/:projectId/costs` returns cost and usage analysis.
-- `/v1/projects/:projectId/budget` reads or updates the monthly project budget.
+- `/v1/projects/:projectId/budget` reads or updates the monthly project budget. Its committed amount
+  includes measured turn usage, open reservations and settled title charges; a reservation is an
+  estimate, not a provider invoice or a hard limit on an already running call.
+  The costs and observability usage series describe native agent turns; title API calls have
+  a separate durable ledger and contribute to the monthly budget, without creating synthetic turns.
 - `/v1/projects/:projectId/overview` returns the operator entry point: running and queued turns,
   open attention with the action each accepts, pull requests waiting for review, recent results,
   backlog counts, recorded workspace states, and permission-gated agent spend and budget. It reads
@@ -221,6 +225,21 @@ verified on 2026-09-29. These entries use standard global API pricing and
 5-minute cache writes, not fast mode, batch, regional premiums, or 1-hour cache
 writes. A valid engine-reported cost takes precedence over this fallback.
 An enabled budget still blocks an unpriced model or a project over its limit.
+Interrupted, failed or canceled turns with incomplete usage return `state: "unconfirmed"` in budget responses.
+Their usage rows have `priced: false`, `source: "unpriced"`, and a nullable cost or a measured
+lower bound. New agent and title-generation model calls are blocked until complete retained
+usage is reconciled or an authorized administrator explicitly disables budget enforcement.
+Raising the limit, resolving attention, and a new calendar month do not clear uncertainty.
+An open reservation stranded on a terminal turn also remains unconfirmed until accounting recovery.
+Title API attempts use scoped request identities and exclusive claims to prevent duplicate jobs
+from repeating provider calls. Their charges are recorded even when enforcement is disabled.
+Missing or malformed usage, a lost response, or an expired started attempt remains unconfirmed;
+an expired unstarted attempt is unbilled. Valid measured zero is preserved as zero.
+Final receipts must belong to the same attempt and cannot erase previously observed usage.
+The API-call ledger and title publication commit atomically; retries of a settled attempt cannot
+publish or charge it twice. There is no public manual-settlement endpoint.
+Recovered usage is counted when it is settled, as with live-worker accounting; reconciliation does not double-charge
+already settled rows. The periodic worker retries available journals without waking compute.
 Updating the catalog does not reprice persisted turns or change agent defaults.
 
 ## Authentication and authorization

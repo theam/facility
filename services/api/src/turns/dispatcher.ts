@@ -15,7 +15,7 @@ import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
-import { CostBudgetService } from "../insights/costs.js";
+import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import type {
   ProjectEnvironmentService,
@@ -31,6 +31,7 @@ import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
 import { LiveTurnEvents } from "./live-events.js";
 import { buildPrompt } from "./prompt.js";
 import { redactEvent as redact, redactString } from "./redaction.js";
+import { readUsageJournal } from "./usage-journal.js";
 
 export class TurnDispatcher {
   constructor(
@@ -47,31 +48,13 @@ export class TurnDispatcher {
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
-    const turn = (
-      await this.db
-        .update(turns)
-        .set({ state: "running", retryAfter: null, startedAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(
-            eq(turns.orgId, input.orgId),
-            eq(turns.projectId, input.projectId),
-            eq(turns.id, input.turnId),
-            eq(turns.state, "queued"),
-            or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
-          ),
-        )
-        .returning()
-    )[0];
-    if (!turn) {
-      const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
-      if (unclaimed?.state === "canceled") {
-        await this.activateQueuedSuccessor({
-          ...input,
-          storyId: unclaimed.storyId,
-        });
-      }
-      return { claimed: false as const };
+    const admission = await this.admit(input);
+    if (admission.kind === "unclaimed") return { claimed: false as const };
+    if (admission.kind === "denied") {
+      return { claimed: true as const, state: "failed" as const, error: admission.error };
     }
+    const turn = admission.turn;
+    let reservationSettled = false;
 
     const cancellation = new AbortController();
     const leaseHeartbeat = new TurnLeaseHeartbeat(
@@ -90,6 +73,7 @@ export class TurnDispatcher {
     let startedGitEvidence: StartedGitEvidence | undefined;
     let gitEvidenceCompleted = false;
     let engineStarted = false;
+    let currentWorkspace: WorkspaceLocator | undefined;
     let liveEvents: LiveTurnEvents | undefined;
     let health: TurnHealthMonitor | undefined;
     try {
@@ -150,11 +134,11 @@ export class TurnDispatcher {
       ]);
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
+      currentWorkspace = workspaceLocator(workspace);
       const manifest = AgentManifestSchema.parse(turn.manifest);
       if (manifest.hash !== turn.manifestHash || manifest.name !== turn.agentName) {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
       }
-      await this.costs.assertTurnAllowed(input.orgId, input.projectId, manifest.model);
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.phase",
@@ -367,9 +351,11 @@ export class TurnDispatcher {
         engine: manifest.engine,
         model: manifest.model,
         usage: result.usage,
+        complete: result.usage !== undefined,
         durationMs: result.durationMs,
         status: "succeeded",
       });
+      reservationSettled = true;
       await this.persistSession({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -448,6 +434,29 @@ export class TurnDispatcher {
         await this.evidence.complete(startedGitEvidence).catch(() => undefined);
         gitEvidenceCompleted = true;
       }
+      if (!reservationSettled) {
+        const retained =
+          engineStarted && this.runtime && currentWorkspace
+            ? await readUsageJournal(this.runtime, currentWorkspace, turn.id, turn.engine)
+            : undefined;
+        await this.costs.record({
+          ...input,
+          storyId: turn.storyId,
+          agentName: turn.agentName,
+          engine: turn.engine,
+          model: turn.model,
+          usage: retained?.complete
+            ? retained.usage
+            : ((error instanceof AgentEngineError ? asUsage(error.details.usage) : undefined) ??
+              retained?.usage),
+          complete: engineStarted ? retained?.complete === true : undefined,
+          durationMs: turn.startedAt ? Date.now() - turn.startedAt.getTime() : 0,
+          status: "failed",
+        });
+        // If accounting fails, retain the hold and let recovery reconcile it.
+        // Never admit a successor between releasing a hold and booking its bill.
+        reservationSettled = true;
+      }
       if (await this.isCanceled(input.orgId, input.projectId, input.turnId)) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -483,20 +492,6 @@ export class TurnDispatcher {
         return { claimed: true as const, state: "canceled" as const };
       }
       if (error instanceof AgentEngineError) {
-        await this.costs
-          .record({
-            orgId: input.orgId,
-            projectId: input.projectId,
-            storyId: turn.storyId,
-            turnId: turn.id,
-            agentName: turn.agentName,
-            engine: turn.engine,
-            model: turn.model,
-            usage: asUsage(error.details.usage),
-            durationMs: numberValue(error.details.durationMs) ?? 0,
-            status: "failed",
-          })
-          .catch(() => undefined);
         if (!liveEvents) await this.persistFailedEngineEvents(error, eventBase, secrets);
       }
       const detail = redactString(error instanceof Error ? error.message : String(error), secrets);
@@ -526,6 +521,75 @@ export class TurnDispatcher {
             JSON.stringify({ event: "workspace.suspend_reconciliation_failed", turnId: turn.id }),
           );
         });
+    }
+  }
+
+  private async admit(input: { orgId: string; projectId: string; turnId: string }): Promise<
+    | { kind: "unclaimed" }
+    | { kind: "denied"; error: string }
+    | {
+        kind: "running";
+        turn: typeof turns.$inferSelect;
+        reservationId: string | null;
+      }
+  > {
+    try {
+      const admitted = await this.db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as FacilityDb;
+        const claimed = (
+          await tx
+            .update(turns)
+            .set({
+              state: "running",
+              retryAfter: null,
+              startedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(turns.orgId, input.orgId),
+                eq(turns.projectId, input.projectId),
+                eq(turns.id, input.turnId),
+                eq(turns.state, "queued"),
+                or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
+              ),
+            )
+            .returning()
+        )[0];
+        if (!claimed) return null;
+        const reservationId = await this.costs.reserveTurn(tx, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: claimed.storyId,
+          turnId: claimed.id,
+          model: claimed.model,
+        });
+        return { turn: claimed, reservationId };
+      });
+      if (!admitted) {
+        const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
+        if (unclaimed?.state === "canceled") {
+          await this.activateQueuedSuccessor({ ...input, storyId: unclaimed.storyId });
+        }
+        return { kind: "unclaimed" };
+      }
+      return { kind: "running", turn: admitted.turn, reservationId: admitted.reservationId };
+    } catch (error) {
+      if (!(error instanceof BudgetPolicyError)) throw error;
+      const queued = await this.turn(input.orgId, input.projectId, input.turnId);
+      if (queued && queued.state === "queued") {
+        await this.storiesService.failTurn({ ...input, error: error.message });
+        await appendTurnEvent(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: queued.storyId,
+          turnId: queued.id,
+          type: "turn.failed",
+          data: { error: error.message.slice(0, 8_000) },
+        });
+        await this.activateQueuedSuccessor({ ...input, storyId: queued.storyId });
+      }
+      return { kind: "denied", error: error.message };
     }
   }
 

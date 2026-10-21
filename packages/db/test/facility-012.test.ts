@@ -45,6 +45,8 @@ describe("Facility 0.12 database", () => {
           "github_pull_request_reviews",
           "preview_sessions",
           "project_skills",
+          "budget_reservations",
+          "model_calls",
           "project_repositories",
           "stories",
           "story_conversations",

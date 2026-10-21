@@ -5002,7 +5002,7 @@ export interface operations {
                         remaining_cents: number | null;
                         percent_used: number | null;
                         /** @enum {string} */
-                        state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded";
+                        state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
                         /** @enum {string} */
                         enforcement: "block_new_turns";
                     };
@@ -5125,7 +5125,7 @@ export interface operations {
                         remaining_cents: number | null;
                         percent_used: number | null;
                         /** @enum {string} */
-                        state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded";
+                        state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
                         /** @enum {string} */
                         enforcement: "block_new_turns";
                     };
@@ -5266,7 +5266,7 @@ export interface operations {
                             remainingCents: number | null;
                             percentUsed: number | null;
                             /** @enum {string} */
-                            state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded";
+                            state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
                             /** @enum {string} */
                             enforcement: "block_new_turns";
                         };
@@ -6076,7 +6076,7 @@ export interface operations {
                                 /** @enum {boolean} */
                                 available: true;
                                 /** @enum {string} */
-                                state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded";
+                                state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
                                 enabled: boolean;
                                 monthlyLimitCents: number | null;
                                 warningPercent: number | null;
