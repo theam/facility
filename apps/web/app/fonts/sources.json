@@ -1,0 +1,55 @@
+{
+  "upstream_commit": "71f558992315a12ca1f06a2215d57962a1992162",
+  "license_source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/LICENSE.txt",
+  "files": [
+    {
+      "file": "IBMPlexSans-Regular.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-sans/fonts/complete/woff2/IBMPlexSans-Regular.woff2",
+      "git_blob": "231a1ad716215de37ce8102dde533be859036f91",
+      "sha256": "ba711a3085ff9f27440b6b9c4550cfc47c97bf36591d5da958b975bb3add8c1a",
+      "bytes": 63020
+    },
+    {
+      "file": "IBMPlexSans-Medium.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-sans/fonts/complete/woff2/IBMPlexSans-Medium.woff2",
+      "git_blob": "b142a66f712be6b6d3e72aaf53d9a2e88b06eefc",
+      "sha256": "5660f8a658f8bb50dbc005232f885eadffd2bc1c235c4f6fbb63469d1f9cde6d",
+      "bytes": 66740
+    },
+    {
+      "file": "IBMPlexSans-SemiBold.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-sans/fonts/complete/woff2/IBMPlexSans-SemiBold.woff2",
+      "git_blob": "b96a19c2457d296f597169ea104c5c1ab1435a46",
+      "sha256": "f78048030eab62e860efa39a0df79e2e5581bf122eb95b9bc42c0b8a4988d205",
+      "bytes": 67060
+    },
+    {
+      "file": "IBMPlexSans-Bold.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-sans/fonts/complete/woff2/IBMPlexSans-Bold.woff2",
+      "git_blob": "0d0b09aec993c87bc77b6f45e6230e867f24daf9",
+      "sha256": "fa7130d854a660b39a7fc9e6e0f2dc23dba5f1346e2adea3e1fe37b6d884133d",
+      "bytes": 63012
+    },
+    {
+      "file": "IBMPlexMono-Regular.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/fonts/complete/woff2/IBMPlexMono-Regular.woff2",
+      "git_blob": "8bdb4c4b3f8fae88cc2e3c9c744952dccf89b15a",
+      "sha256": "ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350",
+      "bytes": 49248
+    },
+    {
+      "file": "IBMPlexMono-Medium.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/fonts/complete/woff2/IBMPlexMono-Medium.woff2",
+      "git_blob": "dd2439862a1c2c2270cbcf911ec181f9ff7e5e30",
+      "sha256": "33faf307fa6031fb4062276d7320a6d632de890cbb347576fd80cfa01077bc25",
+      "bytes": 50400
+    },
+    {
+      "file": "IBMPlexMono-SemiBold.woff2",
+      "source": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/fonts/complete/woff2/IBMPlexMono-SemiBold.woff2",
+      "git_blob": "a0acc15bd6136037c3d188e97c100673c8b294aa",
+      "sha256": "6a825b4824c01cbb401e829e5a066a1818411bcb3538b5a5792c5ca9b82343c3",
+      "bytes": 50600
+    }
+  ]
+}
