@@ -112,7 +112,7 @@ export function StoryActions({
             rel="noreferrer"
             className="inline-flex h-8 items-center gap-2 border border-(--line-strong) px-3.5 text-[12.5px] font-medium text-(--ink) hover:bg-(--card)"
           >
-            pull request #{story.pullRequestNumber} ↗
+            source pull request #{story.pullRequestNumber} ↗
           </a>
         ) : null}
         {canExecute && activeTurn ? (

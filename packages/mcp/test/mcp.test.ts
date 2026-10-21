@@ -87,6 +87,8 @@ describe("@facility/mcp 0.12", () => {
       "facility_list_skills",
       "facility_list_stories",
       "facility_get_story",
+      "facility_get_delivery",
+      "facility_set_delivery",
       "facility_start_story",
       "facility_send_message",
       "facility_get_conversation",
@@ -315,6 +317,81 @@ describe("@facility/mcp 0.12", () => {
         },
       ],
     ]);
+    await client.close();
+    await server.close();
+  });
+
+  test("shares delivery validation and forwards read pagination, CAS and idempotency to the API", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { scope: { revision: 2 } };
+      },
+    });
+    const args = { projectId: "proj_1", storyId: "story/1" };
+    await client.callTool({
+      name: "facility_get_delivery",
+      arguments: {
+        ...args,
+        includeAvailable: true,
+        q: "example/app",
+        limit: 10,
+        offset: 20,
+      },
+    });
+    expect(requests[0]).toEqual({
+      method: "GET",
+      path: "/v1/projects/proj_1/workspace-stories/story%2F1/delivery",
+      options: {
+        query: { include_available: "true", q: "example/app", limit: 10, offset: 20 },
+        body: undefined,
+        idempotencyKey: undefined,
+      },
+    });
+    const write = {
+      ...args,
+      expectedRevision: 1,
+      declaredComplete: true,
+      pullRequests: [{ repository: "example/app", number: 3, primary: true }],
+      idempotencyKey: "delivery-retry-1",
+    };
+    expect(
+      (await client.callTool({ name: "facility_set_delivery", arguments: write })).isError,
+    ).not.toBe(true);
+    expect(requests[1]).toMatchObject({
+      method: "POST",
+      options: {
+        body: {
+          expected_revision: 1,
+          declared_complete: true,
+          pull_requests: [{ repository: "example/app", number: 3, primary: true, required: true }],
+          idempotency_key: "delivery-retry-1",
+        },
+        idempotencyKey: "delivery-retry-1",
+      },
+    });
+    const invalid = await client.callTool({
+      name: "facility_set_delivery",
+      arguments: {
+        ...write,
+        pullRequests: [{ repository: "example/app", number: 3, primary: false }],
+      },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(requests).toHaveLength(2);
+    const tools = await client.listTools();
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_get_delivery")?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_set_delivery")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
     await client.close();
     await server.close();
   });

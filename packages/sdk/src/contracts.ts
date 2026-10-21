@@ -238,7 +238,17 @@ export type StoryWorkspace = {
   lastActivityAt: string;
   destroyedAt: string | null;
 };
+export type StoryDelivery = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery"
+>;
+export type ReplaceStoryDelivery = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery"
+>;
 export type WorkspaceStoryBundle = {
+  /** Absent on older servers; an absent register never means a complete PR set. */
+  delivery?: StoryDelivery;
   story: WorkspaceStory;
   assignees: StoryAssignee[];
   workspace: StoryWorkspace | null;

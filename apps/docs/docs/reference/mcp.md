@@ -13,7 +13,7 @@ server. Authorization-server metadata remains available at `/.well-known/oauth-a
 and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
 still require a valid bearer token.
 
-The server exposes twenty-one task-oriented tools:
+The server exposes twenty-three task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -21,7 +21,9 @@ The server exposes twenty-one task-oriented tools:
 | `facility_list_agents` | Valid `.agents/` catalog with engines, models, and triggers. |
 | `facility_list_skills` | Valid skills installed in `.agents/skills/` or `.claude/skills/`. |
 | `facility_list_stories` | Stories, optionally filtered by status. |
-| `facility_get_story` | Story, workspace, turns, artifacts, attention, and ordered evidence timeline. |
+| `facility_get_story` | Story, workspace, turns, artifacts, attention, delivery PR set, and ordered evidence timeline. |
+| `facility_get_delivery` | Read the declared complete PR set, observed heads, CI/reviews and partial merges; optionally search the project's mirrored PRs. |
+| `facility_set_delivery` | Replace delivery links with revision checking and idempotency; does not accept work, merge or run an agent. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
 | `facility_get_conversation` | Read the shared ordered conversation. |
@@ -140,3 +142,44 @@ When a budget is enabled, Facility checks it before starting a provider call. Us
 recorded after the call from provider-reported values when available, otherwise from the built-in
 model price book. A call already running may cross the limit; subsequent turns are blocked. Models
 without a known price are rejected while budget enforcement is enabled.
+
+## Record all delivery PRs
+
+Read `facility_get_delivery` with `projectId`, `storyId` and `includeAvailable: true` to inspect
+the current `scope.revision` and find PRs already in this project's GitHub mirror. Optional `q`,
+`limit` and `offset` page the available PRs. Reading does not synchronize GitHub or wake compute.
+
+Declare the full set explicitly, using the revision you just read:
+
+```json
+{
+  "name": "facility_set_delivery",
+  "arguments": {
+    "projectId": "proj_example",
+    "storyId": "story_example",
+    "expectedRevision": 0,
+    "declaredComplete": true,
+    "pullRequests": [
+      { "repository": "example/app", "number": 12, "required": true, "primary": true },
+      { "repository": "example/api", "number": 34, "required": true, "primary": false }
+    ],
+    "idempotencyKey": "delivery-scope-first"
+  }
+}
+```
+
+This operation needs `projects:write`; reads need `projects:read`. A set has at most 50 PRs and
+one required primary when nonempty. Related PRs use `required: false`. A legacy source PR alone
+does not declare completeness. A concurrent edit returns 409; read the new revision and reconcile
+the set before making a new request. Retry an uncertain identical request with the same key.
+
+`candidate.revision` identifies the scope and all required heads. A changed required head changes
+that identity; observation times and array order do not. `candidate.state` distinguishes an
+incomplete scope, missing heads, stale observations and a recorded revision. GitHub observations
+older than 30 minutes are stale. CI for a different head is retained with `checks.current: false`;
+missing CI is `unobserved`. Reviews retain their source state and commit; bounded samples are
+marked `partial`. Reviews without a commit, or without an observed PR head, remain unverified;
+`unverifiedHeadCount` includes these alongside reviews on other commits. GitHub remains
+authoritative for required checks, review requirements and
+branch protection. Neither the candidate identity nor all PRs being merged constitutes acceptance
+or integration verification. Registering this set does not alter the existing source PR lifecycle.

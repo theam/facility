@@ -11,6 +11,7 @@ import type {
   ProjectSkill,
   StoryAgent,
   StoryConversationPage,
+  StoryDelivery,
   StoryEnvironment,
   StoryTimelinePage,
   StoryTurnActivityPage,
@@ -55,6 +56,7 @@ export type {
   StoryAgent,
   StoryAssignee,
   StoryConversationPage,
+  StoryDelivery,
   StoryEnvironment,
   StoryMessage,
   StoryMessageAuthor,
@@ -160,6 +162,13 @@ export const api = {
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}`,
         { query: { evidence: "none" } },
+      ),
+    ),
+  workspaceStoryDelivery: (projectId: string, storyId: string) =>
+    typed<StoryDelivery>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/delivery`,
       ),
     ),
   workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>

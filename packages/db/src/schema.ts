@@ -524,6 +524,78 @@ export const stories = pgTable(
   ],
 );
 
+export const storyDeliveryScopes = pgTable(
+  "story_delivery_scopes",
+  {
+    storyId: text("story_id")
+      .primaryKey()
+      .references(() => stories.id),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    revision: integer("revision").notNull(),
+    declaredComplete: boolean("declared_complete").notNull().default(false),
+    updatedBy: jsonb("updated_by").$type<{ type: "user" | "service"; id: string }>().notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    check("story_delivery_scopes_revision_check", sql`${table.revision} > 0`),
+    check(
+      "story_delivery_scopes_actor_check",
+      sql`jsonb_typeof(${table.updatedBy}) = 'object' and octet_length(${table.updatedBy}::text) <= 512`,
+    ),
+    foreignKey({
+      name: "story_delivery_scopes_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+  ],
+);
+
+export const storyDeliveryPullRequests = pgTable(
+  "story_delivery_pull_requests",
+  {
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    repositoryId: text("repository_id").notNull(),
+    pullNumber: integer("pull_number").notNull(),
+    required: boolean("required").notNull().default(true),
+    isPrimary: boolean("is_primary").notNull().default(false),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storyId, table.repositoryId, table.pullNumber] }),
+    uniqueIndex("story_delivery_pull_requests_primary_uidx")
+      .on(table.storyId)
+      .where(sql`${table.isPrimary}`),
+    index("story_delivery_pull_requests_scope_idx").on(table.orgId, table.projectId, table.storyId),
+    index("story_delivery_pull_requests_repository_idx").on(table.repositoryId, table.pullNumber),
+    check("story_delivery_pull_requests_number_check", sql`${table.pullNumber} > 0`),
+    check(
+      "story_delivery_pull_requests_primary_required_check",
+      sql`not ${table.isPrimary} or ${table.required}`,
+    ),
+    foreignKey({
+      name: "story_delivery_pull_requests_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_delivery_pull_requests_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+    foreignKey({
+      name: "story_delivery_pull_requests_observed_pr_fk",
+      columns: [table.repositoryId, table.pullNumber],
+      foreignColumns: [githubPullRequests.repositoryId, githubPullRequests.number],
+    }),
+  ],
+);
+
 /** Durable, coalesced lifecycle notification cursor; never project-owned data. */
 export const storyIntegrationNotifications = pgTable(
   "story_integration_notifications",

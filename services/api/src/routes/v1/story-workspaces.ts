@@ -4,12 +4,14 @@ import {
   AgentTriggerSchema,
   renderAgentManifest,
 } from "@facility/agents";
+import { ReplaceStoryDeliveryBody, StoryDeliveryQuery, StoryDeliverySchema } from "@facility/core";
 import { projectRepositories, workspaceEvents } from "@facility/db";
 import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { ApiError } from "../../errors.js";
+import { readStoryDelivery, replaceStoryDelivery } from "../../stories/delivery.js";
 import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
@@ -100,6 +102,64 @@ const DeleteBody = z.object({
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/delivery",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: StoryParams,
+        querystring: StoryDeliveryQuery,
+        response: { 200: StoryDeliverySchema },
+        operationId: "getStoryDelivery",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const query = request.query as z.infer<typeof StoryDeliveryQuery>;
+      reply.header("cache-control", "private, no-store");
+      return readStoryDelivery(
+        app.facilityDb,
+        { orgId: principal(request).orgId, projectId, storyId },
+        { ...query, includeAvailable: query.include_available === "true" },
+      );
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/delivery",
+    {
+      config: {
+        permission: "projects:write",
+        idempotent: true,
+        auditAction: "story.delivery.recorded",
+      },
+      schema: {
+        params: StoryParams,
+        body: ReplaceStoryDeliveryBody,
+        response: { 200: StoryDeliverySchema },
+        operationId: "replaceStoryDelivery",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof ReplaceStoryDeliveryBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "delivery_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return replaceStoryDelivery(
+        app.facilityDb,
+        { orgId: actor.orgId, projectId, storyId },
+        body,
+        principalActor(actor),
+      );
+    },
+  );
 
   app.patch(
     "/v1/projects/:projectId/workspace-stories/:storyId/integration-state",
@@ -487,7 +547,12 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         config.nativePreviews,
       );
       reply.header("cache-control", "private, no-store");
-      return { ...storyResponse(value), lifecycle };
+      const delivery = await readStoryDelivery(app.facilityDb, {
+        orgId: actor.orgId,
+        projectId,
+        storyId,
+      });
+      return { ...storyResponse(value), lifecycle, delivery };
     },
   );
 

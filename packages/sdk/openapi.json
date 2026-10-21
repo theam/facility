@@ -9537,6 +9537,1186 @@
         "x-facility-permission": "projects:read"
       }
     },
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery": {
+      "get": {
+        "operationId": "getStoryDelivery",
+        "parameters": [
+          {
+            "schema": {
+              "default": "false",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "in": "query",
+            "name": "include_available",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "in": "query",
+            "name": "q",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 25,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "in": "query",
+            "name": "offset",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "declaredComplete": {
+                          "type": "boolean"
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "registered",
+                            "legacy"
+                          ]
+                        },
+                        "updatedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "updatedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "declaredComplete",
+                        "origin",
+                        "updatedAt",
+                        "updatedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "pullRequests": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "repositoryId": {
+                            "type": "string"
+                          },
+                          "repository": {
+                            "type": "string"
+                          },
+                          "number": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "primary": {
+                            "type": "boolean"
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": [
+                              "registered",
+                              "legacy"
+                            ]
+                          },
+                          "title": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "url": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "closed",
+                              "merged",
+                              "unobserved"
+                            ]
+                          },
+                          "draft": {
+                            "nullable": true,
+                            "type": "boolean"
+                          },
+                          "headSha": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "headRef": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "baseRef": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "observedAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "stale": {
+                            "type": "boolean"
+                          },
+                          "checks": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "unobserved",
+                                  "pending",
+                                  "success",
+                                  "failure"
+                                ]
+                              },
+                              "headSha": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "current": {
+                                "type": "boolean"
+                              },
+                              "observedAt": {
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "headSha",
+                              "current",
+                              "observedAt"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "reviews": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "unobserved",
+                                  "recorded",
+                                  "partial"
+                                ]
+                              },
+                              "currentHeadCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "unverifiedHeadCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "truncated": {
+                                "type": "boolean"
+                              },
+                              "latest": {
+                                "maxItems": 5,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "reviewId": {
+                                      "type": "string"
+                                    },
+                                    "author": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "state": {
+                                      "type": "string"
+                                    },
+                                    "commitSha": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "submittedAt": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "current": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "reviewId",
+                                    "author",
+                                    "state",
+                                    "commitSha",
+                                    "submittedAt",
+                                    "url",
+                                    "current"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "currentHeadCount",
+                              "unverifiedHeadCount",
+                              "truncated",
+                              "latest"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "repositoryId",
+                          "repository",
+                          "number",
+                          "required",
+                          "primary",
+                          "origin",
+                          "title",
+                          "url",
+                          "state",
+                          "draft",
+                          "headSha",
+                          "headRef",
+                          "baseRef",
+                          "observedAt",
+                          "stale",
+                          "checks",
+                          "reviews"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "candidate": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "scope_incomplete",
+                            "unobserved",
+                            "stale",
+                            "recorded"
+                          ]
+                        },
+                        "requiredCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "mergedCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "allRequiredMerged": {
+                          "nullable": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "state",
+                        "requiredCount",
+                        "mergedCount",
+                        "allRequiredMerged"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "available": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "repositoryId": {
+                                "type": "string"
+                              },
+                              "repository": {
+                                "type": "string"
+                              },
+                              "number": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "headSha": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "closed",
+                                  "merged"
+                                ]
+                              },
+                              "draft": {
+                                "type": "boolean"
+                              },
+                              "stale": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "repositoryId",
+                              "repository",
+                              "number",
+                              "title",
+                              "url",
+                              "headSha",
+                              "state",
+                              "draft",
+                              "stale"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        },
+                        "nextOffset": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "hasMore",
+                        "nextOffset"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "generatedAt",
+                    "scope",
+                    "pullRequests",
+                    "candidate",
+                    "available"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get delivery",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:read"
+      },
+      "post": {
+        "operationId": "replaceStoryDelivery",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483646
+                  },
+                  "declared_complete": {
+                    "type": "boolean"
+                  },
+                  "pull_requests": {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "repository": {
+                          "type": "string",
+                          "minLength": 3,
+                          "maxLength": 240,
+                          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                        },
+                        "number": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2147483647
+                        },
+                        "required": {
+                          "default": true,
+                          "type": "boolean"
+                        },
+                        "primary": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "repository",
+                        "number"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "expected_revision",
+                  "declared_complete",
+                  "pull_requests",
+                  "idempotency_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "declaredComplete": {
+                          "type": "boolean"
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "registered",
+                            "legacy"
+                          ]
+                        },
+                        "updatedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "updatedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "declaredComplete",
+                        "origin",
+                        "updatedAt",
+                        "updatedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "pullRequests": {
+                      "maxItems": 50,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "repositoryId": {
+                            "type": "string"
+                          },
+                          "repository": {
+                            "type": "string"
+                          },
+                          "number": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "primary": {
+                            "type": "boolean"
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": [
+                              "registered",
+                              "legacy"
+                            ]
+                          },
+                          "title": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "url": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "closed",
+                              "merged",
+                              "unobserved"
+                            ]
+                          },
+                          "draft": {
+                            "nullable": true,
+                            "type": "boolean"
+                          },
+                          "headSha": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "headRef": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "baseRef": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "observedAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "stale": {
+                            "type": "boolean"
+                          },
+                          "checks": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "unobserved",
+                                  "pending",
+                                  "success",
+                                  "failure"
+                                ]
+                              },
+                              "headSha": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "current": {
+                                "type": "boolean"
+                              },
+                              "observedAt": {
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "headSha",
+                              "current",
+                              "observedAt"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "reviews": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "unobserved",
+                                  "recorded",
+                                  "partial"
+                                ]
+                              },
+                              "currentHeadCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "unverifiedHeadCount": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "truncated": {
+                                "type": "boolean"
+                              },
+                              "latest": {
+                                "maxItems": 5,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "reviewId": {
+                                      "type": "string"
+                                    },
+                                    "author": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "state": {
+                                      "type": "string"
+                                    },
+                                    "commitSha": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "submittedAt": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "current": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "reviewId",
+                                    "author",
+                                    "state",
+                                    "commitSha",
+                                    "submittedAt",
+                                    "url",
+                                    "current"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "currentHeadCount",
+                              "unverifiedHeadCount",
+                              "truncated",
+                              "latest"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "repositoryId",
+                          "repository",
+                          "number",
+                          "required",
+                          "primary",
+                          "origin",
+                          "title",
+                          "url",
+                          "state",
+                          "draft",
+                          "headSha",
+                          "headRef",
+                          "baseRef",
+                          "observedAt",
+                          "stale",
+                          "checks",
+                          "reviews"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "candidate": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "scope_incomplete",
+                            "unobserved",
+                            "stale",
+                            "recorded"
+                          ]
+                        },
+                        "requiredCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "mergedCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "allRequiredMerged": {
+                          "nullable": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "state",
+                        "requiredCount",
+                        "mergedCount",
+                        "allRequiredMerged"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "available": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "repositoryId": {
+                                "type": "string"
+                              },
+                              "repository": {
+                                "type": "string"
+                              },
+                              "number": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "headSha": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "closed",
+                                  "merged"
+                                ]
+                              },
+                              "draft": {
+                                "type": "boolean"
+                              },
+                              "stale": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "repositoryId",
+                              "repository",
+                              "number",
+                              "title",
+                              "url",
+                              "headSha",
+                              "state",
+                              "draft",
+                              "stale"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        },
+                        "nextOffset": {
+                          "nullable": true,
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "hasMore",
+                        "nextOffset"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "generatedAt",
+                    "scope",
+                    "pullRequests",
+                    "candidate",
+                    "available"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create delivery",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:write"
+      }
+    },
     "/v1/projects/{projectId}/workspace-stories/{storyId}/integration-state": {
       "patch": {
         "operationId": "updateStoryIntegrationState",

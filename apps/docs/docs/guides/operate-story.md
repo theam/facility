@@ -99,6 +99,34 @@ When the story needs attention:
 
 Canceling a turn does not roll back files or commits already written in the workspace.
 
+## Review the complete PR set
+
+The story's **delivery** panel lists every registered PR, its required or related role, the
+primary, observed head, merge state, CI and review commits. A legacy source PR is shown as an
+association until someone explicitly declares the full set. One merged primary does not prove
+that all required PRs merged.
+
+With project write access, choose **Edit PR set**, find PRs in the project's GitHub mirror and
+select one required primary. Mark which PRs are required and confirm **These are all the PRs
+required to deliver this story**. Saving records metadata and history; it does not start an agent,
+accept work or merge a PR. Changing links clears the editor's completeness confirmation.
+
+An automatic page refresh preserves unsaved selections. If somebody changes the saved set, a
+save reports a conflict and retains your edits. **Reload saved set (discard edits)** explicitly
+replaces them with the current saved set. Retrying an unchanged failed save reuses its request key.
+
+The panel uses mirrored GitHub observations. CI on an older commit is labelled separately from
+CI on the current head; missing CI remains unobserved. Expand reviews to inspect their source
+states and commits. Stale observations require GitHub reconciliation before delivery can be
+evaluated. The observed revision identifies the required heads without requiring you to enter
+commit hashes. GitHub still controls required checks and branch protection.
+
+`facility_get_delivery` and `facility_set_delivery` provide the same register over MCP. See the
+[MCP reference](../reference/mcp.md#record-all-delivery-prs) for revision, completeness and retry
+semantics. The register preserves the existing source PR association and lifecycle; a source PR
+merge can still mark the story done while the delivery panel shows other required PRs outstanding.
+Acceptance, integration and all required merges remain separate facts.
+
 ## Inspect and test the environment
 
 The environment view reports workspace state, provider inspection, setup and wake timing, events,

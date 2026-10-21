@@ -7,6 +7,7 @@ import { AttentionActions } from "@/components/story/attention-actions";
 import { EnvironmentLogs } from "@/components/story/environment-logs";
 import { StoryActions } from "@/components/story/story-actions";
 import { StoryConversation } from "@/components/story/story-conversation";
+import { StoryDeliveryPanel } from "@/components/story/story-delivery";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
@@ -190,6 +191,14 @@ export default async function StoryPage({
           ))}
         </section>
       ) : null}
+
+      <StoryDeliveryPanel
+        key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.delivery}
+        canWrite={canWrite}
+      />
 
       <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
         <div className="flex flex-wrap items-baseline justify-between gap-4">

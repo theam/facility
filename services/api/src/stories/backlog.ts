@@ -30,7 +30,7 @@ import {
 // Large text columns (issue and pull request bodies, manifests) are never
 // selected here.
 
-const MIRROR_STALE_AFTER_MS = 30 * 60 * 1_000;
+export const MIRROR_STALE_AFTER_MS = 30 * 60 * 1_000;
 const MAX_LIMIT = 100;
 
 export type BacklogPhaseFilter = WorkPhase | "open" | "all";

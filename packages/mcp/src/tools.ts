@@ -1,3 +1,4 @@
+import { ReplaceStoryDeliveryBody } from "@facility/core";
 import { FacilityApiError, FacilityClient, type QueryParams } from "@facility/sdk";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -105,6 +106,55 @@ export const toolDefinitions: ToolDefinition[] = [
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}`,
+  },
+  {
+    name: "facility_get_delivery",
+    permission: "projects:read",
+    description:
+      "Read the story's declared delivery PR set, exact observed heads, current or older CI/reviews and partial merges. Reads never start agents, refresh GitHub or wake workspaces. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      storyId,
+      includeAvailable: z.boolean().default(false),
+      q: z.string().trim().max(200).optional(),
+      limit: z.number().int().min(1).max(100).default(25),
+      offset: z.number().int().min(0).max(1_000_000).default(0),
+    },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/delivery`,
+    query: (args) => ({
+      include_available: args.includeAvailable === true ? "true" : "false",
+      q: stringValue(args.q),
+      limit: Number(args.limit ?? 25),
+      offset: Number(args.offset ?? 0),
+    }),
+  },
+  {
+    name: "facility_set_delivery",
+    permission: "projects:write",
+    description:
+      "Replace a story's delivery PR links from its project's GitHub mirror. Read the current scope revision first; declare completeness explicitly and choose one required primary. This records metadata only; it does not accept work, merge PRs or run agents. Needs projects:write.",
+    inputSchema: {
+      projectId,
+      storyId,
+      expectedRevision: ReplaceStoryDeliveryBody.shape.expected_revision,
+      declaredComplete: ReplaceStoryDeliveryBody.shape.declared_complete,
+      pullRequests: ReplaceStoryDeliveryBody.shape.pull_requests,
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/delivery`,
+    body: (args) =>
+      ReplaceStoryDeliveryBody.parse({
+        expected_revision: args.expectedRevision,
+        declared_complete: args.declaredComplete,
+        pull_requests: args.pullRequests,
+        idempotency_key: args.idempotencyKey,
+      }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
   },
   {
     name: "facility_start_story",

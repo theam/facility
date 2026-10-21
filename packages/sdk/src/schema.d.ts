@@ -542,6 +542,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get delivery */
+        get: operations["getStoryDelivery"];
+        put?: never;
+        /** Create delivery */
+        post: operations["replaceStoryDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectId}/workspace-stories/{storyId}/integration-state": {
         parameters: {
             query?: never;
@@ -6109,6 +6127,390 @@ export interface operations {
                             /** Format: date-time */
                             resolvedAt: string | null;
                         }[];
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getStoryDelivery: {
+        parameters: {
+            query?: {
+                include_available?: "true" | "false";
+                q?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        scope: {
+                            revision: number;
+                            declaredComplete: boolean;
+                            /** @enum {string} */
+                            origin: "registered" | "legacy";
+                            updatedAt: string | null;
+                            updatedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                        };
+                        pullRequests: {
+                            repositoryId: string;
+                            repository: string;
+                            number: number;
+                            required: boolean;
+                            primary: boolean;
+                            /** @enum {string} */
+                            origin: "registered" | "legacy";
+                            title: string | null;
+                            url: string | null;
+                            /** @enum {string} */
+                            state: "open" | "closed" | "merged" | "unobserved";
+                            draft: boolean | null;
+                            headSha: string | null;
+                            headRef: string | null;
+                            baseRef: string | null;
+                            observedAt: string | null;
+                            stale: boolean;
+                            checks: {
+                                /** @enum {string} */
+                                state: "unobserved" | "pending" | "success" | "failure";
+                                headSha: string | null;
+                                current: boolean;
+                                observedAt: string | null;
+                            };
+                            reviews: {
+                                /** @enum {string} */
+                                state: "unobserved" | "recorded" | "partial";
+                                currentHeadCount: number;
+                                unverifiedHeadCount: number;
+                                truncated: boolean;
+                                latest: {
+                                    reviewId: string;
+                                    author: string | null;
+                                    state: string;
+                                    commitSha: string | null;
+                                    submittedAt: string | null;
+                                    url: string | null;
+                                    current: boolean;
+                                }[];
+                            };
+                        }[];
+                        candidate: {
+                            revision: string | null;
+                            /** @enum {string} */
+                            state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                            requiredCount: number;
+                            mergedCount: number;
+                            allRequiredMerged: boolean | null;
+                        };
+                        available: {
+                            items: {
+                                repositoryId: string;
+                                repository: string;
+                                number: number;
+                                title: string;
+                                url: string;
+                                headSha: string;
+                                /** @enum {string} */
+                                state: "open" | "closed" | "merged";
+                                draft: boolean;
+                                stale: boolean;
+                            }[];
+                            hasMore: boolean;
+                            nextOffset: number | null;
+                        } | null;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    replaceStoryDelivery: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_revision: number;
+                    declared_complete: boolean;
+                    pull_requests: {
+                        repository: string;
+                        number: number;
+                        /** @default true */
+                        required?: boolean;
+                        /** @default false */
+                        primary?: boolean;
+                    }[];
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        scope: {
+                            revision: number;
+                            declaredComplete: boolean;
+                            /** @enum {string} */
+                            origin: "registered" | "legacy";
+                            updatedAt: string | null;
+                            updatedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                        };
+                        pullRequests: {
+                            repositoryId: string;
+                            repository: string;
+                            number: number;
+                            required: boolean;
+                            primary: boolean;
+                            /** @enum {string} */
+                            origin: "registered" | "legacy";
+                            title: string | null;
+                            url: string | null;
+                            /** @enum {string} */
+                            state: "open" | "closed" | "merged" | "unobserved";
+                            draft: boolean | null;
+                            headSha: string | null;
+                            headRef: string | null;
+                            baseRef: string | null;
+                            observedAt: string | null;
+                            stale: boolean;
+                            checks: {
+                                /** @enum {string} */
+                                state: "unobserved" | "pending" | "success" | "failure";
+                                headSha: string | null;
+                                current: boolean;
+                                observedAt: string | null;
+                            };
+                            reviews: {
+                                /** @enum {string} */
+                                state: "unobserved" | "recorded" | "partial";
+                                currentHeadCount: number;
+                                unverifiedHeadCount: number;
+                                truncated: boolean;
+                                latest: {
+                                    reviewId: string;
+                                    author: string | null;
+                                    state: string;
+                                    commitSha: string | null;
+                                    submittedAt: string | null;
+                                    url: string | null;
+                                    current: boolean;
+                                }[];
+                            };
+                        }[];
+                        candidate: {
+                            revision: string | null;
+                            /** @enum {string} */
+                            state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                            requiredCount: number;
+                            mergedCount: number;
+                            allRequiredMerged: boolean | null;
+                        };
+                        available: {
+                            items: {
+                                repositoryId: string;
+                                repository: string;
+                                number: number;
+                                title: string;
+                                url: string;
+                                headSha: string;
+                                /** @enum {string} */
+                                state: "open" | "closed" | "merged";
+                                draft: boolean;
+                                stale: boolean;
+                            }[];
+                            hasMore: boolean;
+                            nextOffset: number | null;
+                        } | null;
                     };
                 };
             };
