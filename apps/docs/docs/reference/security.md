@@ -55,10 +55,17 @@ URL is created.
 The workspace pins minimum patched versions for transitive dependencies in
 `pnpm-workspace.yaml`, with the resolved graph committed in `pnpm-lock.yaml`.
 Network dependency floors include `fast-uri` 3.1.7/4.1.4, `ip-address` 10.5.1,
-and `undici` 7.29.1 on the affected 7.x line. These address malformed URI
-authorities, IPv6 special-use classification and compressed WebSocket error
-handling. They do not establish that every dependency advisory is exploitable
-through a Facility route, or replace application authorization and egress policy.
+and `undici` 7.30.1/8.12.2 on the affected 7.x and 8.x lines. These address
+malformed URI authorities, IPv6 special-use classification, compressed WebSocket
+error handling, and the October 2026 undici advisories, including the `Agent` TLS
+identity-callback bypass. They do not establish that every dependency advisory is
+exploitable through a Facility route, or replace application authorization and
+egress policy.
+
+The API, web, and runner images build from a digest-pinned `node:24-trixie-slim`
+base on Node.js 24.22.1 or later, which contains the October 2026 Node.js security release.
+Running containers keep their previous Node.js runtime until the images are rebuilt
+and redeployed.
 
 The all-severity audit remains part of `pnpm verify`; the refresh does not add
 audit exceptions or change existing exceptions. For deployment and verification,

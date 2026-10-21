@@ -3,7 +3,7 @@
 # Web and docs build separately (Next standalone / static).
 #
 #   docker build --target api     -t facility/api .
-FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS base
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 # Keep a digest-pinned base while still making a reviewed Debian security
