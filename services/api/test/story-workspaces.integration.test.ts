@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
@@ -1054,5 +1054,159 @@ environment:
         actor: { type: "user", id: "other" },
       }),
     ).rejects.toMatchObject({ code: "story_not_found", statusCode: 404 });
+  });
+
+  function deliveryMirror() {
+    return new GithubMirrorService(
+      db,
+      async () => {
+        throw new Error("no external GitHub call expected");
+      },
+      service,
+    );
+  }
+
+  function observeMergedPullRequest(
+    mirror: GithubMirrorService,
+    number: number,
+    branch: string,
+    scope = { orgId, projectId, repositoryId },
+  ) {
+    return mirror.handleWebhook({
+      id: randomUUID(),
+      ...scope,
+      eventType: "pull_request",
+      payload: {
+        action: "closed",
+        repository: {
+          full_name: `acme/app-${suffix}`,
+          name: `app-${suffix}`,
+          owner: { login: "acme" },
+        },
+        pull_request: {
+          number,
+          title: "Story delivery",
+          body: "",
+          state: "closed",
+          merged: true,
+          draft: false,
+          html_url: `https://github.com/acme/app/pull/${number}`,
+          user: { login: "facility[bot]" },
+          // A fresh head keeps the commit-evidence lookup from matching another story.
+          head: { ref: branch, sha: randomUUID().replaceAll("-", "").padEnd(40, "0") },
+          base: { ref: "main" },
+          created_at: "2026-10-01T10:00:00Z",
+          updated_at: "2026-10-01T12:00:00Z",
+          closed_at: "2026-10-01T12:00:00Z",
+          merged_at: "2026-10-01T12:00:00Z",
+        },
+      },
+    });
+  }
+
+  async function startManualStory() {
+    const branch = `facility/manual-${randomUUID()}`;
+    const started = await service.start({
+      ...startInput(`manual:${randomUUID()}`),
+      provider: "manual",
+      branch,
+    });
+    if (!started.queued.turn) throw new Error("expected initial turn");
+    await service.completeTurn({
+      orgId,
+      projectId,
+      turnId: started.queued.turn.id,
+      output: "done",
+      actor: { type: "system", id: "test-engine" },
+    });
+    return { started, branch };
+  }
+
+  it("completes a manually started story when its pull request merges", async () => {
+    const { started, branch } = await startManualStory();
+    expect(started.story.repositoryId).toBe(repositoryId);
+
+    await observeMergedPullRequest(deliveryMirror(), 8801, branch);
+
+    const merged = await service.get(orgId, projectId, started.story.id);
+    expect(merged.story).toMatchObject({ status: "done", pullRequestNumber: 8801, branch });
+    expect(merged.workspace?.state).toBe("sleeping");
+  });
+
+  it("starts scheduled stories in the primary repository and replays the same identity", async () => {
+    const input = { ...startInput(`audit:${randomUUID()}`), provider: "schedule" as const };
+    const first = await service.start(input);
+    const replay = await service.start(input);
+
+    expect(first.story.repositoryId).toBe(repositoryId);
+    expect(replay.story.id).toBe(first.story.id);
+    expect(
+      await db.select().from(stories).where(eq(stories.externalId, input.externalId)),
+    ).toHaveLength(1);
+  });
+
+  it("ignores a merged pull request on the same branch from another tenant or repository", async () => {
+    const { started, branch } = await startManualStory();
+    const mirror = deliveryMirror();
+
+    await observeMergedPullRequest(mirror, 8802, branch, {
+      orgId: otherOrgId,
+      projectId: otherProjectId,
+      repositoryId,
+    });
+    await observeMergedPullRequest(mirror, 8803, branch, {
+      orgId,
+      projectId,
+      repositoryId: newId("repo"),
+    });
+
+    const unchanged = await service.get(orgId, projectId, started.story.id);
+    expect(unchanged.story).toMatchObject({ status: "working", pullRequestNumber: null });
+    expect(unchanged.workspace?.state).toBe("running");
+  });
+
+  it("backfills legacy manual and scheduled stories without colliding or crossing projects", async () => {
+    const legacy = (provider: "manual" | "schedule", overrides = {}) => ({
+      id: newId("story"),
+      orgId,
+      projectId,
+      provider,
+      externalId: `legacy:${randomUUID()}`,
+      title: "Legacy story",
+      status: "working" as const,
+      createdBy: { type: "user", id: "user_test" },
+      updatedAt: new Date("2026-09-01T00:00:00Z"),
+      ...overrides,
+    });
+    const manual = legacy("manual");
+    const scheduled = legacy("schedule");
+    // Same identity already exists in the primary repository, so the unique index must hold.
+    const colliding = legacy("manual");
+    const otherTenant = legacy("manual", { orgId: otherOrgId, projectId: otherProjectId });
+    await db
+      .insert(stories)
+      .values([
+        manual,
+        scheduled,
+        colliding,
+        { ...colliding, id: newId("story"), repositoryId },
+        otherTenant,
+      ]);
+
+    const backfill = await readFile(
+      new URL(
+        "../../../packages/db/migrations/v0.12/0009_story_primary_repository.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    await client.unsafe(backfill);
+
+    const row = async (id: string) =>
+      (await db.select().from(stories).where(eq(stories.id, id)))[0];
+    expect(await row(manual.id)).toMatchObject({ repositoryId, updatedAt: manual.updatedAt });
+    expect(await row(scheduled.id)).toMatchObject({ repositoryId });
+    expect(await row(colliding.id)).toMatchObject({ repositoryId: null });
+    expect(await row(otherTenant.id)).toMatchObject({ repositoryId: null });
   });
 });

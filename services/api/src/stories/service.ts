@@ -6,6 +6,7 @@ import {
   type FacilityDb,
   githubIssues,
   previewSessions,
+  projectRepositories,
   stories,
   storyArtifacts,
   storyAssignees,
@@ -40,6 +41,7 @@ export type StoryTitleSource = "user" | "github" | "schedule" | "pending" | "fal
 export type StartStoryInput = {
   orgId: string;
   projectId: string;
+  /** Manual and scheduled stories default to the project's primary repository. */
   repositoryId?: string;
   provider: "github" | "manual" | "schedule";
   externalId: string;
@@ -120,9 +122,16 @@ export class StoryWorkspaceService {
     validateStartInput(input);
     const aggregate = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      // The primary repository owns the story branch, so its pull requests must
+      // resolve to this story even when no GitHub issue started it.
+      const repositoryId =
+        input.repositoryId ??
+        (input.provider === "github"
+          ? undefined
+          : await primaryRepositoryId(tx, input.orgId, input.projectId));
       await lockIdentity(
         tx,
-        `${input.orgId}:${input.projectId}:${input.repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
+        `${input.orgId}:${input.projectId}:${repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
       );
       let story = (
         await tx
@@ -132,9 +141,7 @@ export class StoryWorkspaceService {
             and(
               eq(stories.orgId, input.orgId),
               eq(stories.projectId, input.projectId),
-              input.repositoryId
-                ? eq(stories.repositoryId, input.repositoryId)
-                : isNull(stories.repositoryId),
+              repositoryId ? eq(stories.repositoryId, repositoryId) : isNull(stories.repositoryId),
               eq(stories.provider, input.provider),
               eq(stories.externalId, input.externalId),
             ),
@@ -149,7 +156,7 @@ export class StoryWorkspaceService {
               id: newId("story"),
               orgId: input.orgId,
               projectId: input.projectId,
-              repositoryId: input.repositoryId,
+              repositoryId,
               provider: input.provider,
               externalId: input.externalId,
               title: input.title,
@@ -2244,6 +2251,23 @@ async function scopedStory(db: FacilityDb, orgId: string, projectId: string, sto
   )[0];
   if (!story) throw new StoryServiceError("story_not_found", "story not found", 404);
   return story;
+}
+
+async function primaryRepositoryId(db: FacilityDb, orgId: string, projectId: string) {
+  const repository = (
+    await db
+      .select({ id: projectRepositories.id })
+      .from(projectRepositories)
+      .where(
+        and(
+          eq(projectRepositories.orgId, orgId),
+          eq(projectRepositories.projectId, projectId),
+          eq(projectRepositories.role, "primary"),
+        ),
+      )
+      .limit(1)
+  )[0];
+  return repository?.id;
 }
 
 async function scopedTurn(db: FacilityDb, orgId: string, projectId: string, turnId: string) {
