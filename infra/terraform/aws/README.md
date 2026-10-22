@@ -2,7 +2,8 @@
 
 This module runs Facility's durable control plane on AWS while every story workspace runs on
 Vercel Sandbox. It provisions one ALB, ECS services for API/MCP/webhooks, worker, and web, an RDS
-PostgreSQL database, ECR repositories, Secrets Manager, and CloudWatch logs.
+PostgreSQL database, ECR repositories, Secrets Manager, CloudWatch logs, and alarms for queue age,
+failed turns, webhook rejections, mirror lag, and exhausted budgets.
 
 It does not provision a model gateway, CodeBuild sandboxes, preview tasks, or a separate metering
 service. Cost controls, audit events, observability, GitHub mirroring, and the delivery pipeline are

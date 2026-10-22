@@ -18,7 +18,7 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import websocket from "@fastify/websocket";
 import { and, eq, isNull, or } from "drizzle-orm";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -38,6 +38,7 @@ import {
   type OpenApiDocument,
   type OpenApiRouteRecord,
 } from "./openapi-contract.js";
+import { readinessDecision, readWorkerReadiness } from "./operations/readiness.js";
 import { assertPreviewOriginSurface } from "./origin-isolation.js";
 import { safeRequestLog } from "./request-log.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -308,25 +309,70 @@ export async function buildApp(
     }
   });
 
-  const healthOptions = {
-    config: { public: true },
-    schema: {
-      response: {
-        200: z.object({ ok: z.boolean(), version: z.string(), db: z.enum(["ok", "down"]) }),
-        503: z.object({ ok: z.boolean(), version: z.string(), db: z.enum(["ok", "down"]) }),
-      },
+  const version = "0.12.0";
+  const livenessBody = z.object({
+    ok: z.boolean(),
+    version: z.string(),
+    db: z.enum(["ok", "down"]),
+  });
+  const readinessBody = livenessBody.extend({
+    worker: z.enum(["ok", "down"]),
+    queue: z.enum(["ok", "stale"]),
+    queueAgeMs: z.number().nullable(),
+  });
+  app.get(
+    "/health",
+    {
+      config: { public: true },
+      schema: { response: { 200: livenessBody, 503: livenessBody } },
     },
-  };
-  const healthHandler = async (_request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      await db.execute("select 1" as never);
-      return { ok: true, version: "0.12.0", db: "ok" as const };
-    } catch {
-      return reply.status(503).send({ ok: false, version: "0.12.0", db: "down" as const });
-    }
-  };
-  app.get("/health", healthOptions, healthHandler);
-  app.get("/readyz", healthOptions, healthHandler);
+    async (_request, reply) => {
+      try {
+        await db.execute("select 1" as never);
+        return { ok: true, version, db: "ok" as const };
+      } catch {
+        return reply.status(503).send({ ok: false, version, db: "down" as const });
+      }
+    },
+  );
+  app.get(
+    "/readyz",
+    {
+      config: { public: true },
+      schema: { response: { 200: readinessBody, 503: readinessBody } },
+    },
+    async (_request, reply) => {
+      try {
+        await db.execute("select 1" as never);
+      } catch {
+        return reply.status(503).send({
+          ok: false,
+          version,
+          db: "down" as const,
+          worker: "down" as const,
+          queue: "ok" as const,
+          queueAgeMs: null,
+        });
+      }
+      try {
+        const decision = readinessDecision({
+          ...(await readWorkerReadiness(db, new Date())),
+          now: new Date(),
+        });
+        const body = { ...decision, version, db: "ok" as const };
+        return decision.ok ? body : reply.status(503).send(body);
+      } catch {
+        return reply.status(503).send({
+          ok: false,
+          version,
+          db: "ok" as const,
+          worker: "down" as const,
+          queue: "ok" as const,
+          queueAgeMs: null,
+        });
+      }
+    },
+  );
 
   await registerAuthorizationServer(app, config);
   await registerMcpRoutes(app, config);

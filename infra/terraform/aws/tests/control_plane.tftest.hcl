@@ -87,4 +87,24 @@ run "vercel_workspace_control_plane" {
     condition     = aws_db_instance.facility.skip_final_snapshot && aws_db_instance.facility.final_snapshot_identifier == null
     error_message = "Disposable deployments must skip the final snapshot without setting an incompatible identifier."
   }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.queue_age.threshold == 120 && aws_cloudwatch_metric_alarm.queue_age.treat_missing_data == "breaching"
+    error_message = "A dead worker or a turn waiting more than two minutes must alarm."
+  }
+
+  assert {
+    condition = toset([
+      aws_cloudwatch_metric_alarm.failed_turns.metric_name,
+      aws_cloudwatch_metric_alarm.webhook_rejections.metric_name,
+      aws_cloudwatch_metric_alarm.mirror_lag.metric_name,
+      aws_cloudwatch_metric_alarm.budgets_exceeded.metric_name,
+    ]) == toset(["FailedTurns", "WebhookRejections", "MirrorLagSeconds", "BudgetsExceeded"])
+    error_message = "Operations alarms must cover failed turns, webhook rejection, mirror lag, and budget state."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.mirror_lag.threshold == 1800 && aws_cloudwatch_metric_alarm.failed_turns.threshold == 0
+    error_message = "Mirror lag alarms after 30 minutes and any failed turn alarms immediately."
+  }
 }
