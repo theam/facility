@@ -1,3 +1,5 @@
+import { CONSULTATION_LIMITS } from "./story-consultations.js";
+
 export type ModelPrice = {
   input: number;
   output: number;
@@ -67,7 +69,24 @@ export const TITLE_RESERVATION_TOKENS = {
   outputTokens: 256,
 } as const;
 
-export function reservationCents(model: string, purpose: "turn" | "title"): number | null {
+export function reservationCents(
+  model: string,
+  purpose: "turn" | "title" | "consultation",
+): number | null {
+  if (purpose === "consultation") {
+    const key = normalizeModel(model);
+    const price: ModelPrice | undefined = key ? MODEL_PRICES_USD_PER_1M[key] : undefined;
+    if (!price) return null;
+    const inputPrice = Math.max(price.input, price.cacheRead ?? 0, price.cacheWrite ?? 0);
+    return (
+      Math.ceil(
+        (((CONSULTATION_LIMITS.inputBytes + 1_024) * inputPrice +
+          CONSULTATION_LIMITS.outputTokens * price.output) /
+          10_000) *
+          1_000_000,
+      ) / 1_000_000
+    );
+  }
   const tokens = purpose === "turn" ? TURN_RESERVATION_TOKENS : TITLE_RESERVATION_TOKENS;
   return costCents({ model, ...tokens });
 }

@@ -10,6 +10,7 @@ import type {
   FacilityRouteResponse,
   ProjectSkill,
   StoryAgent,
+  StoryConsultations,
   StoryConversationPage,
   StoryDelivery,
   StoryEnvironment,
@@ -169,6 +170,13 @@ export const api = {
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/delivery`,
+      ),
+    ),
+  workspaceStoryConsultations: (projectId: string, storyId: string) =>
+    typed<StoryConsultations>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/consultations`,
       ),
     ),
   reviewStoryPlanDecision: (projectId: string, storyId: string, requestId: string) =>

@@ -1267,6 +1267,13 @@ export const modelCalls = pgTable(
   },
   (table) => [
     uniqueIndex("model_calls_scope_uidx").on(table.orgId, table.projectId, table.storyId, table.id),
+    uniqueIndex("model_calls_scope_purpose_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.id,
+      table.purpose,
+    ),
     uniqueIndex("model_calls_request_uidx").on(
       table.orgId,
       table.projectId,
@@ -1344,16 +1351,19 @@ export const budgetReservations = pgTable(
       .where(sql`${table.modelCallId} is not null`),
     check(
       "budget_reservations_model_call_check",
-      sql`${table.modelCallId} is null or ${table.purpose} = 'title'`,
+      sql`(${table.modelCallId} is null or ${table.purpose} in ('title', 'consultation')) and (${table.purpose} != 'consultation' or ${table.modelCallId} is not null)`,
     ),
-    check("budget_reservations_purpose_check", sql`${table.purpose} in ('turn', 'title')`),
+    check(
+      "budget_reservations_purpose_check",
+      sql`${table.purpose} in ('turn', 'title', 'consultation')`,
+    ),
     check("budget_reservations_state_check", sql`${table.state} in ('open', 'settled')`),
     check("budget_reservations_cents_check", sql`${table.reservedCents} >= 0`),
     check(
       "budget_reservations_subject_check",
       sql`(
         (${table.purpose} = 'turn' and ${table.turnId} is not null and ${table.state} = 'open')
-        or (${table.purpose} = 'title' and ${table.turnId} is null)
+        or (${table.purpose} in ('title', 'consultation') and ${table.turnId} is null)
       )`,
     ),
     foreignKey({
@@ -1363,8 +1373,14 @@ export const budgetReservations = pgTable(
     }),
     foreignKey({
       name: "budget_reservations_model_call_scope_fk",
-      columns: [table.orgId, table.projectId, table.storyId, table.modelCallId],
-      foreignColumns: [modelCalls.orgId, modelCalls.projectId, modelCalls.storyId, modelCalls.id],
+      columns: [table.orgId, table.projectId, table.storyId, table.modelCallId, table.purpose],
+      foreignColumns: [
+        modelCalls.orgId,
+        modelCalls.projectId,
+        modelCalls.storyId,
+        modelCalls.id,
+        modelCalls.purpose,
+      ],
     }),
     foreignKey({
       name: "budget_reservations_story_scope_fk",
@@ -1375,6 +1391,125 @@ export const budgetReservations = pgTable(
       name: "budget_reservations_turn_scope_fk",
       columns: [table.orgId, table.projectId, table.storyId, table.turnId],
       foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+  ],
+);
+
+export const storyConsultations = pgTable(
+  "story_consultations",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    storyId: text("story_id")
+      .notNull()
+      .references(() => stories.id),
+    requestKey: text("request_key").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    principalType: text("principal_type").notNull(),
+    principalId: text("principal_id").notNull(),
+    actorName: text("actor_name"),
+    surface: text("surface").notNull(),
+    agentName: text("agent_name").notNull(),
+    engine: text("engine").notNull(),
+    model: text("model").notNull(),
+    reasoningEffort: text("reasoning_effort"),
+    agentHash: text("agent_hash").notNull(),
+    agentPrompt: text("agent_prompt").notNull(),
+    catalogRepositoryId: text("catalog_repository_id").notNull(),
+    catalogSha: text("catalog_sha").notNull(),
+    provider: text("provider").notNull(),
+    providerModel: text("provider_model"),
+    sourceInputs: jsonb("source_inputs").notNull().default(sql`'[]'::jsonb`),
+    request: text("request").notNull(),
+    throughMessageSeq: integer("through_message_seq").notNull(),
+    savedSummary: text("saved_summary"),
+    summaryOmitted: boolean("summary_omitted").notNull().default(false),
+    contextPrompt: text("context_prompt"),
+    contextData: jsonb("context_data").notNull().default(sql`'{}'::jsonb`),
+    contextHash: text("context_hash"),
+    state: text("state").notNull().default("queued"),
+    processingToken: text("processing_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    modelCallId: text("model_call_id"),
+    callPurpose: text("call_purpose").notNull().default("consultation"),
+    result: text("result"),
+    resultHash: text("result_hash"),
+    errorCode: text("error_code"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("story_consultations_scope_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.id,
+    ),
+    uniqueIndex("story_consultations_request_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.requestKey,
+    ),
+    uniqueIndex("story_consultations_active_story_uidx")
+      .on(table.orgId, table.projectId, table.storyId)
+      .where(sql`${table.state} in ('queued', 'preparing', 'running')`),
+    index("story_consultations_project_state_idx").on(table.orgId, table.projectId, table.state),
+    index("story_consultations_story_created_idx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.createdAt.desc(),
+      table.id,
+    ),
+    index("story_consultations_expiry_idx").on(table.state, table.expiresAt),
+    check(
+      "story_consultations_identity_check",
+      sql`length(${table.requestKey}) between 8 and 200 and length(${table.fingerprint}) = 43 and ${table.principalType} in ('user', 'key') and length(${table.principalId}) between 1 and 200 and ${table.surface} in ('ui', 'mcp')`,
+    ),
+    check(
+      "story_consultations_agent_check",
+      sql`((${table.engine} = 'codex' and ${table.provider} = 'openai') or (${table.engine} = 'claude_code' and ${table.provider} = 'anthropic')) and length(${table.agentName}) between 1 and 64 and length(${table.model}) between 1 and 160 and length(${table.agentHash}) between 1 and 128 and ${table.catalogSha} ~ '^[a-f0-9]{40}$'`,
+    ),
+    check(
+      "story_consultations_text_check",
+      sql`octet_length(${table.request}) between 1 and 8000 and octet_length(${table.agentPrompt}) <= 12000 and (${table.savedSummary} is null or octet_length(${table.savedSummary}) <= 4096) and (${table.contextPrompt} is null or octet_length(${table.contextPrompt}) <= 65536) and (${table.result} is null or octet_length(${table.result}) <= 32768)`,
+    ),
+    check(
+      "story_consultations_context_check",
+      sql`${table.throughMessageSeq} >= 0 and jsonb_typeof(${table.sourceInputs}) = 'array' and jsonb_array_length(${table.sourceInputs}) <= 4 and jsonb_typeof(${table.contextData}) = 'object' and (${table.contextHash} is null or length(${table.contextHash}) = 43) and (${table.resultHash} is null or length(${table.resultHash}) = 43) and (${table.result} is null) = (${table.resultHash} is null)`,
+    ),
+    check(
+      "story_consultations_state_check",
+      sql`${table.state} in ('queued', 'preparing', 'running', 'succeeded', 'incomplete', 'failed', 'canceled') and ${table.callPurpose} = 'consultation'`,
+    ),
+    check(
+      "story_consultations_phase_check",
+      sql`${table.expiresAt} > ${table.createdAt} and (${table.endedAt} is null) = (${table.state} in ('queued', 'preparing', 'running')) and (${table.state} not in ('preparing', 'running') or (${table.processingToken} is not null and ${table.leaseExpiresAt} is not null)) and (${table.state} != 'queued' or (${table.processingToken} is null and ${table.leaseExpiresAt} is null)) and (${table.state} != 'running' or (${table.startedAt} is not null and ${table.modelCallId} is not null and ${table.contextHash} is not null and ${table.contextPrompt} is not null)) and (${table.state} != 'succeeded' or (${table.result} is not null and ${table.startedAt} is not null and ${table.modelCallId} is not null))`,
+    ),
+    foreignKey({
+      name: "story_consultations_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_consultations_model_call_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.modelCallId, table.callPurpose],
+      foreignColumns: [
+        modelCalls.orgId,
+        modelCalls.projectId,
+        modelCalls.storyId,
+        modelCalls.id,
+        modelCalls.purpose,
+      ],
     }),
   ],
 );

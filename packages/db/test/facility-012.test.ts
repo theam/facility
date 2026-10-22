@@ -47,6 +47,7 @@ describe("Facility 0.12 database", () => {
           "project_skills",
           "budget_reservations",
           "model_calls",
+          "story_consultations",
           "project_repositories",
           "stories",
           "story_conversations",

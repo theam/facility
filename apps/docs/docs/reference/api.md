@@ -116,6 +116,27 @@ credential revocation remains a separate operator action.
 Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
 request can also use the HTTP `Idempotency-Key` behavior described below.
 
+### Read-only text consultations
+
+All paths below are under `/v1/projects/:projectId/workspace-stories/:storyId/consultations`:
+
+| Method/path | Purpose | Permission |
+| --- | --- | --- |
+| `GET /options` | Fresh API-text agent capability and connected source commits; no inference. | `workspaces:execute` |
+| `GET /` | Saved history with `limit`/`offset`, total and billing status. | `projects:read` |
+| `GET /:consultationId` | One durable result and immutable snapshot metadata. | `projects:read` |
+| `POST /` | Record an idempotent paid consultation intent; returns 202. | `workspaces:execute` |
+| `POST /:consultationId/cancel` | Cancel before start or request cancellation after submission. | `workspaces:execute` |
+| `GET /:consultationId/handoff` | Draft text from a succeeded, confirmed result; no execution. | `projects:read` |
+
+Monetary amounts require `costs:read`; write receipts always redact amounts so a cached response
+cannot restore an earlier permission. GET responses are private/no-store. Bodies reject actor,
+provider and model overrides. Supply the options' `expected_agent_hash`, `expected_catalog_sha`,
+configured `agent`, bounded `message`, exact `sources` and `idempotency_key`; the header/body key
+must agree. Queued intent, provider attempt, billing certainty and native implementation remain
+separate. See [MCP consultation behavior](mcp.md#consult-without-workspace-actions) for limits,
+configuration, uncertainty and the explicit handoff.
+
 ### Versioned plans and interactive decisions
 
 The story bundle includes `plans`. All paths below are under

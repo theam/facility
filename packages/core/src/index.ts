@@ -5,5 +5,6 @@ export * from "./permissions.js";
 export * from "./pricing.js";
 export * from "./render-workspace-kickstart.js";
 export * from "./roles.js";
+export * from "./story-consultations.js";
 export * from "./story-delivery.js";
 export * from "./story-plans.js";

@@ -99,6 +99,29 @@ When the story needs attention:
 
 Canceling a turn does not roll back files or commits already written in the workspace.
 
+## Ask a read-only consultation
+
+In **Ask about this task**, choose **New consultation**, review the configured agent/model and
+enter a question. You can select up to four committed source files, each at an exact SHA. Refreshing
+options does not move a selected commit. The paid text executor uses saved task context and those
+files; it cannot access workspace files, native sessions, hooks or tools. A compatible project
+provider API key is required. An unavailable configuration stays unavailable without a substitute.
+
+**Close consultation draft** keeps a separate draft for the same person, task and browser tab,
+using the same 24-hour storage limit as the normal composer. A failed submission preserves its
+original body/key for **Retry original consultation**. **Edit as a new request** explicitly creates
+a new intent. Refreshing history or preparing implementation starts no model or native turn.
+
+Inspect the saved result and **Snapshot and provenance** for source commits, hashes, watermark
+and omissions. Results render as text. **Cancel consultation** records cancellation; submitted
+usage may still be billed. An unconfirmed charge stays unknown, including when an admission
+estimate exists. Incomplete, failed or canceled consultations are not completed implementation.
+
+**Prepare implementation request** opens a separate editable composer with the completed result's
+ID and hash. Review the text and recipient, then choose **send to agent** to queue normal work.
+This action follows the existing execution permissions; preparing the draft itself starts nothing
+and does not confirm a plan or accept delivery.
+
 ## Agree on a versioned plan
 
 The story's **plan and decisions** panel shows the proposed text, repositories and configured

@@ -126,13 +126,18 @@ describe("embedded MCP control plane", async () => {
 
   it("serves the reduced tool catalog from the API process", async () => {
     const tools = await client.listTools();
-    expect(tools.tools).toHaveLength(26);
+    expect(tools.tools).toHaveLength(31);
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_start_story");
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_list_skills");
     for (const name of [
       "facility_get_plan",
       "facility_propose_plan",
       "facility_request_plan_decision",
+      "facility_get_consultation_options",
+      "facility_get_consultations",
+      "facility_consult_story",
+      "facility_cancel_consultation",
+      "facility_prepare_consultation_handoff",
     ])
       expect(tools.tools.map((tool) => tool.name)).toContain(name);
     expect(tools.tools.map((tool) => tool.name).join(" ")).not.toMatch(/confirm/);

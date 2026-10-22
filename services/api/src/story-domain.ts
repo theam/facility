@@ -12,6 +12,8 @@ import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
 import { CostBudgetService } from "./insights/costs.js";
 import { ProjectBacklogService } from "./stories/backlog.js";
+import { GithubConsultationSources } from "./stories/consultation-sources.js";
+import { StoryConsultationService } from "./stories/consultations.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
@@ -46,6 +48,7 @@ export type StoryDomain = {
   costs: CostBudgetService;
   evidence: TurnGitEvidenceService;
   titles: StoryTitleService;
+  consultations: StoryConsultationService;
   backlog: ProjectBacklogService;
 };
 
@@ -103,6 +106,12 @@ export function createStoryDomain(input: {
     enqueue: (data) => input.enqueue("stories.title", data),
   });
   const backlog = new ProjectBacklogService(input.db);
+  const consultations = new StoryConsultationService(input.db, {
+    sources: new GithubConsultationSources(input.db, githubFactory),
+    credentials: async (scope, provider) =>
+      titleCredentials(scope.projectId, await variables.projectValues(scope))[provider],
+    enqueue: (data) => input.enqueue("stories.consultation", data),
+  });
   const dispatcher = new TurnDispatcher(
     input.db,
     stories,
@@ -156,6 +165,7 @@ export function createStoryDomain(input: {
     costs,
     evidence,
     titles,
+    consultations,
     backlog,
   };
 }

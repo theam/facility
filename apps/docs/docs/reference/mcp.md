@@ -13,7 +13,7 @@ server. Authorization-server metadata remains available at `/.well-known/oauth-a
 and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
 still require a valid bearer token.
 
-The server exposes twenty-six task-oriented tools:
+The server exposes thirty-one task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -27,6 +27,11 @@ The server exposes twenty-six task-oriented tools:
 | `facility_get_plan` | Current plan, immutable scope snapshots and paged plan/decision history; optionally read an earlier revision. |
 | `facility_propose_plan` | Record a revision with server-resolved repository names and fresh agent configuration; no execution. |
 | `facility_request_plan_decision` | Request approval or changes and return an expiring interactive review link; does not record a human confirmation. |
+| `facility_get_consultation_options` | Check configured API-text agents and exact source revisions without inference or workspace activity. |
+| `facility_get_consultations` | Read saved consultation history or one result, provenance and billing state. |
+| `facility_consult_story` | Request a separate paid text consultation with no tools or workspace access. |
+| `facility_cancel_consultation` | Cancel a consultation while preserving any submitted usage. |
+| `facility_prepare_consultation_handoff` | Return editable implementation context from a completed result; does not queue work. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
 | `facility_get_conversation` | Read the shared ordered conversation. |
@@ -176,6 +181,46 @@ Reads need `projects:read`; proposals and decision requests need `projects:write
 uncertain identical request with the same key. These records do not start agents, activate
 execution-policy enforcement, merge PRs or accept delivery. Existing execution permissions and
 repository merge controls continue to govern those actions.
+
+## Consult without workspace actions
+
+Read `facility_get_consultation_options` with `projectId` and `storyId`. It returns configured
+agents, eligibility/reason, `manifestHash`, `catalogSha`, connected repositories and exact commits.
+It uses bounded GitHub reads and starts no model call. The selected model must have a compatible
+API identifier, reasoning settings and known price, plus its existing project provider API key.
+A native CLI subscription login is not reused; Facility never substitutes a provider or model.
+
+Call `facility_consult_story` with the selected `agent`, `expectedAgentHash`, `expectedCatalogSha`,
+`message`, optional `sources` and `idempotencyKey`. Each source has `repository_id`, `commit_sha`
+and a relative `path`. At most four regular UTF-8 files, 8 KiB each, are read at exact commits.
+Symlinks, submodules, external LFS content and arbitrary URLs are rejected. The snapshot includes
+bounded saved conversation and summary through the request's message watermark, agent guidance,
+and source hashes. It also captures the story's current plan, recorded decision and complete
+delivery PR observations in one local repeatable-read snapshot, identified by revisions, digest
+and capture time. These are mirrored observations, with their existing freshness/unknown markers.
+Plan text above 12,000 bytes is explicitly omitted while its digest/scope remain identified;
+structured metadata above 32 KiB is rejected before a paid attempt. The combined prompt is bounded,
+so explicit sources may need to be reduced. Confirmation proofs, cookies and pending review links
+are excluded. Uncommitted workspace files, native sessions, environment and hooks are excluded.
+There is no cross-story knowledge retrieval.
+
+The `provider_api_text` executor sends one bounded request, with no tools, shell, native runtime,
+MCP or GitHub capabilities. Reading a result does not rerun it. Use `facility_get_consultations`
+with `consultationId`, or page history with `limit` and `offset`. Results distinguish queued,
+preparing, running, succeeded, incomplete, failed and canceled. Usage can remain unconfirmed after
+a lost response or worker failure; an estimate is not a measured charge. Cancellation cannot
+undo already submitted model usage. Started calls are never automatically retried by recovery.
+Retry uncertain submissions with the original body and key; changed intent needs a new key.
+
+Options, paid requests and cancellation require `workspaces:execute`. History and handoff require
+`projects:read`; monetary amounts also require `costs:read`. Authority and source connections are
+rechecked before the call. Admission shares the project's native/title budget and uncertainty
+checks; one consultation may be active per story, up to four across a project.
+
+For a succeeded result with confirmed usage, `facility_prepare_consultation_handoff` returns text
+with its ID and result hash. Review/edit that text, then explicitly use `facility_send_message`
+and choose an implementation agent to start normal work. Preparing text approves no plan, accepts
+no delivery and creates no native turn. A consulted answer is not implementation evidence.
 
 ## Record all delivery PRs
 

@@ -6,6 +6,7 @@ import { LiveRefresh } from "@/components/shell/live-refresh";
 import { AttentionActions } from "@/components/story/attention-actions";
 import { EnvironmentLogs } from "@/components/story/environment-logs";
 import { StoryActions } from "@/components/story/story-actions";
+import { StoryConsultationPanel } from "@/components/story/story-consultation";
 import { StoryConversation } from "@/components/story/story-conversation";
 import { StoryDeliveryPanel } from "@/components/story/story-delivery";
 import { StoryPlanPanel } from "@/components/story/story-plan";
@@ -40,12 +41,13 @@ export default async function StoryPage({
   params: Promise<{ projectId: string; number: string }>;
 }) {
   const { projectId, number: storyId } = await params;
-  const [detail, conversation, environment, agents, me] = await Promise.all([
+  const [detail, conversation, environment, agents, me, consultations] = await Promise.all([
     api.workspaceStory(projectId, storyId),
     api.workspaceStoryConversation(projectId, storyId),
     api.workspaceStoryEnvironment(projectId, storyId),
     api.storyAgents(projectId),
     api.me(),
+    api.workspaceStoryConsultations(projectId, storyId),
   ]);
 
   if (!detail.ok) {
@@ -211,6 +213,22 @@ export default async function StoryPage({
         storyId={story.id}
         initial={bundle.delivery}
         canWrite={canWrite}
+      />
+
+      <StoryConsultationPanel
+        key={`consultation:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
+        projectId={projectId}
+        storyId={story.id}
+        initial={consultations.ok ? consultations.data : undefined}
+        initialError={consultations.ok ? undefined : consultations.message}
+        agents={agentRows}
+        defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+        canExecute={canExecute && story.deletedAt === null}
+        draftOwnerId={
+          me.ok && me.data.principal?.type === "user"
+            ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+            : undefined
+        }
       />
 
       <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">

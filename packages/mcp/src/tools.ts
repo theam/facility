@@ -1,6 +1,7 @@
 import {
   ProposeStoryPlanBody,
   ReplaceStoryDeliveryBody,
+  RequestConsultationBody,
   RequestPlanDecisionBody,
 } from "@facility/core";
 import { FacilityApiError, FacilityClient, type QueryParams } from "@facility/sdk";
@@ -243,6 +244,91 @@ export const toolDefinitions: ToolDefinition[] = [
       }),
     idempotencyKey: (args) => stringValue(args.idempotencyKey),
     write: true,
+  },
+  {
+    name: "facility_get_consultation_options",
+    permission: "workspaces:execute",
+    description:
+      "Read the configured agents' API-text consultation capability and exact repository revisions. Uses bounded GitHub reads, without inference or workspace activity. A compatible project provider API key is required; native CLI subscription login is not reused. Needs workspaces:execute.",
+    inputSchema: { projectId, storyId },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/consultations/options`,
+    openWorld: true,
+  },
+  {
+    name: "facility_get_consultations",
+    permission: "projects:read",
+    description:
+      "Read saved consultation history, immutable source metadata, results and billing status. Omit consultationId to page history, or include it for one result. Reading starts no inference or workspace activity; cost amounts require costs:read. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      storyId,
+      consultationId: z.string().min(1).max(200).optional(),
+      limit: z.number().int().min(1).max(50).default(10),
+      offset: z.number().int().min(0).max(1_000_000).default(0),
+    },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/consultations${args.consultationId === undefined ? "" : `/${part(args.consultationId)}`}`,
+    query: (args) =>
+      args.consultationId === undefined
+        ? { limit: Number(args.limit ?? 10), offset: Number(args.offset ?? 0) }
+        : {},
+  },
+  {
+    name: "facility_consult_story",
+    permission: "workspaces:execute",
+    description:
+      "Request one charged text consultation using the selected configured agent model and exact source commits from consultation options. It has no tools, native session, shell or workspace access. Stores a separate durable request; never enqueues implementation. Reuse the same idempotency key for retries. Needs workspaces:execute.",
+    inputSchema: {
+      projectId,
+      storyId,
+      agent: RequestConsultationBody.shape.agent,
+      expectedAgentHash: RequestConsultationBody.shape.expected_agent_hash,
+      expectedCatalogSha: RequestConsultationBody.shape.expected_catalog_sha,
+      message: RequestConsultationBody.shape.message,
+      sources: RequestConsultationBody.shape.sources,
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/consultations`,
+    body: (args) =>
+      RequestConsultationBody.parse({
+        agent: args.agent,
+        expected_agent_hash: args.expectedAgentHash,
+        expected_catalog_sha: args.expectedCatalogSha,
+        message: args.message,
+        sources: args.sources,
+        idempotency_key: args.idempotencyKey,
+      }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+    openWorld: true,
+  },
+  {
+    name: "facility_cancel_consultation",
+    permission: "workspaces:execute",
+    description:
+      "Cancel a queued consultation or request cancellation of an active one. A submitted API request may already be billed; its durable accounting is retained. Does not cancel native implementation turns. Needs workspaces:execute.",
+    inputSchema: { projectId, storyId, consultationId: z.string().min(1).max(200), idempotencyKey },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/consultations/${part(args.consultationId)}/cancel`,
+    body: (args) => ({ idempotency_key: args.idempotencyKey }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+  },
+  {
+    name: "facility_prepare_consultation_handoff",
+    permission: "projects:read",
+    description:
+      "Prepare draft implementation context from an exact completed consultation, including its result hash and provenance. Returns text only. Starting implementation requires a separate explicit authorized story message; this tool never approves a plan, accepts delivery or enqueues a native turn. Needs projects:read.",
+    inputSchema: { projectId, storyId, consultationId: z.string().min(1).max(200) },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/consultations/${part(args.consultationId)}/handoff`,
   },
   {
     name: "facility_start_story",

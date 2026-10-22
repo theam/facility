@@ -24,6 +24,7 @@ import {
   WorkspaceVariablesMetadata,
 } from "../../workspaces/variables.js";
 import { principal } from "./shared.js";
+import { registerStoryConsultationRoutes } from "./story-consultations.js";
 import { registerStoryPlanRoutes } from "./story-plans.js";
 
 const ProjectParams = z.object({ projectId: z.string() });
@@ -105,6 +106,7 @@ const DeleteBody = z.object({
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
   await registerStoryPlanRoutes(app, config);
+  await registerStoryConsultationRoutes(app);
 
   app.get(
     "/v1/projects/:projectId/workspace-stories/:storyId/delivery",

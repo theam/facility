@@ -49,7 +49,7 @@ type Policy = {
     committed: number,
     estimate: number,
     limit: number,
-    purpose: "turn" | "title",
+    purpose: "turn" | "title" | "consultation",
   ) => void;
 };
 
@@ -70,7 +70,7 @@ export class ModelCallLedger {
     private readonly policy: Policy,
   ) {}
 
-  async reserveTitle(
+  reserveTitle(
     input: Scope & {
       model: string;
       provider?: "openai" | "anthropic";
@@ -79,8 +79,41 @@ export class ModelCallLedger {
     },
     now = new Date(),
   ): Promise<TitleAdmission> {
+    return this.reserveApiCall({ ...input, purpose: "title" }, now);
+  }
+
+  reserveConsultation(
+    input: Scope & {
+      model: string;
+      provider: "openai" | "anthropic";
+      requestKey: string;
+      fingerprint: string;
+    },
+    now = new Date(),
+    admitted?: (
+      tx: FacilityDb,
+      receipt: { callId: string; reservationId: string },
+    ) => Promise<void>,
+  ) {
+    return this.reserveApiCall({ ...input, purpose: "consultation" }, now, admitted);
+  }
+
+  private async reserveApiCall(
+    input: Scope & {
+      model: string;
+      provider?: "openai" | "anthropic";
+      requestKey?: string;
+      fingerprint?: string;
+      purpose: "title" | "consultation";
+    },
+    now: Date,
+    admitted?: (
+      tx: FacilityDb,
+      receipt: { callId: string; reservationId: string },
+    ) => Promise<void>,
+  ): Promise<TitleAdmission> {
     const provider = input.provider ?? (input.model.startsWith("claude-") ? "anthropic" : "openai");
-    const requestKey = input.requestKey ?? `title:${input.storyId}`;
+    const requestKey = input.requestKey ?? `${input.purpose}:${input.storyId}`;
     const fingerprint =
       input.fingerprint ??
       modelCallFingerprint({
@@ -116,7 +149,7 @@ export class ModelCallLedger {
           .where(
             and(
               scopeWhere(input),
-              eq(modelCalls.purpose, "title"),
+              eq(modelCalls.purpose, input.purpose),
               eq(modelCalls.requestKey, requestKey),
             ),
           )
@@ -147,7 +180,13 @@ export class ModelCallLedger {
           );
           return { outcome: "unbilled" as const };
         }
-        return { outcome: "admitted" as const, reservationId: hold.id, callId: existing.id };
+        const receipt = {
+          outcome: "admitted" as const,
+          reservationId: hold.id,
+          callId: existing.id,
+        };
+        if (admitted) await admitted(tx, receipt);
+        return receipt;
       }
       const legacy = (
         await tx
@@ -156,19 +195,19 @@ export class ModelCallLedger {
           .where(
             and(
               holdScope(input),
-              eq(budgetReservations.purpose, "title"),
+              eq(budgetReservations.purpose, input.purpose),
               eq(budgetReservations.state, "open"),
             ),
           )
           .limit(1)
       )[0];
       if (legacy) return { outcome: "unconfirmed" as const };
-      const estimate = reservationCents(input.model, "title");
+      const estimate = reservationCents(input.model, input.purpose);
       if (estimate === null) return { outcome: "unpriced" as const };
       if (budget?.enabled) {
         const committed = await this.policy.committedCents(tx, input.orgId, input.projectId, now);
         try {
-          this.policy.assertRoom(committed, estimate, budget.monthlyLimitCents, "title");
+          this.policy.assertRoom(committed, estimate, budget.monthlyLimitCents, input.purpose);
         } catch (error) {
           if (error instanceof BudgetPolicyError && error.code === "budget_exceeded")
             return { outcome: "exceeded" as const };
@@ -182,7 +221,7 @@ export class ModelCallLedger {
         orgId: input.orgId,
         projectId: input.projectId,
         storyId: input.storyId,
-        purpose: "title",
+        purpose: input.purpose,
         provider,
         model: input.model,
         requestKey,
@@ -200,17 +239,23 @@ export class ModelCallLedger {
         projectId: input.projectId,
         storyId: input.storyId,
         modelCallId: callId,
-        purpose: "title",
+        purpose: input.purpose,
         state: "open",
         model: input.model,
         reservedCents: estimate,
         createdAt: now,
       });
-      return { outcome: "admitted" as const, reservationId, callId };
+      const receipt = { outcome: "admitted" as const, reservationId, callId };
+      if (admitted) await admitted(tx, receipt);
+      return receipt;
     });
   }
 
-  async claim(input: Scope & { callId: string }, now = new Date()): Promise<string | null> {
+  async claim(
+    input: Scope & { callId: string },
+    now = new Date(),
+    claimed?: (tx: FacilityDb, claimToken: string) => Promise<void>,
+  ): Promise<string | null> {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await this.scope(tx, input);
@@ -246,6 +291,7 @@ export class ModelCallLedger {
         .update(modelCalls)
         .set({ state: "started", claimToken, startedAt: now, updatedAt: now })
         .where(eq(modelCalls.id, call.id));
+      if (claimed) await claimed(tx, claimToken);
       return claimToken;
     });
   }
@@ -441,7 +487,7 @@ export class ModelCallLedger {
       .where(eq(modelCalls.id, call.id));
     if (holdId) {
       // Keep the title receipt for existing consumers; totals count its linked call once.
-      if (state === "confirmed")
+      if (state === "confirmed" && call.purpose === "title")
         await tx
           .update(budgetReservations)
           .set({ state: "settled", reservedCents: cost ?? 0 })

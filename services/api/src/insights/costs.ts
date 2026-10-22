@@ -9,6 +9,7 @@ import {
   type FacilityDb,
   modelCalls,
   projectBudgets,
+  storyConsultations,
   turns,
   turnUsage,
 } from "@facility/db";
@@ -123,8 +124,35 @@ export class CostBudgetService {
   claimModelCall(
     input: { orgId: string; projectId: string; storyId: string; callId: string },
     now = new Date(),
+    claimed?: (tx: FacilityDb, claimToken: string) => Promise<void>,
   ) {
-    return this.apiCalls.claim(input, now);
+    return this.apiCalls.claim(input, now, claimed);
+  }
+
+  reserveConsultation(
+    input: {
+      orgId: string;
+      projectId: string;
+      storyId: string;
+      model: string;
+      provider: "openai" | "anthropic";
+      requestKey: string;
+      fingerprint: string;
+    },
+    now = new Date(),
+    admitted?: (
+      tx: FacilityDb,
+      receipt: { callId: string; reservationId: string },
+    ) => Promise<void>,
+  ) {
+    return this.apiCalls.reserveConsultation(input, now, admitted);
+  }
+
+  settleModelCall<T>(
+    input: ModelCallSettlement,
+    publish?: (tx: FacilityDb, receipt: ModelCallReceipt) => Promise<T>,
+  ) {
+    return this.apiCalls.settle(input, publish);
   }
 
   settleTitle<T>(
@@ -349,7 +377,12 @@ function exhaustedMessage(committed: number, limit: number) {
   return `Project monthly budget is exhausted (${committed.toFixed(2)} of ${limit} cents)`;
 }
 
-function assertRoom(committed: number, estimate: number, limit: number, purpose: "turn" | "title") {
+function assertRoom(
+  committed: number,
+  estimate: number,
+  limit: number,
+  purpose: "turn" | "title" | "consultation",
+) {
   if (committed >= limit) {
     throw new BudgetPolicyError("budget_exceeded", exhaustedMessage(committed, limit));
   }
@@ -470,6 +503,30 @@ async function hasUnconfirmedUsage(db: FacilityDb, orgId: string, projectId: str
     )
     .limit(1);
   if (uncertainCalls.length > 0) return true;
+  const expiredConsultations = await db
+    .select({ id: storyConsultations.id })
+    .from(storyConsultations)
+    .innerJoin(
+      modelCalls,
+      and(
+        eq(modelCalls.id, storyConsultations.modelCallId),
+        eq(modelCalls.orgId, storyConsultations.orgId),
+        eq(modelCalls.projectId, storyConsultations.projectId),
+        eq(modelCalls.storyId, storyConsultations.storyId),
+        eq(modelCalls.purpose, "consultation"),
+      ),
+    )
+    .where(
+      and(
+        eq(storyConsultations.orgId, orgId),
+        eq(storyConsultations.projectId, projectId),
+        inArray(storyConsultations.state, ["preparing", "running"]),
+        eq(modelCalls.state, "started"),
+        sql`(${storyConsultations.leaseExpiresAt} <= now() or ${storyConsultations.expiresAt} <= now())`,
+      ),
+    )
+    .limit(1);
+  if (expiredConsultations.length > 0) return true;
   const legacyTitles = await db
     .select({ id: budgetReservations.id })
     .from(budgetReservations)

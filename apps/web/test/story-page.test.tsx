@@ -42,6 +42,8 @@ vi.mock("../lib/api", async () => {
         record("conversation", { ok: true, data: mocks.conversation }),
       workspaceStoryEnvironment: async () =>
         record("environment", { ok: true, data: mocks.environment }),
+      workspaceStoryConsultations: async () =>
+        record("consultations", { ok: true, data: { items: [], total: 0, limit: 10, offset: 0 } }),
       workspaceStoryActivity: async () => record("activity", unexpected),
       workspaceStoryTimeline: async () => record("timeline", unexpected),
       workspaceStoryTurnEvent: async () => record("event", unexpected),
@@ -252,8 +254,9 @@ describe("story overview integration", () => {
     expect(root.textContent).toContain("Suspended");
     expect(root.textContent).toContain("In review");
     expect(root.querySelector('[aria-label="Needs your attention"]')).toBeNull();
-    // Only the story, its first conversation page and the environment inspection were requested.
-    expect(mocks.calls.sort()).toEqual(["conversation", "environment", "story"]);
+    // Initial reads include saved consultation history; no options, inference or workspace wake.
+    expect(mocks.calls.sort()).toEqual(["consultations", "conversation", "environment", "story"]);
+    expect(root.querySelector("#consultation")?.textContent).toContain("No consultations saved");
 
     const history = [...root.querySelectorAll("details")].find((d) =>
       d.querySelector("summary")?.textContent?.includes("Resolved and dismissed"),

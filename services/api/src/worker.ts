@@ -6,6 +6,7 @@ import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
 import { CostBudgetService } from "./insights/costs.js";
+import type { StoryConsultationService } from "./stories/consultations.js";
 import { StoryIntegrationNotifications } from "./stories/integration-notifications.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
@@ -39,12 +40,18 @@ export async function startWorker() {
     "github.mirror",
     "agent.schedules",
     "stories.title",
+    "stories.consultation",
     "stories.integrations",
   ];
   for (const queue of queues) {
     await boss.createQueue(queue);
   }
   await configureTurnQueue(boss);
+  await boss.updateQueue("stories.consultation", {
+    name: "stories.consultation",
+    retryLimit: 0,
+    expireInSeconds: 180,
+  });
   // A provider hiccup retries a few times; the story keeps its provisional title meanwhile.
   await boss.updateQueue("stories.title", {
     name: "stories.title",
@@ -60,6 +67,10 @@ export async function startWorker() {
     (turn) => storyDomain.dispatcher.activateQueuedSuccessor(turn),
   );
   const queuedAtStartup = await recoverQueuedTurns(db, (queue, data) => boss.send(queue, data));
+  await storyDomain.consultations.recover();
+  await recoverPendingConsultations(storyDomain.consultations, (queue, data) =>
+    boss.send(queue, data),
+  );
   if (interruptedAtStartup > 0 || queuedAtStartup > 0) {
     logger.info(
       { interruptedTurns: interruptedAtStartup, queuedTurns: queuedAtStartup },
@@ -120,6 +131,26 @@ export async function startWorker() {
             { failed: result.failed },
             "lifecycle notifications deferred; inspect durable notification cursors",
           );
+      } else if (queue === "stories.consultation") {
+        const input = data as {
+          orgId: string;
+          projectId: string;
+          storyId: string;
+          consultationId: string;
+        };
+        try {
+          result = await turnGuard.run(() => storyDomain.consultations.dispatch(input));
+        } catch {
+          logger.error(
+            {
+              event: "worker.consultation_settlement_failed",
+              consultationId: input.consultationId,
+              jobId,
+            },
+            "consultation recovery will reconcile its durable attempt",
+          );
+          throw new Error("consultation_settlement_failed");
+        }
       } else if (queue === "stories.title") {
         const outcome = await storyDomain.titles.generate(
           data as { orgId: string; projectId: string; storyId: string },
@@ -140,6 +171,11 @@ export async function startWorker() {
           boss.send(name, payload),
         );
         const suspendedWorkspaces = await storyDomain.stories.suspendFailedWorkspaces();
+        const recoveredConsultations = await storyDomain.consultations.recover();
+        const pendingConsultations = await recoverPendingConsultations(
+          storyDomain.consultations,
+          (name, payload) => boss.send(name, payload),
+        );
         const pendingTitles = await recoverPendingTitles(storyDomain.titles, (name, payload) =>
           boss.send(name, payload),
         );
@@ -149,6 +185,8 @@ export async function startWorker() {
           recoveredTurns,
           suspendedWorkspaces,
           pendingTitles,
+          recoveredConsultations,
+          pendingConsultations,
         };
       }
       logger.info({ queue, jobId, ...result }, "worker completed job");
@@ -165,6 +203,16 @@ export async function startWorker() {
       return boss.stop({ graceful: true, timeout: 30_000, close: true });
     },
   };
+}
+
+/** Recover only queued consultations; a submitted provider call is never retried. */
+export async function recoverPendingConsultations(
+  consultations: Pick<StoryConsultationService, "pending">,
+  enqueue: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+) {
+  const pending = await consultations.pending();
+  for (const item of pending) await enqueue("stories.consultation", item);
+  return pending.length;
 }
 
 /** Titles whose job was lost (restart, crash) are queued again; generation itself stays idempotent. */

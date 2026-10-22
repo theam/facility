@@ -192,6 +192,9 @@ export function StoryComposer({
   draftOwnerId,
   open = true,
   focusRequest = 0,
+  initialDraft,
+  composerId = "story-composer",
+  formLabel = "Send a task",
 }: {
   projectId: string;
   storyId: string;
@@ -202,6 +205,9 @@ export function StoryComposer({
   draftOwnerId?: string;
   open?: boolean;
   focusRequest?: number;
+  initialDraft?: StoryDraft;
+  composerId?: string;
+  formLabel?: string;
 }) {
   const router = useRouter();
   const defaultAgent =
@@ -210,7 +216,9 @@ export function StoryComposer({
     agents[0]?.name ??
     "";
   const storageKey = storyDraftKey(draftOwnerId, projectId, storyId);
-  const [draft, setDraft] = useState<StoryDraft>({ agent: defaultAgent, message: "" });
+  const [draft, setDraft] = useState<StoryDraft>(
+    initialDraft ?? { agent: defaultAgent, message: "" },
+  );
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
@@ -284,13 +292,14 @@ export function StoryComposer({
   return (
     <form
       ref={form}
-      id="story-composer"
+      id={composerId}
       onSubmit={submit}
       className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
-      aria-label="Send a task"
+      aria-label={formLabel}
     >
       <Field label="Message">
         <TextArea
+          aria-label="Message"
           required
           value={message}
           disabled={pending}
@@ -309,7 +318,7 @@ export function StoryComposer({
           : "Closing keeps your draft while this page is open."}
       </p>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <Field label="Run as" className="min-w-56">
+        <Field label="Run as" className="min-w-0 flex-1 sm:min-w-56">
           <Select
             value={agent}
             disabled={pending}
