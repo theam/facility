@@ -47,7 +47,8 @@ similar handwritten versions.
 
 ## Main request path
 
-A UI or MCP request enters the API, resolves a principal, checks project scope and permissions, and
+A UI or MCP request enters the API, resolves a principal, checks its organization-wide role
+permissions and — for a project-scoped API key — that the key's project matches the request, and
 calls a domain service. Starting or continuing a story persists its message and turn in PostgreSQL.
 The worker claims the turn, resolves an exact agent manifest, wakes the workspace provider,
 prepares `.facility.yml`, issues repository credentials, and starts or resumes Claude Code or
