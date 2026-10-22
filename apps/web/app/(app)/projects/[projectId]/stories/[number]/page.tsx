@@ -10,6 +10,7 @@ import { StoryConsultationPanel } from "@/components/story/story-consultation";
 import { StoryConversation } from "@/components/story/story-conversation";
 import { StoryDeliveryPanel } from "@/components/story/story-delivery";
 import { StoryPlanPanel } from "@/components/story/story-plan";
+import { StoryPreviewConvergencePanel } from "@/components/story/story-preview-convergence";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
@@ -213,6 +214,13 @@ export default async function StoryPage({
         storyId={story.id}
         initial={bundle.delivery}
         canWrite={canWrite}
+      />
+
+      <StoryPreviewConvergencePanel
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.previewConvergence}
+        canExecute={canExecute && story.deletedAt === null}
       />
 
       <StoryConsultationPanel

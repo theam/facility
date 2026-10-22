@@ -636,6 +636,15 @@ export class TurnDispatcher {
     storyId: string;
     turnId: string;
   }) {
+    return this.activateQueuedStorySuccessor(input);
+  }
+
+  async activateQueuedStorySuccessor(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId?: string;
+  }) {
     const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
     if (!next?.requestedAgentName) return;
     try {
@@ -665,14 +674,15 @@ export class TurnDispatcher {
         title: `Could not dispatch queued ${next.requestedAgentName} turn`,
         detail,
       });
-      await appendTurnEvent(this.db, {
-        orgId: input.orgId,
-        projectId: input.projectId,
-        storyId: input.storyId,
-        turnId: input.turnId,
-        type: "queue.activation_failed",
-        data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
-      });
+      if (input.turnId)
+        await appendTurnEvent(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: input.storyId,
+          turnId: input.turnId,
+          type: "queue.activation_failed",
+          data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
+        });
     }
   }
 

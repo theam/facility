@@ -72,6 +72,8 @@ describe("project-scoped delivery register API", () => {
     }));
   const path = (storyId: string, selectedProject = projectId) =>
     `/v1/projects/${selectedProject}/workspace-stories/${storyId}/delivery`;
+  const previewPath = (storyId: string, selectedProject = projectId) =>
+    `/v1/projects/${selectedProject}/workspace-stories/${storyId}/preview-convergence`;
   const headers = (name = "writer") => ({ authorization: `Bearer ${credentials[name]}` });
   const body = (expected_revision = 0, idempotency_key = randomUUID()) => ({
     expected_revision,
@@ -207,7 +209,6 @@ describe("project-scoped delivery register API", () => {
   afterAll(async () => {
     await app?.close();
     await client.end();
-    expect(enqueue).not.toHaveBeenCalled();
     expect(upstream).not.toHaveBeenCalled();
     for (const call of runtimeCalls) expect(call).not.toHaveBeenCalled();
   });
@@ -324,6 +325,65 @@ describe("project-scoped delivery register API", () => {
       mergedCount: 1,
       allRequiredMerged: false,
     });
+    const preview = await app.inject({ url: previewPath(legacyStory), headers: headers("viewer") });
+    expect(preview.statusCode, preview.body).toBe(200);
+    const previewBody = preview.json();
+    expect(previewBody).toMatchObject({
+      state: "pending",
+      desired: {
+        generation: result.candidate.revision,
+      },
+      deployedGeneration: null,
+      lastGoodGeneration: null,
+    });
+    expect(
+      previewBody.desired.repositories.map((item: { repositoryId: string }) => item.repositoryId),
+    ).toEqual(repositoryIds);
+    expect(enqueue).toHaveBeenCalledWith("stories.preview-convergence", {
+      orgId,
+      projectId,
+      storyId: legacyStory,
+    });
+    expect(
+      (await app.inject({ url: previewPath(legacyStory), headers: headers("noRead") })).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          url: previewPath(legacyStory, otherProjectId),
+          headers: headers("otherProject"),
+        })
+      ).statusCode,
+    ).toBe(404);
+    const retryKey = randomUUID();
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `${previewPath(legacyStory)}/retry`,
+          headers: { ...headers("viewer"), "idempotency-key": retryKey },
+          payload: { idempotency_key: retryKey },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `${previewPath(legacyStory)}/retry`,
+          headers: { ...headers("executor"), "idempotency-key": randomUUID() },
+          payload: { idempotency_key: retryKey },
+        })
+      ).statusCode,
+    ).toBe(400);
+    const retry = await app.inject({
+      method: "POST",
+      url: `${previewPath(legacyStory)}/retry`,
+      headers: { ...headers("executor"), "idempotency-key": retryKey },
+      payload: { idempotency_key: retryKey },
+    });
+    expect(retry.statusCode, retry.body).toBe(200);
+    expect(retry.json().state).toBe("pending");
     expect((await save(legacyStory, payload)).json()).toEqual(result);
     const evidence = await db
       .select()

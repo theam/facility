@@ -549,106 +549,6 @@
         "security": []
       }
     },
-    "/auth/dev-login": {
-      "get": {
-        "responses": {
-          "302": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "400": {
-            "description": "The request is invalid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication is required or invalid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The authenticated principal lacks the required permission.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The resource was not found or is outside the principal scope.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The request conflicts with current resource state.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The request rate limit was exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "An unexpected server error occurred.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "A required service is unavailable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "getAuthDevLogin",
-        "summary": "Get dev login",
-        "tags": [
-          "Authentication"
-        ],
-        "security": []
-      }
-    },
     "/auth/login": {
       "get": {
         "parameters": [
@@ -17141,6 +17041,711 @@
           }
         ],
         "x-facility-permission": "projects:write"
+      }
+    },
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/preview-convergence": {
+      "get": {
+        "operationId": "getStoryPreviewConvergence",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "nullable": true,
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "waiting",
+                        "applying",
+                        "blocked",
+                        "failed",
+                        "ready",
+                        "suspended"
+                      ]
+                    },
+                    "desired": {
+                      "type": "object",
+                      "properties": {
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[a-f\\d]{64}$"
+                        },
+                        "deliveryRevision": {
+                          "type": "string",
+                          "pattern": "^[a-f\\d]{64}$"
+                        },
+                        "repositories": {
+                          "minItems": 1,
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "repositoryId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "repository": {
+                                "type": "string",
+                                "minLength": 3
+                              },
+                              "pullNumber": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991
+                              },
+                              "headRef": {
+                                "nullable": true,
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "headSha": {
+                                "type": "string",
+                                "pattern": "^[a-f\\d]{40}$"
+                              },
+                              "primary": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "repositoryId",
+                              "repository",
+                              "pullNumber",
+                              "headRef",
+                              "headSha",
+                              "primary"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "observedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "generation",
+                        "deliveryRevision",
+                        "repositories",
+                        "observedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "deployedGeneration": {
+                      "nullable": true,
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{64}$"
+                    },
+                    "lastGoodGeneration": {
+                      "nullable": true,
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{64}$"
+                    },
+                    "attempt": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "number": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[a-f\\d]{64}$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "applying",
+                            "succeeded",
+                            "failed",
+                            "blocked",
+                            "superseded"
+                          ]
+                        },
+                        "workspaceId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "cause": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "startedAt": {
+                          "type": "string"
+                        },
+                        "endedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "number",
+                        "generation",
+                        "state",
+                        "workspaceId",
+                        "cause",
+                        "startedAt",
+                        "endedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "revision",
+                    "state",
+                    "desired",
+                    "deployedGeneration",
+                    "lastGoodGeneration",
+                    "attempt",
+                    "error",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get preview convergence",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:read"
+      }
+    },
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/preview-convergence/retry": {
+      "post": {
+        "operationId": "retryStoryPreviewConvergence",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "idempotency_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "waiting",
+                        "applying",
+                        "blocked",
+                        "failed",
+                        "ready",
+                        "suspended"
+                      ]
+                    },
+                    "desired": {
+                      "type": "object",
+                      "properties": {
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[a-f\\d]{64}$"
+                        },
+                        "deliveryRevision": {
+                          "type": "string",
+                          "pattern": "^[a-f\\d]{64}$"
+                        },
+                        "repositories": {
+                          "minItems": 1,
+                          "maxItems": 50,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "repositoryId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "repository": {
+                                "type": "string",
+                                "minLength": 3
+                              },
+                              "pullNumber": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991
+                              },
+                              "headRef": {
+                                "nullable": true,
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "headSha": {
+                                "type": "string",
+                                "pattern": "^[a-f\\d]{40}$"
+                              },
+                              "primary": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "repositoryId",
+                              "repository",
+                              "pullNumber",
+                              "headRef",
+                              "headSha",
+                              "primary"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "observedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "generation",
+                        "deliveryRevision",
+                        "repositories",
+                        "observedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "deployedGeneration": {
+                      "nullable": true,
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{64}$"
+                    },
+                    "lastGoodGeneration": {
+                      "nullable": true,
+                      "type": "string",
+                      "pattern": "^[a-f\\d]{64}$"
+                    },
+                    "attempt": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "number": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991
+                        },
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[a-f\\d]{64}$"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "applying",
+                            "succeeded",
+                            "failed",
+                            "blocked",
+                            "superseded"
+                          ]
+                        },
+                        "workspaceId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "cause": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "startedAt": {
+                          "type": "string"
+                        },
+                        "endedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "number",
+                        "generation",
+                        "state",
+                        "workspaceId",
+                        "cause",
+                        "startedAt",
+                        "endedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "nullable": true,
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retryAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "retryAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "revision",
+                    "state",
+                    "desired",
+                    "deployedGeneration",
+                    "lastGoodGeneration",
+                    "attempt",
+                    "error",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create retry",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "workspaces:execute"
       }
     },
     "/v1/projects/{projectId}/workspace-stories/{storyId}/integration-state": {

@@ -6,14 +6,18 @@ import type {
 } from "@facility/core";
 import {
   type FacilityDb,
+  stories,
   storyDeliveryPullRequests,
   storyDeliveryScopes,
   storyPreviewAttempts,
   storyPreviewConvergences,
   storyPreviewGenerations,
   turns,
+  workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { ApiError } from "../errors.js";
+import type { PreviewEndpoint } from "../workspaces/runtime.js";
 import { readStoryDelivery } from "./delivery.js";
 
 export type PreviewConvergenceScope = { orgId: string; projectId: string; storyId: string };
@@ -30,7 +34,14 @@ export type PreviewConvergenceClaim =
     }
   | {
       claimed: false;
-      reason: "unconfigured" | "suspended" | "current" | "leased" | "writer_active";
+      reason:
+        | "unconfigured"
+        | "suspended"
+        | "current"
+        | "leased"
+        | "writer_active"
+        | "blocked"
+        | "backoff";
       retryAt?: Date;
     };
 
@@ -191,6 +202,13 @@ export class StoryPreviewConvergenceService {
         .limit(1);
       if (!controller) return { claimed: false, reason: "unconfigured" };
       if (controller.state === "suspended") return { claimed: false, reason: "suspended" };
+      if (controller.state === "blocked") return { claimed: false, reason: "blocked" };
+      if (
+        (controller.state === "failed" || controller.state === "waiting") &&
+        controller.retryAt &&
+        controller.retryAt > now
+      )
+        return { claimed: false, reason: "backoff", retryAt: controller.retryAt };
       if (
         controller.state === "ready" &&
         controller.deployedGeneration === controller.desiredGeneration
@@ -312,7 +330,13 @@ export class StoryPreviewConvergenceService {
 
   async complete(
     scope: PreviewConvergenceScope,
-    input: { generation: string; leaseToken: string; workspaceId?: string },
+    input: {
+      generation: string;
+      leaseToken: string;
+      workspaceId?: string;
+      setupChecksum?: string;
+      endpoints?: PreviewEndpoint[];
+    },
     now = new Date(),
   ) {
     const result = await this.settle(scope, input, "succeeded", {}, now);
@@ -348,7 +372,14 @@ export class StoryPreviewConvergenceService {
       .from(storyPreviewConvergences)
       .where(
         or(
-          inArray(storyPreviewConvergences.state, ["pending", "waiting"]),
+          eq(storyPreviewConvergences.state, "pending"),
+          and(
+            eq(storyPreviewConvergences.state, "waiting"),
+            or(
+              isNull(storyPreviewConvergences.retryAt),
+              lte(storyPreviewConvergences.retryAt, now),
+            ),
+          ),
           and(
             eq(storyPreviewConvergences.state, "applying"),
             lte(storyPreviewConvergences.leaseExpiresAt, now),
@@ -386,6 +417,61 @@ export class StoryPreviewConvergenceService {
     return recorded;
   }
 
+  async reconcileLifecycle(now = new Date(), limit = 1_000) {
+    const controllers = await this.db
+      .select({
+        orgId: storyPreviewConvergences.orgId,
+        projectId: storyPreviewConvergences.projectId,
+        storyId: storyPreviewConvergences.storyId,
+        state: storyPreviewConvergences.state,
+      })
+      .from(storyPreviewConvergences)
+      .orderBy(asc(storyPreviewConvergences.updatedAt))
+      .limit(limit);
+    let suspended = 0;
+    let resumed = 0;
+    for (const controller of controllers) {
+      const [story] = await this.db
+        .select({ status: stories.status, deletedAt: stories.deletedAt })
+        .from(stories)
+        .where(
+          and(
+            eq(stories.orgId, controller.orgId),
+            eq(stories.projectId, controller.projectId),
+            eq(stories.id, controller.storyId),
+          ),
+        )
+        .limit(1);
+      const [workspace] = await this.db
+        .select({ state: workspaces.state })
+        .from(workspaces)
+        .where(
+          and(
+            eq(workspaces.orgId, controller.orgId),
+            eq(workspaces.projectId, controller.projectId),
+            eq(workspaces.storyId, controller.storyId),
+          ),
+        )
+        .orderBy(desc(workspaces.createdAt))
+        .limit(1);
+      const shouldSuspend =
+        !!story &&
+        (story.deletedAt !== null ||
+          story.status === "archived" ||
+          workspace?.state === "sleeping");
+      if (shouldSuspend && controller.state !== "suspended") {
+        if (await this.suspend(controller, undefined, now)) suspended += 1;
+      } else if (
+        !shouldSuspend &&
+        controller.state === "suspended" &&
+        workspace?.state === "running"
+      ) {
+        if (await this.resume(controller, now)) resumed += 1;
+      }
+    }
+    return { suspended, resumed };
+  }
+
   async retry(scope: PreviewConvergenceScope, now = new Date()) {
     const [saved] = await this.db
       .update(storyPreviewConvergences)
@@ -411,13 +497,135 @@ export class StoryPreviewConvergenceService {
     return Boolean(saved);
   }
 
+  async renew(
+    scope: PreviewConvergenceScope,
+    input: { generation: string; leaseToken: string },
+    now = new Date(),
+  ) {
+    const leaseExpiresAt = new Date(now.getTime() + this.leaseMs);
+    const [saved] = await this.db
+      .update(storyPreviewConvergences)
+      .set({ leaseExpiresAt, updatedAt: now })
+      .where(
+        and(
+          convergenceWhere(scope),
+          eq(storyPreviewConvergences.state, "applying"),
+          eq(storyPreviewConvergences.leaseToken, input.leaseToken),
+          eq(storyPreviewConvergences.leaseGeneration, input.generation),
+          gt(storyPreviewConvergences.leaseExpiresAt, now),
+        ),
+      )
+      .returning({ storyId: storyPreviewConvergences.storyId });
+    return saved ? leaseExpiresAt : null;
+  }
+
+  async suspend(
+    scope: PreviewConvergenceScope,
+    input?: { generation: string; leaseToken: string; reason?: string },
+    now = new Date(),
+  ) {
+    return this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`facility:preview-convergence:${scope.orgId}:${scope.projectId}:${scope.storyId}`}))`,
+      );
+      const [controller] = await tx
+        .select()
+        .from(storyPreviewConvergences)
+        .where(convergenceWhere(scope))
+        .for("update")
+        .limit(1);
+      if (!controller) return false;
+      if (input && controller.state === "applying") {
+        if (
+          controller.leaseToken !== input.leaseToken ||
+          controller.leaseGeneration !== input.generation
+        )
+          return false;
+      }
+      if (controller.state === "applying" && controller.leaseToken) {
+        await tx
+          .update(storyPreviewAttempts)
+          .set({
+            state: "blocked",
+            cause: { code: "preview_suspended", reason: input?.reason ?? "workspace_suspended" },
+            endedAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(storyPreviewAttempts.storyId, scope.storyId),
+              eq(storyPreviewAttempts.leaseToken, controller.leaseToken),
+              eq(storyPreviewAttempts.state, "applying"),
+            ),
+          );
+      }
+      if (controller.state === "suspended") return true;
+      await tx
+        .update(storyPreviewConvergences)
+        .set({
+          state: "suspended",
+          leaseToken: null,
+          leaseGeneration: null,
+          leaseExpiresAt: null,
+          errorCode: "preview_suspended",
+          errorMessage: "Preview convergence is suspended with the story workspace.",
+          retryAt: null,
+          revision: controller.revision + 1,
+          updatedAt: now,
+        })
+        .where(convergenceWhere(scope));
+      return true;
+    });
+  }
+
+  async resume(scope: PreviewConvergenceScope, now = new Date()) {
+    const [controller] = await this.db
+      .select()
+      .from(storyPreviewConvergences)
+      .where(convergenceWhere(scope))
+      .limit(1);
+    if (controller?.state !== "suspended") return false;
+    const state =
+      controller.deployedGeneration === controller.desiredGeneration ? "ready" : "pending";
+    const [saved] = await this.db
+      .update(storyPreviewConvergences)
+      .set({
+        state,
+        errorCode: null,
+        errorMessage: null,
+        revision: controller.revision + 1,
+        updatedAt: now,
+      })
+      .where(
+        and(convergenceWhere(scope), eq(storyPreviewConvergences.revision, controller.revision)),
+      )
+      .returning({ storyId: storyPreviewConvergences.storyId });
+    if (saved && state === "pending") await this.enqueue(QUEUE, scope);
+    return Boolean(saved);
+  }
+
   async read(scope: PreviewConvergenceScope): Promise<StoryPreviewConvergence | null> {
     const [controller] = await this.db
       .select()
       .from(storyPreviewConvergences)
       .where(convergenceWhere(scope))
       .limit(1);
-    if (!controller) return null;
+    if (!controller) {
+      const [story] = await this.db
+        .select({ id: stories.id })
+        .from(stories)
+        .where(
+          and(
+            eq(stories.orgId, scope.orgId),
+            eq(stories.projectId, scope.projectId),
+            eq(stories.id, scope.storyId),
+          ),
+        )
+        .limit(1);
+      if (!story) throw new ApiError(404, "not_found", "Story not found");
+      return null;
+    }
     const [generation] = await this.db
       .select()
       .from(storyPreviewGenerations)
@@ -478,6 +686,8 @@ export class StoryPreviewConvergenceService {
       generation: string;
       leaseToken: string;
       workspaceId?: string;
+      setupChecksum?: string;
+      endpoints?: PreviewEndpoint[];
       code?: string;
       message?: string;
       retryAt?: Date;
@@ -525,6 +735,34 @@ export class StoryPreviewConvergenceService {
         : outcome === "succeeded"
           ? "ready"
           : outcome;
+      if (
+        outcome === "succeeded" &&
+        !superseded &&
+        input.workspaceId &&
+        input.setupChecksum &&
+        input.endpoints
+      ) {
+        const [published] = await tx
+          .update(workspaces)
+          .set({
+            endpoints: input.endpoints,
+            state: "running",
+            error: null,
+            setupChecksum: input.setupChecksum,
+            lastActivityAt: now,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(workspaces.orgId, scope.orgId),
+              eq(workspaces.projectId, scope.projectId),
+              eq(workspaces.storyId, scope.storyId),
+              eq(workspaces.id, input.workspaceId),
+            ),
+          )
+          .returning({ id: workspaces.id });
+        if (!published) throw new Error("preview_workspace_missing");
+      }
       await tx
         .update(storyPreviewConvergences)
         .set({

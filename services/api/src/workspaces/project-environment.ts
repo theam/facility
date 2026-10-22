@@ -323,10 +323,40 @@ export class ProjectEnvironmentService {
     return this.startServices(preparedInput, input.setupChecksum, alreadyReady);
   }
 
+  /** Rebuild a retained workspace after Facility has safely advanced its repositories. */
+  async refreshPrepared(input: EnvironmentInput & { previousSetupChecksum?: string | null }) {
+    assertRepositoryContract(input.manifest, input.credentials.repositories);
+    const preparedInput = await this.withDeclaredEnvironment(input);
+    if (preparedInput.manifest.environment.stop) {
+      await this.run(
+        preparedInput,
+        preparedInput.manifest.environment.stop,
+        primaryPath(preparedInput.credentials),
+        "environment.stop",
+      );
+    }
+    const setupChecksum = await this.setupChecksum(preparedInput);
+    if (preparedInput.manifest.environment.setup && input.previousSetupChecksum !== setupChecksum) {
+      // Retained data belongs to the story. Refresh dependencies, but never
+      // rerun the creation-only seed while converging a later code generation.
+      await this.run(
+        preparedInput,
+        preparedInput.manifest.environment.setup,
+        primaryPath(preparedInput.credentials),
+        "environment.setup",
+      );
+    }
+    // A convergence worker may lose its lease while the environment starts.
+    // Return the candidate publication so the fenced controller can persist it
+    // atomically with the generation transition to ready.
+    return this.startServices(preparedInput, setupChecksum, false, false);
+  }
+
   private async startServices(
     preparedInput: EnvironmentInput,
     setupChecksum: string,
     alreadyReady = false,
+    publish = true,
   ) {
     if (!alreadyReady) {
       await this.run(
@@ -359,31 +389,36 @@ export class ProjectEnvironmentService {
           );
       }
     }
-    await this.db
-      .update(workspaces)
-      .set({
-        endpoints,
-        state: "running",
-        error: null,
-        lastActivityAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(workspaces.orgId, preparedInput.orgId),
-          eq(workspaces.id, preparedInput.workspace.id),
-        ),
+    if (publish) {
+      await this.db
+        .update(workspaces)
+        .set({
+          endpoints,
+          state: "running",
+          error: null,
+          lastActivityAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(workspaces.orgId, preparedInput.orgId),
+            eq(workspaces.id, preparedInput.workspace.id),
+          ),
+        );
+      await appendWorkspaceEvent(
+        this.db,
+        preparedInput.workspace.id,
+        preparedInput.orgId,
+        "environment.ready",
+        {
+          services: endpoints.map((endpoint) => ({
+            service: endpoint.service,
+            port: endpoint.port,
+          })),
+          setupChecksum,
+        },
       );
-    await appendWorkspaceEvent(
-      this.db,
-      preparedInput.workspace.id,
-      preparedInput.orgId,
-      "environment.ready",
-      {
-        services: endpoints.map((endpoint) => ({ service: endpoint.service, port: endpoint.port })),
-        setupChecksum,
-      },
-    );
+    }
     return {
       endpoints,
       primaryCwd: primaryPath(preparedInput.credentials),

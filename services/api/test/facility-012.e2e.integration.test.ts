@@ -33,6 +33,8 @@ import { CostBudgetService } from "../src/insights/costs.js";
 import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { GithubConsultationSources } from "../src/stories/consultation-sources.js";
 import { StoryConsultationService } from "../src/stories/consultations.js";
+import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
+import { StoryPreviewConvergenceExecutor } from "../src/stories/preview-convergence-executor.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { StoryTitleService } from "../src/stories/titles.js";
 import type { StoryDomain } from "../src/story-domain.js";
@@ -247,6 +249,15 @@ environment:
       projectManifests,
       environment,
     );
+    const previewConvergence = new StoryPreviewConvergenceService(db, async () => undefined);
+    const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
+      db,
+      runtime,
+      credentials,
+      projectManifests,
+      environment,
+      previewConvergence,
+    );
     const domain: StoryDomain = {
       variables: new WorkspaceVariablesService(db, config.secretMasterKey),
       runtime,
@@ -283,6 +294,8 @@ environment:
         credentials: async () => undefined,
         enqueue: async () => undefined,
       }),
+      previewConvergence,
+      previewConvergenceExecutor,
     };
     app = await buildApp(config, {
       storyDomain: domain,

@@ -278,6 +278,10 @@ export type ReplaceStoryDelivery = FacilityGeneratedBody<
   "POST",
   "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery"
 >;
+export type StoryPreviewConvergence = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/preview-convergence"
+>;
 export type StoryPlans = FacilityGeneratedResponse<
   "GET",
   "/v1/projects/{projectId}/workspace-stories/{storyId}/plan"
@@ -317,6 +321,8 @@ export type RequestStoryConsultation = FacilityGeneratedBody<
 export type WorkspaceStoryBundle = {
   /** Absent on older servers; an absent register never means a complete PR set. */
   delivery?: StoryDelivery;
+  /** Absent on older servers; null until a complete exact delivery generation is observed. */
+  previewConvergence?: StoryPreviewConvergence | null;
   /** Absent on older servers. Missing metadata never implies an approved plan. */
   plans?: StoryPlans;
   story: WorkspaceStory;

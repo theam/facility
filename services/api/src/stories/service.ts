@@ -13,6 +13,7 @@ import {
   storyConversations,
   storyEvidenceEvents,
   storyMessages,
+  storyPreviewConvergences,
   turnEvents,
   turnGitEvidence,
   turns,
@@ -21,7 +22,7 @@ import {
   users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
 import { ACTIVITY_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
@@ -119,6 +120,14 @@ export class StoryWorkspaceService {
     private readonly runtime: WorkspaceRuntime,
     private readonly onTurnQueued: (turn: typeof turns.$inferSelect) => Promise<void> = async () =>
       undefined,
+    private readonly lifecycleHooks: {
+      onSuspend?: (scope: {
+        orgId: string;
+        projectId: string;
+        storyId: string;
+      }) => Promise<unknown>;
+      onResume?: (scope: { orgId: string; projectId: string; storyId: string }) => Promise<unknown>;
+    } = {},
   ) {}
 
   async start(input: StartStoryInput) {
@@ -375,17 +384,18 @@ export class StoryWorkspaceService {
         return { message: duplicate, turn, queued: !turn, created: false };
       }
 
-      const active = (
+      const activeTurn = (
         await tx
           .select()
           .from(turns)
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
+      const activePreview = await activePreviewWriter(tx, input);
       await recordParticipation(tx, story, input.actor);
       const sequence = await allocateMessageSequence(tx, conversation.id);
       let turn: typeof turns.$inferSelect | undefined;
-      if (!active) {
+      if (!activeTurn && !activePreview) {
         turn = (
           await tx
             .insert(turns)
@@ -1159,7 +1169,7 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
-      if (active) return undefined;
+      if (active || (await activePreviewWriter(tx, input))) return undefined;
       const message = (
         await tx
           .select()
@@ -1660,7 +1670,7 @@ export class StoryWorkspaceService {
 
   /** Rechecked under the same lock as message submission and explicit wake. */
   async suspendFailedWorkspace(orgId: string, projectId: string, storyId: string) {
-    return this.db.transaction(async (rawTx) => {
+    const suspended = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, orgId, projectId, storyId);
       const workspace = await this.activeWorkspace(orgId, projectId, storyId, false, tx);
@@ -1744,6 +1754,8 @@ export class StoryWorkspaceService {
       });
       return true;
     });
+    if (suspended) await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
+    return suspended;
   }
 
   /** Scheduler retry also covers a worker exiting before terminal cleanup. */
@@ -1794,6 +1806,7 @@ export class StoryWorkspaceService {
       .set({ state: "sleeping", updatedAt: new Date() })
       .where(and(eq(workspaces.orgId, orgId), eq(workspaces.id, workspace.id)));
     await appendWorkspaceEvent(this.db, workspace.id, orgId, "workspace.suspended", {});
+    await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -1824,6 +1837,7 @@ export class StoryWorkspaceService {
       await lockStory(tx, orgId, projectId, storyId);
       await this.restoreLocked(tx, orgId, projectId, storyId);
     });
+    await this.lifecycleHooks.onResume?.({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -2452,6 +2466,27 @@ async function scopedTurn(db: FacilityDb, orgId: string, projectId: string, turn
 async function lockStory(db: FacilityDb, orgId: string, projectId: string, storyId: string) {
   await scopedStory(db, orgId, projectId, storyId);
   await lockIdentity(db, `${orgId}:${projectId}:${storyId}`);
+}
+
+async function activePreviewWriter(
+  db: FacilityDb,
+  scope: { orgId: string; projectId: string; storyId: string },
+) {
+  return (
+    await db
+      .select({ storyId: storyPreviewConvergences.storyId })
+      .from(storyPreviewConvergences)
+      .where(
+        and(
+          eq(storyPreviewConvergences.orgId, scope.orgId),
+          eq(storyPreviewConvergences.projectId, scope.projectId),
+          eq(storyPreviewConvergences.storyId, scope.storyId),
+          eq(storyPreviewConvergences.state, "applying"),
+          gt(storyPreviewConvergences.leaseExpiresAt, new Date()),
+        ),
+      )
+      .limit(1)
+  )[0];
 }
 
 async function lockIdentity(db: FacilityDb, identity: string) {

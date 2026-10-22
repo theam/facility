@@ -162,6 +162,30 @@ export const toolDefinitions: ToolDefinition[] = [
     write: true,
   },
   {
+    name: "facility_get_preview_convergence",
+    permission: "projects:read",
+    description:
+      "Read the story preview's desired exact PR generation, current state, latest attempt, deployed generation, last good generation, and retryable failure. This is database-only and never wakes or changes the workspace. Needs projects:read.",
+    inputSchema: { projectId, storyId },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/preview-convergence`,
+  },
+  {
+    name: "facility_retry_preview_convergence",
+    permission: "workspaces:execute",
+    description:
+      "Retry a waiting, failed, or blocked preview convergence for the latest recorded delivery generation. The worker may fetch exact Git commits and rebuild the retained workspace; it never merges pull requests or starts an agent. Needs workspaces:execute.",
+    inputSchema: { projectId, storyId, idempotencyKey },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/preview-convergence/retry`,
+    body: (args) => ({ idempotency_key: args.idempotencyKey }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+    openWorld: true,
+  },
+  {
     name: "facility_get_plan",
     permission: "projects:read",
     description:

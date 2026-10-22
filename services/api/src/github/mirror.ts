@@ -30,6 +30,10 @@ export class GithubMirrorService {
     private readonly db: FacilityDb,
     private readonly githubFactory: GithubClientFactory,
     private readonly storiesService?: StoryWorkspaceService,
+    private readonly onPullObserved?: (
+      repositoryId: string,
+      pullNumber: number,
+    ) => Promise<unknown>,
   ) {}
 
   async handleWebhook(input: {
@@ -479,13 +483,14 @@ export class GithubMirrorService {
       syncedAt: now,
       updatedAt: now,
     };
-    const saved =
+    let saved =
       (
         await this.db
           .insert(githubPullRequests)
           .values(values)
           .onConflictDoUpdate({
             target: [githubPullRequests.repositoryId, githubPullRequests.number],
+            setWhere: sql`${githubPullRequests.githubUpdatedAt} is null or excluded.github_updated_at >= ${githubPullRequests.githubUpdatedAt}`,
             set: {
               title: values.title,
               body: bodyPresent ? values.body : githubPullRequests.body,
@@ -511,19 +516,44 @@ export class GithubMirrorService {
           })
           .returning()
       )[0] ?? null;
+    // GitHub's REST-shaped reconciliation payloads may confirm a terminal
+    // merge with an older or absent updated_at. Promote only the terminal
+    // state in that case; retain the newer observed head and mutable fields.
+    if (!saved && state === "merged") {
+      saved =
+        (
+          await this.db
+            .update(githubPullRequests)
+            .set({
+              state: "merged",
+              ...(values.closedAt ? { closedAt: values.closedAt } : {}),
+              ...(values.mergedAt ? { mergedAt: values.mergedAt } : {}),
+              syncedAt: now,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(githubPullRequests.repositoryId, repository.id),
+                eq(githubPullRequests.number, number),
+                sql`${githubPullRequests.state} <> 'merged'`,
+              ),
+            )
+            .returning()
+        )[0] ?? null;
+    }
     if (!saved) return null;
     const linked = await this.linkedStory(repository, {
       pullNumber: number,
-      branch: headRef,
-      headSha,
-      closingIssues: values.closingIssues,
+      branch: saved.headRef,
+      headSha: saved.headSha,
+      closingIssues: saved.closingIssues,
     });
     if (linked) {
       await this.associateStoryPullRequest(linked.story, {
         number,
-        url: htmlUrl,
-        branch: headRef,
-        state,
+        url: saved.htmlUrl,
+        branch: saved.headRef,
+        state: saved.state as "open" | "closed" | "merged",
       });
       await appendStoryEvidence(this.db, {
         orgId: repository.orgId,
@@ -536,25 +566,26 @@ export class GithubMirrorService {
           "pull",
           repository.id,
           number,
-          state,
-          headSha,
-          values.githubUpdatedAt?.toISOString() ?? "unknown",
+          saved.state,
+          saved.headSha,
+          saved.githubUpdatedAt?.toISOString() ?? "unknown",
         ].join(":"),
-        occurredAt: values.githubUpdatedAt ?? now,
+        occurredAt: saved.githubUpdatedAt ?? now,
         data: {
           repository: `${repository.owner}/${repository.name}`,
           number,
-          title,
-          state,
-          draft: values.draft,
-          headRef,
-          headSha,
-          baseRef,
-          url: htmlUrl,
+          title: saved.title,
+          state: saved.state,
+          draft: saved.draft,
+          headRef: saved.headRef,
+          headSha: saved.headSha,
+          baseRef: saved.baseRef,
+          url: saved.htmlUrl,
           actor: linked.turnId ? "facility-turn" : "external",
         },
       });
     }
+    await this.onPullObserved?.(repository.id, number);
     return saved;
   }
 

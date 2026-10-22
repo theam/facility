@@ -89,6 +89,8 @@ describe("@facility/mcp 0.12", () => {
       "facility_get_story",
       "facility_get_delivery",
       "facility_set_delivery",
+      "facility_get_preview_convergence",
+      "facility_retry_preview_convergence",
       "facility_get_plan",
       "facility_propose_plan",
       "facility_request_plan_decision",
@@ -399,6 +401,52 @@ describe("@facility/mcp 0.12", () => {
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: false,
+    });
+    await client.close();
+    await server.close();
+  });
+
+  test("reads and explicitly retries the shared preview convergence projection", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { state: "pending" };
+      },
+    });
+    const scope = { projectId: "proj_1", storyId: "story/1" };
+    await client.callTool({ name: "facility_get_preview_convergence", arguments: scope });
+    await client.callTool({
+      name: "facility_retry_preview_convergence",
+      arguments: { ...scope, idempotencyKey: "preview-retry-1" },
+    });
+    expect(requests).toEqual([
+      {
+        method: "GET",
+        path: "/v1/projects/proj_1/workspace-stories/story%2F1/preview-convergence",
+        options: { query: undefined, body: undefined, idempotencyKey: undefined },
+      },
+      {
+        method: "POST",
+        path: "/v1/projects/proj_1/workspace-stories/story%2F1/preview-convergence/retry",
+        options: {
+          query: undefined,
+          body: { idempotency_key: "preview-retry-1" },
+          idempotencyKey: "preview-retry-1",
+        },
+      },
+    ]);
+    const tools = await client.listTools();
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_get_preview_convergence")?.annotations,
+    ).toMatchObject({ readOnlyHint: true, openWorldHint: false });
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_retry_preview_convergence")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
     });
     await client.close();
     await server.close();

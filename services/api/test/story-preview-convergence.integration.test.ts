@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseAgentManifest } from "@facility/agents";
 import { newId, StoryPreviewConvergenceSchema } from "@facility/core";
 import {
   createDb,
@@ -14,13 +15,31 @@ import {
   storyPreviewAttempts,
   storyPreviewGenerations,
   turns,
+  workspaces,
 } from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { GithubMirrorService } from "../src/github/mirror.js";
 import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
+import { StoryWorkspaceService } from "../src/stories/service.js";
+import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
+const builder = parseAgentManifest(
+  `---
+name: builder
+description: Builds a queued story after preview convergence releases the writer.
+engine: codex
+model: gpt-5.5
+enabled: true
+triggers:
+  - type: manual
+---
+Build the story.
+`,
+  "builder.md",
+);
 
 describe("durable story preview convergence", () => {
   const { db, client } = createDb(databaseUrl);
@@ -64,6 +83,7 @@ describe("durable story preview convergence", () => {
       baseRef: "main",
       headSha: "a".repeat(40),
       htmlUrl: `https://github.com/example-${suffix}/app/pull/7`,
+      githubUpdatedAt: observedAt,
       syncedAt: observedAt,
     });
     await db.insert(stories).values({
@@ -95,13 +115,26 @@ describe("durable story preview convergence", () => {
     return {
       scope: { orgId: "org_local", projectId, storyId },
       repositoryId,
-      conversationId: newId("msg"),
+      owner: `example-${suffix}`,
     };
   }
 
   it("coalesces changed heads and fences an older worker from publishing", async () => {
     const base = new Date();
     const { scope, repositoryId } = await fixture(new Date(base.getTime() - 60_000));
+    const workspaceId = newId("ws");
+    const lastGoodEndpoints = [
+      { service: "web", port: 3000, url: "https://last-good.example.test" },
+    ];
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      ...scope,
+      provider: "fake",
+      volumeRef: `fake://${workspaceId}`,
+      state: "running",
+      setupChecksum: "last-good",
+      endpoints: lastGoodEndpoints,
+    });
     const enqueue = vi.fn(async () => undefined);
     const service = new StoryPreviewConvergenceService(db, enqueue);
 
@@ -132,9 +165,20 @@ describe("durable story preview convergence", () => {
       service.complete(scope, {
         generation: firstClaim.generation,
         leaseToken: firstClaim.leaseToken,
-        workspaceId: "ws_old",
+        workspaceId,
+        setupChecksum: "stale-candidate",
+        endpoints: [{ service: "web", port: 3000, url: "https://stale.example.test" }],
       }),
     ).resolves.toMatchObject({ settled: true, superseded: true, enqueue: true });
+    expect(
+      (
+        await db
+          .select({ setupChecksum: workspaces.setupChecksum, endpoints: workspaces.endpoints })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
+          .limit(1)
+      )[0],
+    ).toMatchObject({ setupChecksum: "last-good", endpoints: lastGoodEndpoints });
     const secondClaim = await service.claim(scope, new Date(newer.getTime() + 1));
     expect(secondClaim).toMatchObject({ claimed: true, attempt: 2 });
     if (!secondClaim.claimed) throw new Error("Expected second preview claim");
@@ -142,7 +186,9 @@ describe("durable story preview convergence", () => {
       service.complete(scope, {
         generation: secondClaim.generation,
         leaseToken: secondClaim.leaseToken,
-        workspaceId: "ws_current",
+        workspaceId,
+        setupChecksum: "current-candidate",
+        endpoints: [{ service: "web", port: 3000, url: "https://current.example.test" }],
       }),
     ).resolves.toMatchObject({ settled: true, superseded: false });
     const ready = StoryPreviewConvergenceSchema.parse(await service.read(scope));
@@ -150,8 +196,17 @@ describe("durable story preview convergence", () => {
       state: "ready",
       deployedGeneration: secondClaim.generation,
       lastGoodGeneration: secondClaim.generation,
-      attempt: { state: "succeeded", workspaceId: "ws_current" },
+      attempt: { state: "succeeded", workspaceId },
     });
+    expect(
+      (
+        await db
+          .select({ state: workspaces.state, setupChecksum: workspaces.setupChecksum })
+          .from(workspaces)
+          .where(eq(workspaces.id, workspaceId))
+          .limit(1)
+      )[0],
+    ).toEqual({ state: "running", setupChecksum: "current-candidate" });
 
     // A late observation of the older head records history but cannot roll back desired state.
     await db
@@ -209,6 +264,97 @@ describe("durable story preview convergence", () => {
     expect(claimed).toMatchObject({ claimed: true });
   });
 
+  it("queues a new story message until the preview writer releases the workspace", async () => {
+    const now = new Date();
+    const { scope } = await fixture(now);
+    const preview = new StoryPreviewConvergenceService(db, async () => undefined);
+    await preview.observe(scope, now);
+    const claim = await preview.claim(scope, now);
+    if (!claim.claimed) throw new Error("Expected preview writer claim");
+    const conversationId = newId("sess");
+    await db.insert(storyConversations).values({ id: conversationId, ...scope });
+    const dispatch = vi.fn(async () => undefined);
+    const storiesService = new StoryWorkspaceService(db, new FakeWorkspaceRuntime(), dispatch);
+    const queued = await storiesService.queueMessage({
+      ...scope,
+      body: "Continue after the preview update.",
+      dedupeKey: randomUUID(),
+      agent: builder,
+      actor: { type: "user", id: "user_local_admin" },
+      trigger: { type: "manual" },
+    });
+    expect(queued).toMatchObject({ queued: true, turn: undefined });
+    expect(dispatch).not.toHaveBeenCalled();
+    await preview.complete(scope, {
+      generation: claim.generation,
+      leaseToken: claim.leaseToken,
+      workspaceId: "ws_preview",
+    });
+    const activated = await storiesService.activateNextMessage({
+      ...scope,
+      agent: builder,
+      actor: { type: "user", id: "user_local_admin" },
+    });
+    expect(activated).toMatchObject({ state: "queued", agentName: "builder" });
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("observes accepted mirror heads and ignores a reordered older GitHub payload", async () => {
+    const initial = new Date("2026-10-22T10:00:00.000Z");
+    const { scope, repositoryId, owner } = await fixture(initial);
+    const convergence = new StoryPreviewConvergenceService(db, async () => undefined);
+    await convergence.observe(scope, initial);
+    const mirror = new GithubMirrorService(
+      db,
+      async () => {
+        throw new Error("Full mirror synchronization is not used in this test");
+      },
+      undefined,
+      (id, number) => convergence.observePull(id, number),
+    );
+    const payload = (headSha: string, updatedAt: string) => ({
+      repository: { full_name: `${owner}/app`, name: "app", owner: { login: owner } },
+      pull_request: {
+        number: 7,
+        title: "Complete preview",
+        body: "",
+        state: "open",
+        draft: false,
+        html_url: `https://github.com/${owner}/app/pull/7`,
+        user: { login: "maintainer" },
+        head: { ref: "feature/preview", sha: headSha },
+        base: { ref: "main" },
+        created_at: initial.toISOString(),
+        updated_at: updatedAt,
+      },
+    });
+    const accepted = await mirror.handleWebhook({
+      id: "newer",
+      orgId: scope.orgId,
+      eventType: "pull_request",
+      payload: payload("b".repeat(40), "2026-10-22T11:00:00.000Z"),
+    });
+    expect(accepted.mirrored).toBe(1);
+    expect((await convergence.read(scope))?.desired.repositories[0]?.headSha).toBe("b".repeat(40));
+    const reordered = await mirror.handleWebhook({
+      id: "older",
+      orgId: scope.orgId,
+      eventType: "pull_request",
+      payload: payload("c".repeat(40), "2026-10-22T10:30:00.000Z"),
+    });
+    expect(reordered.mirrored).toBe(0);
+    expect((await convergence.read(scope))?.desired.repositories[0]?.headSha).toBe("b".repeat(40));
+    expect(
+      (
+        await db
+          .select({ headSha: githubPullRequests.headSha })
+          .from(githubPullRequests)
+          .where(eq(githubPullRequests.repositoryId, repositoryId))
+          .limit(1)
+      )[0]?.headSha,
+    ).toBe("b".repeat(40));
+  });
+
   it("expires abandoned leases, rejects their late settlement, and exposes bounded failures", async () => {
     const now = new Date();
     const { scope } = await fixture(now);
@@ -217,7 +363,18 @@ describe("durable story preview convergence", () => {
     await service.observe(scope, now);
     const abandoned = await service.claim(scope, now);
     if (!abandoned.claimed) throw new Error("Expected abandoned claim");
-    const replacement = await service.claim(scope, new Date(now.getTime() + 1_001));
+    await expect(
+      service.renew(
+        scope,
+        { generation: abandoned.generation, leaseToken: abandoned.leaseToken },
+        new Date(now.getTime() + 500),
+      ),
+    ).resolves.toEqual(new Date(now.getTime() + 1_500));
+    await expect(service.claim(scope, new Date(now.getTime() + 1_001))).resolves.toMatchObject({
+      claimed: false,
+      reason: "leased",
+    });
+    const replacement = await service.claim(scope, new Date(now.getTime() + 1_501));
     expect(replacement).toMatchObject({ claimed: true, attempt: 2 });
     if (!replacement.claimed) throw new Error("Expected replacement claim");
     await expect(
@@ -249,6 +406,10 @@ describe("durable story preview convergence", () => {
         cause: { code: "preview_dirty_overlap", paths: ["src/example.ts"] },
       },
     });
+    await expect(service.claim(scope, new Date(now.getTime() + 1_500))).resolves.toEqual({
+      claimed: false,
+      reason: "blocked",
+    });
     expect(
       await db
         .select()
@@ -257,5 +418,31 @@ describe("durable story preview convergence", () => {
     ).toHaveLength(2);
     await expect(service.retry(scope, new Date(now.getTime() + 2_000))).resolves.toBe(true);
     expect((await service.read(scope))?.state).toBe("pending");
+  });
+
+  it("fences an active preview when workspace suspension wins and resumes the latest generation", async () => {
+    const now = new Date();
+    const { scope } = await fixture(now);
+    const enqueue = vi.fn(async () => undefined);
+    const service = new StoryPreviewConvergenceService(db, enqueue);
+    await service.observe(scope, now);
+    const claim = await service.claim(scope, now);
+    if (!claim.claimed) throw new Error("Expected preview claim");
+    await expect(service.suspend(scope, undefined, new Date(now.getTime() + 1))).resolves.toBe(
+      true,
+    );
+    expect(await service.read(scope)).toMatchObject({
+      state: "suspended",
+      attempt: { state: "blocked", cause: { code: "preview_suspended" } },
+    });
+    await expect(
+      service.complete(scope, {
+        generation: claim.generation,
+        leaseToken: claim.leaseToken,
+      }),
+    ).resolves.toEqual({ settled: false, enqueue: false });
+    await expect(service.resume(scope, new Date(now.getTime() + 2))).resolves.toBe(true);
+    expect((await service.read(scope))?.state).toBe("pending");
+    expect(enqueue).toHaveBeenLastCalledWith("stories.preview-convergence", scope);
   });
 });

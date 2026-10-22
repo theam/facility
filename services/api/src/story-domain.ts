@@ -14,6 +14,8 @@ import { CostBudgetService } from "./insights/costs.js";
 import { ProjectBacklogService } from "./stories/backlog.js";
 import { GithubConsultationSources } from "./stories/consultation-sources.js";
 import { StoryConsultationService } from "./stories/consultations.js";
+import { StoryPreviewConvergenceService } from "./stories/preview-convergence.js";
+import { StoryPreviewConvergenceExecutor } from "./stories/preview-convergence-executor.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
@@ -49,6 +51,8 @@ export type StoryDomain = {
   evidence: TurnGitEvidenceService;
   titles: StoryTitleService;
   consultations: StoryConsultationService;
+  previewConvergence: StoryPreviewConvergenceService;
+  previewConvergenceExecutor: StoryPreviewConvergenceExecutor;
   backlog: ProjectBacklogService;
 };
 
@@ -86,14 +90,28 @@ export function createStoryDomain(input: {
     undefined,
     (scope) => variables.values(scope),
   );
-  const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
-    await input.enqueue("turns.dispatch", {
-      orgId: turn.orgId,
-      projectId: turn.projectId,
-      turnId: turn.id,
-    });
-  });
-  const mirror = new GithubMirrorService(input.db, githubFactory, stories);
+  const previewConvergence = new StoryPreviewConvergenceService(input.db, input.enqueue);
+  const stories = new StoryWorkspaceService(
+    input.db,
+    runtime,
+    async (turn) => {
+      await input.enqueue("turns.dispatch", {
+        orgId: turn.orgId,
+        projectId: turn.projectId,
+        turnId: turn.id,
+      });
+    },
+    {
+      onSuspend: (scope) => previewConvergence.suspend(scope),
+      onResume: (scope) => previewConvergence.resume(scope),
+    },
+  );
+  const mirror = new GithubMirrorService(
+    input.db,
+    githubFactory,
+    stories,
+    (repositoryId, pullNumber) => previewConvergence.observePull(repositoryId, pullNumber),
+  );
   const engines = new AgentEngineRegistry([
     new ClaudeCodeEngine(runtime),
     new CodexEngine(runtime),
@@ -123,6 +141,15 @@ export function createStoryDomain(input: {
     evidence,
     costs,
     runtime,
+  );
+  const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
+    input.db,
+    runtime,
+    credentials,
+    projectManifests,
+    environment,
+    previewConvergence,
+    (scope) => dispatcher.activateQueuedStorySuccessor(scope),
   );
   const previews = new WorkspacePreviewService(
     input.db,
@@ -166,6 +193,8 @@ export function createStoryDomain(input: {
     evidence,
     titles,
     consultations,
+    previewConvergence,
+    previewConvergenceExecutor,
     backlog,
   };
 }

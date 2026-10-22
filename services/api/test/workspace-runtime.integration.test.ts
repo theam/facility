@@ -5,6 +5,7 @@ import { engineSessions, storyMessages, turns, workspaces } from "@facility/db";
 import Docker from "dockerode";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
+import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
 import { createStoryDomain } from "../src/story-domain.js";
 import { stopInterruptedEngineProcess } from "../src/turns/engines.js";
 import { ENGINE_USAGE_PROCESS, readUsageJournal } from "../src/turns/usage-journal.js";
@@ -19,6 +20,94 @@ import { consultationDatabaseUrl, consultationTestEnvironment } from "./fixtures
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it("converges an exact revision without replacing the retained volume or local data", async () => {
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const workspace = await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+    });
+    const run = async (script: string, cwd = ".") => {
+      const result = await runtime.exec(workspace, {
+        command: "sh",
+        args: ["-lc", script],
+        cwd,
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const credentials = {
+      repositories: [
+        { owner: "acme", name: "app", defaultBranch: "main", role: "primary" as const },
+      ],
+      environment: {},
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      gitIdentity: { name: "Facility Test", email: "facility@example.test" },
+    };
+    const target = (headSha: string) => ({
+      repositoryId: "repo_app",
+      repository: "acme/app",
+      pullNumber: 7,
+      headRef: "preview-one",
+      headSha,
+      primary: true,
+    });
+    try {
+      await run(`
+        mkdir -p remotes source repos/acme
+        git init --bare --initial-branch=main remotes/app.git
+        git clone remotes/app.git source/app
+        git -C source/app config user.name 'Facility Test'
+        git -C source/app config user.email facility@example.test
+        printf 'base\\n' > source/app/README.md
+        git -C source/app add README.md
+        git -C source/app commit -m base
+        git -C source/app push origin main
+        git clone remotes/app.git repos/acme/app
+        git -C repos/acme/app config user.name 'Facility Test'
+        git -C repos/acme/app config user.email facility@example.test
+        git -C source/app switch -c preview-one
+        printf 'first generation\\n' > source/app/application.txt
+        git -C source/app add application.txt
+        git -C source/app commit -m 'first generation'
+        git -C source/app push origin preview-one
+        printf 'retained user data\\n' > repos/acme/app/local-data.txt
+      `);
+      const first = await run("git rev-parse HEAD", "source/app");
+      const applicator = new PreviewWorkspaceGitApplicator(runtime);
+      await applicator.apply({ workspace, credentials, repositories: [target(first)] });
+      expect(await run(`git merge-base --is-ancestor ${first} HEAD`, "repos/acme/app")).toBe("");
+      expect(await run("cat local-data.txt", "repos/acme/app")).toBe("retained user data");
+      expect((await runtime.inspect(workspace)).volumeRef).toBe(workspace.volumeRef);
+
+      await run(
+        `
+        printf 'second generation\\n' > README.md
+        git add README.md
+        git commit -m 'second generation'
+        git push origin preview-one
+      `,
+        "source/app",
+      );
+      const second = await run("git rev-parse HEAD", "source/app");
+      const beforeBlocked = await run("git rev-parse HEAD", "repos/acme/app");
+      await run("printf 'local README edit\\n' > README.md", "repos/acme/app");
+      await expect(
+        applicator.apply({ workspace, credentials, repositories: [target(second)] }),
+      ).rejects.toMatchObject({ code: "preview_dirty_overlap" });
+      expect(await run("git rev-parse HEAD", "repos/acme/app")).toBe(beforeBlocked);
+      expect(await run("cat README.md", "repos/acme/app")).toBe("local README edit");
+      expect(await run("cat local-data.txt", "repos/acme/app")).toBe("retained user data");
+
+      await run("git restore README.md", "repos/acme/app");
+      await applicator.apply({ workspace, credentials, repositories: [target(second)] });
+      expect(await run("cat README.md", "repos/acme/app")).toBe("second generation");
+      expect(await run("cat local-data.txt", "repos/acme/app")).toBe("retained user data");
+      expect((await runtime.inspect(workspace)).volumeRef).toBe(workspace.volumeRef);
+    } finally {
+      await runtime.destroy(workspace);
+    }
+  }, 180_000);
+
   it("consults through the production domain without touching running or sleeping workspace state", async () => {
     const env = await consultationTestEnvironment();
     const runtime = new DockerWorkspaceRuntime(new Docker());
