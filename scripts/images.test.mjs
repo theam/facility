@@ -19,9 +19,9 @@ const digest = `sha256:${"b".repeat(64)}`;
 const imagesWorkflow = readFileSync(
   new URL("../.github/workflows/images.yml", import.meta.url),
   "utf8",
-);
-const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const runnerDockerfile = readFileSync(new URL("../runner/Dockerfile", import.meta.url), "utf8");
+).replace(/\r\n/g, "\n");
+const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const runnerDockerfile = readFileSync(new URL("../runner/Dockerfile", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 test("manual publication is SHA-only even when dispatch targets a tag", () => {
   for (const ref of ["refs/heads/main", "refs/heads/feature", "refs/tags/v0.3.0"]) {
@@ -267,7 +267,12 @@ test("every gRPC-bearing source build replaces the vulnerable module", () => {
   }
 });
 
-test("the executable gRPC audit accepts fixed modules and rejects unsafe binaries", () => {
+test("the executable gRPC audit accepts fixed modules and rejects unsafe binaries", (t) => {
+  const shCheck = spawnSync("sh", ["-c", "exit 0"]);
+  if (shCheck.error) {
+    t.skip("sh is not available on this platform");
+    return;
+  }
   // Execute the Dockerfile's actual shell loop with deterministic go-version output.
   // This checks the gate itself without requiring registries or a Go toolchain.
   const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
