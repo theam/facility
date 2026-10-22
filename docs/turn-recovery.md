@@ -54,8 +54,10 @@ Infrastructure job logs contain turn identifiers and state, not agent transcript
 A provider failure does not authorize blindly replaying agent commands. Transient
 observation reads reconnect to the original command; terminal failures remain
 visible and require a continuation. Corrupt native sessions retain the existing
-explicit replacement workflow. No automatic Git reset, workspace deletion, clean
-setup, or replay of external writes is performed.
+explicit replacement workflow. Resume failure compacts the story transcript into
+`story_conversations.summary` so the replacement session keeps the oldest constraints
+without replaying the raw transcript. No automatic Git reset, workspace deletion,
+clean setup, or replay of external writes is performed.
 
 ## Failed commands and idle compute
 

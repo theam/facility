@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TURN_POOL_SIZE } from "../src/turn-queue.js";
 import { ecsTaskProtection, WorkerTurnGuard } from "../src/worker-task-protection.js";
 
 afterEach(() => vi.useRealTimers());
@@ -79,10 +80,9 @@ describe("worker turn protection", () => {
     await expect(guard.run(dispatch)).rejects.toThrow("not accepting");
   });
 
-  it("renews long turns and never releases while renewal is in flight", async () => {
+  it("renews long turns and holds protection until the pool is idle", async () => {
     vi.useFakeTimers();
     const states: boolean[] = [];
-    let finish!: () => void;
     let finishRenewal!: () => void;
     const guard = new WorkerTurnGuard(
       {
@@ -96,20 +96,27 @@ describe("worker turn protection", () => {
       },
       { warn: vi.fn() },
     );
-    const turn = guard.run(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
+    const blockers: Array<() => void> = [];
+    const turns = Array.from({ length: TURN_POOL_SIZE }, () =>
+      guard.run(
+        () =>
+          new Promise<void>((resolve) => {
+            blockers.push(resolve);
+          }),
+      ),
     );
     await vi.advanceTimersByTimeAsync(60_000);
     expect(states).toEqual([true, true]);
+    expect(blockers).toHaveLength(TURN_POOL_SIZE);
     await expect(guard.run(vi.fn())).rejects.toThrow("not accepting");
-    finish();
+    blockers[0]?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(states).toEqual([true, true]);
+    for (const release of blockers.slice(1)) release();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(states).toEqual([true, true]);
     finishRenewal();
-    await turn;
+    await Promise.all(turns);
     expect(states).toEqual([true, true, false]);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(states).toHaveLength(3);
