@@ -173,27 +173,11 @@ export class GithubMirrorService {
     };
   }
 
-  async syncAll() {
-    const activeProjects = await this.db
+  async activeProjects() {
+    return this.db
       .select({ orgId: projects.orgId, projectId: projects.id })
       .from(projects)
       .where(eq(projects.status, "active"));
-    const results = [];
-    for (const project of activeProjects) {
-      try {
-        results.push({ ...project, ...(await this.syncProject(project.orgId, project.projectId)) });
-      } catch (error) {
-        results.push({
-          ...project,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    return {
-      projects: results.length,
-      failed: results.filter((result) => "error" in result).length,
-      results,
-    };
   }
 
   private async repositoryForPayload(
