@@ -63,15 +63,17 @@ The project manifest also lets you [choose CPU and memory for new story workspac
 ## Quick start: run Facility
 
 You need Docker, Node.js 24 LTS, and pnpm 11.28.2. Node.js 22 is also supported
-from 22.13.0. Start the application locally, then connect a repository to run
-Claude Code or Codex in a story workspace.
+from 22.13.0. Node.js 25 and later are outside the supported range and no longer
+bundle Corepack; `.nvmrc` selects a supported line. Start the application
+locally, then connect a repository to run Claude Code or Codex in a story
+workspace.
 
 ### 1. Open the local application
 
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack install --global pnpm@11.28.2
+npm install --global pnpm@11.28.2
 pnpm dev
 ```
 
@@ -161,7 +163,7 @@ behavior and boundaries can be agreed on.
 ```bash
 git clone https://github.com/theam/facility.git
 cd facility
-corepack install --global pnpm@11.28.2
+npm install --global pnpm@11.28.2
 pnpm install --frozen-lockfile
 pnpm verify
 ```
