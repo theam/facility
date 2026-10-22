@@ -8,9 +8,11 @@ project boundary as security vulnerabilities.
 
 ## Reporting
 
-Report privately via [GitHub Security Advisories](https://github.com/theam/facility/security/advisories/new).
-Please don't open public issues for suspected vulnerabilities. We'll respond
-within five working days.
+Report privately via [GitHub Security Advisories](https://github.com/theam/facility/security/advisories/new)
+when private reporting is enabled on the repository. If that form is unavailable,
+email **security@theagilemonkeys.com** with a short description and reproduction
+steps instead. Please don't open public issues for suspected vulnerabilities.
+We'll respond within five working days.
 
 In scope, with examples:
 
