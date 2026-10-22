@@ -319,6 +319,42 @@ export interface paths {
         patch: operations["patchProjectsProjectId"];
         trace?: never;
     };
+    "/v1/projects/{projectId}/delivery-integration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get delivery integration */
+        get: operations["getProjectDeliveryIntegration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update delivery integration */
+        patch: operations["updateProjectDeliveryIntegration"];
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/delivery-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get delivery notices */
+        get: operations["getProjectDeliveryNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update delivery notices */
+        patch: operations["updateProjectDeliveryNotices"];
+        trace?: never;
+    };
     "/v1/projects/{projectId}/repos": {
         parameters: {
             query?: never;
@@ -760,6 +796,57 @@ export interface paths {
         put?: never;
         /** Create retry */
         post: operations["retryStoryPreviewConvergence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/completion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get completion */
+        get: operations["getStoryCompletion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/integration-result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create integration result */
+        post: operations["recordStoryDeliveryIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create complete */
+        post: operations["requestStoryCompletion"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4221,6 +4308,441 @@ export interface operations {
                             enabled: boolean;
                             available: boolean;
                         };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getProjectDeliveryIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                keyId: string;
+                userId: string;
+                roleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @default none
+                         * @enum {string}
+                         */
+                        mode: "none" | "manual" | "repository_dispatch";
+                        /** @default null */
+                        repository: string | null;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateProjectDeliveryIntegration: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                keyId: string;
+                userId: string;
+                roleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @default none
+                     * @enum {string}
+                     */
+                    mode?: "none" | "manual" | "repository_dispatch";
+                    /** @default null */
+                    repository?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * @default none
+                         * @enum {string}
+                         */
+                        mode: "none" | "manual" | "repository_dispatch";
+                        /** @default null */
+                        repository: string | null;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getProjectDeliveryNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                keyId: string;
+                userId: string;
+                roleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @default true */
+                        in_app: boolean;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateProjectDeliveryNotices: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                keyId: string;
+                userId: string;
+                roleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @default true */
+                    in_app?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @default true */
+                        in_app: boolean;
                     };
                 };
             };
@@ -9161,6 +9683,546 @@ export interface operations {
                             retryAt: string | null;
                         } | null;
                         updatedAt: string;
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getStoryCompletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        candidate: {
+                            revision: string | null;
+                            /** @enum {string} */
+                            state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                            requiredCount: number;
+                            mergedCount: number;
+                            allRequiredMerged: boolean | null;
+                        };
+                        integration: {
+                            policy: {
+                                /**
+                                 * @default none
+                                 * @enum {string}
+                                 */
+                                mode: "none" | "manual" | "repository_dispatch";
+                                /** @default null */
+                                repository: string | null;
+                            };
+                            candidateRevision: string | null;
+                            /** @enum {string} */
+                            state: "not_required" | "pending" | "dispatching" | "dispatched" | "succeeded" | "failed" | "stale";
+                            attempt: number;
+                            eventId: string | null;
+                            repository: string | null;
+                            summary: string | null;
+                            evidenceUrl: string | null;
+                            errorCode: string | null;
+                            recordedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                            recordedAt: string | null;
+                        };
+                        source: {
+                            /** @enum {string} */
+                            kind: "github_issue" | "other";
+                            /** @enum {string} */
+                            state: "open" | "closed" | "unavailable";
+                            url: string | null;
+                        };
+                        completion: {
+                            candidateRevision: string | null;
+                            /** @enum {string} */
+                            state: "not_requested" | "pending" | "closing" | "failed" | "completed" | "stale";
+                            attempt: number;
+                            errorCode: string | null;
+                            requestedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                            requestedAt: string | null;
+                            completedAt: string | null;
+                        };
+                        notices: {
+                            /** @default true */
+                            in_app: boolean;
+                        };
+                        retention: {
+                            workspaceState: string | null;
+                            computeSuspended: boolean;
+                            storageRetained: boolean;
+                            archived: boolean;
+                            deleted: boolean;
+                        };
+                        /** @enum {string} */
+                        nextAction: "declare_delivery" | "review" | "merge" | "configure_integration" | "record_integration" | "wait_integration" | "inspect_integration_failure" | "request_completion" | "wait_completion" | "retry_completion" | "completed";
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordStoryDeliveryIntegration: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    candidate_revision: string;
+                    /** @enum {string} */
+                    state: "succeeded" | "failed";
+                    summary: string;
+                    /**
+                     * Format: uri
+                     * @default null
+                     */
+                    evidence_url?: string | null;
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        candidate: {
+                            revision: string | null;
+                            /** @enum {string} */
+                            state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                            requiredCount: number;
+                            mergedCount: number;
+                            allRequiredMerged: boolean | null;
+                        };
+                        integration: {
+                            policy: {
+                                /**
+                                 * @default none
+                                 * @enum {string}
+                                 */
+                                mode: "none" | "manual" | "repository_dispatch";
+                                /** @default null */
+                                repository: string | null;
+                            };
+                            candidateRevision: string | null;
+                            /** @enum {string} */
+                            state: "not_required" | "pending" | "dispatching" | "dispatched" | "succeeded" | "failed" | "stale";
+                            attempt: number;
+                            eventId: string | null;
+                            repository: string | null;
+                            summary: string | null;
+                            evidenceUrl: string | null;
+                            errorCode: string | null;
+                            recordedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                            recordedAt: string | null;
+                        };
+                        source: {
+                            /** @enum {string} */
+                            kind: "github_issue" | "other";
+                            /** @enum {string} */
+                            state: "open" | "closed" | "unavailable";
+                            url: string | null;
+                        };
+                        completion: {
+                            candidateRevision: string | null;
+                            /** @enum {string} */
+                            state: "not_requested" | "pending" | "closing" | "failed" | "completed" | "stale";
+                            attempt: number;
+                            errorCode: string | null;
+                            requestedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                            requestedAt: string | null;
+                            completedAt: string | null;
+                        };
+                        notices: {
+                            /** @default true */
+                            in_app: boolean;
+                        };
+                        retention: {
+                            workspaceState: string | null;
+                            computeSuspended: boolean;
+                            storageRetained: boolean;
+                            archived: boolean;
+                            deleted: boolean;
+                        };
+                        /** @enum {string} */
+                        nextAction: "declare_delivery" | "review" | "merge" | "configure_integration" | "record_integration" | "wait_integration" | "inspect_integration_failure" | "request_completion" | "wait_completion" | "retry_completion" | "completed";
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    requestStoryCompletion: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                storyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    candidate_revision: string;
+                    /** @enum {boolean} */
+                    confirm: true;
+                    idempotency_key: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {number} */
+                        schemaVersion: 1;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        generatedAt: string;
+                        candidate: {
+                            revision: string | null;
+                            /** @enum {string} */
+                            state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                            requiredCount: number;
+                            mergedCount: number;
+                            allRequiredMerged: boolean | null;
+                        };
+                        integration: {
+                            policy: {
+                                /**
+                                 * @default none
+                                 * @enum {string}
+                                 */
+                                mode: "none" | "manual" | "repository_dispatch";
+                                /** @default null */
+                                repository: string | null;
+                            };
+                            candidateRevision: string | null;
+                            /** @enum {string} */
+                            state: "not_required" | "pending" | "dispatching" | "dispatched" | "succeeded" | "failed" | "stale";
+                            attempt: number;
+                            eventId: string | null;
+                            repository: string | null;
+                            summary: string | null;
+                            evidenceUrl: string | null;
+                            errorCode: string | null;
+                            recordedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                            recordedAt: string | null;
+                        };
+                        source: {
+                            /** @enum {string} */
+                            kind: "github_issue" | "other";
+                            /** @enum {string} */
+                            state: "open" | "closed" | "unavailable";
+                            url: string | null;
+                        };
+                        completion: {
+                            candidateRevision: string | null;
+                            /** @enum {string} */
+                            state: "not_requested" | "pending" | "closing" | "failed" | "completed" | "stale";
+                            attempt: number;
+                            errorCode: string | null;
+                            requestedBy: {
+                                /** @enum {string} */
+                                type: "user" | "service";
+                                id: string;
+                            } | null;
+                            requestedAt: string | null;
+                            completedAt: string | null;
+                        };
+                        notices: {
+                            /** @default true */
+                            in_app: boolean;
+                        };
+                        retention: {
+                            workspaceState: string | null;
+                            computeSuspended: boolean;
+                            storageRetained: boolean;
+                            archived: boolean;
+                            deleted: boolean;
+                        };
+                        /** @enum {string} */
+                        nextAction: "declare_delivery" | "review" | "merge" | "configure_integration" | "record_integration" | "wait_integration" | "inspect_integration_failure" | "request_completion" | "wait_completion" | "retry_completion" | "completed";
                     };
                 };
             };

@@ -89,6 +89,13 @@ describe("@facility/mcp 0.12", () => {
       "facility_get_story",
       "facility_get_delivery",
       "facility_set_delivery",
+      "facility_get_delivery_integration_policy",
+      "facility_set_delivery_integration_policy",
+      "facility_get_story_completion",
+      "facility_get_delivery_notice_policy",
+      "facility_set_delivery_notice_policy",
+      "facility_record_delivery_integration",
+      "facility_request_story_completion",
       "facility_get_preview_convergence",
       "facility_retry_preview_convergence",
       "facility_get_plan",
@@ -233,6 +240,100 @@ describe("@facility/mcp 0.12", () => {
     expect(calls[1]?.[2]).toMatchObject({ idempotencyKey: "story-message-13" });
     expect(calls[2]?.[1]).toContain("/preview/web%2Fapp/open");
     expect(calls[3]?.[1]).toMatch(/\/suspend$/);
+    await client.close();
+    await server.close();
+  });
+
+  test("maps delivery policy, notices, integration evidence and completion with stable retries", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    });
+    const scope = { projectId: "proj/one", storyId: "story/one" };
+    await client.callTool({
+      name: "facility_set_delivery_integration_policy",
+      arguments: {
+        projectId: scope.projectId,
+        mode: "repository_dispatch",
+        repository: "acme/app",
+      },
+    });
+    await client.callTool({
+      name: "facility_set_delivery_notice_policy",
+      arguments: { projectId: scope.projectId, inApp: false },
+    });
+    await client.callTool({ name: "facility_get_story_completion", arguments: scope });
+    await client.callTool({
+      name: "facility_record_delivery_integration",
+      arguments: {
+        ...scope,
+        candidateRevision: "a".repeat(64),
+        state: "succeeded",
+        summary: "Integrated",
+        evidenceUrl: null,
+        idempotencyKey: "integration-result-1",
+      },
+    });
+    await client.callTool({
+      name: "facility_request_story_completion",
+      arguments: {
+        ...scope,
+        candidateRevision: "a".repeat(64),
+        idempotencyKey: "completion-request-1",
+      },
+    });
+    expect(calls).toEqual([
+      [
+        "PATCH",
+        "/v1/projects/proj%2Fone/delivery-integration",
+        {
+          query: undefined,
+          body: { mode: "repository_dispatch", repository: "acme/app" },
+          idempotencyKey: undefined,
+        },
+      ],
+      [
+        "PATCH",
+        "/v1/projects/proj%2Fone/delivery-notices",
+        { query: undefined, body: { in_app: false }, idempotencyKey: undefined },
+      ],
+      [
+        "GET",
+        "/v1/projects/proj%2Fone/workspace-stories/story%2Fone/completion",
+        { query: undefined, body: undefined, idempotencyKey: undefined },
+      ],
+      [
+        "POST",
+        "/v1/projects/proj%2Fone/workspace-stories/story%2Fone/integration-result",
+        {
+          query: undefined,
+          body: {
+            candidate_revision: "a".repeat(64),
+            state: "succeeded",
+            summary: "Integrated",
+            evidence_url: null,
+            idempotency_key: "integration-result-1",
+          },
+          idempotencyKey: "integration-result-1",
+        },
+      ],
+      [
+        "POST",
+        "/v1/projects/proj%2Fone/workspace-stories/story%2Fone/complete",
+        {
+          query: undefined,
+          body: {
+            candidate_revision: "a".repeat(64),
+            confirm: true,
+            idempotency_key: "completion-request-1",
+          },
+          idempotencyKey: "completion-request-1",
+        },
+      ],
+    ]);
     await client.close();
     await server.close();
   });

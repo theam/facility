@@ -4691,6 +4691,718 @@
         "x-facility-permission": "projects:write"
       }
     },
+    "/v1/projects/{projectId}/delivery-integration": {
+      "get": {
+        "operationId": "getProjectDeliveryIntegration",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "keyId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "roleId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "default": "none",
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "manual",
+                        "repository_dispatch"
+                      ]
+                    },
+                    "repository": {
+                      "default": null,
+                      "nullable": true,
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 240,
+                      "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "repository"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get delivery integration",
+        "tags": [
+          "Projects"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:read"
+      },
+      "patch": {
+        "operationId": "updateProjectDeliveryIntegration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "default": "none",
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "manual",
+                      "repository_dispatch"
+                    ]
+                  },
+                  "repository": {
+                    "default": null,
+                    "nullable": true,
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 240,
+                    "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "keyId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "roleId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "default": "none",
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "manual",
+                        "repository_dispatch"
+                      ]
+                    },
+                    "repository": {
+                      "default": null,
+                      "nullable": true,
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 240,
+                      "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "repository"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update delivery integration",
+        "tags": [
+          "Projects"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": [
+          "projects:write",
+          "repos:write"
+        ]
+      }
+    },
+    "/v1/projects/{projectId}/delivery-notices": {
+      "get": {
+        "operationId": "getProjectDeliveryNotices",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "keyId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "roleId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "in_app": {
+                      "default": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "in_app"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get delivery notices",
+        "tags": [
+          "Projects"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:read"
+      },
+      "patch": {
+        "operationId": "updateProjectDeliveryNotices",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "in_app": {
+                    "default": true,
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "keyId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "roleId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "in_app": {
+                      "default": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "in_app"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update delivery notices",
+        "tags": [
+          "Projects"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:write"
+      }
+    },
     "/v1/projects/{projectId}/repos": {
       "get": {
         "parameters": [
@@ -17746,6 +18458,1524 @@
           }
         ],
         "x-facility-permission": "workspaces:execute"
+      }
+    },
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/completion": {
+      "get": {
+        "operationId": "getStoryCompletion",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "candidate": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "scope_incomplete",
+                            "unobserved",
+                            "stale",
+                            "recorded"
+                          ]
+                        },
+                        "requiredCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "mergedCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "allRequiredMerged": {
+                          "nullable": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "state",
+                        "requiredCount",
+                        "mergedCount",
+                        "allRequiredMerged"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "integration": {
+                      "type": "object",
+                      "properties": {
+                        "policy": {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "default": "none",
+                              "type": "string",
+                              "enum": [
+                                "none",
+                                "manual",
+                                "repository_dispatch"
+                              ]
+                            },
+                            "repository": {
+                              "default": null,
+                              "nullable": true,
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 240,
+                              "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                            }
+                          },
+                          "required": [
+                            "mode",
+                            "repository"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "candidateRevision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_required",
+                            "pending",
+                            "dispatching",
+                            "dispatched",
+                            "succeeded",
+                            "failed",
+                            "stale"
+                          ]
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "eventId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "repository": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "summary": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "evidenceUrl": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "errorCode": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "recordedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "recordedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "policy",
+                        "candidateRevision",
+                        "state",
+                        "attempt",
+                        "eventId",
+                        "repository",
+                        "summary",
+                        "evidenceUrl",
+                        "errorCode",
+                        "recordedBy",
+                        "recordedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "github_issue",
+                            "other"
+                          ]
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "closed",
+                            "unavailable"
+                          ]
+                        },
+                        "url": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "state",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "completion": {
+                      "type": "object",
+                      "properties": {
+                        "candidateRevision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_requested",
+                            "pending",
+                            "closing",
+                            "failed",
+                            "completed",
+                            "stale"
+                          ]
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "errorCode": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "requestedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "requestedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "completedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "candidateRevision",
+                        "state",
+                        "attempt",
+                        "errorCode",
+                        "requestedBy",
+                        "requestedAt",
+                        "completedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "notices": {
+                      "type": "object",
+                      "properties": {
+                        "in_app": {
+                          "default": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "in_app"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "retention": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceState": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "computeSuspended": {
+                          "type": "boolean"
+                        },
+                        "storageRetained": {
+                          "type": "boolean"
+                        },
+                        "archived": {
+                          "type": "boolean"
+                        },
+                        "deleted": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "workspaceState",
+                        "computeSuspended",
+                        "storageRetained",
+                        "archived",
+                        "deleted"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "nextAction": {
+                      "type": "string",
+                      "enum": [
+                        "declare_delivery",
+                        "review",
+                        "merge",
+                        "configure_integration",
+                        "record_integration",
+                        "wait_integration",
+                        "inspect_integration_failure",
+                        "request_completion",
+                        "wait_completion",
+                        "retry_completion",
+                        "completed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "generatedAt",
+                    "candidate",
+                    "integration",
+                    "source",
+                    "completion",
+                    "notices",
+                    "retention",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get completion",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "projects:read"
+      }
+    },
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/integration-result": {
+      "post": {
+        "operationId": "recordStoryDeliveryIntegration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "candidate_revision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "succeeded",
+                      "failed"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "evidence_url": {
+                    "default": null,
+                    "nullable": true,
+                    "type": "string",
+                    "maxLength": 2000,
+                    "format": "uri"
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "candidate_revision",
+                  "state",
+                  "summary",
+                  "idempotency_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "candidate": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "scope_incomplete",
+                            "unobserved",
+                            "stale",
+                            "recorded"
+                          ]
+                        },
+                        "requiredCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "mergedCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "allRequiredMerged": {
+                          "nullable": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "state",
+                        "requiredCount",
+                        "mergedCount",
+                        "allRequiredMerged"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "integration": {
+                      "type": "object",
+                      "properties": {
+                        "policy": {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "default": "none",
+                              "type": "string",
+                              "enum": [
+                                "none",
+                                "manual",
+                                "repository_dispatch"
+                              ]
+                            },
+                            "repository": {
+                              "default": null,
+                              "nullable": true,
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 240,
+                              "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                            }
+                          },
+                          "required": [
+                            "mode",
+                            "repository"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "candidateRevision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_required",
+                            "pending",
+                            "dispatching",
+                            "dispatched",
+                            "succeeded",
+                            "failed",
+                            "stale"
+                          ]
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "eventId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "repository": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "summary": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "evidenceUrl": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "errorCode": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "recordedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "recordedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "policy",
+                        "candidateRevision",
+                        "state",
+                        "attempt",
+                        "eventId",
+                        "repository",
+                        "summary",
+                        "evidenceUrl",
+                        "errorCode",
+                        "recordedBy",
+                        "recordedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "github_issue",
+                            "other"
+                          ]
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "closed",
+                            "unavailable"
+                          ]
+                        },
+                        "url": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "state",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "completion": {
+                      "type": "object",
+                      "properties": {
+                        "candidateRevision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_requested",
+                            "pending",
+                            "closing",
+                            "failed",
+                            "completed",
+                            "stale"
+                          ]
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "errorCode": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "requestedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "requestedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "completedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "candidateRevision",
+                        "state",
+                        "attempt",
+                        "errorCode",
+                        "requestedBy",
+                        "requestedAt",
+                        "completedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "notices": {
+                      "type": "object",
+                      "properties": {
+                        "in_app": {
+                          "default": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "in_app"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "retention": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceState": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "computeSuspended": {
+                          "type": "boolean"
+                        },
+                        "storageRetained": {
+                          "type": "boolean"
+                        },
+                        "archived": {
+                          "type": "boolean"
+                        },
+                        "deleted": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "workspaceState",
+                        "computeSuspended",
+                        "storageRetained",
+                        "archived",
+                        "deleted"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "nextAction": {
+                      "type": "string",
+                      "enum": [
+                        "declare_delivery",
+                        "review",
+                        "merge",
+                        "configure_integration",
+                        "record_integration",
+                        "wait_integration",
+                        "inspect_integration_failure",
+                        "request_completion",
+                        "wait_completion",
+                        "retry_completion",
+                        "completed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "generatedAt",
+                    "candidate",
+                    "integration",
+                    "source",
+                    "completion",
+                    "notices",
+                    "retention",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create integration result",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "stories:write"
+      }
+    },
+    "/v1/projects/{projectId}/workspace-stories/{storyId}/complete": {
+      "post": {
+        "operationId": "requestStoryCompletion",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "candidate_revision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "candidate_revision",
+                  "confirm",
+                  "idempotency_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "storyId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "candidate": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "scope_incomplete",
+                            "unobserved",
+                            "stale",
+                            "recorded"
+                          ]
+                        },
+                        "requiredCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "mergedCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "allRequiredMerged": {
+                          "nullable": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "state",
+                        "requiredCount",
+                        "mergedCount",
+                        "allRequiredMerged"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "integration": {
+                      "type": "object",
+                      "properties": {
+                        "policy": {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "default": "none",
+                              "type": "string",
+                              "enum": [
+                                "none",
+                                "manual",
+                                "repository_dispatch"
+                              ]
+                            },
+                            "repository": {
+                              "default": null,
+                              "nullable": true,
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 240,
+                              "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                            }
+                          },
+                          "required": [
+                            "mode",
+                            "repository"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "candidateRevision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_required",
+                            "pending",
+                            "dispatching",
+                            "dispatched",
+                            "succeeded",
+                            "failed",
+                            "stale"
+                          ]
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "eventId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "repository": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "summary": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "evidenceUrl": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "errorCode": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "recordedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "recordedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "policy",
+                        "candidateRevision",
+                        "state",
+                        "attempt",
+                        "eventId",
+                        "repository",
+                        "summary",
+                        "evidenceUrl",
+                        "errorCode",
+                        "recordedBy",
+                        "recordedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "github_issue",
+                            "other"
+                          ]
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "closed",
+                            "unavailable"
+                          ]
+                        },
+                        "url": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "state",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "completion": {
+                      "type": "object",
+                      "properties": {
+                        "candidateRevision": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "not_requested",
+                            "pending",
+                            "closing",
+                            "failed",
+                            "completed",
+                            "stale"
+                          ]
+                        },
+                        "attempt": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "errorCode": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "requestedBy": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "service"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "requestedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "completedAt": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "candidateRevision",
+                        "state",
+                        "attempt",
+                        "errorCode",
+                        "requestedBy",
+                        "requestedAt",
+                        "completedAt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "notices": {
+                      "type": "object",
+                      "properties": {
+                        "in_app": {
+                          "default": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "in_app"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "retention": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceState": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "computeSuspended": {
+                          "type": "boolean"
+                        },
+                        "storageRetained": {
+                          "type": "boolean"
+                        },
+                        "archived": {
+                          "type": "boolean"
+                        },
+                        "deleted": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "workspaceState",
+                        "computeSuspended",
+                        "storageRetained",
+                        "archived",
+                        "deleted"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "nextAction": {
+                      "type": "string",
+                      "enum": [
+                        "declare_delivery",
+                        "review",
+                        "merge",
+                        "configure_integration",
+                        "record_integration",
+                        "wait_integration",
+                        "inspect_integration_failure",
+                        "request_completion",
+                        "wait_completion",
+                        "retry_completion",
+                        "completed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "generatedAt",
+                    "candidate",
+                    "integration",
+                    "source",
+                    "completion",
+                    "notices",
+                    "retention",
+                    "nextAction"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create complete",
+        "tags": [
+          "Stories"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": [
+          "projects:write",
+          "github:write"
+        ]
       }
     },
     "/v1/projects/{projectId}/workspace-stories/{storyId}/integration-state": {

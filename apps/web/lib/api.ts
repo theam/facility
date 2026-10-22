@@ -57,6 +57,7 @@ export type {
   StoryActivityItem,
   StoryAgent,
   StoryAssignee,
+  StoryCompletion,
   StoryConversationPage,
   StoryDelivery,
   StoryEnvironment,

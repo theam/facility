@@ -247,6 +247,32 @@ async function render() {
 }
 
 describe("story overview integration", () => {
+  it("shows actionable delivery notices without recasting them as agent errors", async () => {
+    setUp(["*"]);
+    mocks.bundle.attention = [
+      {
+        id: "delivery-notice",
+        turnId: null,
+        kind: "delivery_completion",
+        title: "Complete the source issue",
+        detail: "Review the exact source issue and explicitly request completion.",
+        status: "open",
+        resolution: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: at,
+      },
+    ];
+    const { root } = await render();
+    const attention = root.querySelector('[aria-label="Needs your attention"]');
+    expect(attention?.textContent).toContain("Complete the source issue");
+    expect(attention?.textContent).toContain(
+      "Review the exact source issue and explicitly request completion.",
+    );
+    expect(attention?.textContent).not.toContain("The run reported an error");
+    expect(attention?.textContent).not.toContain("Technical details");
+  });
+
   it("renders state, the final response first, participants, and folded evidence for a reader", async () => {
     setUp();
     const { html, root } = await render();

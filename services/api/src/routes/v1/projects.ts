@@ -1,4 +1,9 @@
-import { can, newId } from "@facility/core";
+import {
+  can,
+  DeliveryIntegrationPolicySchema,
+  DeliveryNoticePolicySchema,
+  newId,
+} from "@facility/core";
 import { type FacilityDb, githubInstallations, projectRepositories, projects } from "@facility/db";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -141,6 +146,96 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
     },
     async (request) =>
       presentProject(await loadProject(db, principal(request).orgId, projectId(request))),
+  );
+
+  app.get(
+    "/v1/projects/:projectId/delivery-integration",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: IdParams,
+        response: { 200: DeliveryIntegrationPolicySchema },
+        operationId: "getProjectDeliveryIntegration",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.getPolicy({
+        orgId: actor.orgId,
+        projectId: projectId(request),
+      });
+    },
+  );
+
+  app.patch(
+    "/v1/projects/:projectId/delivery-integration",
+    {
+      config: {
+        permission: ["projects:write", "repos:write"],
+        auditAction: "project.delivery_integration.updated",
+        idempotent: true,
+      },
+      schema: {
+        params: IdParams,
+        body: DeliveryIntegrationPolicySchema,
+        response: { 200: DeliveryIntegrationPolicySchema },
+        operationId: "updateProjectDeliveryIntegration",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.setPolicy(
+        { orgId: actor.orgId, projectId: projectId(request) },
+        request.body as z.infer<typeof DeliveryIntegrationPolicySchema>,
+      );
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/delivery-notices",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: IdParams,
+        response: { 200: DeliveryNoticePolicySchema },
+        operationId: "getProjectDeliveryNotices",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.getNoticePolicy({
+        orgId: actor.orgId,
+        projectId: projectId(request),
+      });
+    },
+  );
+
+  app.patch(
+    "/v1/projects/:projectId/delivery-notices",
+    {
+      config: {
+        permission: "projects:write",
+        auditAction: "project.delivery_notices.updated",
+        idempotent: true,
+      },
+      schema: {
+        params: IdParams,
+        body: DeliveryNoticePolicySchema,
+        response: { 200: DeliveryNoticePolicySchema },
+        operationId: "updateProjectDeliveryNotices",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.setNoticePolicy(
+        { orgId: actor.orgId, projectId: projectId(request) },
+        request.body as z.infer<typeof DeliveryNoticePolicySchema>,
+      );
+    },
   );
 
   app.patch(

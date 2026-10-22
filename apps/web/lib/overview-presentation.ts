@@ -84,6 +84,10 @@ export function attentionKindLabel(kind: string) {
       return "Turn could not start";
     case "runtime_error":
       return "Environment error";
+    case "delivery_integration":
+      return "Delivery integration";
+    case "delivery_completion":
+      return "Delivery completion";
     default:
       return kind.replaceAll("_", " ");
   }
@@ -152,15 +156,18 @@ export function attentionNotice(
 ): AttentionEntry {
   const resolved = notice.status === "resolved";
   const waiting = notice.kind === "agent_waiting";
+  const delivery = ["delivery_integration", "delivery_completion"].includes(notice.kind);
+  const deliveryFailure = delivery && /failed|needs attention/i.test(notice.title);
   return {
     key: `attention:${notice.id}`,
-    tone: resolved ? "machine" : waiting ? "human" : "bad",
-    title: attentionKindLabel(notice.kind),
+    tone: resolved ? "machine" : waiting || (delivery && !deliveryFailure) ? "human" : "bad",
+    title: delivery ? notice.title : attentionKindLabel(notice.kind),
     storyId: notice.storyId,
     storyTitle: notice.storyTitle,
-    summary: waiting
-      ? (notice.detail ?? "The agent is waiting for your reply.")
-      : errorSummary(notice.detail),
+    summary:
+      waiting || delivery
+        ? (notice.detail ?? "The agent is waiting for your reply.")
+        : errorSummary(notice.detail),
     at: notice.createdAt,
     action:
       !resolved && notice.action === "reply"
@@ -170,7 +177,7 @@ export function attentionNotice(
           }
         : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
     item: resolved ? null : notice,
-    detail: waiting ? null : notice.detail,
+    detail: waiting || delivery ? null : notice.detail,
     resolved: resolved
       ? { label: resolutionLabel(notice.resolution ?? null), at: notice.resolvedAt ?? null }
       : null,

@@ -5,7 +5,10 @@ import {
   renderAgentManifest,
 } from "@facility/agents";
 import {
+  RecordDeliveryIntegrationBody,
   ReplaceStoryDeliveryBody,
+  RequestStoryCompletionBody,
+  StoryCompletionSchema,
   StoryDeliveryQuery,
   StoryDeliverySchema,
   StoryPreviewConvergenceSchema,
@@ -228,6 +231,95 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       await domain.previewConvergence.retry(scope);
       reply.header("cache-control", "private, no-store");
       return (await domain.previewConvergence.read(scope)) ?? current;
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/completion",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: StoryParams,
+        response: { 200: StoryCompletionSchema },
+        operationId: "getStoryCompletion",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      reply.header("cache-control", "private, no-store");
+      return domain.completion.read({
+        orgId: principal(request).orgId,
+        projectId,
+        storyId,
+      });
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/integration-result",
+    {
+      config: {
+        permission: "stories:write",
+        idempotent: true,
+        auditAction: "story.delivery_integration.recorded",
+      },
+      schema: {
+        params: StoryParams,
+        body: RecordDeliveryIntegrationBody,
+        response: { 200: StoryCompletionSchema },
+        operationId: "recordStoryDeliveryIntegration",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof RecordDeliveryIntegrationBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "integration_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return domain.completion.recordIntegration(
+        { orgId: actor.orgId, projectId, storyId },
+        body,
+        principalActor(actor),
+      );
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/complete",
+    {
+      config: {
+        permission: ["projects:write", "github:write"],
+        idempotent: true,
+        auditAction: "story.completion.requested",
+      },
+      schema: {
+        params: StoryParams,
+        body: RequestStoryCompletionBody,
+        response: { 200: StoryCompletionSchema },
+        operationId: "requestStoryCompletion",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof RequestStoryCompletionBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "completion_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return domain.completion.requestCompletion(
+        { orgId: actor.orgId, projectId, storyId },
+        body,
+        principalActor(actor),
+      );
     },
   );
 
@@ -632,7 +724,19 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         projectId,
         storyId,
       });
-      return { ...storyResponse(value), lifecycle, delivery, plans, previewConvergence };
+      const completion = await domain.completion.read({
+        orgId: actor.orgId,
+        projectId,
+        storyId,
+      });
+      return {
+        ...storyResponse(value),
+        lifecycle,
+        delivery,
+        plans,
+        previewConvergence,
+        completion,
+      };
     },
   );
 

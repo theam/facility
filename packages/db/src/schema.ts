@@ -1040,6 +1040,151 @@ export const storyIntegrationNotifications = pgTable(
   ],
 );
 
+export const storyDeliveryIntegrations = pgTable(
+  "story_delivery_integrations",
+  {
+    storyId: text("story_id")
+      .primaryKey()
+      .references(() => stories.id),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    candidateRevision: text("candidate_revision").notNull(),
+    mode: text("mode").$type<"manual" | "repository_dispatch">().notNull(),
+    repositoryId: text("repository_id"),
+    state: text("state")
+      .$type<"pending" | "dispatching" | "dispatched" | "succeeded" | "failed">()
+      .notNull()
+      .default("pending"),
+    attempt: integer("attempt").notNull().default(0),
+    eventId: text("event_id"),
+    leaseToken: text("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    errorCode: text("error_code"),
+    summary: text("summary"),
+    evidenceUrl: text("evidence_url"),
+    recordedBy: jsonb("recorded_by").$type<{ type: "user" | "service"; id: string }>(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("story_delivery_integrations_due_idx").on(
+      table.state,
+      table.nextAttemptAt,
+      table.leaseUntil,
+    ),
+    check(
+      "story_delivery_integrations_candidate_check",
+      sql`${table.candidateRevision} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "story_delivery_integrations_mode_check",
+      sql`${table.mode} in ('manual', 'repository_dispatch')`,
+    ),
+    check(
+      "story_delivery_integrations_state_check",
+      sql`${table.state} in ('pending', 'dispatching', 'dispatched', 'succeeded', 'failed')`,
+    ),
+    check("story_delivery_integrations_attempt_check", sql`${table.attempt} >= 0`),
+    check(
+      "story_delivery_integrations_repository_check",
+      sql`(${table.mode} = 'manual' and ${table.repositoryId} is null) or (${table.mode} = 'repository_dispatch' and ${table.repositoryId} is not null)`,
+    ),
+    check(
+      "story_delivery_integrations_lease_check",
+      sql`(${table.leaseToken} is null and ${table.leaseUntil} is null) or (${table.state} = 'dispatching' and ${table.leaseToken} is not null and ${table.leaseUntil} is not null)`,
+    ),
+    check(
+      "story_delivery_integrations_result_check",
+      sql`(${table.state} = 'succeeded' and ${table.summary} is not null and ${table.recordedBy} is not null and ${table.recordedAt} is not null and ${table.errorCode} is null) or (${table.state} = 'failed' and ((${table.summary} is not null and ${table.recordedBy} is not null and ${table.recordedAt} is not null and ${table.errorCode} is null) or (${table.summary} is null and ${table.evidenceUrl} is null and ${table.recordedBy} is null and ${table.recordedAt} is null and ${table.errorCode} is not null))) or (${table.state} in ('pending', 'dispatching', 'dispatched') and ${table.summary} is null and ${table.evidenceUrl} is null and ${table.recordedBy} is null and ${table.recordedAt} is null and ${table.errorCode} is null)`,
+    ),
+    check(
+      "story_delivery_integrations_summary_check",
+      sql`${table.summary} is null or octet_length(${table.summary}) <= 2000`,
+    ),
+    check(
+      "story_delivery_integrations_evidence_check",
+      sql`${table.evidenceUrl} is null or octet_length(${table.evidenceUrl}) <= 2000`,
+    ),
+    check(
+      "story_delivery_integrations_actor_check",
+      sql`${table.recordedBy} is null or (jsonb_typeof(${table.recordedBy}) = 'object' and octet_length(${table.recordedBy}::text) <= 512)`,
+    ),
+    foreignKey({
+      name: "story_delivery_integrations_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_delivery_integrations_repository_scope_fk",
+      columns: [table.orgId, table.projectId, table.repositoryId],
+      foreignColumns: [
+        projectRepositories.orgId,
+        projectRepositories.projectId,
+        projectRepositories.id,
+      ],
+    }),
+  ],
+);
+
+export const storyCompletionOperations = pgTable(
+  "story_completion_operations",
+  {
+    storyId: text("story_id")
+      .primaryKey()
+      .references(() => stories.id),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    candidateRevision: text("candidate_revision").notNull(),
+    state: text("state")
+      .$type<"pending" | "closing" | "failed" | "completed">()
+      .notNull()
+      .default("pending"),
+    attempt: integer("attempt").notNull().default(0),
+    leaseToken: text("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    errorCode: text("error_code"),
+    requestedBy: jsonb("requested_by").$type<{ type: "user" | "service"; id: string }>().notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("story_completion_operations_due_idx").on(
+      table.state,
+      table.nextAttemptAt,
+      table.leaseUntil,
+    ),
+    check(
+      "story_completion_operations_candidate_check",
+      sql`${table.candidateRevision} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "story_completion_operations_state_check",
+      sql`${table.state} in ('pending', 'closing', 'failed', 'completed')`,
+    ),
+    check("story_completion_operations_attempt_check", sql`${table.attempt} >= 0`),
+    check(
+      "story_completion_operations_lease_check",
+      sql`(${table.leaseToken} is null and ${table.leaseUntil} is null) or (${table.state} = 'closing' and ${table.leaseToken} is not null and ${table.leaseUntil} is not null)`,
+    ),
+    check(
+      "story_completion_operations_completed_check",
+      sql`(${table.state} = 'completed') = (${table.completedAt} is not null)`,
+    ),
+    check(
+      "story_completion_operations_actor_check",
+      sql`jsonb_typeof(${table.requestedBy}) = 'object' and octet_length(${table.requestedBy}::text) <= 512`,
+    ),
+    foreignKey({
+      name: "story_completion_operations_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+  ],
+);
+
 export const storyAssignees = pgTable(
   "story_assignees",
   {

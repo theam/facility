@@ -1,8 +1,12 @@
 import {
+  DeliveryIntegrationPolicySchema,
+  DeliveryNoticePolicySchema,
   ProposeStoryPlanBody,
+  RecordDeliveryIntegrationBody,
   ReplaceStoryDeliveryBody,
   RequestConsultationBody,
   RequestPlanDecisionBody,
+  RequestStoryCompletionBody,
 } from "@facility/core";
 import { FacilityApiError, FacilityClient, type QueryParams } from "@facility/sdk";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -160,6 +164,113 @@ export const toolDefinitions: ToolDefinition[] = [
       }),
     idempotencyKey: (args) => stringValue(args.idempotencyKey),
     write: true,
+  },
+  {
+    name: "facility_get_delivery_integration_policy",
+    permission: "projects:read",
+    description:
+      "Read the project's post-merge integration policy. This does not merge pull requests, run an integration, or wake a workspace. Needs projects:read.",
+    inputSchema: { projectId },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/delivery-integration`,
+  },
+  {
+    name: "facility_set_delivery_integration_policy",
+    permission: "projects:write",
+    description:
+      "Configure post-merge integration as none, a manual recorded result, or a fixed repository_dispatch to a repository already connected to this project. It never accepts a URL or command and never merges pull requests. Needs projects:write and repos:write.",
+    inputSchema: {
+      projectId,
+      mode: DeliveryIntegrationPolicySchema.shape.mode,
+      repository: z.string().min(3).max(240).nullable().default(null),
+    },
+    method: "PATCH",
+    path: (args) => `/v1/projects/${part(args.projectId)}/delivery-integration`,
+    body: (args) =>
+      DeliveryIntegrationPolicySchema.parse({ mode: args.mode, repository: args.repository }),
+    write: true,
+  },
+  {
+    name: "facility_get_story_completion",
+    permission: "projects:read",
+    description:
+      "Read the exact delivery candidate, post-merge integration, source issue, completion operation, compute suspension, retained storage, and next action as separate facts. Needs projects:read.",
+    inputSchema: { projectId, storyId },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/completion`,
+  },
+  {
+    name: "facility_get_delivery_notice_policy",
+    permission: "projects:read",
+    description:
+      "Read whether this project shows actionable delivery notices in Facility. This is an in-app preference and does not configure external messages. Needs projects:read.",
+    inputSchema: { projectId },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/delivery-notices`,
+  },
+  {
+    name: "facility_set_delivery_notice_policy",
+    permission: "projects:write",
+    description:
+      "Enable or disable actionable delivery notices in Facility's in-app inbox. It never sends Slack, email, or other external messages. Needs projects:write.",
+    inputSchema: { projectId, inApp: DeliveryNoticePolicySchema.shape.in_app },
+    method: "PATCH",
+    path: (args) => `/v1/projects/${part(args.projectId)}/delivery-notices`,
+    body: (args) => DeliveryNoticePolicySchema.parse({ in_app: args.inApp }),
+    write: true,
+  },
+  {
+    name: "facility_record_delivery_integration",
+    permission: "stories:write",
+    description:
+      "Record a succeeded or failed post-merge integration result for the exact current candidate. A result cannot be carried to a different candidate and this action does not merge, deploy, close the source issue, or destroy storage. Needs stories:write.",
+    inputSchema: {
+      projectId,
+      storyId,
+      candidateRevision: RecordDeliveryIntegrationBody.shape.candidate_revision,
+      state: RecordDeliveryIntegrationBody.shape.state,
+      summary: RecordDeliveryIntegrationBody.shape.summary,
+      evidenceUrl: z.string().url().max(2_000).nullable().default(null),
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/integration-result`,
+    body: (args) =>
+      RecordDeliveryIntegrationBody.parse({
+        candidate_revision: args.candidateRevision,
+        state: args.state,
+        summary: args.summary,
+        evidence_url: args.evidenceUrl,
+        idempotency_key: args.idempotencyKey,
+      }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+  },
+  {
+    name: "facility_request_story_completion",
+    permission: "projects:write",
+    description:
+      "Request durable completion of the exact source GitHub issue after every required PR is merged and the configured integration succeeds. This queues a retryable close and compute suspension; it never merges, archives, or deletes retained storage. Needs projects:write and github:write.",
+    inputSchema: {
+      projectId,
+      storyId,
+      candidateRevision: RequestStoryCompletionBody.shape.candidate_revision,
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/complete`,
+    body: (args) =>
+      RequestStoryCompletionBody.parse({
+        candidate_revision: args.candidateRevision,
+        confirm: true,
+        idempotency_key: args.idempotencyKey,
+      }),
+    idempotencyKey: (args) => stringValue(args.idempotencyKey),
+    write: true,
+    openWorld: true,
   },
   {
     name: "facility_get_preview_convergence",

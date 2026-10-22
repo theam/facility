@@ -31,6 +31,7 @@ import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
 import { ProjectBacklogService } from "../src/stories/backlog.js";
+import { StoryCompletionService } from "../src/stories/completion.js";
 import { GithubConsultationSources } from "../src/stories/consultation-sources.js";
 import { StoryConsultationService } from "../src/stories/consultations.js";
 import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
@@ -296,6 +297,14 @@ environment:
       }),
       previewConvergence,
       previewConvergenceExecutor,
+      completion: new StoryCompletionService(
+        db,
+        async () => {
+          throw new Error("Completion GitHub writes are not used by this fixture");
+        },
+        stories,
+        async () => undefined,
+      ),
     };
     app = await buildApp(config, {
       storyDomain: domain,
