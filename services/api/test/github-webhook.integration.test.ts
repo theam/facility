@@ -55,6 +55,7 @@ describe("GitHub webhook authentication and tenant binding", async () => {
   const installationNumber = 4_000_000 + Math.floor(Math.random() * 100_000);
   const otherInstallationNumber = installationNumber + 100_000;
   const queued: Array<{ queue: string; data: Record<string, unknown> }> = [];
+  let failNextEnqueue = false;
   const config = {
     databaseUrl,
     secretMasterKey: Buffer.alloc(32, 51).toString("base64"),
@@ -117,6 +118,10 @@ describe("GitHub webhook authentication and tenant binding", async () => {
     app.setSerializerCompiler(serializerCompiler);
     app.decorate("facilityDb", db);
     app.decorate("enqueue", async (queue: string, data: Record<string, unknown>) => {
+      if (failNextEnqueue) {
+        failNextEnqueue = false;
+        throw new Error("queue unavailable");
+      }
       queued.push({ queue, data });
       return "queued";
     });
@@ -154,6 +159,12 @@ describe("GitHub webhook authentication and tenant binding", async () => {
       ]),
     );
 
+    await db
+      .update(githubWebhookEvents)
+      .set({ processedAt: new Date() })
+      .where(
+        eq(githubWebhookEvents.id, `${installationEventPrefix(installationRowId)}${delivery}`),
+      );
     const replay = await deliver(delivery, installationNumber);
     expect(replay.statusCode).toBe(202);
     expect(replay.json()).toEqual({ ok: true, replayed: true });
@@ -165,6 +176,30 @@ describe("GitHub webhook authentication and tenant binding", async () => {
     expect(
       (await db.select().from(githubWebhookEvents)).find((row) => row.id.endsWith(otherDelivery)),
     ).toMatchObject({ orgId: otherOrgId, installationId: otherInstallationRowId });
+  });
+
+  it("re-enqueues a stored delivery when its original queue attempt failed", async () => {
+    const delivery = `queue-retry-${suffix}`;
+    failNextEnqueue = true;
+
+    const failed = await deliver(delivery, installationNumber);
+    expect(failed.statusCode).toBe(500);
+    expect(
+      await db
+        .select()
+        .from(githubWebhookEvents)
+        .where(
+          eq(githubWebhookEvents.id, `${installationEventPrefix(installationRowId)}${delivery}`),
+        ),
+    ).toEqual([expect.objectContaining({ processedAt: null })]);
+
+    const replay = await deliver(delivery, installationNumber);
+    expect(replay.statusCode).toBe(202);
+    expect(replay.json()).toEqual({ ok: true, replayed: true });
+    expect(queued).toContainEqual({
+      queue: "github.webhook",
+      data: { inboundEventId: `${installationEventPrefix(installationRowId)}${delivery}` },
+    });
   });
 
   it("rejects invalid and malformed signed requests without enqueueing work", async () => {
