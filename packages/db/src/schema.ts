@@ -1,4 +1,10 @@
-import type { PlanActor, PlanAgent, PlanRepository, StoryPlan } from "@facility/core";
+import type {
+  PlanActor,
+  PlanAgent,
+  PlanRepository,
+  PreviewGenerationRepository,
+  StoryPlan,
+} from "@facility/core";
 import { sql } from "drizzle-orm";
 import {
   bigint,
@@ -593,6 +599,149 @@ export const storyDeliveryPullRequests = pgTable(
       name: "story_delivery_pull_requests_observed_pr_fk",
       columns: [table.repositoryId, table.pullNumber],
       foreignColumns: [githubPullRequests.repositoryId, githubPullRequests.number],
+    }),
+  ],
+);
+
+export const storyPreviewGenerations = pgTable(
+  "story_preview_generations",
+  {
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    generation: text("generation").notNull(),
+    deliveryRevision: text("delivery_revision").notNull(),
+    repositories: jsonb("repositories").$type<PreviewGenerationRepository[]>().notNull(),
+    sourceObservedAt: timestamp("source_observed_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storyId, table.generation] }),
+    index("story_preview_generations_scope_idx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.createdAt,
+    ),
+    check(
+      "story_preview_generations_identity_check",
+      sql`${table.generation} ~ '^[a-f0-9]{64}$' and ${table.deliveryRevision} ~ '^[a-f0-9]{64}$'`,
+    ),
+    check(
+      "story_preview_generations_repositories_check",
+      sql`jsonb_typeof(${table.repositories}) = 'array' and jsonb_array_length(${table.repositories}) between 1 and 50 and octet_length(${table.repositories}::text) <= 65536`,
+    ),
+    foreignKey({
+      name: "story_preview_generations_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+  ],
+);
+
+export const storyPreviewConvergences = pgTable(
+  "story_preview_convergences",
+  {
+    storyId: text("story_id")
+      .primaryKey()
+      .references(() => stories.id),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    desiredGeneration: text("desired_generation").notNull(),
+    desiredObservedAt: timestamp("desired_observed_at", { withTimezone: true }).notNull(),
+    deployedGeneration: text("deployed_generation"),
+    lastGoodGeneration: text("last_good_generation"),
+    state: text("state").notNull().default("pending"),
+    revision: integer("revision").notNull().default(1),
+    leaseToken: text("lease_token"),
+    leaseGeneration: text("lease_generation"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    retryAt: timestamp("retry_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("story_preview_convergences_recovery_idx").on(
+      table.state,
+      table.retryAt,
+      table.leaseExpiresAt,
+    ),
+    check("story_preview_convergences_revision_check", sql`${table.revision} > 0`),
+    check(
+      "story_preview_convergences_state_check",
+      sql`${table.state} in ('pending', 'waiting', 'applying', 'blocked', 'failed', 'ready', 'suspended')`,
+    ),
+    check(
+      "story_preview_convergences_lease_check",
+      sql`(${table.leaseToken} is null and ${table.leaseGeneration} is null and ${table.leaseExpiresAt} is null) or (${table.state} = 'applying' and ${table.leaseToken} is not null and ${table.leaseGeneration} is not null and ${table.leaseExpiresAt} is not null)`,
+    ),
+    foreignKey({
+      name: "story_preview_convergences_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_preview_convergences_desired_generation_fk",
+      columns: [table.storyId, table.desiredGeneration],
+      foreignColumns: [storyPreviewGenerations.storyId, storyPreviewGenerations.generation],
+    }),
+    foreignKey({
+      name: "story_preview_convergences_deployed_generation_fk",
+      columns: [table.storyId, table.deployedGeneration],
+      foreignColumns: [storyPreviewGenerations.storyId, storyPreviewGenerations.generation],
+    }),
+    foreignKey({
+      name: "story_preview_convergences_last_good_generation_fk",
+      columns: [table.storyId, table.lastGoodGeneration],
+      foreignColumns: [storyPreviewGenerations.storyId, storyPreviewGenerations.generation],
+    }),
+  ],
+);
+
+export const storyPreviewAttempts = pgTable(
+  "story_preview_attempts",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    generation: text("generation").notNull(),
+    attempt: integer("attempt").notNull(),
+    leaseToken: text("lease_token").notNull(),
+    state: text("state").notNull().default("applying"),
+    workspaceId: text("workspace_id"),
+    cause: jsonb("cause").$type<Record<string, unknown>>().notNull().default({}),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    unique("story_preview_attempts_story_attempt_uidx").on(table.storyId, table.attempt),
+    unique("story_preview_attempts_story_lease_uidx").on(table.storyId, table.leaseToken),
+    index("story_preview_attempts_scope_idx").on(table.orgId, table.projectId, table.storyId),
+    check("story_preview_attempts_attempt_check", sql`${table.attempt} > 0`),
+    check(
+      "story_preview_attempts_state_check",
+      sql`${table.state} in ('applying', 'succeeded', 'failed', 'blocked', 'superseded')`,
+    ),
+    check(
+      "story_preview_attempts_ended_check",
+      sql`(${table.state} = 'applying' and ${table.endedAt} is null) or (${table.state} != 'applying' and ${table.endedAt} is not null)`,
+    ),
+    check(
+      "story_preview_attempts_cause_check",
+      sql`jsonb_typeof(${table.cause}) = 'object' and octet_length(${table.cause}::text) <= 16384`,
+    ),
+    foreignKey({
+      name: "story_preview_attempts_story_scope_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_preview_attempts_generation_fk",
+      columns: [table.storyId, table.generation],
+      foreignColumns: [storyPreviewGenerations.storyId, storyPreviewGenerations.generation],
     }),
   ],
 );
