@@ -22,7 +22,7 @@ const { quote } = launcherRequire("shell-quote");
 const sharp = nextRequire("sharp");
 const { auth } = apiRequire("@modelcontextprotocol/sdk/client/auth.js");
 const lock = apiRequire("yaml").parse(readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8"));
-const floors = { next: "16.3.8", "shell-quote": "1.11.0", sharp: "0.35.5", "@modelcontextprotocol/sdk": "1.31.0" };
+const floors = { next: "16.4.1", "shell-quote": "1.11.0", sharp: "0.35.5", "@modelcontextprotocol/sdk": "1.31.0" };
 
 test("the lockfile and real consumers use reviewed security releases", () => {
   for (const [name, minimum] of Object.entries(floors)) {

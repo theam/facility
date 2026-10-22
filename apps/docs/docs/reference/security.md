@@ -93,7 +93,7 @@ unrecoverable, while disclosure alongside a database backup defeats that protect
 
 ## Dependency security updates
 
-The reviewed dependency floors include Next.js 16.3.8, MCP SDK 1.31.0, sharp 0.35.5
+The reviewed dependency floors include Next.js 16.4.1, MCP SDK 1.31.0, sharp 0.35.5
 with bundled librsvg 2.63.2, and shell-quote 1.11.0. Keep the lockfile and transitive
 overrides together when upgrading; run `pnpm verify`, including the full-severity
 dependency audit and the installed-consumer regression tests. These package updates
