@@ -1,4 +1,4 @@
-import type { AgentManifest } from "@facility/agents";
+import type { AgentEngineId, AgentManifest } from "@facility/agents";
 import type {
   WorkspaceCommandResult,
   WorkspaceLocator,
@@ -19,7 +19,7 @@ export type AgentTurnRequest = {
 };
 
 export type AgentTurnEvent = {
-  engine: "claude_code" | "codex";
+  engine: AgentEngineId;
   type: string;
   data: Record<string, unknown>;
 };
@@ -48,7 +48,7 @@ export type AgentTurnUsage = {
 };
 
 export interface AgentEngine {
-  readonly name: "claude_code" | "codex";
+  readonly name: AgentEngineId;
   run(request: AgentTurnRequest): Promise<AgentTurnResult>;
 }
 
@@ -64,7 +64,7 @@ export class AgentEngineError extends Error {
 }
 
 abstract class CliAgentEngine implements AgentEngine {
-  abstract readonly name: "claude_code" | "codex";
+  abstract readonly name: AgentEngineId;
   abstract run(request: AgentTurnRequest): Promise<AgentTurnResult>;
 
   constructor(protected readonly runtime: WorkspaceRuntime) {}

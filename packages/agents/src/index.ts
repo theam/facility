@@ -7,6 +7,17 @@ import { z } from "zod";
 
 export const AGENT_DIRECTORY = ".agents";
 
+/**
+ * The single source of truth for the agent engines Facility can run. Adding a
+ * provider is a one-line change here: the manifest schema, the engine registry
+ * key type, and every derived union follow from this list. Keep the identifiers
+ * in sync with a registered engine implementation (services/api turns) and the
+ * runner image that installs the corresponding CLI.
+ */
+export const AGENT_ENGINES = ["claude_code", "codex"] as const;
+
+export type AgentEngineId = (typeof AGENT_ENGINES)[number];
+
 export const AgentNameSchema = z
   .string()
   .min(1)
@@ -76,7 +87,7 @@ export const AgentManifestFrontmatterSchema = z
   .object({
     name: AgentNameSchema,
     description: z.string().min(1).max(240),
-    engine: z.enum(["claude_code", "codex"]),
+    engine: z.enum(AGENT_ENGINES),
     model: z.string().min(1).max(160),
     enabled: z.boolean().default(true),
     options: z
