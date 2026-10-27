@@ -287,7 +287,11 @@ export default async function StoryPage({
         )}
       </section>
 
-      <StoryTimeline projectId={projectId} storyId={story.id} />
+      <StoryTimeline
+        projectId={projectId}
+        storyId={story.id}
+        pullRequestUrl={story.pullRequestUrl}
+      />
 
       {resolvedAttention.length > 0 ? (
         <details className="border border-(--line) p-5">

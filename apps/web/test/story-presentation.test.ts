@@ -8,10 +8,13 @@ import type {
 import {
   computeLabel,
   errorSummary,
+  gitFileStatus,
+  githubCommitUrl,
   groupExchanges,
   initials,
   mergeMessages,
   newestMessages,
+  parseGitChanges,
   presentMessage,
   runStatus,
   storyActivity,
@@ -241,5 +244,90 @@ describe("conversation exchanges", () => {
     );
     expect(timelineSummary("turn.failed", { error: "boom" })).toBe("boom");
     expect(timelineSummary("workspace.ready", {})).toBe("workspace ready");
+  });
+});
+
+describe("git timeline evidence presentation", () => {
+  it("parses well-formed git.changes_recorded payloads", () => {
+    const payload = {
+      initialSha: "1111111111111111111111111111111111111111",
+      finalSha: "2222222222222222222222222222222222222222",
+      commits: [
+        {
+          sha: "2222222222222222222222222222222222222222",
+          author: "Builder Agent",
+          authoredAt: "2026-09-10T00:04:00Z",
+          subject: "feat(web): add timeline git inspector",
+        },
+      ],
+      changedFiles: [
+        { status: "M", path: "apps/web/components/story/story-timeline.tsx" },
+        {
+          status: "R100",
+          path: "apps/web/lib/story-presentation.ts",
+          previousPath: "apps/web/lib/old-presentation.ts",
+        },
+      ],
+      dirty: true,
+      truncated: false,
+    };
+
+    expect(parseGitChanges(payload)).toEqual({
+      initialSha: "1111111111111111111111111111111111111111",
+      finalSha: "2222222222222222222222222222222222222222",
+      commits: [
+        {
+          sha: "2222222222222222222222222222222222222222",
+          author: "Builder Agent",
+          authoredAt: "2026-09-10T00:04:00Z",
+          subject: "feat(web): add timeline git inspector",
+        },
+      ],
+      changedFiles: [
+        { status: "M", path: "apps/web/components/story/story-timeline.tsx" },
+        {
+          status: "R100",
+          path: "apps/web/lib/story-presentation.ts",
+          previousPath: "apps/web/lib/old-presentation.ts",
+        },
+      ],
+      dirty: true,
+      truncated: false,
+    });
+  });
+
+  it("returns null when commits and changedFiles are empty or malformed", () => {
+    expect(parseGitChanges({})).toBeNull();
+    expect(parseGitChanges({ commits: [], changedFiles: [] })).toBeNull();
+    expect(
+      parseGitChanges({
+        commits: [{ invalid: true }, null],
+        changedFiles: [{ status: "M" }, "not-an-object"],
+      }),
+    ).toBeNull();
+  });
+
+  it("maps git file status codes to readable labels and tones", () => {
+    expect(gitFileStatus("A")).toEqual({ code: "A", label: "Added", tone: "ok" });
+    expect(gitFileStatus("M")).toEqual({ code: "M", label: "Modified", tone: "agent" });
+    expect(gitFileStatus("D")).toEqual({ code: "D", label: "Deleted", tone: "bad" });
+    expect(gitFileStatus("R095")).toEqual({ code: "R", label: "Renamed", tone: "info" });
+    expect(gitFileStatus("C")).toEqual({ code: "C", label: "Copied", tone: "info" });
+    expect(gitFileStatus("??")).toEqual({ code: "??", label: "Untracked", tone: "dim" });
+  });
+
+  it("derives GitHub commit URLs from valid pull request URLs and rejects invalid inputs", () => {
+    const sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    expect(githubCommitUrl("https://github.com/theam/Facility/pull/42", sha)).toBe(
+      `https://github.com/theam/Facility/commit/${sha}`,
+    );
+    expect(githubCommitUrl("https://github.com/theam/Facility/pull/42/files", "a1b2c3d")).toBe(
+      "https://github.com/theam/Facility/commit/a1b2c3d",
+    );
+    expect(githubCommitUrl(null, sha)).toBeNull();
+    expect(githubCommitUrl("", sha)).toBeNull();
+    expect(githubCommitUrl("https://gitlab.com/theam/Facility/-/merge_requests/42", sha)).toBeNull();
+    expect(githubCommitUrl("https://github.com/theam/Facility/issues/42", sha)).toBeNull();
+    expect(githubCommitUrl("https://github.com/theam/Facility/pull/42", "not-a-sha!")).toBeNull();
   });
 });
