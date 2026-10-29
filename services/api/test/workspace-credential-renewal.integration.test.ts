@@ -199,3 +199,15 @@ it("the real GitHub CLI consumes rotated configuration offline without a migrati
     (await execute("gh", ["auth", "token", "--hostname", "github.com"], options)).stdout.trim(),
   ).toBe("synthetic-second");
 });
+
+it("ignores a stale lower-priority Git credential helper", async () => {
+  const cached = join(root, "cached-helper.cjs");
+  await writeFile(
+    cached,
+    "process.stdout.write('username=x-access-token\\npassword=stale-cached-credential\\n\\n');",
+  );
+  const config = join(root, "cached.gitconfig");
+  await writeFile(config, "[credential]\nhelper = !node " + cached + "\n");
+  environment.GIT_CONFIG_GLOBAL = config;
+  expect((await gitCredential()).stdout).toContain("password=synthetic-first");
+});

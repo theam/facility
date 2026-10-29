@@ -446,7 +446,9 @@ environment:
       GH_TOKEN: "",
       GITHUB_TOKEN: "",
       GH_CONFIG_DIR: expect.stringContaining(".facility/github/"),
-      GIT_CONFIG_VALUE_0: expect.stringContaining("facility-git-credential"),
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_VALUE_1: expect.stringContaining("facility-git-credential"),
     });
 
     const followUp = mcpData(

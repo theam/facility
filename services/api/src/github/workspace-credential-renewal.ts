@@ -98,11 +98,14 @@ export class WorkspaceCredentialRenewal {
       ...(engine ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
       GH_CONFIG_DIR: `${this.installed.root}/gh`,
       PATH: `${this.installed.bin}:${environment.PATH ?? this.installed.originalPath}`,
-      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_COUNT: "3",
       GIT_CONFIG_KEY_0: "credential.helper",
-      GIT_CONFIG_VALUE_0: this.installed.helper,
-      GIT_CONFIG_KEY_1: "credential.useHttpPath",
-      GIT_CONFIG_VALUE_1: "true",
+      // Reset cached helpers before installing the current turn's scoped reader.
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_KEY_1: "credential.helper",
+      GIT_CONFIG_VALUE_1: this.installed.helper,
+      GIT_CONFIG_KEY_2: "credential.useHttpPath",
+      GIT_CONFIG_VALUE_2: "true",
     };
   }
 
