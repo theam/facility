@@ -15,6 +15,7 @@ import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { ApiError } from "../errors.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
+import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
@@ -92,6 +93,7 @@ export class TurnDispatcher {
     let currentWorkspace: WorkspaceLocator | undefined;
     let liveEvents: LiveTurnEvents | undefined;
     let health: TurnHealthMonitor | undefined;
+    let credentialRenewal: WorkspaceCredentialRenewal | undefined;
     try {
       await this.storiesService.resolveAttention({
         orgId: input.orgId,
@@ -185,6 +187,7 @@ export class TurnDispatcher {
           .set({ branch, updatedAt: new Date() })
           .where(and(eq(stories.orgId, input.orgId), eq(stories.id, story.id)));
       }
+      let renewableEnvironment = credential.environment;
       if (this.runtime) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -204,6 +207,27 @@ export class TurnDispatcher {
             ),
           );
         const recovered = await this.runtime.wake(workspaceLocator(workspace));
+        credentialRenewal = new WorkspaceCredentialRenewal(
+          this.runtime,
+          { ...workspaceLocator(workspace), expectedComputeRef: recovered.computeRef },
+          turn.id,
+          credential,
+          {
+            issue: () => this.credentials.issue(input.orgId, input.projectId),
+            authorized: () => this.heartbeat(input.orgId, input.projectId, turn.id),
+            rememberSecrets: (values) => {
+              secrets = [...new Set([...secrets, ...values])];
+            },
+            report: (state) =>
+              appendTurnEvent(this.db, {
+                ...eventBase,
+                type: `github.credentials.${state}`,
+                data: {},
+              }).then(() => undefined),
+            revoked: () => cancellation.abort(),
+          },
+        );
+        renewableEnvironment = await credentialRenewal.start();
         await appendTurnEvent(this.db, {
           ...eventBase,
           type: "workspace.ready",
@@ -224,11 +248,22 @@ export class TurnDispatcher {
         projectId: input.projectId,
         workspace: workspaceLocator(workspace),
         manifest: projectManifest,
-        credentials: credential,
+        credentials: { ...credential, environment: renewableEnvironment },
         branch,
         previousSetupChecksum: workspace.setupChecksum,
       });
-      secrets = credentialSecrets(prepared.processEnvironment, prepared.secretNames);
+      if (credentialRenewal) {
+        prepared.processEnvironment = credentialRenewal.environment(
+          prepared.processEnvironment,
+          true,
+        );
+      }
+      secrets = [
+        ...new Set([
+          ...secrets,
+          ...credentialSecrets(prepared.processEnvironment, prepared.secretNames),
+        ]),
+      ];
       const session = (
         await this.db
           .select()
@@ -525,6 +560,7 @@ export class TurnDispatcher {
         await health?.stop();
       } finally {
         leaseHeartbeat.stop();
+        await credentialRenewal?.stop();
       }
       await this.storiesService
         .suspendFailedWorkspace(input.orgId, input.projectId, turn.storyId)

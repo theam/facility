@@ -146,15 +146,28 @@ describe("Facility 0.12 reference journey", async () => {
           `mkdir -p .facility/${this.name === "codex" ? "codex" : "claude"} && printf '%s' ${JSON.stringify(nativeSessionId)} > .facility/${this.name === "codex" ? "codex" : "claude"}/native-session`,
         ],
       });
+      const credentialRead = await runtime.exec(request.workspace, {
+        command: "gh",
+        args: ["auth", "token"],
+        env: {
+          ...request.environment,
+          HTTPS_PROXY: "http://127.0.0.1:9",
+          HTTP_PROXY: "http://127.0.0.1:9",
+          NO_PROXY: "",
+        },
+      });
+      if (credentialRead.exitCode !== 0)
+        throw new Error(`renewable GitHub credential was unavailable: ${credentialRead.stderr}`);
+      const currentCredential = credentialRead.stdout.trim();
       return {
         nativeSessionId,
-        output: `completed turn ${sequence} with ${request.environment?.GH_TOKEN}`,
+        output: `completed turn ${sequence} with ${currentCredential}`,
         progress: [],
         events: [
           {
             engine: this.name,
             type: "item.completed",
-            data: { sequence, credential: request.environment?.GH_TOKEN },
+            data: { sequence, credential: currentCredential },
           },
         ],
         exitCode: 0,
@@ -223,6 +236,8 @@ environment:
       environment,
       engines,
       new TurnGitEvidenceService(db, runtime),
+      undefined,
+      runtime,
     );
 
     const port = await unusedPort();
@@ -428,9 +443,10 @@ environment:
     ).resolves.toMatchObject({ claimed: true, state: "succeeded" });
     expect(engineRequests[0]).toMatchObject({ nativeSessionId: undefined });
     expect(engineRequests[0]?.environment).toMatchObject({
-      GH_TOKEN: "e2e-maintainer-installation-token",
-      GITHUB_TOKEN: "e2e-maintainer-installation-token",
-      GIT_CONFIG_VALUE_0: "!facility-git-credential",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+      GH_CONFIG_DIR: expect.stringContaining(".facility/github/"),
+      GIT_CONFIG_VALUE_0: expect.stringContaining("facility-git-credential"),
     });
 
     const followUp = mcpData(

@@ -225,7 +225,19 @@ environment:
         });
         if (renamed.exitCode !== 0) throw new Error("branch rename failed");
       }
-      const secret = request.environment?.GH_TOKEN ?? "missing";
+      const credentialRead = await runtime.exec(request.workspace, {
+        command: "gh",
+        args: ["auth", "token"],
+        env: {
+          ...request.environment,
+          HTTPS_PROXY: "http://127.0.0.1:9",
+          HTTP_PROXY: "http://127.0.0.1:9",
+          NO_PROXY: "",
+        },
+      });
+      if (credentialRead.exitCode !== 0)
+        throw new Error(`renewable GitHub credential was unavailable: ${credentialRead.stderr}`);
+      const secret = credentialRead.stdout.trim();
       const projectSecret = request.environment?.FACILITY_DISPATCH_SECRET ?? "missing";
       const nativeSessionId = this.replacementPending
         ? "codex-replacement-session"
