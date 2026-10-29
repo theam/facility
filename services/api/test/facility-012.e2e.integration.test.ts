@@ -146,19 +146,13 @@ describe("Facility 0.12 reference journey", async () => {
           `mkdir -p .facility/${this.name === "codex" ? "codex" : "claude"} && printf '%s' ${JSON.stringify(nativeSessionId)} > .facility/${this.name === "codex" ? "codex" : "claude"}/native-session`,
         ],
       });
-      const credentialRead = await runtime.exec(request.workspace, {
-        command: "gh",
-        args: ["auth", "token"],
-        env: {
-          ...request.environment,
-          HTTPS_PROXY: "http://127.0.0.1:9",
-          HTTP_PROXY: "http://127.0.0.1:9",
-          NO_PROXY: "",
-        },
-      });
-      if (credentialRead.exitCode !== 0)
-        throw new Error(`renewable GitHub credential was unavailable: ${credentialRead.stderr}`);
-      const currentCredential = credentialRead.stdout.trim();
+      // Keep the full journey within its deadline; real gh runs in the credential integration suite.
+      const credentialDirectory = request.environment?.GH_CONFIG_DIR;
+      if (!credentialDirectory)
+        throw new Error("renewable GitHub credential scope was unavailable");
+      const currentCredential = JSON.parse(
+        await readFile(join(credentialDirectory, "hosts.yml"), "utf8"),
+      )["github.com"].oauth_token;
       return {
         nativeSessionId,
         output: `completed turn ${sequence} with ${currentCredential}`,

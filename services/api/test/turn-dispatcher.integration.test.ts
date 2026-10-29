@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
@@ -225,19 +225,13 @@ environment:
         });
         if (renamed.exitCode !== 0) throw new Error("branch rename failed");
       }
-      const credentialRead = await runtime.exec(request.workspace, {
-        command: "gh",
-        args: ["auth", "token"],
-        env: {
-          ...request.environment,
-          HTTPS_PROXY: "http://127.0.0.1:9",
-          HTTP_PROXY: "http://127.0.0.1:9",
-          NO_PROXY: "",
-        },
-      });
-      if (credentialRead.exitCode !== 0)
-        throw new Error(`renewable GitHub credential was unavailable: ${credentialRead.stderr}`);
-      const secret = credentialRead.stdout.trim();
+      // This fixture exercises redaction; real gh execution has dedicated integration coverage.
+      const credentialDirectory = request.environment?.GH_CONFIG_DIR;
+      if (!credentialDirectory)
+        throw new Error("renewable GitHub credential scope was unavailable");
+      const secret = JSON.parse(await readFile(join(credentialDirectory, "hosts.yml"), "utf8"))[
+        "github.com"
+      ].oauth_token;
       const projectSecret = request.environment?.FACILITY_DISPATCH_SECRET ?? "missing";
       const nativeSessionId = this.replacementPending
         ? "codex-replacement-session"
