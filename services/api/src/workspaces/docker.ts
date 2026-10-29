@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PassThrough, Readable } from "node:stream";
 import Docker from "dockerode";
 import {
@@ -20,6 +20,13 @@ import {
 const WORKSPACE_LABEL = "facility.workspace.id";
 const KIND_LABEL = "facility.workload.kind";
 const KIND = "workspace-v2";
+const EXECUTION_TAG = "FACILITY_EXECUTION_ID";
+/** Sends SIGTERM to every process whose environment contains the exact entry `$1`. */
+const TERMINATE_TAGGED_PROCESSES = `for entry in /proc/[0-9]*; do
+  if tr '\\0' '\\n' 2>/dev/null < "$entry/environ" | grep -qxF "$1"; then
+    kill -TERM "\${entry#/proc/}" 2>/dev/null || true
+  fi
+done`;
 
 export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "docker" as const;
@@ -109,6 +116,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     const container = this.docker.getContainer(handle.computeRef);
     command.signal?.throwIfAborted();
     const startedAt = performance.now();
+    const executionTag = `${EXECUTION_TAG}=${randomUUID()}`;
     const execution = await container.exec({
       Cmd: [command.command, ...(command.args ?? [])],
       AttachStdin: command.stdin !== undefined,
@@ -117,11 +125,14 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       Tty: false,
       User: "node",
       WorkingDir: workspaceCwd(command.cwd),
-      Env: Object.entries({
-        ...persistentWorkspaceEnvironment(),
-        ...(workspace.environment ?? {}),
-        ...(command.env ?? {}),
-      }).map(([key, value]) => `${key}=${value}`),
+      Env: [
+        ...Object.entries({
+          ...persistentWorkspaceEnvironment(),
+          ...(workspace.environment ?? {}),
+          ...(command.env ?? {}),
+        }).map(([key, value]) => `${key}=${value}`),
+        executionTag,
+      ],
     });
     const stream = await execution.start({
       hijack: command.stdin !== undefined,
@@ -146,14 +157,14 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     let canceled = command.signal?.aborted ?? false;
     const cancel = () => {
       canceled = true;
-      void this.terminateExecution(container, execution);
+      void this.terminateExecution(container, executionTag);
     };
     command.signal?.addEventListener("abort", cancel, { once: true });
     if (canceled) cancel();
     const timeout = command.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          void this.terminateExecution(container, execution);
+          void this.terminateExecution(container, executionTag);
         }, command.timeoutMs)
       : undefined;
     try {
@@ -412,13 +423,18 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     }
   }
 
-  private async terminateExecution(container: Docker.Container, execution: Docker.Exec) {
-    const details = await execution.inspect().catch(() => undefined);
-    if (!details?.Pid) return;
+  /**
+   * Docker reports an exec's PID in the daemon's PID namespace, which means nothing inside
+   * the container. Signal the processes that inherited the exec's tag instead; this also
+   * reaches children, which would otherwise keep running after their parent exits. It runs
+   * as the commands' own user: reading another user's environ needs CAP_SYS_PTRACE.
+   */
+  private async terminateExecution(container: Docker.Container, executionTag: string) {
     const killer = await container.exec({
-      Cmd: ["kill", "-TERM", String(details.Pid)],
+      Cmd: ["sh", "-c", TERMINATE_TAGGED_PROCESSES, "facility-terminate", executionTag],
       AttachStdout: false,
       AttachStderr: false,
+      User: "node",
     });
     await killer.start({}).catch(() => undefined);
   }
