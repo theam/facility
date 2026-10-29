@@ -62,10 +62,10 @@ identity-callback bypass. They do not establish that every dependency advisory i
 exploitable through a Facility route, or replace application authorization and
 egress policy.
 
-The API, web, and runner images build from a digest-pinned `node:24-trixie-slim`
-base on Node.js 24.22.1 or later, which contains the October 2026 Node.js security release.
-Running containers keep their previous Node.js runtime until the images are rebuilt
-and redeployed.
+The API, web, and runner images build from the same digest-pinned
+`node:24.22.2-trixie-slim` base. The October 2026 Node.js security release first
+shipped in 24.22.1, and the image test rejects an older base. Running containers
+keep their previous Node.js runtime until the images are rebuilt and redeployed.
 
 The all-severity audit remains part of `pnpm verify`; the refresh does not add
 audit exceptions or change existing exceptions. For deployment and verification,

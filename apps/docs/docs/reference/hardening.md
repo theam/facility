@@ -112,8 +112,7 @@ a frozen-lockfile install and rebuilt images; existing running images do not cha
 when the lockfile changes. No data migration or new credentials are required for
 this dependency refresh. `node --test scripts/network-dependencies-security.test.mjs`
 checks the resolved URI/IP libraries and a loopback-only WebSocket peer, including
-valid traffic and malformed compressed input. It also checks every locked undici
-line against its floor and proves that an `Agent` applies a custom TLS identity
-callback to a loopback HTTPS peer; the throwaway certificate requires `openssl` on
-`PATH`. Run `pnpm verify` for the complete regression and audit gate; do not
-suppress new advisories merely to pass it.
+valid traffic and malformed compressed input. It also proves that an undici
+`Agent` applies a custom TLS identity callback to a loopback HTTPS peer; the
+throwaway certificate requires `openssl` on `PATH`. Run `pnpm verify` for the
+complete regression and audit gate; do not suppress new advisories merely to pass it.

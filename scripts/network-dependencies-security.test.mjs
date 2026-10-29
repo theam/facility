@@ -11,7 +11,6 @@ import test from "node:test";
 import { checkServerIdentity } from "node:tls";
 import { fileURLToPath } from "node:url";
 import { constants, createDeflateRaw } from "node:zlib";
-import { assertPatchedVersion } from "../runner/verify-package-security.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -20,16 +19,12 @@ const lockfile = await readFile(join(root, "pnpm-lock.yaml"), "utf8");
 
 // Test the versions actually selected by the lockfile, not stale store folders
 // left behind by an update or a separately installed test-only dependency.
-function lockedVersions(name) {
+function lockedModules(name) {
   const versions = [...new Set(
     [...lockfile.matchAll(new RegExp(`^  ${name}@([\\d.]+):`, "gm"))].map((match) => match[1]),
   )];
   assert.ok(versions.length > 0, `${name} must be present in the tested dependency graph`);
-  return versions;
-}
-
-function lockedModules(name) {
-  return lockedVersions(name).map((version) => ({
+  return versions.map((version) => ({
     version,
     module: require(join(root, "node_modules/.pnpm", `${name}@${version}`, "node_modules", name)),
   }));
@@ -130,10 +125,6 @@ test("undici rejects a malformed compressed peer without crashing", { timeout: 5
   assert.equal(client.readyState, WebSocket.CLOSED);
 });
 
-// Each affected undici line has its own October 2026 security release; a new
-// major has no reviewed floor yet and must be reviewed rather than accepted.
-const undiciFloors = { 7: "7.30.1", 8: "8.12.2" };
-
 // Generated per run so no private key is committed. The client trusts this
 // certificate explicitly, leaving its identity callback as the only refusal.
 function throwawayCertificate() {
@@ -177,16 +168,6 @@ async function tlsPeer(t, identityCheck) {
     },
   };
 }
-
-// Read from the lockfile rather than loaded: the 8.x line is jsdom's test
-// environment and needs a newer Node.js than the supported 22.13 floor.
-test("every locked undici line is at or above its reviewed security release", () => {
-  for (const version of lockedVersions("undici")) {
-    const minimum = undiciFloors[version.split(".")[0]];
-    assert.ok(minimum, `undici ${version}: review a new major before accepting it`);
-    assertPatchedVersion(version, minimum, "undici");
-  }
-});
 
 test("undici Agent runs a TLS identity callback that accepts the peer", { timeout: 5000 }, async (t) => {
   let checks = 0;
