@@ -9,6 +9,7 @@ const apiRequire = createRequire(new URL("../services/api/package.json", import.
 const root = resolve(import.meta.dirname, "..");
 const lock = apiRequire("yaml").parse(readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8"));
 const floors = {
+  "@hono/node-server": { 2: "2.1.3" },
   qs: { 6: "6.16.1" },
   zod: { 4: "4.6.6" },
   "body-parser": { 1: "1.20.9", 2: "2.4.0" },
