@@ -120,9 +120,11 @@ unrecoverable, while disclosure alongside a database backup defeats that protect
 
 ## Dependency security updates
 
-The reviewed dependency floors include Next.js 16.4.1, MCP SDK 1.31.0, sharp 0.35.5
-with bundled librsvg 2.63.2, and shell-quote 1.11.0. Keep the lockfile and transitive
-overrides together when upgrading; run `pnpm verify`, including the full-severity
+The reviewed dependency floors include Next.js 16.4.3, MCP SDK 1.31.0, sharp 0.35.5
+with bundled librsvg 2.63.2, and shell-quote 1.11.0. Next.js 16.4.1 first fixed the
+October 22, 2026 Image Optimization SVG and `use cache` remote code execution
+advisories and the App Router Server Actions denial of service. Keep the lockfile
+and transitive overrides together when upgrading; run `pnpm verify`, including the full-severity
 dependency audit and the installed-consumer regression tests. These package updates
 do not change database schemas, permissions, or credentials.
 
