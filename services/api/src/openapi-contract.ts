@@ -82,7 +82,27 @@ export function enrichOpenApi(document: OpenApiDocument, routes: OpenApiRouteRec
       } else {
         operation.security ??= [];
       }
-      if (route?.idempotent) addIdempotencyHeader(operation);
+      if (
+        [
+          "reviewStoryPlanDecision",
+          "confirmStoryPlanDecision",
+          "reviewProjectWorkflowPolicy",
+          "confirmProjectWorkflowPolicy",
+          "reviewStoryDeliveryAcceptance",
+          "confirmStoryDeliveryAcceptance",
+        ].includes(String(operation.operationId))
+      ) {
+        operation.security = [{ sessionCookie: [] }];
+        operation["x-facility-interactive-confirmation"] = true;
+      }
+      const requiresMatchingKey = [
+        "reviewProjectWorkflowPolicy",
+        "confirmProjectWorkflowPolicy",
+        "requestStoryDeliveryAcceptance",
+        "confirmStoryDeliveryAcceptance",
+      ].includes(String(operation.operationId));
+      if (route?.idempotent || requiresMatchingKey)
+        addIdempotencyHeader(operation, requiresMatchingKey);
       if (method === "post" && path === "/webhooks/github") {
         addHeaders(operation, [
           ["X-Hub-Signature-256", "HMAC-SHA256 over the exact request body."],
@@ -159,13 +179,15 @@ export function enrichOpenApi(document: OpenApiDocument, routes: OpenApiRouteRec
   return document;
 }
 
-function addIdempotencyHeader(operation: OpenApiOperation) {
+function addIdempotencyHeader(operation: OpenApiOperation, required = false) {
   const parameters = Array.isArray(operation.parameters) ? [...operation.parameters] : [];
   parameters.push({
     name: "Idempotency-Key",
     in: "header",
-    required: false,
-    description: "Replays the first response for the same principal, route, key, and body.",
+    required,
+    description: required
+      ? "Must match idempotency_key in the request body. Reuse the same key when retrying that action."
+      : "Replays the first response for the same principal, route, key, and body.",
     schema: { type: "string", minLength: 8, maxLength: 200 },
   });
   operation.parameters = parameters;

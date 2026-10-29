@@ -21,6 +21,15 @@ The image contains:
 Go-based container and GitHub tools are rebuilt from checksum-pinned source and
 audited during the image build. Base image and package changes must preserve
 that executable supply-chain check rather than bypassing it.
+The containerd source build pins `github.com/klauspost/compress` to `v1.18.7`
+for GHSA-259r-337f-4rfw; other tools retain their newer reviewed dependencies.
+The build checks the effective embedded module, including Go replacements,
+in every copied Go binary and rejects versions below that floor or substituted copies.
+
+Docker CLI and containerd also replace `github.com/go-jose/go-jose/v4` with
+`v4.1.6` for [GHSA-mgcc-cww5-fp2q](https://github.com/advisories/GHSA-mgcc-cww5-fp2q).
+The same final-binary inspection rejects affected effective JOSE versions,
+substituted modules and metadata inspection failures across the copied toolchain.
 
 ## Persistent layout
 

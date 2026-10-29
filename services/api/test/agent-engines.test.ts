@@ -82,6 +82,9 @@ class EngineRuntime implements WorkspaceRuntime {
   suspend(): never {
     throw new Error("not used");
   }
+  retireCompute(): never {
+    throw new Error("not used");
+  }
   destroy(): never {
     throw new Error("not used");
   }

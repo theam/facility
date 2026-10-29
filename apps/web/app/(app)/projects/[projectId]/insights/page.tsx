@@ -4,14 +4,16 @@ import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { api } from "@/lib/api";
 import { insightsSpendReading } from "@/lib/overview-presentation";
+import { can } from "@/lib/permissions";
 
 export const metadata = { title: "insights" };
 
 export default async function InsightsPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const [overview, budget] = await Promise.all([
+  const [overview, budget, me] = await Promise.all([
     api.projectObservability(projectId),
     api.projectBudget(projectId),
+    api.me(),
   ]);
   if (!overview.ok)
     return overview.offline ? <Offline /> : <ErrorNotice message={overview.message} />;
@@ -114,11 +116,23 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
           <PillTag>{budget.data.state.replaceAll("_", " ")}</PillTag>
         </div>
         <p className="text-[12px] text-(--dim)">
-          {money(budget.data.spent_cents)} spent this month. New turns are blocked once the limit is
-          reached; a provider call already in progress is allowed to finish and is accounted
-          afterwards.
+          {budget.data.state === "unconfirmed" ? "At least " : ""}
+          {money(budget.data.spent_cents)} committed to this month's budget, including measured
+          usage, open reservations and settled title charges. New calls reserve an estimate before
+          starting; a running call can exceed its estimate and is accounted afterwards. If an agent
+          or API call's full usage cannot be recovered, spending is shown as a lower bound and new
+          model calls are blocked while the budget is enabled.
         </p>
-        <BudgetForm projectId={projectId} budget={budget.data} />
+        {can(me.ok ? me.data.permissions : [], "budgets:write") ? (
+          <BudgetForm projectId={projectId} budget={budget.data} />
+        ) : (
+          <p className="text-[12px] text-(--dim)">
+            {budget.data.monthly_limit_cents === null
+              ? "No monthly limit configured."
+              : `Monthly limit: ${money(budget.data.monthly_limit_cents)}.`}{" "}
+            Enforcement is {budget.data.enabled ? "enabled" : "disabled"}.
+          </p>
+        )}
       </section>
 
       <section className="grid gap-6 xl:grid-cols-2">
@@ -167,6 +181,7 @@ function UsageTable({
     name: string;
     turns: number;
     costCents: number;
+    unpricedTurns?: number;
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
@@ -187,7 +202,10 @@ function UsageTable({
             >
               <span className="truncate font-mono text-(--ink)">{row.name}</span>
               <span className="text-(--dim)">{row.turns} turns</span>
-              <span className="font-mono text-(--mut)">{money(row.costCents)}</span>
+              <span className="font-mono text-(--mut)">
+                {(row.unpricedTurns ?? 0) > 0 ? "≥ " : ""}
+                {money(row.costCents)}
+              </span>
             </div>
           ))
         )}

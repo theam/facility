@@ -52,10 +52,44 @@ them up according to their recovery policy.
 
 ## Does a project budget delete or stop a workspace?
 
-No. A budget is checked before a provider call. A call already running may finish and be accounted
-afterwards; later turns are blocked once the monthly limit is reached. The worktree, conversation,
+No. Turns and title generation reserve a priced estimate before a provider call. Admission counts
+measured usage, open holds and settled title charges together. A call already running may exceed
+its estimate and is accounted afterwards; later calls are blocked when their estimate will not fit.
+The worktree, conversation,
 and engine sessions remain. Unknown model pricing is rejected while budget enforcement is enabled,
 and unavailable workspace pricing is not reported as zero.
+
+If a worker dies, recovery reads the turn's retained usage journal. Final counters are charged
+once; partial counters are a lower bound. Missing, unreadable, or incomplete usage is marked
+unpriced and the budget state becomes `unconfirmed`: new agent and title-generation model calls
+are blocked while enforcement is enabled. Raising the limit, resolving attention, or starting a
+new month does not confirm the bill. Recovery retries retained journals without waking compute
+or rerunning the agent. A finalized journal clears the block after reconciliation.
+The same recovery pass marks missing bills on worker-interrupted turns failed by older
+Facility versions as unconfirmed; it cannot invent usage that was never retained.
+
+Failed or canceled live turns also retain an unconfirmed bill when final usage is unavailable.
+Accounting and hold settlement happen before the next queued turn is activated. If accounting
+cannot be saved, the hold remains and handoff stops until recovery reconciles it. Recovery can
+read a late final journal for a terminal turn without waking compute or rerunning inference.
+An open hold stranded on a terminal turn also blocks enforced-budget admission.
+
+Title generation also records a durable API attempt, even before a budget is enabled.
+Duplicate jobs share one attempt and only one can call the provider. A lost response,
+timeout, server error, or missing usage leaves spending unconfirmed; it does not trigger
+another paid attempt. An authentication rejection is recorded as unbilled. Recovery expires
+an attempt that never started without charging it, but an expired started attempt remains
+uncertain. A final receipt for the same fenced attempt can reconcile that uncertainty.
+The bill and generated title are saved atomically; a failed database write keeps the attempt
+and hold for recovery instead of calling the provider again. The ledger stores numerical
+usage and request identity, without prompts or credentials. It currently covers titles;
+read-only consultation is a separate feature.
+
+When no final journal can be recovered, inspect the provider bill and retained session files;
+the true charge may exceed the recorded lower bound. There is currently no manual billing
+reconciliation endpoint. An authorized budget administrator can explicitly disable enforcement
+to continue, accepting that spend remains incomplete. Deleting the workspace loses evidence
+and does not clear the accounting block.
 
 To use a newly supported model, update the agent's `model` field and ensure the
 deployed Facility version contains its price-book entry. See

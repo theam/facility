@@ -87,6 +87,29 @@ describe("@facility/mcp 0.12", () => {
       "facility_list_skills",
       "facility_list_stories",
       "facility_get_story",
+      "facility_get_delivery",
+      "facility_set_delivery",
+      "facility_get_delivery_integration_policy",
+      "facility_set_delivery_integration_policy",
+      "facility_get_story_completion",
+      "facility_get_delivery_notice_policy",
+      "facility_set_delivery_notice_policy",
+      "facility_record_delivery_integration",
+      "facility_request_story_completion",
+      "facility_get_preview_convergence",
+      "facility_retry_preview_convergence",
+      "facility_get_workflow_policy",
+      "facility_get_story_workflow",
+      "facility_get_delivery_acceptance",
+      "facility_request_delivery_acceptance",
+      "facility_get_plan",
+      "facility_propose_plan",
+      "facility_request_plan_decision",
+      "facility_get_consultation_options",
+      "facility_get_consultations",
+      "facility_consult_story",
+      "facility_cancel_consultation",
+      "facility_prepare_consultation_handoff",
       "facility_start_story",
       "facility_send_message",
       "facility_get_conversation",
@@ -225,6 +248,101 @@ describe("@facility/mcp 0.12", () => {
     await server.close();
   });
 
+  test("maps delivery policy, notices, integration evidence and completion with stable retries", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    });
+    const scope = { projectId: "proj/one", storyId: "story/one" };
+    await client.callTool({
+      name: "facility_set_delivery_integration_policy",
+      arguments: {
+        projectId: scope.projectId,
+        mode: "repository_dispatch",
+        repository: "acme/app",
+      },
+    });
+    await client.callTool({
+      name: "facility_set_delivery_notice_policy",
+      arguments: { projectId: scope.projectId, inApp: false },
+    });
+    await client.callTool({ name: "facility_get_story_completion", arguments: scope });
+    await client.callTool({
+      name: "facility_record_delivery_integration",
+      arguments: {
+        ...scope,
+        candidateRevision: "a".repeat(64),
+        state: "succeeded",
+        summary: "Integrated",
+        evidenceUrl: null,
+        idempotencyKey: "integration-result-1",
+      },
+    });
+    await client.callTool({
+      name: "facility_request_story_completion",
+      arguments: {
+        ...scope,
+        candidateRevision: "a".repeat(64),
+        idempotencyKey: "completion-request-1",
+      },
+    });
+    expect(calls).toEqual([
+      [
+        "PATCH",
+        "/v1/projects/proj%2Fone/delivery-integration",
+        {
+          query: undefined,
+          body: { mode: "repository_dispatch", repository: "acme/app" },
+          idempotencyKey: undefined,
+        },
+      ],
+      [
+        "PATCH",
+        "/v1/projects/proj%2Fone/delivery-notices",
+        { query: undefined, body: { in_app: false }, idempotencyKey: undefined },
+      ],
+      [
+        "GET",
+        "/v1/projects/proj%2Fone/workspace-stories/story%2Fone/completion",
+        { query: undefined, body: undefined, idempotencyKey: undefined },
+      ],
+      [
+        "POST",
+        "/v1/projects/proj%2Fone/workspace-stories/story%2Fone/integration-result",
+        {
+          query: undefined,
+          body: {
+            candidate_revision: "a".repeat(64),
+            event_id: null,
+            state: "succeeded",
+            summary: "Integrated",
+            evidence_url: null,
+            idempotency_key: "integration-result-1",
+          },
+          idempotencyKey: "integration-result-1",
+        },
+      ],
+      [
+        "POST",
+        "/v1/projects/proj%2Fone/workspace-stories/story%2Fone/complete",
+        {
+          query: undefined,
+          body: {
+            candidate_revision: "a".repeat(64),
+            confirm: true,
+            idempotency_key: "completion-request-1",
+          },
+          idempotencyKey: "completion-request-1",
+        },
+      ],
+    ]);
+    await client.close();
+    await server.close();
+  });
+
   test("reads what is waiting on a person with the same filters as the web page", async () => {
     const calls: unknown[][] = [];
     const { client, server } = await connect({
@@ -315,6 +433,298 @@ describe("@facility/mcp 0.12", () => {
         },
       ],
     ]);
+    await client.close();
+    await server.close();
+  });
+
+  test("shares delivery validation and forwards read pagination, CAS and idempotency to the API", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { scope: { revision: 2 } };
+      },
+    });
+    const args = { projectId: "proj_1", storyId: "story/1" };
+    await client.callTool({
+      name: "facility_get_delivery",
+      arguments: {
+        ...args,
+        includeAvailable: true,
+        q: "example/app",
+        limit: 10,
+        offset: 20,
+      },
+    });
+    expect(requests[0]).toEqual({
+      method: "GET",
+      path: "/v1/projects/proj_1/workspace-stories/story%2F1/delivery",
+      options: {
+        query: { include_available: "true", q: "example/app", limit: 10, offset: 20 },
+        body: undefined,
+        idempotencyKey: undefined,
+      },
+    });
+    const write = {
+      ...args,
+      expectedRevision: 1,
+      declaredComplete: true,
+      pullRequests: [{ repository: "example/app", number: 3, primary: true }],
+      idempotencyKey: "delivery-retry-1",
+    };
+    expect(
+      (await client.callTool({ name: "facility_set_delivery", arguments: write })).isError,
+    ).not.toBe(true);
+    expect(requests[1]).toMatchObject({
+      method: "POST",
+      options: {
+        body: {
+          expected_revision: 1,
+          declared_complete: true,
+          pull_requests: [{ repository: "example/app", number: 3, primary: true, required: true }],
+          idempotency_key: "delivery-retry-1",
+        },
+        idempotencyKey: "delivery-retry-1",
+      },
+    });
+    const invalid = await client.callTool({
+      name: "facility_set_delivery",
+      arguments: {
+        ...write,
+        pullRequests: [{ repository: "example/app", number: 3, primary: false }],
+      },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(requests).toHaveLength(2);
+    const tools = await client.listTools();
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_get_delivery")?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_set_delivery")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+    await client.close();
+    await server.close();
+  });
+
+  test("reads and explicitly retries the shared preview convergence projection", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { state: "pending" };
+      },
+    });
+    const scope = { projectId: "proj_1", storyId: "story/1" };
+    await client.callTool({ name: "facility_get_preview_convergence", arguments: scope });
+    await client.callTool({
+      name: "facility_retry_preview_convergence",
+      arguments: { ...scope, idempotencyKey: "preview-retry-1" },
+    });
+    expect(requests).toEqual([
+      {
+        method: "GET",
+        path: "/v1/projects/proj_1/workspace-stories/story%2F1/preview-convergence",
+        options: { query: undefined, body: undefined, idempotencyKey: undefined },
+      },
+      {
+        method: "POST",
+        path: "/v1/projects/proj_1/workspace-stories/story%2F1/preview-convergence/retry",
+        options: {
+          query: undefined,
+          body: { idempotency_key: "preview-retry-1" },
+          idempotencyKey: "preview-retry-1",
+        },
+      },
+    ]);
+    const tools = await client.listTools();
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_get_preview_convergence")?.annotations,
+    ).toMatchObject({ readOnlyHint: true, openWorldHint: false });
+    expect(
+      tools.tools.find((tool) => tool.name === "facility_retry_preview_convergence")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+    await client.close();
+    await server.close();
+  });
+
+  test("shares workflow and acceptance reads while exposing only a request for human acceptance", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { status: "missing" };
+      },
+    });
+    const scope = { projectId: "proj_1", storyId: "story/1" };
+    for (const name of [
+      "facility_get_workflow_policy",
+      "facility_get_story_workflow",
+      "facility_get_delivery_acceptance",
+    ])
+      expect((await client.callTool({ name, arguments: scope })).isError).not.toBe(true);
+    expect(requests.map((item) => item.path)).toEqual([
+      "/v1/projects/proj_1/workflow-policy",
+      "/v1/projects/proj_1/workspace-stories/story%2F1/workflow",
+      "/v1/projects/proj_1/workspace-stories/story%2F1/delivery-acceptance",
+    ]);
+    expect(
+      (
+        await client.callTool({
+          name: "facility_request_delivery_acceptance",
+          arguments: {
+            ...scope,
+            candidateRevision: "a".repeat(64),
+            expectedPlanRevision: 2,
+            expectedDecisionRevision: 3,
+            idempotencyKey: "acceptance-retry-key",
+          },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect(requests[3]).toMatchObject({
+      method: "POST",
+      options: {
+        body: {
+          expected_candidate_revision: "a".repeat(64),
+          expected_plan_revision: 2,
+          expected_decision_revision: 3,
+          idempotency_key: "acceptance-retry-key",
+        },
+        idempotencyKey: "acceptance-retry-key",
+      },
+    });
+    const tools = await client.listTools();
+    expect(tools.tools.map((tool) => tool.name).join(" ")).not.toMatch(
+      /confirm.*accept|confirm.*policy/,
+    );
+    await client.close();
+    await server.close();
+  });
+
+  test("records plans and requests decisions without exposing an interactive confirmation tool", async () => {
+    const requests: Array<{ method: string; path: string; options: unknown }> = [];
+    const { client, server } = await connect({
+      request: async (method, path, options) => {
+        requests.push({ method, path, options });
+        return { request: { confirmationUrl: "https://facility.example/review" } };
+      },
+    });
+    const scope = { projectId: "proj_1", storyId: "story/1" };
+    await client.callTool({
+      name: "facility_get_plan",
+      arguments: { ...scope, beforeRevision: 4, beforeDecisionRevision: 3, limit: 2 },
+    });
+    expect(requests[0]).toMatchObject({
+      method: "GET",
+      path: "/v1/projects/proj_1/workspace-stories/story%2F1/plan",
+      options: { query: { before_revision: 4, before_decision_revision: 3, limit: 2 } },
+    });
+    await client.callTool({ name: "facility_get_plan", arguments: { ...scope, revision: 2 } });
+    expect(requests[1]?.path).toBe(
+      "/v1/projects/proj_1/workspace-stories/story%2F1/plan/revisions/2",
+    );
+    const input = {
+      ...scope,
+      expectedRevision: 2,
+      markdown: "  ## Exact plan\n",
+      repositories: ["example/app"],
+      agents: ["planner"],
+      sourceMessageId: "msg_1",
+      idempotencyKey: "plan-retry-key",
+    };
+    expect(
+      (await client.callTool({ name: "facility_propose_plan", arguments: input })).isError,
+    ).not.toBe(true);
+    expect(requests[2]).toMatchObject({
+      method: "POST",
+      options: {
+        body: {
+          expected_revision: 2,
+          markdown: input.markdown,
+          repositories: input.repositories,
+          agents: input.agents,
+          source_message_id: "msg_1",
+          idempotency_key: input.idempotencyKey,
+        },
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    expect(
+      (
+        await client.callTool({
+          name: "facility_propose_plan",
+          arguments: { ...input, repositories: ["example/app", "Example/APP"] },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(
+      (
+        await client.callTool({
+          name: "facility_request_plan_decision",
+          arguments: {
+            ...scope,
+            expectedRevision: 3,
+            expectedDecisionRevision: 1,
+            intent: "reject",
+            idempotencyKey: "decision-retry-key",
+          },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(requests).toHaveLength(3);
+    expect(
+      (
+        await client.callTool({
+          name: "facility_request_plan_decision",
+          arguments: {
+            ...scope,
+            expectedRevision: 3,
+            expectedDecisionRevision: 1,
+            intent: "reject",
+            reason: "Add regression coverage",
+            idempotencyKey: "decision-retry-key",
+          },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect(requests[3]).toMatchObject({
+      method: "POST",
+      path: "/v1/projects/proj_1/workspace-stories/story%2F1/plan/decisions",
+      options: {
+        body: {
+          expected_revision: 3,
+          expected_decision_revision: 1,
+          intent: "reject",
+          reason: "Add regression coverage",
+          idempotency_key: "decision-retry-key",
+        },
+        idempotencyKey: "decision-retry-key",
+      },
+    });
+    const tools = (await client.listTools()).tools;
+    expect(tools.some((tool) => /confirm/.test(tool.name))).toBe(false);
+    expect(tools.find((tool) => tool.name === "facility_get_plan")?.annotations?.readOnlyHint).toBe(
+      true,
+    );
+    expect(
+      tools.find((tool) => tool.name === "facility_request_plan_decision")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
     await client.close();
     await server.close();
   });

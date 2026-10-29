@@ -33,6 +33,29 @@ function fakeSandbox() {
 }
 
 describe("Vercel persistent workspace runtime", () => {
+  it("never stops or executes on a replacement session through an old compute target", async () => {
+    const sandbox = fakeSandbox();
+    sandboxApi.get.mockResolvedValue(sandbox);
+    const runtime = new VercelWorkspaceRuntime();
+    const target = {
+      id: sandbox.name,
+      externalRef: sandbox.name,
+      volumeRef: "snap_persistent",
+      image: "runner:test",
+      expectedComputeRef: "session_old",
+    };
+    await runtime.suspend(target);
+    await runtime.retireCompute(target);
+    expect(sandbox.stop).not.toHaveBeenCalled();
+    await expect(runtime.exec(target, { command: "true" })).rejects.toMatchObject({
+      code: "workspace_compute_replaced",
+    });
+    expect(sandbox.asUser).not.toHaveBeenCalled();
+    expect(sandboxApi.get).toHaveBeenLastCalledWith(expect.objectContaining({ resume: false }));
+    await runtime.retireCompute({ ...target, expectedComputeRef: "session_current" });
+    expect(sandbox.stop).toHaveBeenCalledOnce();
+  });
+
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.unstubAllGlobals());
 

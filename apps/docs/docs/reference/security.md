@@ -71,6 +71,13 @@ The all-severity audit remains part of `pnpm verify`; the refresh does not add
 audit exceptions or change existing exceptions. For deployment and verification,
 see [release and dependency controls](hardening.md#release-and-dependency-controls).
 
+The docs SVG optimizer `@svgr/plugin-svgo` 8.1.0 declares an unused `deepmerge`
+dependency affected by GHSA-gcqx-w48m-w2h4. A version-scoped override removes
+that dependency edge rather than ignoring the advisory. Installed-consumer
+tests compile and render an SVG through the actual docs webpack loader, verify
+custom optimization options and reject malformed input. Reassess the override
+when updating SVGR; the all-severity audit remains unchanged.
+
 ## Workspace isolation
 
 Each story has separate provider compute, network context, and durable storage. Docker projects run
@@ -89,6 +96,19 @@ connected to the project. They retain the App's full configured permission set f
 repositories. Engine and project values are injected only when named in `.facility.yml` and
 resolved from project-specific operator variables.
 
+During native turns, the worker renews GitHub credentials before expiry while rechecking execution
+and repository scope. Git reads a private turn-local credential file. GitHub CLI uses the same
+current credentials through a helper and a private configuration directory, including when a
+child shell resets PATH. The GitHub App signing key stays in the control plane.
+
+Native engine processes do not receive a fixed `GH_TOKEN` or `GITHUB_TOKEN`: use Git or `gh api`
+for authenticated repository operations. Arbitrary applications that retain their own token copy
+cannot observe a later renewal. Project preparation retains its original injected values.
+Temporary credential files have owner-only access and are removed when the turn ends. If the
+worker crashes, any retained token still expires at GitHub; a resumed turn gets a new credential
+session without replacing local files or commits. Renewal errors are reported without secret
+values; unavailable or revoked credentials never grant broader repository access.
+
 Facility redacts supplied values from persisted command events and API responses. Redaction cannot
 prevent an agent or repository process from intentionally copying a value into a file, commit,
 external request, or encoded output. Connect only code and credentials appropriate for the agent
@@ -100,7 +120,7 @@ unrecoverable, while disclosure alongside a database backup defeats that protect
 
 ## Dependency security updates
 
-The reviewed dependency floors include Next.js 16.3.8, MCP SDK 1.31.0, sharp 0.35.5
+The reviewed dependency floors include Next.js 16.4.1, MCP SDK 1.31.0, sharp 0.35.5
 with bundled librsvg 2.63.2, and shell-quote 1.11.0. Keep the lockfile and transitive
 overrides together when upgrading; run `pnpm verify`, including the full-severity
 dependency audit and the installed-consumer regression tests. These package updates
@@ -120,6 +140,13 @@ client migration requirements.
 Agent manifests cannot define a custom permission set. Reviewers and scheduled agents have the
 same capability as builders. Their prompts define behavior, while GitHub branch protection,
 required reviews, and CI remain structural controls for merge.
+
+Optional project workflow policies gate native turns on a current approved plan with exact agent
+configuration and full connected repository scope. These are admission gates, not per-command
+permissions: agents retain the same native capabilities once admitted. Policy configuration and
+final delivery acceptance require interactive, session-bound confirmations with current authority;
+MCP can request a human review link but cannot confirm one. Completion rechecks required acceptance
+at its protected source-close boundary. Existing projects remain ungated until configured.
 
 Facility does not use per-command receipts or approvals. It also does not merge a pull request as a
 side effect of marking a story done. Configure protected branches so an installation token cannot

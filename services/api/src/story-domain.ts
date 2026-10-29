@@ -12,6 +12,14 @@ import { GithubMirrorService } from "./github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "./github/workspace-credentials.js";
 import { CostBudgetService } from "./insights/costs.js";
 import { ProjectBacklogService } from "./stories/backlog.js";
+import { StoryCompletionService } from "./stories/completion.js";
+import { GithubConsultationSources } from "./stories/consultation-sources.js";
+import { StoryConsultationService } from "./stories/consultations.js";
+import { StoryPreviewConvergenceService } from "./stories/preview-convergence.js";
+import {
+  retirePreviewWriter,
+  StoryPreviewConvergenceExecutor,
+} from "./stories/preview-convergence-executor.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
@@ -46,6 +54,10 @@ export type StoryDomain = {
   costs: CostBudgetService;
   evidence: TurnGitEvidenceService;
   titles: StoryTitleService;
+  consultations: StoryConsultationService;
+  previewConvergence: StoryPreviewConvergenceService;
+  previewConvergenceExecutor: StoryPreviewConvergenceExecutor;
+  completion: StoryCompletionService;
   backlog: ProjectBacklogService;
 };
 
@@ -83,14 +95,37 @@ export function createStoryDomain(input: {
     undefined,
     (scope) => variables.values(scope),
   );
-  const stories = new StoryWorkspaceService(input.db, runtime, async (turn) => {
-    await input.enqueue("turns.dispatch", {
-      orgId: turn.orgId,
-      projectId: turn.projectId,
-      turnId: turn.id,
-    });
-  });
-  const mirror = new GithubMirrorService(input.db, githubFactory, stories);
+  const previewConvergence = new StoryPreviewConvergenceService(
+    input.db,
+    input.enqueue,
+    undefined,
+    (scope) => retirePreviewWriter(input.db, runtime, scope),
+  );
+  const stories = new StoryWorkspaceService(
+    input.db,
+    runtime,
+    async (turn) => {
+      await input.enqueue("turns.dispatch", {
+        orgId: turn.orgId,
+        projectId: turn.projectId,
+        turnId: turn.id,
+      });
+    },
+    {
+      onSuspend: (scope) => previewConvergence.suspend(scope),
+      onResume: (scope) => previewConvergence.resume(scope),
+    },
+  );
+  const completion = new StoryCompletionService(input.db, githubFactory, stories, input.enqueue);
+  const mirror = new GithubMirrorService(
+    input.db,
+    githubFactory,
+    stories,
+    async (repositoryId, pullNumber) => {
+      await previewConvergence.observePull(repositoryId, pullNumber);
+      await completion.observePull(repositoryId, pullNumber);
+    },
+  );
   const engines = new AgentEngineRegistry([
     new ClaudeCodeEngine(runtime),
     new CodexEngine(runtime),
@@ -103,6 +138,12 @@ export function createStoryDomain(input: {
     enqueue: (data) => input.enqueue("stories.title", data),
   });
   const backlog = new ProjectBacklogService(input.db);
+  const consultations = new StoryConsultationService(input.db, {
+    sources: new GithubConsultationSources(input.db, githubFactory),
+    credentials: async (scope, provider) =>
+      titleCredentials(scope.projectId, await variables.projectValues(scope))[provider],
+    enqueue: (data) => input.enqueue("stories.consultation", data),
+  });
   const dispatcher = new TurnDispatcher(
     input.db,
     stories,
@@ -114,6 +155,15 @@ export function createStoryDomain(input: {
     evidence,
     costs,
     runtime,
+  );
+  const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
+    input.db,
+    runtime,
+    credentials,
+    projectManifests,
+    environment,
+    previewConvergence,
+    (scope) => dispatcher.activateQueuedStorySuccessor(scope),
   );
   const previews = new WorkspacePreviewService(
     input.db,
@@ -156,6 +206,10 @@ export function createStoryDomain(input: {
     costs,
     evidence,
     titles,
+    consultations,
+    previewConvergence,
+    previewConvergenceExecutor,
+    completion,
     backlog,
   };
 }
@@ -206,6 +260,9 @@ class UnsupportedWorkspaceRuntime implements WorkspaceRuntime {
     return this.unavailable();
   }
   suspend(): never {
+    return this.unavailable();
+  }
+  retireCompute(): never {
     return this.unavailable();
   }
   destroy(): never {

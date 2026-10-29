@@ -101,10 +101,13 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     command: WorkspaceCommand,
   ): Promise<WorkspaceCommandResult> {
     const handle =
-      command.resume === false ? await this.inspect(workspace) : await this.wake(workspace);
+      command.resume === false || workspace.expectedComputeRef
+        ? await this.inspect(workspace)
+        : await this.wake(workspace);
     if (handle.state !== "running" || !handle.computeRef)
       throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
     const container = this.docker.getContainer(handle.computeRef);
+    command.signal?.throwIfAborted();
     const startedAt = performance.now();
     const execution = await container.exec({
       Cmd: [command.command, ...(command.args ?? [])],
@@ -188,14 +191,18 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
 
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
     validateWorkspacePorts(ports);
-    const handle = await this.wake(workspace);
+    const handle = workspace.expectedComputeRef
+      ? await this.inspect(workspace)
+      : await this.wake(workspace);
+    if (!handle.computeRef || handle.state !== "running")
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
     return this.endpoints(handle.computeRef, ports);
   }
 
   async inspect(workspace: WorkspaceLocator): Promise<WorkspaceInspection> {
     const names = this.assertLocator(workspace);
     const [container, volumeExists] = await Promise.all([
-      this.inspectContainer(names.container),
+      this.inspectContainer(workspace.expectedComputeRef ?? names.container),
       this.volumeExists(names.volume),
     ]);
     if (!volumeExists) {
@@ -230,7 +237,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
 
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     const names = this.assertLocator(workspace);
-    const current = await this.inspectContainer(names.container);
+    const current = await this.inspectContainer(workspace.expectedComputeRef ?? names.container);
     if (!current) return;
     this.assertOwned(current, workspace.id, names.volume);
     if (!current.State?.Running) return;
@@ -239,6 +246,20 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       .stop({ t: 20 })
       .catch((error) => {
         if (!isDockerNotFound(error) && !isAlreadyStopped(error)) throw error;
+      });
+  }
+
+  async retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void> {
+    const names = this.assertLocator(workspace);
+    const current = await this.inspectContainer(workspace.expectedComputeRef);
+    if (!current) return;
+    this.assertOwned(current, workspace.id, names.volume);
+    // Remove this immutable container ID, never the reusable workspace name.
+    await this.docker
+      .getContainer(current.Id)
+      .remove({ force: true, v: false })
+      .catch((error) => {
+        if (!isDockerNotFound(error)) throw error;
       });
   }
 

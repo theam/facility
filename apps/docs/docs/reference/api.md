@@ -116,6 +116,59 @@ credential revocation remains a separate operator action.
 Start and message bodies contain their own `idempotency_key` for story-level deduplication. The
 request can also use the HTTP `Idempotency-Key` behavior described below.
 
+### Read-only text consultations
+
+All paths below are under `/v1/projects/:projectId/workspace-stories/:storyId/consultations`:
+
+| Method/path | Purpose | Permission |
+| --- | --- | --- |
+| `GET /options` | Fresh API-text agent capability and connected source commits; no inference. | `workspaces:execute` |
+| `GET /` | Saved history with `limit`/`offset`, total and billing status. | `projects:read` |
+| `GET /:consultationId` | One durable result and immutable snapshot metadata. | `projects:read` |
+| `POST /` | Record an idempotent paid consultation intent; returns 202. | `workspaces:execute` |
+| `POST /:consultationId/cancel` | Cancel before start or request cancellation after submission. | `workspaces:execute` |
+| `GET /:consultationId/handoff` | Draft text from a succeeded, confirmed result; no execution. | `projects:read` |
+
+Monetary amounts require `costs:read`; write receipts always redact amounts so a cached response
+cannot restore an earlier permission. GET responses are private/no-store. Bodies reject actor,
+provider and model overrides. Supply the options' `expected_agent_hash`, `expected_catalog_sha`,
+configured `agent`, bounded `message`, exact `sources` and `idempotency_key`; the header/body key
+must agree. Queued intent, provider attempt, billing certainty and native implementation remain
+separate. See [MCP consultation behavior](mcp.md#consult-without-workspace-actions) for limits,
+configuration, uncertainty and the explicit handoff.
+
+### Versioned plans and interactive decisions
+
+The story bundle includes `plans`. All paths below are under
+`/v1/projects/:projectId/workspace-stories/:storyId/plan`:
+
+| Method and suffix | Behavior | Permission |
+| --- | --- | --- |
+| `GET /` | Current plan/state, bounded pending requests and keyset-paged plan/decision history. | `projects:read` |
+| `GET /revisions/:revision` | One immutable earlier plan and its scope/provenance. | `projects:read` |
+| `GET /repositories` | Scoped repository names for the plan picker; `q`, `limit`, `offset`. No repository administration or GitHub refresh. | `projects:write` |
+| `POST /` | Propose an immutable revision with expected revision and server-resolved repository/agent snapshots. | `projects:write` |
+| `POST /decisions` | Request approval or rejection of exact plan/decision revisions; return an expiring browser link. | `projects:write` |
+| `GET /decisions/:requestId` | Review the requested plan and issue a session-bound confirmation proof when still pending. | Interactive user with `projects:write` |
+| `POST /decisions/:requestId/confirm` | Atomically record a decision, consume the request, increment decision revision and append evidence. | Interactive user with `projects:write` |
+
+All three POST bodies require `idempotency_key` matching `Idempotency-Key`. Proposals accept
+only text, selected repository/agent names, expected revision and optional exact source message;
+actors, digests and scope snapshots are server-owned. Reads are database-only. Proposal resolution
+refreshes the authorized agent catalog and preserves the exact observed source commit, even if
+another refresh later replaces the projection. The observed repository identity is rechecked under the topology lock before recording the plan; network resolution does not hold ledger locks.
+
+Interactive routes require the normally verified browser cookie and reject any Authorization
+header, including a valid OAuth bearer with that same user's cookie. Confirmation proofs are
+short-lived, bind the existing session and full target/intent, and never appear in URLs or evidence.
+The confirm body accepts only proof and idempotency key. The interactive guard and proof check run
+before the HTTP replay hook; current membership and revisions are checked again in the write
+transaction. Expired, consumed, cross-session or superseded requests cannot create another receipt.
+
+Plan and receipt history is retained, including on repository disconnect conflicts. These records
+do not change execution permissions, dispatch turns, activate project policy or establish delivery
+acceptance. The recorded method is `interactive_session`, not a claim to prove human presence.
+
 ### External integrations
 
 The existing story GET includes `lifecycle`: effective phase/activity, GitHub issue
@@ -158,7 +211,11 @@ in another client.
 ## Costs, budgets, operations, and delivery
 
 - `/v1/projects/:projectId/costs` returns cost and usage analysis.
-- `/v1/projects/:projectId/budget` reads or updates the monthly project budget.
+- `/v1/projects/:projectId/budget` reads or updates the monthly project budget. Its committed amount
+  includes measured turn usage, open reservations and settled title charges; a reservation is an
+  estimate, not a provider invoice or a hard limit on an already running call.
+  The costs and observability usage series describe native agent turns; title API calls have
+  a separate durable ledger and contribute to the monthly budget, without creating synthetic turns.
 - `/v1/projects/:projectId/overview` returns the operator entry point: running and queued turns,
   open attention with the action each accepts, pull requests waiting for review, recent results,
   backlog counts, recorded workspace states, and permission-gated agent spend and budget. It reads
@@ -189,6 +246,21 @@ verified on 2026-09-29. These entries use standard global API pricing and
 5-minute cache writes, not fast mode, batch, regional premiums, or 1-hour cache
 writes. A valid engine-reported cost takes precedence over this fallback.
 An enabled budget still blocks an unpriced model or a project over its limit.
+Interrupted, failed or canceled turns with incomplete usage return `state: "unconfirmed"` in budget responses.
+Their usage rows have `priced: false`, `source: "unpriced"`, and a nullable cost or a measured
+lower bound. New agent and title-generation model calls are blocked until complete retained
+usage is reconciled or an authorized administrator explicitly disables budget enforcement.
+Raising the limit, resolving attention, and a new calendar month do not clear uncertainty.
+An open reservation stranded on a terminal turn also remains unconfirmed until accounting recovery.
+Title API attempts use scoped request identities and exclusive claims to prevent duplicate jobs
+from repeating provider calls. Their charges are recorded even when enforcement is disabled.
+Missing or malformed usage, a lost response, or an expired started attempt remains unconfirmed;
+an expired unstarted attempt is unbilled. Valid measured zero is preserved as zero.
+Final receipts must belong to the same attempt and cannot erase previously observed usage.
+The API-call ledger and title publication commit atomically; retries of a settled attempt cannot
+publish or charge it twice. There is no public manual-settlement endpoint.
+Recovered usage is counted when it is settled, as with live-worker accounting; reconciliation does not double-charge
+already settled rows. The periodic worker retries available journals without waking compute.
 Updating the catalog does not reprice persisted turns or change agent defaults.
 
 ## Authentication and authorization

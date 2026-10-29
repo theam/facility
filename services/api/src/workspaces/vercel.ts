@@ -105,11 +105,18 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
         "Vercel workspace commands do not support stdin; pass data as an argument or file",
       );
     }
-    const sandbox = await this.get(workspace, command.resume !== false);
-    if (command.resume === false && sandbox.status !== "running") {
+    const pinned = command.resume === false || Boolean(workspace.expectedComputeRef);
+    const sandbox = await this.get(workspace, !pinned);
+    if (pinned && sandbox.status !== "running") {
       throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
     }
     const session = sandbox.currentSession();
+    if (workspace.expectedComputeRef && session.sessionId !== workspace.expectedComputeRef)
+      throw new WorkspaceRuntimeError(
+        "workspace_compute_replaced",
+        "Workspace compute has been replaced",
+      );
+    command.signal?.throwIfAborted();
     const stdoutStream = new PassThrough();
     const stderrStream = new PassThrough();
     const stdout: Buffer[] = [];
@@ -138,14 +145,13 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
           : Math.min(command.timeoutMs, MAX_COMMAND_TIMEOUT_MS),
       detached: true as const,
     };
-    const running =
-      command.resume === false
-        ? await session.runCommand({
-            ...submission,
-            cmd: "sudo",
-            args: ["-u", "node", "--", submission.cmd, ...(submission.args ?? [])],
-          })
-        : await sandbox.asUser("node").runCommand(submission);
+    const running = pinned
+      ? await session.runCommand({
+          ...submission,
+          cmd: "sudo",
+          args: ["-u", "node", "--", submission.cmd, ...(submission.args ?? [])],
+        })
+      : await sandbox.asUser("node").runCommand(submission);
     const observation = new AbortController();
     const deadline = setTimeout(
       () =>
@@ -310,7 +316,16 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
   }
 
   async expose(workspace: WorkspaceLocator, ports: CreateWorkspace["ports"] = []) {
-    const sandbox = await this.get(workspace, true);
+    const sandbox = await this.get(workspace, !workspace.expectedComputeRef);
+    if (
+      workspace.expectedComputeRef &&
+      (sandbox.status !== "running" ||
+        sandbox.currentSession().sessionId !== workspace.expectedComputeRef)
+    )
+      throw new WorkspaceRuntimeError(
+        "workspace_compute_replaced",
+        "Workspace compute has been replaced",
+      );
     const endpoints = this.endpoints(sandbox, validateWorkspacePorts(ports));
     if (!this.nativePreview || !(await this.nativePreview.enabledForWorkspace(workspace.id)))
       return endpoints;
@@ -420,10 +435,20 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     try {
       const signal = AbortSignal.timeout(60_000);
       const sandbox = await this.get(workspace, false, undefined, signal);
+      if (
+        workspace.expectedComputeRef &&
+        sandbox.currentSession().sessionId !== workspace.expectedComputeRef
+      )
+        return;
       if (sandbox.status !== "stopped") await sandbox.stop({ signal });
     } catch (error) {
       if (!isVercelNotFound(error)) throw error;
     }
+  }
+
+  async retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void> {
+    // A stopped persistent sandbox resumes into a new immutable session ID.
+    await this.suspend(workspace);
   }
 
   async destroy(workspace: WorkspaceLocator): Promise<void> {

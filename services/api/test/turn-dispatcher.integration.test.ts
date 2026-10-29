@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
   attentionItems,
+  budgetReservations,
   createDb,
   engineSessions,
   githubInstallations,
@@ -22,11 +23,12 @@ import {
   turnUsage,
   workspaces,
 } from "@facility/db";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/catalog.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
+import { CostBudgetService } from "../src/insights/costs.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
 import {
@@ -79,6 +81,7 @@ describe("turn dispatcher end to end", async () => {
   const projectId = newId("proj");
   const installationRowId = newId("ghi");
   const queuedTurns: string[] = [];
+  const budgetHandoffRepositories = new Map<string, string>();
   let rejectEnqueue = false;
   let credentialFailure: unknown;
   const builder = parseAgentManifest(
@@ -111,6 +114,8 @@ environment:
     app:
       port: 3000
 `);
+
+  const reviewer = parseAgentManifest(agentSource("pr-reviewer"), ".agents/pr-reviewer.md");
 
   class FakeCodexEngine implements AgentEngine {
     readonly name = "codex" as const;
@@ -220,11 +225,20 @@ environment:
         });
         if (renamed.exitCode !== 0) throw new Error("branch rename failed");
       }
-      const secret = request.environment?.GH_TOKEN ?? "missing";
+      // This fixture exercises redaction; real gh execution has dedicated integration coverage.
+      const credentialDirectory = request.environment?.GH_CONFIG_DIR;
+      if (!credentialDirectory)
+        throw new Error("renewable GitHub credential scope was unavailable");
+      const secret = JSON.parse(await readFile(join(credentialDirectory, "hosts.yml"), "utf8"))[
+        "github.com"
+      ].oauth_token;
       const projectSecret = request.environment?.FACILITY_DISPATCH_SECRET ?? "missing";
       const nativeSessionId = this.replacementPending
         ? "codex-replacement-session"
-        : (request.nativeSessionId ?? "codex-native-session");
+        : (request.nativeSessionId ??
+          (request.manifest.name === "builder"
+            ? "codex-native-session"
+            : `codex-${request.manifest.name}-session`));
       this.replacementPending = false;
       return {
         nativeSessionId,
@@ -298,10 +312,30 @@ environment:
     const catalogSource: AgentCatalogSource = {
       load: async () => ({
         commitSha: "a".repeat(40),
-        sources: [{ file: builder.file, source: agentSource(builder.name) }],
+        sources: [builder, reviewer].map((agent) => ({
+          file: agent.file,
+          source: agentSource(agent.name),
+        })),
       }),
     };
-    const manifestSource: ProjectManifestSource = { load: async () => projectManifest };
+    const manifestSource: ProjectManifestSource = {
+      load: async (_orgId, requestedProjectId) => {
+        const isolatedRepository = budgetHandoffRepositories.get(requestedProjectId);
+        return isolatedRepository
+          ? parseProjectManifest(`
+version: 1
+repositories:
+  primary: github.com/${owner}/${isolatedRepository}
+  related: []
+environment:
+  setup: printf setup > .setup-complete
+  start: mkdir -p .dev && printf running > .dev/status
+  ready: test -f .dev/status
+  secrets: [FACILITY_DISPATCH_SECRET]
+`)
+          : projectManifest;
+      },
+    };
     dispatcher = new TurnDispatcher(
       db,
       storiesService,
@@ -488,6 +522,12 @@ environment:
     expect(
       await db.select().from(turnUsage).where(eq(turnUsage.turnId, started.queued.turn.id)),
     ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.turnId, started.queued.turn.id)),
+    ).toEqual([]);
     await expect(storiesService.get(orgId, projectId, started.story.id)).resolves.toMatchObject({
       story: { status: "attention" },
       attention: [
@@ -551,6 +591,192 @@ environment:
     expect(history).toEqual([
       expect.objectContaining({ status: "resolved", resolution: "replied" }),
     ]);
+  });
+
+  it("carries the asked question into a prompt rebuilt for a different agent", async () => {
+    const reviewer = parseAgentManifest(
+      `---
+name: reviewer
+description: Reviews stories.
+engine: codex
+model: gpt-5.5-codex
+enabled: true
+triggers:
+  - type: manual
+---
+Review the request.
+`,
+      ".agents/reviewer.md",
+    );
+    engine.outputOverride =
+      "Blocked on one decision.\n\n<facility-needs-attention>Should existing JSON exports remain available?</facility-needs-attention>";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "github",
+      externalId: `handoff-${suffix}`,
+      title: "Decide the export policy",
+      agent: builder,
+      message: "Plan the export change",
+      messageDedupeKey: `handoff-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    const askingTurn = started.queued.turn;
+    if (!askingTurn) throw new Error("expected the asking turn");
+    await dispatcher.dispatch({ orgId, projectId, turnId: askingTurn.id });
+
+    engine.outputOverride = undefined;
+    // A different agent has no engine session of its own, so the engine is handed a
+    // rebuilt prompt rather than resuming native context.
+    const reply = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "No, continue.",
+      dedupeKey: `handoff-reply-${suffix}`,
+      agent: reviewer,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    if (!reply.turn) throw new Error("expected the reply turn");
+    await dispatcher.dispatch({ orgId, projectId, turnId: reply.turn.id });
+
+    const rebuilt = engine.requests.at(-1);
+    expect(rebuilt?.nativeSessionId).toBeUndefined();
+    expect(rebuilt?.prompt).toContain("Should existing JSON exports remain available?");
+    expect(rebuilt?.prompt).toContain("No, continue.");
+    // The question belongs to the agent turn that asked it, once.
+    expect(rebuilt?.prompt.match(/Should existing JSON exports remain available\?/g)?.length).toBe(
+      1,
+    );
+    const askedIndex =
+      rebuilt?.prompt.indexOf("Should existing JSON exports remain available?") ?? -1;
+    const repliedIndex = rebuilt?.prompt.indexOf("No, continue.") ?? -1;
+    expect(askedIndex).toBeGreaterThan(-1);
+    expect(repliedIndex).toBeGreaterThan(askedIndex);
+  });
+
+  it("retains a predecessor question before a completed turn becomes available to a successor", async () => {
+    const freshReviewer = parseAgentManifest(
+      agentSource("race-reviewer"),
+      ".agents/race-reviewer.md",
+    );
+    let attentionEntered!: () => void;
+    let releaseAttention!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      attentionEntered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseAttention = resolve;
+    });
+    const originalComplete = storiesService.completeTurn.bind(storiesService);
+    let held = false;
+    const flag = vi.spyOn(storiesService, "completeTurn").mockImplementation(async (input) => {
+      const result = await originalComplete(input);
+      if (!held) {
+        held = true;
+        attentionEntered();
+        await gate;
+      }
+      return result;
+    });
+    engine.outputOverride =
+      "One decision is required.\n<facility-needs-attention>RACE_QUESTION: Keep existing JSON exports?</facility-needs-attention>";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "github",
+      externalId: `race-${suffix}`,
+      title: "Question persistence race",
+      agent: builder,
+      message: "Plan the export change",
+      messageDedupeKey: `race-start-${suffix}`,
+      actor: { type: "user", id: "review_fixture" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected asking turn");
+    const asking = dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id });
+    let observedPrompt: string | undefined;
+    let observedSession: string | undefined;
+    try {
+      await entered;
+      engine.outputOverride = undefined;
+      const reply = await storiesService.queueMessage({
+        orgId,
+        projectId,
+        storyId: started.story.id,
+        body: "No, continue.",
+        dedupeKey: `race-reply-${suffix}`,
+        agent: freshReviewer,
+        actor: { type: "user", id: "review_fixture" },
+        trigger: { type: "manual" },
+      });
+      if (!reply.turn) throw new Error("expected successor turn after predecessor success");
+      expect(await dispatcher.dispatch({ orgId, projectId, turnId: reply.turn.id })).toMatchObject({
+        state: "succeeded",
+      });
+      observedPrompt = engine.requests.at(-1)?.prompt;
+      observedSession = engine.requests.at(-1)?.nativeSessionId;
+    } finally {
+      releaseAttention();
+      await asking;
+      flag.mockRestore();
+    }
+    const notices = await db
+      .select()
+      .from(attentionItems)
+      .where(
+        and(eq(attentionItems.storyId, started.story.id), eq(attentionItems.kind, "agent_waiting")),
+      );
+    expect(observedPrompt).toContain("RACE_QUESTION");
+    expect(observedSession).toBeUndefined();
+    expect(notices.every((notice) => notice.status === "resolved")).toBe(true);
+  });
+
+  it("redacts retained blocking-question detail before cross-agent reconstruction", async () => {
+    const freshReviewer = parseAgentManifest(
+      agentSource("redaction-reviewer"),
+      ".agents/redaction-reviewer.md",
+    );
+    engine.outputOverride =
+      "One decision.\n<facility-needs-attention>QUESTION_REDACTION: May project-secret and secret-installation-token be used?</facility-needs-attention>";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "github",
+      externalId: `question-redaction-${suffix}`,
+      title: "Question redaction",
+      agent: builder,
+      message: "Plan the change",
+      messageDedupeKey: `redaction-start-${suffix}`,
+      actor: { type: "user", id: "review_fixture" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected asking turn");
+    expect(
+      await dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+    ).toMatchObject({ state: "succeeded" });
+    engine.outputOverride = undefined;
+    const reply = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "No, continue.",
+      dedupeKey: `redaction-reply-${suffix}`,
+      agent: freshReviewer,
+      actor: { type: "user", id: "review_fixture" },
+      trigger: { type: "manual" },
+    });
+    if (!reply.turn) throw new Error("expected reply turn");
+    expect(await dispatcher.dispatch({ orgId, projectId, turnId: reply.turn.id })).toMatchObject({
+      state: "succeeded",
+    });
+    const rebuilt = engine.requests.at(-1);
+    expect(rebuilt?.nativeSessionId).toBeUndefined();
+    expect(rebuilt?.prompt).toContain("QUESTION_REDACTION: May [REDACTED] and [REDACTED] be used?");
+    expect(rebuilt?.prompt).not.toContain("project-secret");
+    expect(rebuilt?.prompt).not.toContain("secret-installation-token");
   });
 
   it("claims a turn once even when dispatch is repeated", async () => {
@@ -653,6 +879,83 @@ environment:
         "Continue after the native session was lost",
       ]),
     );
+  });
+
+  it("passes the builder handoff to a queued reviewer without exposing a later request", async () => {
+    const handoff = "Implementation complete; integration tests could not run.";
+    const reviewRequest = "Review the builder result and its verification limitations.";
+    const futureRequest = "FUTURE REQUEST: implement an unrelated feature.";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `queued-review-${suffix}`,
+      title: "Review a queued builder result",
+      agent: builder,
+      message: "Implement the requested change.",
+      messageDedupeKey: `queued-review-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected builder turn");
+
+    const queuedReview = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: reviewRequest,
+      dedupeKey: `queued-review-message-${suffix}`,
+      agent: reviewer,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    expect(queuedReview).toMatchObject({ queued: true, turn: undefined });
+    await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: futureRequest,
+      dedupeKey: `queued-future-message-${suffix}`,
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+
+    engine.outputOverride = handoff;
+    try {
+      await expect(
+        dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+      ).resolves.toMatchObject({ state: "succeeded" });
+    } finally {
+      engine.outputOverride = undefined;
+    }
+    expect(engine.requests.at(-1)?.prompt).not.toContain(reviewRequest);
+    expect(engine.requests.at(-1)?.prompt).not.toContain(futureRequest);
+
+    const afterBuilder = await storiesService.get(orgId, projectId, started.story.id);
+    const next = afterBuilder.turns.find((turn) => turn.state === "queued");
+    if (!next) throw new Error("expected queued reviewer turn");
+    expect(next.agentName).toBe(reviewer.name);
+    await expect(dispatcher.dispatch({ orgId, projectId, turnId: next.id })).resolves.toMatchObject(
+      { state: "succeeded" },
+    );
+
+    const request = engine.requests.at(-1);
+    expect(request?.nativeSessionId).toBeUndefined();
+    expect(request?.manifest.name).toBe(reviewer.name);
+    expect(request?.prompt).toContain(handoff);
+    expect(request?.prompt).toContain(reviewRequest);
+    expect(request?.prompt).not.toContain(futureRequest);
+    expect(request?.prompt.indexOf(handoff)).toBeLessThan(
+      request?.prompt.indexOf(reviewRequest) ?? -1,
+    );
+    const afterReview = await storiesService.get(orgId, projectId, started.story.id);
+    const futureTurn = afterReview.turns.find((turn) => turn.state === "queued");
+    if (!futureTurn) throw new Error("expected future request to remain queued");
+    await expect(
+      dispatcher.dispatch({ orgId, projectId, turnId: futureTurn.id }),
+    ).resolves.toMatchObject({ state: "succeeded" });
+    expect(engine.requests.at(-1)?.prompt).toContain(futureRequest);
   });
 
   it.each([
@@ -1275,6 +1578,194 @@ environment:
     expect(turn).toMatchObject({ state: "failed", retryAfter: null });
   });
 
+  async function budgetHandoffStory() {
+    const isolatedProjectId = newId("proj");
+    const isolatedRepository = `${repository}-${isolatedProjectId.slice(-8)}`;
+    await createBareRepository(remotes, owner, isolatedRepository);
+    budgetHandoffRepositories.set(isolatedProjectId, isolatedRepository);
+    await db
+      .insert(projects)
+      .values({ id: isolatedProjectId, orgId, name: "Budget handoff", slug: isolatedProjectId });
+    await db.insert(projectRepositories).values({
+      id: newId("repo"),
+      orgId,
+      projectId: isolatedProjectId,
+      installationId: installationRowId,
+      owner,
+      name: isolatedRepository,
+      defaultBranch: "main",
+      role: "primary",
+    });
+    await db.insert(projectBudgets).values({
+      id: newId("bud"),
+      orgId,
+      projectId: isolatedProjectId,
+      monthlyLimitCents: 100_000,
+      enabled: true,
+    });
+    const started = await storiesService.start({
+      orgId,
+      projectId: isolatedProjectId,
+      provider: "manual",
+      externalId: newId("evt"),
+      title: "Settle before the next request",
+      agent: builder,
+      message: "First request",
+      messageDedupeKey: newId("evt"),
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.queued.turn) throw new Error("expected first turn");
+    await storiesService.queueMessage({
+      orgId,
+      projectId: isolatedProjectId,
+      storyId: started.story.id,
+      body: "Next request",
+      dedupeKey: newId("evt"),
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    return {
+      orgId,
+      projectId: isolatedProjectId,
+      storyId: started.story.id,
+      turnId: started.queued.turn.id,
+    };
+  }
+
+  it("releases a pre-provider hold before activating its queued successor", async () => {
+    const input = await budgetHandoffStory();
+    const activate = dispatcher.activateQueuedSuccessor.bind(dispatcher);
+    const checked = vi
+      .spyOn(dispatcher, "activateQueuedSuccessor")
+      .mockImplementation(async (scope) => {
+        if (scope.turnId === input.turnId) {
+          expect(
+            await db
+              .select()
+              .from(budgetReservations)
+              .where(eq(budgetReservations.turnId, input.turnId)),
+          ).toEqual([]);
+          expect(
+            await db.select().from(turnUsage).where(eq(turnUsage.turnId, input.turnId)),
+          ).toEqual([]);
+        }
+        return activate(scope);
+      });
+    credentialFailure = Object.assign(new Error("access revoked"), { status: 403 });
+    try {
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject({ state: "failed" });
+      expect(checked).toHaveBeenCalled();
+    } finally {
+      checked.mockRestore();
+      credentialFailure = undefined;
+    }
+  });
+
+  it.each([
+    "failed",
+    "canceled",
+  ] as const)("books missing %s usage before handoff and reconciles a late final journal without rerunning", async (outcome) => {
+    const input = await budgetHandoffStory();
+    const activate = dispatcher.activateQueuedSuccessor.bind(dispatcher);
+    const checked = vi
+      .spyOn(dispatcher, "activateQueuedSuccessor")
+      .mockImplementation(async (scope) => {
+        if (scope.turnId === input.turnId) {
+          const failed = (await db.select().from(turns).where(eq(turns.id, input.turnId)))[0];
+          expect(
+            engine.requests.some((request) => request.turnId === input.turnId),
+            failed?.error ?? "fake engine did not run",
+          ).toBe(true);
+          expect(
+            await db
+              .select()
+              .from(budgetReservations)
+              .where(eq(budgetReservations.turnId, input.turnId)),
+          ).toEqual([]);
+          expect(
+            (await db.select().from(turnUsage).where(eq(turnUsage.turnId, input.turnId)))[0],
+          ).toMatchObject({ priced: false, source: "unpriced" });
+        }
+        return activate(scope);
+      });
+    engine.failNextRun = outcome === "failed";
+    engine.blockUntilCanceled = outcome === "canceled";
+    engine.blockingStarted = false;
+    try {
+      const dispatch = dispatcher.dispatch(input);
+      if (outcome === "canceled") {
+        await waitFor(() => engine.blockingStarted);
+        await storiesService.cancelTurn({ ...input, actor: { type: "user", id: "user_test" } });
+      }
+      await expect(dispatch).resolves.toMatchObject({ state: outcome });
+    } finally {
+      checked.mockRestore();
+      engine.blockUntilCanceled = false;
+    }
+    const costs = new CostBudgetService(db);
+    expect((await costs.budgetState(input.orgId, input.projectId)).state).toBe("unconfirmed");
+    const workspace = (await storiesService.get(input.orgId, input.projectId, input.storyId))
+      .workspace;
+    if (!workspace) throw new Error("missing retained workspace");
+    const dir = join(workspace.volumeRef, ".facility", "engine-usage");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, `${input.turnId}.json`),
+      JSON.stringify({
+        version: 1,
+        turnId: input.turnId,
+        engine: "codex",
+        complete: true,
+        usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      }),
+    );
+    const calls = engine.requests.length;
+    await recoverInterruptedTurns(db, storiesService);
+    expect(engine.requests).toHaveLength(calls);
+    expect((await costs.budgetState(input.orgId, input.projectId)).state).toBe("ok");
+  });
+
+  it("retains the hold and stops handoff when live accounting cannot be persisted", async () => {
+    const input = await budgetHandoffStory();
+    const original = CostBudgetService.prototype.record;
+    const accounting = vi
+      .spyOn(CostBudgetService.prototype, "record")
+      .mockImplementation(async function (this: CostBudgetService, bill) {
+        if (bill.turnId === input.turnId) throw new Error("accounting unavailable");
+        return original.call(this, bill);
+      });
+    const activation = vi.spyOn(dispatcher, "activateQueuedSuccessor");
+    engine.failNextRun = true;
+    try {
+      await expect(dispatcher.dispatch(input)).rejects.toThrow("accounting unavailable");
+      expect(activation).not.toHaveBeenCalled();
+      expect(
+        await db
+          .select()
+          .from(budgetReservations)
+          .where(eq(budgetReservations.turnId, input.turnId)),
+      ).toHaveLength(1);
+      expect((await db.select().from(turns).where(eq(turns.id, input.turnId)))[0]?.state).toBe(
+        "running",
+      );
+    } finally {
+      accounting.mockRestore();
+      activation.mockRestore();
+    }
+    await storiesService.recoverInterruptedTurn({
+      ...input,
+      staleBefore: new Date(Date.now() + 1000),
+    });
+    expect(
+      await db.select().from(budgetReservations).where(eq(budgetReservations.turnId, input.turnId)),
+    ).toEqual([]);
+    expect((await new CostBudgetService(db).budgetState(input.orgId, input.projectId)).state).toBe(
+      "unconfirmed",
+    );
+  });
+
   it("does not revive a canceled deferred turn after its deadline", async () => {
     const input = await startAdmissionStory();
     credentialFailure = Object.assign(new Error("API rate limit exceeded"), { status: 429 });
@@ -1295,6 +1786,186 @@ environment:
     expect(enqueued).toEqual([]);
     await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
   });
+  it("retains the writer while native stop is pending and rolls back a failed stop", async () => {
+    const input = await budgetHandoffStory();
+    const admitted = await (
+      dispatcher as unknown as { admit: (i: typeof input) => Promise<{ kind: string }> }
+    ).admit(input);
+    expect(admitted.kind).toBe("running");
+    const stale = new Date(Date.now() - 300000);
+    await db.update(turns).set({ updatedAt: stale }).where(eq(turns.id, input.turnId));
+    let entered!: () => void;
+    let finish!: () => void;
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const cleanup = vi.spyOn(runtime, "exec").mockImplementation(async (_workspace, command) => {
+      if (command.env?.FACILITY_INTERRUPTED_TURN_ID === input.turnId) {
+        entered();
+        await gate;
+        return { exitCode: 1, stdout: "", stderr: "stop unconfirmed", durationMs: 1 };
+      }
+      throw Error("Unexpected recovery command");
+    });
+    const onRecovered = vi.fn(async (_turn: { turnId: string }) => undefined);
+    const recovering = recoverInterruptedTurns(db, storiesService, new Date(), 60000, onRecovered);
+    try {
+      await inside;
+      expect((await db.select().from(turns).where(eq(turns.id, input.turnId)))[0]?.state).toBe(
+        "running",
+      );
+      expect(onRecovered.mock.calls.some(([turn]) => turn.turnId === input.turnId)).toBe(false);
+      finish();
+      await recovering;
+      expect((await db.select().from(turns).where(eq(turns.id, input.turnId)))[0]?.state).toBe(
+        "running",
+      );
+      expect(
+        await db
+          .select()
+          .from(budgetReservations)
+          .where(eq(budgetReservations.turnId, input.turnId)),
+      ).toHaveLength(1);
+      expect(onRecovered.mock.calls.some(([turn]) => turn.turnId === input.turnId)).toBe(false);
+    } finally {
+      finish();
+      cleanup.mockRestore();
+      await recovering.catch(() => undefined);
+      await db
+        .update(turns)
+        .set({ state: "canceled", updatedAt: new Date() })
+        .where(eq(turns.id, input.turnId));
+      await db.delete(budgetReservations).where(eq(budgetReservations.turnId, input.turnId));
+    }
+  });
+
+  it("keeps a promoted provider reservation when cancellation waits for the story lock", async () => {
+    const input = await budgetHandoffStory();
+    const costs = new CostBudgetService(db);
+    let releaseStory!: () => void;
+    let signalLocked!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseStory = resolve;
+    });
+    const locked = new Promise<void>((resolve) => {
+      signalLocked = resolve;
+    });
+    const lock = db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`facility:story:${input.orgId}:${input.projectId}:${input.storyId}`}))`,
+      );
+      signalLocked();
+      await gate;
+    });
+    await locked;
+    const canceled = storiesService.cancelTurn({ ...input, actor: { type: "user", id: "test" } });
+    let waiting = false;
+    for (let i = 0; i < 100; i++) {
+      const result = await db.execute<{ blocked: boolean }>(
+        sql`select exists(select 1 from pg_locks where locktype = 'advisory' and not granted) as blocked`,
+      );
+      if (result[0]?.blocked) {
+        waiting = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(waiting).toBe(true);
+    engine.blockUntilCanceled = true;
+    engine.blockingStarted = false;
+    const running = dispatcher.dispatch(input);
+    const escaped = running.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    let accounting: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await waitFor(() => engine.blockingStarted);
+      const [hold] = await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.turnId, input.turnId));
+      expect(hold).toBeDefined();
+      if (!hold) throw Error("Expected admitted provider reservation");
+      const cap = Math.ceil(hold.reservedCents);
+      await db
+        .update(projectBudgets)
+        .set({ monthlyLimitCents: cap })
+        .where(eq(projectBudgets.projectId, input.projectId));
+      const workspace = (await storiesService.get(input.orgId, input.projectId, input.storyId))
+        .workspace;
+      if (!workspace) throw Error("Missing retained workspace");
+      const dir = join(workspace.volumeRef, ".facility", "engine-usage");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, `${input.turnId}.json`),
+        JSON.stringify({
+          version: 1,
+          turnId: input.turnId,
+          engine: "codex",
+          complete: true,
+          usage: {
+            inputTokens: 100,
+            outputTokens: 20,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            reportedCostCents: cap + 1,
+          },
+        }),
+      );
+      const original = CostBudgetService.prototype.record;
+      accounting = vi
+        .spyOn(CostBudgetService.prototype, "record")
+        .mockImplementation(async function (this: CostBudgetService, bill) {
+          if (bill.turnId === input.turnId) throw Error("review accounting unavailable");
+          return original.call(this, bill);
+        });
+      releaseStory();
+      await lock;
+      await canceled;
+      expect((await db.select().from(turns).where(eq(turns.id, input.turnId)))[0]?.state).toBe(
+        "canceled",
+      );
+      expect(
+        await db
+          .select()
+          .from(budgetReservations)
+          .where(eq(budgetReservations.turnId, input.turnId)),
+      ).toHaveLength(1);
+      expect(await escaped).toMatchObject({
+        error: expect.objectContaining({ message: "review accounting unavailable" }),
+      });
+      accounting.mockRestore();
+      accounting = undefined;
+      await recoverInterruptedTurns(db, storiesService);
+      expect(await db.select().from(turnUsage).where(eq(turnUsage.turnId, input.turnId))).toEqual([
+        expect.objectContaining({ priced: true }),
+      ]);
+      expect(await costs.budgetState(input.orgId, input.projectId)).toMatchObject({
+        state: "exceeded",
+      });
+      await dispatcher.activateQueuedSuccessor(input);
+      const next = (
+        await storiesService.get(input.orgId, input.projectId, input.storyId)
+      ).turns.find((t) => t.state === "queued");
+      if (!next) throw Error("Missing queued successor");
+      engine.blockUntilCanceled = false;
+      const before = engine.requests.length;
+      await expect(dispatcher.dispatch({ ...input, turnId: next.id })).resolves.toMatchObject({
+        state: "failed",
+      });
+      expect(engine.requests).toHaveLength(before);
+    } finally {
+      releaseStory();
+      await lock;
+      accounting?.mockRestore();
+      engine.blockUntilCanceled = false;
+      await escaped;
+    }
+  }, 15000);
 });
 
 async function waitFor(predicate: () => boolean) {

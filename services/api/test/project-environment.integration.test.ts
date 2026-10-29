@@ -383,6 +383,83 @@ environment:
     expect(
       await readFile(join(workspace.volumeRef, "repos/acme/shared/README.md"), "utf8"),
     ).toContain("shared");
+
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await writeFile(join(repository, ".facility-test/seed"), "retained-user-data");
+    await writeFile(join(repository, "preview-generation.txt"), "next generation\n");
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["add", "preview-generation.txt"],
+      cwd: "repos/acme/app",
+    });
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["commit", "-m", "test: advance preview generation"],
+      cwd: "repos/acme/app",
+    });
+    const refreshed = await environment.refreshPrepared({
+      orgId,
+      projectId,
+      workspace: locator,
+      manifest: {
+        ...manifest,
+        environment: {
+          ...manifest.environment,
+          stop: "rm -f .facility-test/status && printf stopped > .facility-test/stop",
+        },
+      },
+      credentials,
+      previousSetupChecksum: first.setupChecksum,
+      readinessTimeoutMs: 2_000,
+    });
+    expect(await readFile(join(repository, ".setup-count"), "utf8")).toBe("2");
+    expect(await readFile(join(repository, ".facility-test/seed"), "utf8")).toBe(
+      "retained-user-data",
+    );
+    expect(await readFile(join(repository, ".facility-test/stop"), "utf8")).toBe("stopped");
+    expect(refreshed.setupChecksum).not.toBe(first.setupChecksum);
+    await writeFile(
+      join(workspace.volumeRef, "repos/acme/shared/dependency.txt"),
+      "updated dependency",
+    );
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["add", "dependency.txt"],
+      cwd: "repos/acme/shared",
+    });
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["commit", "-m", "test: update related dependency"],
+      cwd: "repos/acme/shared",
+    });
+    const related = await environment.refreshPrepared({
+      orgId,
+      projectId,
+      workspace: locator,
+      manifest,
+      credentials,
+      previousSetupChecksum: refreshed.setupChecksum,
+      readinessTimeoutMs: 2000,
+    });
+    expect(related.setupChecksum).not.toBe(refreshed.setupChecksum);
+    expect(await readFile(join(repository, ".setup-count"), "utf8")).toBe("3");
+    // An ordinary turn may need setup for new code, but must never reseed retained data.
+    const next = await environment.prepare({
+      orgId,
+      projectId,
+      workspace: locator,
+      manifest: { ...manifest, hash: "changed-setup-manifest" },
+      credentials,
+      branch: "facility/story-environment",
+      previousSetupChecksum: related.setupChecksum,
+      readinessTimeoutMs: 2000,
+    });
+    expect(next.setupChecksum).not.toBe(related.setupChecksum);
+    expect(await readFile(join(repository, ".setup-count"), "utf8")).toBe("4");
+
+    expect(await readFile(join(repository, ".facility-test/seed"), "utf8")).toBe(
+      "retained-user-data",
+    );
   });
 
   it("opens previews on the agent's changed workspace without checkout, setup, or reseeding", async () => {

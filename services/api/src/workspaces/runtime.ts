@@ -22,6 +22,8 @@ export type CreateWorkspace = {
 export type WorkspaceLocator = CreateWorkspace & {
   externalRef: string;
   volumeRef: string;
+  /** Fence a controller attempt to one immutable provider compute incarnation. */
+  expectedComputeRef?: string;
 };
 
 export type WorkspaceHandle = WorkspaceLocator & {
@@ -107,6 +109,8 @@ export interface WorkspaceRuntime {
     signal: AbortSignal,
   ): Promise<WorkspaceDiagnostics>;
   suspend(workspace: WorkspaceLocator): Promise<void>;
+  /** Retire the targeted compute, preserving the complete durable workspace volume. */
+  retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void>;
   destroy(workspace: WorkspaceLocator): Promise<void>;
 }
 

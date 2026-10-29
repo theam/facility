@@ -64,7 +64,19 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     command: WorkspaceCommand,
   ): Promise<WorkspaceCommandResult> {
-    const record = command.resume === false ? await this.record(workspace) : undefined;
+    const record =
+      command.resume === false || workspace.expectedComputeRef
+        ? await this.record(workspace)
+        : undefined;
+    if (
+      record &&
+      workspace.expectedComputeRef &&
+      workspace.expectedComputeRef !== this.computeRef(workspace.id, record)
+    )
+      throw new WorkspaceRuntimeError(
+        "workspace_compute_replaced",
+        "Workspace compute has been replaced",
+      );
     if (record && record.state !== "running")
       throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
     const handle = record ? this.handle(record) : await this.wake(workspace);
@@ -175,7 +187,19 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
 
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     const record = await this.record(workspace);
+    if (
+      workspace.expectedComputeRef &&
+      workspace.expectedComputeRef !== this.computeRef(workspace.id, record)
+    )
+      return;
     if (record.state !== "destroyed") record.state = "sleeping";
+  }
+
+  async retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void> {
+    const record = await this.record(workspace);
+    if (workspace.expectedComputeRef !== this.computeRef(workspace.id, record)) return;
+    record.generation += 1;
+    record.state = "sleeping";
   }
 
   async destroy(workspace: WorkspaceLocator): Promise<void> {

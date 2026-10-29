@@ -108,6 +108,7 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
   const suffix = randomUUID().slice(0, 8);
   const orgId = newId("org");
   const projectId = newId("proj");
+  const primaryRepositoryId = newId("repo");
   const installationId = newId("ghi");
 
   beforeAll(async () => {
@@ -132,7 +133,7 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
     });
     await db.insert(projectRepositories).values([
       {
-        id: newId("repo"),
+        id: primaryRepositoryId,
         orgId,
         projectId,
         installationId,
@@ -310,6 +311,7 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
     const snapshot = await new GithubAgentCatalogSource(db, factory).load(orgId, projectId);
     expect(snapshot).toEqual({
       commitSha: "d".repeat(40),
+      repositoryId: primaryRepositoryId,
       sources: [{ file: ".agents/builder.md", source: source("builder") }],
       skills: [
         {

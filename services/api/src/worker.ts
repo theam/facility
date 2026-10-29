@@ -1,10 +1,13 @@
-import { createDb, type FacilityDb, turns } from "@facility/db";
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { budgetReservations, createDb, type FacilityDb, turns, turnUsage } from "@facility/db";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
+import { CostBudgetService } from "./insights/costs.js";
+import { reconciliationPage } from "./reconciliation.js";
+import type { StoryConsultationService } from "./stories/consultations.js";
 import { StoryIntegrationNotifications } from "./stories/integration-notifications.js";
 import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
@@ -38,12 +41,21 @@ export async function startWorker() {
     "github.mirror",
     "agent.schedules",
     "stories.title",
+    "stories.consultation",
+    "stories.preview-convergence",
+    "stories.delivery-integration",
+    "stories.complete",
     "stories.integrations",
   ];
   for (const queue of queues) {
     await boss.createQueue(queue);
   }
   await configureTurnQueue(boss);
+  await boss.updateQueue("stories.consultation", {
+    name: "stories.consultation",
+    retryLimit: 0,
+    expireInSeconds: 180,
+  });
   // A provider hiccup retries a few times; the story keeps its provisional title meanwhile.
   await boss.updateQueue("stories.title", {
     name: "stories.title",
@@ -51,6 +63,11 @@ export async function startWorker() {
     retryDelay: 15,
     retryBackoff: true,
   });
+  await boss.updateQueue("stories.delivery-integration", {
+    name: "stories.delivery-integration",
+    retryLimit: 0,
+  });
+  await boss.updateQueue("stories.complete", { name: "stories.complete", retryLimit: 0 });
   const interruptedAtStartup = await recoverInterruptedTurns(
     db,
     storyDomain.stories,
@@ -59,6 +76,14 @@ export async function startWorker() {
     (turn) => storyDomain.dispatcher.activateQueuedSuccessor(turn),
   );
   const queuedAtStartup = await recoverQueuedTurns(db, (queue, data) => boss.send(queue, data));
+  await storyDomain.consultations.recover();
+  await recoverPendingConsultations(storyDomain.consultations, (queue, data) =>
+    boss.send(queue, data),
+  );
+  const observedPreviewsAtStartup = await storyDomain.previewConvergence.reconcileObserved();
+  const previewLifecycleAtStartup = await storyDomain.previewConvergence.reconcileLifecycle();
+  const recoveredPreviewsAtStartup = await storyDomain.previewConvergence.recover();
+  const recoveredCompletionAtStartup = await storyDomain.completion.recover();
   if (interruptedAtStartup > 0 || queuedAtStartup > 0) {
     logger.info(
       { interruptedTurns: interruptedAtStartup, queuedTurns: queuedAtStartup },
@@ -119,6 +144,40 @@ export async function startWorker() {
             { failed: result.failed },
             "lifecycle notifications deferred; inspect durable notification cursors",
           );
+      } else if (queue === "stories.consultation") {
+        const input = data as {
+          orgId: string;
+          projectId: string;
+          storyId: string;
+          consultationId: string;
+        };
+        try {
+          result = await turnGuard.run(() => storyDomain.consultations.dispatch(input));
+        } catch {
+          logger.error(
+            {
+              event: "worker.consultation_settlement_failed",
+              consultationId: input.consultationId,
+              jobId,
+            },
+            "consultation recovery will reconcile its durable attempt",
+          );
+          throw new Error("consultation_settlement_failed");
+        }
+      } else if (queue === "stories.preview-convergence") {
+        result = await turnGuard.run(() =>
+          storyDomain.previewConvergenceExecutor.dispatch(
+            data as { orgId: string; projectId: string; storyId: string },
+          ),
+        );
+      } else if (queue === "stories.delivery-integration") {
+        result = await storyDomain.completion.dispatchIntegration(
+          data as { orgId: string; projectId: string; storyId: string },
+        );
+      } else if (queue === "stories.complete") {
+        result = await storyDomain.completion.dispatchCompletion(
+          data as { orgId: string; projectId: string; storyId: string },
+        );
       } else if (queue === "stories.title") {
         const outcome = await storyDomain.titles.generate(
           data as { orgId: string; projectId: string; storyId: string },
@@ -139,15 +198,30 @@ export async function startWorker() {
           boss.send(name, payload),
         );
         const suspendedWorkspaces = await storyDomain.stories.suspendFailedWorkspaces();
+        const recoveredConsultations = await storyDomain.consultations.recover();
+        const pendingConsultations = await recoverPendingConsultations(
+          storyDomain.consultations,
+          (name, payload) => boss.send(name, payload),
+        );
         const pendingTitles = await recoverPendingTitles(storyDomain.titles, (name, payload) =>
           boss.send(name, payload),
         );
+        const observedPreviews = await storyDomain.previewConvergence.reconcileObserved();
+        const previewLifecycle = await storyDomain.previewConvergence.reconcileLifecycle();
+        const recoveredPreviews = await storyDomain.previewConvergence.recover();
+        const recoveredCompletion = await storyDomain.completion.recover();
         result = {
           ...(await storyDomain.scheduler.tick()),
           interruptedTurns,
           recoveredTurns,
           suspendedWorkspaces,
           pendingTitles,
+          recoveredConsultations,
+          pendingConsultations,
+          observedPreviews,
+          previewLifecycle,
+          recoveredPreviews,
+          recoveredCompletion,
         };
       }
       logger.info({ queue, jobId, ...result }, "worker completed job");
@@ -156,7 +230,16 @@ export async function startWorker() {
   await boss.schedule("agent.schedules", "* * * * *", {});
   await boss.schedule("github.mirror", "*/10 * * * *", {});
   await boss.schedule("stories.integrations", "* * * * *", {});
-  logger.info({ queues }, "facility worker started");
+  logger.info(
+    {
+      queues,
+      observedPreviewsAtStartup,
+      previewLifecycleAtStartup,
+      recoveredPreviewsAtStartup,
+      recoveredCompletionAtStartup,
+    },
+    "facility worker started",
+  );
   boss.on("stopped", () => void client.end());
   return {
     stop: () => {
@@ -164,6 +247,16 @@ export async function startWorker() {
       return boss.stop({ graceful: true, timeout: 30_000, close: true });
     },
   };
+}
+
+/** Recover only queued consultations; a submitted provider call is never retried. */
+export async function recoverPendingConsultations(
+  consultations: Pick<StoryConsultationService, "pending">,
+  enqueue: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+) {
+  const pending = await consultations.pending();
+  for (const item of pending) await enqueue("stories.consultation", item);
+  return pending.length;
 }
 
 /** Titles whose job was lost (restart, crash) are queued again; generation itself stays idempotent. */
@@ -216,7 +309,55 @@ export async function recoverInterruptedTurns(
     turnId: string;
   }) => Promise<unknown>,
 ) {
+  await new CostBudgetService(db).recoverModelCalls(now);
   const staleBefore = new Date(now.getTime() - leaseTimeoutMs);
+  const unsettled = await reconciliationPage(db, "turn-usage", (tx, after) =>
+    tx
+      .select({ id: turns.id, orgId: turns.orgId, projectId: turns.projectId, turnId: turns.id })
+      .from(turns)
+      .leftJoin(
+        turnUsage,
+        and(
+          eq(turns.id, turnUsage.turnId),
+          eq(turns.orgId, turnUsage.orgId),
+          eq(turns.projectId, turnUsage.projectId),
+        ),
+      )
+      .leftJoin(
+        budgetReservations,
+        and(
+          eq(budgetReservations.turnId, turns.id),
+          eq(budgetReservations.orgId, turns.orgId),
+          eq(budgetReservations.projectId, turns.projectId),
+          eq(budgetReservations.state, "open"),
+        ),
+      )
+      .where(
+        and(
+          after ? gt(turns.id, after) : undefined,
+          or(
+            and(
+              or(isNull(turnUsage.id), eq(turnUsage.priced, false)),
+              eq(turns.state, "failed"),
+              eq(turns.error, "Worker heartbeat expired before the agent turn completed."),
+            ),
+            and(
+              inArray(turns.state, ["succeeded", "failed", "canceled"]),
+              or(eq(turnUsage.priced, false), isNotNull(budgetReservations.id)),
+            ),
+          ),
+        ),
+      )
+      .orderBy(asc(turns.id))
+      .limit(1_000),
+  );
+  for (const turn of unsettled)
+    await stories.reconcileInterruptedUsage(turn).catch(() => {
+      // Preserve the accounting block and still recover other dead workers.
+      console.error(
+        JSON.stringify({ event: "turn.usage_reconciliation_failed", turnId: turn.turnId }),
+      );
+    });
   const running = await db
     .select({
       id: turns.id,
@@ -230,14 +371,20 @@ export async function recoverInterruptedTurns(
     .limit(1_000);
   let recovered = 0;
   for (const turn of running) {
-    if (
-      await stories.recoverInterruptedTurn({
+    let stopped: boolean;
+    try {
+      stopped = await stories.recoverInterruptedTurn({
         orgId: turn.orgId,
         projectId: turn.projectId,
         turnId: turn.id,
         staleBefore,
-      })
-    ) {
+      });
+    } catch {
+      // Keep this writer fenced for retry without starving other dead workers.
+      console.error(JSON.stringify({ event: "turn.cleanup_recovery_failed", turnId: turn.id }));
+      continue;
+    }
+    if (stopped) {
       recovered += 1;
       await onRecovered?.({
         orgId: turn.orgId,

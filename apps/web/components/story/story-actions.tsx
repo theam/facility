@@ -2,7 +2,7 @@
 
 import { Button, Field, Select, TextArea } from "@facility/ui";
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { COMPOSE_EVENT } from "@/components/story/story-conversation";
 import {
   CancelTurnButton,
@@ -11,6 +11,13 @@ import {
 } from "@/components/story/workspace-story-controls";
 import type { StoryAgent, StoryWorkspace, WorkspaceStory, WorkspaceStoryBundle } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
+import {
+  clearSentStoryDraft,
+  readStoryDraft,
+  type StoryDraft,
+  storyDraftKey,
+  writeStoryDraft,
+} from "@/lib/story-draft";
 import { safeExternalUrl } from "@/lib/story-presentation";
 
 type Turn = WorkspaceStoryBundle["turns"][number];
@@ -34,6 +41,7 @@ export function StoryActions({
   activeTurn,
   waitingAgent,
   artifacts,
+  draftOwnerId,
 }: {
   projectId: string;
   story: WorkspaceStory;
@@ -46,11 +54,17 @@ export function StoryActions({
   activeTurn: Turn | null;
   waitingAgent: string | null;
   artifacts: Artifact[];
+  draftOwnerId?: string;
 }) {
   const enabled = agents.filter((candidate) => candidate.enabled);
-  const canSend = canExecute && story.deletedAt === null && enabled.length > 0;
+  const canSend = canExecute && story.deletedAt === null;
   const [open, setOpen] = useState(Boolean(waitingAgent) && canSend);
+  const [hasOpened, setHasOpened] = useState(open);
   const [preset, setPreset] = useState<string | undefined>(waitingAgent ?? undefined);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const [retargetRequest, setRetargetRequest] = useState(0);
+  const [notice, setNotice] = useState("");
+  const actionBar = useRef<HTMLElement>(null);
   const panelId = useId();
   const pullRequestUrl = safeExternalUrl(story.pullRequestUrl);
   const results = artifacts.filter((artifact) => safeExternalUrl(artifact.uri)).slice(0, 3);
@@ -59,15 +73,27 @@ export function StoryActions({
     const listener = (event: Event) => {
       const agent = (event as CustomEvent<{ agent?: string }>).detail?.agent;
       setPreset(agent);
+      setRetargetRequest((request) => request + 1);
       setOpen(true);
+      setHasOpened(true);
+      setFocusRequest((request) => request + 1);
     };
     window.addEventListener(COMPOSE_EVENT, listener);
     return () => window.removeEventListener(COMPOSE_EVENT, listener);
   }, []);
 
+  function close() {
+    setOpen(false);
+    actionBar.current?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      <section className="flex flex-wrap items-center gap-2" aria-label="Story actions">
+      <section
+        ref={actionBar}
+        className="flex flex-wrap items-center gap-2"
+        aria-label="Story actions"
+      >
         {canSend ? (
           <Button
             variant="primary"
@@ -75,7 +101,14 @@ export function StoryActions({
             size="sm"
             aria-expanded={open}
             aria-controls={panelId}
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => {
+              if (open) close();
+              else {
+                setOpen(true);
+                setHasOpened(true);
+                setFocusRequest((request) => request + 1);
+              }
+            }}
           >
             {waitingAgent ? `reply to ${waitingAgent}` : "send a task"}
           </Button>
@@ -87,7 +120,7 @@ export function StoryActions({
             rel="noreferrer"
             className="inline-flex h-8 items-center gap-2 border border-(--line-strong) px-3.5 text-[12.5px] font-medium text-(--ink) hover:bg-(--card)"
           >
-            pull request #{story.pullRequestNumber} ↗
+            source pull request #{story.pullRequestNumber} ↗
           </a>
         ) : null}
         {canExecute && activeTurn ? (
@@ -131,18 +164,29 @@ export function StoryActions({
       ) : null}
       {canSend ? (
         <div id={panelId} hidden={!open}>
-          {open ? (
+          {hasOpened ? (
             <StoryComposer
+              key={JSON.stringify([draftOwnerId, projectId, story.id])}
               projectId={projectId}
               storyId={story.id}
+              draftOwnerId={draftOwnerId}
               agents={enabled}
               preset={preset}
-              onDone={() => setOpen(false)}
-              onCancel={() => setOpen(false)}
+              open={open}
+              focusRequest={focusRequest}
+              retargetRequest={retargetRequest}
+              onDone={(message) => {
+                setNotice(message);
+                close();
+              }}
+              onCancel={close}
             />
           ) : null}
         </div>
       ) : null}
+      <p role="status" className="text-[12px] text-(--mut)">
+        {notice}
+      </p>
     </div>
   );
 }
@@ -154,71 +198,165 @@ export function StoryComposer({
   preset,
   onDone,
   onCancel,
+  draftOwnerId,
+  open = true,
+  focusRequest = 0,
+  initialDraft,
+  composerId = "story-composer",
+  formLabel = "Send a task",
+  retargetRequest = 0,
 }: {
   projectId: string;
   storyId: string;
   agents: StoryAgent[];
   preset?: string;
-  onDone?: () => void;
+  onDone?: (notice: string) => void;
   onCancel?: () => void;
+  draftOwnerId?: string;
+  open?: boolean;
+  focusRequest?: number;
+  initialDraft?: StoryDraft;
+  composerId?: string;
+  formLabel?: string;
+  retargetRequest?: number;
 }) {
   const router = useRouter();
-  const [agent, setAgent] = useState(
+  const defaultAgent =
     agents.find((candidate) => candidate.name === preset)?.name ??
-      agents.find((candidate) => candidate.name === "builder")?.name ??
-      agents[0]?.name ??
-      "",
+    agents.find((candidate) => candidate.name === "builder")?.name ??
+    agents[0]?.name ??
+    "";
+  const storageKey = storyDraftKey(draftOwnerId, projectId, storyId);
+  const [draft, setDraft] = useState<StoryDraft>(
+    initialDraft ?? { agent: defaultAgent, message: "" },
   );
-  const [message, setMessage] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const form = useRef<HTMLFormElement>(null);
+  const sending = useRef(false);
+  const handledRetarget = useRef(0);
+  const handledFocus = useRef(-1);
+  const mounted = useRef(true);
+  const receiptCleared = useRef(false);
+  const agent = agents.some((candidate) => candidate.name === draft.agent) ? draft.agent : "";
+  const message = draft.message;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const previous = readStoryDraft(storageKey);
+    if (previous) setDraft(previous);
+    setLoaded(true);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    if (!draft.message && receiptCleared.current) {
+      receiptCleared.current = false;
+      return;
+    }
+    setSaved(writeStoryDraft(storageKey, draft));
+  }, [draft, loaded, storageKey]);
+
+  useEffect(() => {
+    if (!loaded || pending || !open || handledFocus.current === focusRequest) return;
+    handledFocus.current = focusRequest;
+    if (retargetRequest > handledRetarget.current) {
+      handledRetarget.current = retargetRequest;
+      if (preset !== undefined) {
+        setDraft((current) =>
+          current.agent === preset
+            ? current
+            : { ...current, agent: preset, idempotencyKey: undefined },
+        );
+      }
+    }
+    const input = form.current?.querySelector("textarea");
+    input?.focus({ preventScroll: true });
+    input?.scrollIntoView({ block: "center", behavior: "auto" });
+  }, [focusRequest, retargetRequest, loaded, open, pending, preset]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (sending.current || !agent || !message.trim()) return;
+    sending.current = true;
     setPending(true);
     setError("");
-    const key = `ui-message-${crypto.randomUUID()}`;
+    const key = draft.idempotencyKey ?? `ui-message-${crypto.randomUUID()}`;
+    const attempt = { ...draft, idempotencyKey: key };
+    setDraft(attempt);
+    writeStoryDraft(storageKey, attempt);
     const result = await clientApi<{ queued: { queued: boolean } }>(
       "POST",
       storyPath(projectId, storyId, "/messages"),
       { agent, message, idempotency_key: key },
     );
+    if (result.ok) clearSentStoryDraft(storageKey, attempt);
+    if (!mounted.current) return;
+    sending.current = false;
     setPending(false);
     if (!result.ok) {
       setError(result.message);
       return;
     }
-    setMessage("");
-    setNotice(
-      result.data.queued?.queued
-        ? `Queued for ${agent}; it starts after the current run.`
-        : `Sent to ${agent}.`,
-    );
+    const sent = result.data.queued?.queued
+      ? `Queued for ${agent}; it starts after the current run.`
+      : `Sent to ${agent}.`;
+    const empty = { agent, message: "" };
+    receiptCleared.current = true;
+    setDraft(empty);
+    setNotice(sent);
     router.refresh();
-    onDone?.();
+    onDone?.(sent);
   }
 
   return (
     <form
-      id="story-composer"
+      ref={form}
+      id={composerId}
       onSubmit={submit}
       className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
-      aria-label="Send a task"
+      aria-label={formLabel}
     >
-      <Field label="Message" error={error || undefined}>
+      <Field label="Message">
         <TextArea
-          autoFocus
+          aria-label="Message"
           required
           value={message}
-          onChange={(event) => setMessage(event.target.value)}
+          disabled={pending}
+          maxLength={200_000}
+          onChange={(event) => {
+            setNotice("");
+            setDraft({ agent: draft.agent, message: event.target.value });
+          }}
           placeholder="Ask for the next change, review, diagnosis, or verification."
           rows={4}
         />
       </Field>
+      <p className="text-[12px] text-(--dim)">
+        {saved
+          ? "Closing keeps your draft. Restore it in this tab for up to 24 hours."
+          : "Closing keeps your draft while this page is open."}
+      </p>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <Field label="Run as" className="min-w-56">
-          <Select value={agent} onChange={(event) => setAgent(event.target.value)}>
+        <Field label="Run as" className="min-w-0 flex-1 sm:min-w-56">
+          <Select
+            value={agent}
+            disabled={pending}
+            onChange={(event) => {
+              setNotice("");
+              setDraft({ agent: event.target.value, message });
+            }}
+          >
+            {!agent ? <option value="">Choose an available agent</option> : null}
             {agents.map((candidate) => (
               <option key={candidate.name} value={candidate.name}>
                 {candidate.name} · {candidate.model}
@@ -226,17 +364,45 @@ export function StoryComposer({
             ))}
           </Select>
         </Field>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            disabled={pending || !message}
+            onClick={() => {
+              setDraft({ agent: draft.agent, message: "" });
+              setError("");
+              setNotice("Draft discarded.");
+              form.current?.querySelector("textarea")?.focus();
+            }}
+          >
+            discard draft
+          </Button>
           {onCancel ? (
             <Button type="button" size="sm" onClick={onCancel} disabled={pending}>
               close
             </Button>
           ) : null}
-          <Button type="submit" variant="primary" tone="agent" disabled={pending || !agent}>
+          <Button
+            type="submit"
+            variant="primary"
+            tone="agent"
+            disabled={pending || !agent || !message.trim()}
+          >
             {pending ? "queueing…" : "send to agent"}
           </Button>
         </div>
       </div>
+      {!agent ? (
+        <p role="status" className="text-[12px] text-(--warn)">
+          The previous recipient is unavailable. Choose an agent to send this draft.
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-[12px] text-(--bad)">
+          {error}
+        </p>
+      ) : null}
       {notice ? (
         <p role="status" className="text-[12px] text-(--mut)">
           {notice}

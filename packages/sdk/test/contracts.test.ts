@@ -5,7 +5,10 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   CreateProjectRequest,
   FacilityGeneratedResponse,
+  FacilityOpenApiPath,
   Project,
+  StoryConsultation,
+  StoryConsultationOptions,
   WorkspaceStoryBundle,
 } from "../src/index.js";
 import { type FacilityApiError, FacilityClient } from "../src/index.js";
@@ -51,6 +54,19 @@ describe("generated 0.12 contract", () => {
     expectTypeOf<WorkspaceStoryBundle["story"]["status"]>().toEqualTypeOf<
       "ready" | "working" | "attention" | "review" | "done" | "archived"
     >();
+  });
+
+  it("keeps consultation options distinct from a consultation identifier", () => {
+    expectTypeOf<StoryConsultationOptions["agents"][number]["eligible"]>().toEqualTypeOf<boolean>();
+    expectTypeOf<
+      FacilityOpenApiPath<"/v1/projects/p/workspace-stories/s/consultations/options">
+    >().toEqualTypeOf<"/v1/projects/{projectId}/workspace-stories/{storyId}/consultations/options">();
+    expectTypeOf<
+      FacilityGeneratedResponse<"GET", "/v1/projects/p/workspace-stories/s/consultations/options">
+    >().toEqualTypeOf<StoryConsultationOptions>();
+    expectTypeOf<
+      FacilityGeneratedResponse<"GET", "/v1/projects/p/workspace-stories/s/consultations/cons_123">
+    >().toEqualTypeOf<StoryConsultation>();
   });
 });
 

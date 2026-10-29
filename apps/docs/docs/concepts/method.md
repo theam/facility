@@ -51,6 +51,11 @@ Only one turn is active for a story at a time. Later messages wait in order. If 
 instance fails, Facility keeps the message, turn, worktree, and native engine session needed to
 continue or retry.
 
+When a queued turn starts, its shared conversation context includes available responses from
+preceding turns, even when those responses were recorded after its request was queued. The current
+request follows that history; later queued requests remain excluded. This lets a newly selected
+reviewer receive the builder's final explanation and verification limitations along with the worktree.
+
 ## Broad agent access, narrow merge authority
 
 Every agent gets the same project capability. Facility does not maintain separate tool allowlists
@@ -62,8 +67,9 @@ repository workflow: protected branches, required CI, required reviews, and a hu
 merge. Agent prompts describe expected conduct; they are not a security sandbox.
 
 Facility records agent identity, model and session data, Git changes, GitHub delivery state, costs,
-and runtime activity as story evidence. It relies on repository review and merge controls instead
-of a separate internal approval protocol.
+and runtime activity as story evidence. Versioned story plans can record separate interactive
+approval or requested-change receipts for exact text and scope. Those receipts preserve decisions;
+they do not activate an execution gate or replace repository review and merge controls.
 
 ## Persistence is explicit
 

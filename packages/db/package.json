@@ -24,12 +24,12 @@
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "postgres": "^3.4.7",
-    "zod": "^4.1.13"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

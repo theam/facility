@@ -241,6 +241,46 @@ describe("latest attention", () => {
     expect(resolutionLabel("successful_retry")).toBe("Retried successfully");
     expect(resolutionLabel(null)).toBe("Resolved");
   });
+
+  it("presents delivery notices as actionable workflow state instead of agent failures", () => {
+    const ready = attentionNotice(
+      {
+        ...notice("delivery", "2026-09-10T09:00:00Z", {
+          kind: "delivery_completion",
+          turnId: null,
+          title: "Complete the source issue",
+          detail: "Review the exact source issue and explicitly request completion.",
+        }),
+        action: null,
+      },
+      "p1",
+    );
+    expect(ready).toMatchObject({
+      tone: "human",
+      title: "Complete the source issue",
+      summary: "Review the exact source issue and explicitly request completion.",
+      detail: null,
+    });
+
+    const failed = attentionNotice(
+      {
+        ...notice("delivery-failed", "2026-09-10T09:00:00Z", {
+          kind: "delivery_integration",
+          turnId: null,
+          title: "Post-merge integration needs attention",
+          detail: "Inspect the destination before retrying.",
+        }),
+        action: null,
+      },
+      "p1",
+    );
+    expect(failed).toMatchObject({
+      tone: "bad",
+      title: "Post-merge integration needs attention",
+      summary: "Inspect the destination before retrying.",
+      detail: null,
+    });
+  });
 });
 
 describe("review and result labels", () => {
@@ -347,12 +387,17 @@ describe("spend readings", () => {
     expect(budgetReading({ available: false, reason: "permission" }).label).toBe(
       "Not visible for your role",
     );
-    const budget = (state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded") =>
-      ({ available: true, state }) as ProjectOverview["spend"]["budget"];
+    const budget = (
+      state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed",
+    ) => ({ available: true, state }) as ProjectOverview["spend"]["budget"];
     expect(budgetReading(budget("not_configured")).label).toBe("No monthly budget");
     expect(budgetReading(budget("ok"))).toEqual({ label: "Within budget", tone: "ok" });
     expect(budgetReading(budget("warning")).tone).toBe("human");
     expect(budgetReading(budget("exceeded")).tone).toBe("bad");
+    expect(budgetReading(budget("unconfirmed"))).toEqual({
+      label: "Spending unconfirmed",
+      tone: "bad",
+    });
   });
   it("reports recorded workspace states without claiming live inspection", () => {
     expect(

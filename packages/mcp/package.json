@@ -19,7 +19,7 @@
   "dependencies": {
     "@facility/core": "workspace:*",
     "@facility/sdk": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "zod": "^4.4.3",
     "zod-to-json-schema": "^3.25.2"
   },
@@ -27,6 +27,6 @@
     "@types/node": "^24.10.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

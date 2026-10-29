@@ -92,6 +92,26 @@ function describe(
       };
     case "turn.started":
       return { kind: "lifecycle", title: "Run started", text: null };
+    case "github.credentials.renewed":
+      return { kind: "lifecycle", title: "GitHub credentials renewed", text: null };
+    case "github.credentials.retrying":
+      return {
+        kind: "error",
+        title: "Retrying GitHub credential renewal",
+        text: "Local work is retained. Publishing requires a current credential.",
+      };
+    case "github.credentials.revoked":
+      return {
+        kind: "error",
+        title: "GitHub execution access revoked",
+        text: "Execution stopped; local work is retained.",
+      };
+    case "github.credentials.cleanup_failed":
+      return {
+        kind: "error",
+        title: "Temporary credential cleanup could not be confirmed",
+        text: "Credentials retain their original expiry.",
+      };
     case "turn.succeeded":
       return {
         kind: "lifecycle",

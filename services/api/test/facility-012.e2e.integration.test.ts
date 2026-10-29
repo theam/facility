@@ -31,6 +31,11 @@ import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
 import { ProjectBacklogService } from "../src/stories/backlog.js";
+import { StoryCompletionService } from "../src/stories/completion.js";
+import { GithubConsultationSources } from "../src/stories/consultation-sources.js";
+import { StoryConsultationService } from "../src/stories/consultations.js";
+import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
+import { StoryPreviewConvergenceExecutor } from "../src/stories/preview-convergence-executor.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { StoryTitleService } from "../src/stories/titles.js";
 import type { StoryDomain } from "../src/story-domain.js";
@@ -141,15 +146,22 @@ describe("Facility 0.12 reference journey", async () => {
           `mkdir -p .facility/${this.name === "codex" ? "codex" : "claude"} && printf '%s' ${JSON.stringify(nativeSessionId)} > .facility/${this.name === "codex" ? "codex" : "claude"}/native-session`,
         ],
       });
+      // Keep the full journey within its deadline; real gh runs in the credential integration suite.
+      const credentialDirectory = request.environment?.GH_CONFIG_DIR;
+      if (!credentialDirectory)
+        throw new Error("renewable GitHub credential scope was unavailable");
+      const currentCredential = JSON.parse(
+        await readFile(join(credentialDirectory, "hosts.yml"), "utf8"),
+      )["github.com"].oauth_token;
       return {
         nativeSessionId,
-        output: `completed turn ${sequence} with ${request.environment?.GH_TOKEN}`,
+        output: `completed turn ${sequence} with ${currentCredential}`,
         progress: [],
         events: [
           {
             engine: this.name,
             type: "item.completed",
-            data: { sequence, credential: request.environment?.GH_TOKEN },
+            data: { sequence, credential: currentCredential },
           },
         ],
         exitCode: 0,
@@ -218,6 +230,8 @@ environment:
       environment,
       engines,
       new TurnGitEvidenceService(db, runtime),
+      undefined,
+      runtime,
     );
 
     const port = await unusedPort();
@@ -244,6 +258,15 @@ environment:
       credentials,
       projectManifests,
       environment,
+    );
+    const previewConvergence = new StoryPreviewConvergenceService(db, async () => undefined);
+    const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
+      db,
+      runtime,
+      credentials,
+      projectManifests,
+      environment,
+      previewConvergence,
     );
     const domain: StoryDomain = {
       variables: new WorkspaceVariablesService(db, config.secretMasterKey),
@@ -274,6 +297,23 @@ environment:
         budget: new CostBudgetService(db),
       }),
       backlog: new ProjectBacklogService(db),
+      consultations: new StoryConsultationService(db, {
+        sources: new GithubConsultationSources(db, async () => {
+          throw new Error("Consultation sources are not used in this reference fixture");
+        }),
+        credentials: async () => undefined,
+        enqueue: async () => undefined,
+      }),
+      previewConvergence,
+      previewConvergenceExecutor,
+      completion: new StoryCompletionService(
+        db,
+        async () => {
+          throw new Error("Completion GitHub writes are not used by this fixture");
+        },
+        stories,
+        async () => undefined,
+      ),
     };
     app = await buildApp(config, {
       storyDomain: domain,
@@ -397,9 +437,12 @@ environment:
     ).resolves.toMatchObject({ claimed: true, state: "succeeded" });
     expect(engineRequests[0]).toMatchObject({ nativeSessionId: undefined });
     expect(engineRequests[0]?.environment).toMatchObject({
-      GH_TOKEN: "e2e-maintainer-installation-token",
-      GITHUB_TOKEN: "e2e-maintainer-installation-token",
-      GIT_CONFIG_VALUE_0: "!facility-git-credential",
+      GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+      GH_CONFIG_DIR: expect.stringContaining(".facility/github/"),
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_VALUE_1: expect.stringContaining("facility-git-credential"),
     });
 
     const followUp = mcpData(

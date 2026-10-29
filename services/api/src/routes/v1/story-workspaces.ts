@@ -4,15 +4,28 @@ import {
   AgentTriggerSchema,
   renderAgentManifest,
 } from "@facility/agents";
+import {
+  can,
+  RecordDeliveryIntegrationBody,
+  ReplaceStoryDeliveryBody,
+  RequestStoryCompletionBody,
+  StoryCompletionSchema,
+  StoryDeliveryQuery,
+  StoryDeliverySchema,
+  StoryPreviewConvergenceSchema,
+} from "@facility/core";
 import { projectRepositories, workspaceEvents } from "@facility/db";
 import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
+import { requirePermissions } from "../../auth/required-permissions.js";
 import { ApiError } from "../../errors.js";
+import { readStoryDelivery, replaceStoryDelivery } from "../../stories/delivery.js";
 import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
+import { readStoryPlans } from "../../stories/plans.js";
 import type { AppConfig } from "../../types.js";
 import { projectWorkspaceInput } from "../../workspaces/project-environment.js";
 import {
@@ -21,6 +34,9 @@ import {
   WorkspaceVariablesMetadata,
 } from "../../workspaces/variables.js";
 import { principal } from "./shared.js";
+import { registerStoryConsultationRoutes } from "./story-consultations.js";
+import { registerStoryPlanRoutes } from "./story-plans.js";
+import { registerStoryWorkflowRoutes } from "./story-workflow.js";
 
 const ProjectParams = z.object({ projectId: z.string() });
 const StoryParams = z.object({ projectId: z.string(), storyId: z.string() });
@@ -97,9 +113,226 @@ const DeleteBody = z.object({
   confirm: z.literal(true),
   idempotency_key: z.string().min(8).max(200),
 });
+const RetryPreviewConvergenceBody = z
+  .object({ idempotency_key: z.string().min(8).max(200) })
+  .strict();
 
 export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config: AppConfig) {
   const domain = app.storyDomain;
+  await registerStoryPlanRoutes(app, config);
+  await registerStoryWorkflowRoutes(app, config);
+  await registerStoryConsultationRoutes(app);
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/delivery",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: StoryParams,
+        querystring: StoryDeliveryQuery,
+        response: { 200: StoryDeliverySchema },
+        operationId: "getStoryDelivery",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const query = request.query as z.infer<typeof StoryDeliveryQuery>;
+      reply.header("cache-control", "private, no-store");
+      return readStoryDelivery(
+        app.facilityDb,
+        { orgId: principal(request).orgId, projectId, storyId },
+        { ...query, includeAvailable: query.include_available === "true" },
+      );
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/delivery",
+    {
+      config: {
+        permission: "projects:write",
+        idempotent: true,
+        auditAction: "story.delivery.recorded",
+      },
+      schema: {
+        params: StoryParams,
+        body: ReplaceStoryDeliveryBody,
+        response: { 200: StoryDeliverySchema },
+        operationId: "replaceStoryDelivery",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof ReplaceStoryDeliveryBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "delivery_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      const result = await replaceStoryDelivery(
+        app.facilityDb,
+        { orgId: actor.orgId, projectId, storyId },
+        body,
+        principalActor(actor),
+      );
+      const scope = { orgId: actor.orgId, projectId, storyId };
+      if (can(actor.permissions, "workspaces:execute"))
+        await domain.previewConvergence.authorize(scope, actor, result.scope.revision);
+      await domain.previewConvergence.observe(scope);
+      return result;
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/preview-convergence",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: StoryParams,
+        response: { 200: StoryPreviewConvergenceSchema.nullable() },
+        operationId: "getStoryPreviewConvergence",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      reply.header("cache-control", "private, no-store");
+      return domain.previewConvergence.read({
+        orgId: principal(request).orgId,
+        projectId,
+        storyId,
+      });
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/preview-convergence/retry",
+    {
+      config: {
+        permission: "workspaces:execute",
+        idempotent: true,
+        auditAction: "story.preview_convergence.retried",
+      },
+      schema: {
+        params: StoryParams,
+        body: RetryPreviewConvergenceBody,
+        response: { 200: StoryPreviewConvergenceSchema },
+        operationId: "retryStoryPreviewConvergence",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof RetryPreviewConvergenceBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "preview_convergence_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const scope = { orgId: principal(request).orgId, projectId, storyId };
+      const current = await domain.previewConvergence.read(scope);
+      if (!current)
+        throw new ApiError(404, "preview_convergence_not_found", "Preview is not configured");
+      const delivery = await readStoryDelivery(app.facilityDb, scope);
+      await domain.previewConvergence.authorize(scope, principal(request), delivery.scope.revision);
+      await domain.previewConvergence.observe(scope);
+      await domain.previewConvergence.retry(scope);
+      reply.header("cache-control", "private, no-store");
+      return (await domain.previewConvergence.read(scope)) ?? current;
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/workspace-stories/:storyId/completion",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: StoryParams,
+        response: { 200: StoryCompletionSchema },
+        operationId: "getStoryCompletion",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      reply.header("cache-control", "private, no-store");
+      return domain.completion.read({
+        orgId: principal(request).orgId,
+        projectId,
+        storyId,
+      });
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/integration-result",
+    {
+      config: {
+        permission: "stories:write",
+        idempotent: true,
+        auditAction: "story.delivery_integration.recorded",
+      },
+      schema: {
+        params: StoryParams,
+        body: RecordDeliveryIntegrationBody,
+        response: { 200: StoryCompletionSchema },
+        operationId: "recordStoryDeliveryIntegration",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof RecordDeliveryIntegrationBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "integration_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return domain.completion.recordIntegration(
+        { orgId: actor.orgId, projectId, storyId },
+        body,
+        principalActor(actor),
+      );
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/workspace-stories/:storyId/complete",
+    {
+      config: {
+        permission: ["projects:write", "github:write"],
+        idempotent: true,
+        auditAction: "story.completion.requested",
+      },
+      schema: {
+        params: StoryParams,
+        body: RequestStoryCompletionBody,
+        response: { 200: StoryCompletionSchema },
+        operationId: "requestStoryCompletion",
+      },
+    },
+    async (request, reply) => {
+      const { projectId, storyId } = request.params as z.infer<typeof StoryParams>;
+      const body = request.body as z.infer<typeof RequestStoryCompletionBody>;
+      if (request.headers["idempotency-key"] !== body.idempotency_key)
+        throw new ApiError(
+          400,
+          "completion_idempotency_key_mismatch",
+          "Provide the same idempotency key in the header and body",
+        );
+      const actor = principal(request);
+      requirePermissions(actor, ["projects:write", "github:write"]);
+      reply.header("cache-control", "private, no-store");
+      return domain.completion.requestCompletion(
+        { orgId: actor.orgId, projectId, storyId },
+        body,
+        principalActor(actor),
+      );
+    },
+  );
 
   app.patch(
     "/v1/projects/:projectId/workspace-stories/:storyId/integration-state",
@@ -487,7 +720,34 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         config.nativePreviews,
       );
       reply.header("cache-control", "private, no-store");
-      return { ...storyResponse(value), lifecycle };
+      const delivery = await readStoryDelivery(app.facilityDb, {
+        orgId: actor.orgId,
+        projectId,
+        storyId,
+      });
+      const plans = await readStoryPlans(
+        app.facilityDb,
+        { orgId: actor.orgId, projectId, storyId },
+        { webUrl: config.webUrl ?? config.publicUrl },
+      );
+      const previewConvergence = await domain.previewConvergence.read({
+        orgId: actor.orgId,
+        projectId,
+        storyId,
+      });
+      const completion = await domain.completion.read({
+        orgId: actor.orgId,
+        projectId,
+        storyId,
+      });
+      return {
+        ...storyResponse(value),
+        lifecycle,
+        delivery,
+        plans,
+        previewConvergence,
+        completion,
+      };
     },
   );
 

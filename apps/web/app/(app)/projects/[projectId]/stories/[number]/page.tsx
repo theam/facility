@@ -6,8 +6,14 @@ import { LiveRefresh } from "@/components/shell/live-refresh";
 import { AttentionActions } from "@/components/story/attention-actions";
 import { EnvironmentLogs } from "@/components/story/environment-logs";
 import { StoryActions } from "@/components/story/story-actions";
+import { StoryCompletionPanel } from "@/components/story/story-completion";
+import { StoryConsultationPanel } from "@/components/story/story-consultation";
 import { StoryConversation } from "@/components/story/story-conversation";
+import { StoryDeliveryPanel } from "@/components/story/story-delivery";
+import { StoryPlanPanel } from "@/components/story/story-plan";
+import { StoryPreviewConvergencePanel } from "@/components/story/story-preview-convergence";
 import { StoryTimeline } from "@/components/story/story-timeline";
+import { StoryWorkflowPanel } from "@/components/story/story-workflow";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
 import { titleStatus } from "@/lib/backlog-presentation";
@@ -38,13 +44,16 @@ export default async function StoryPage({
   params: Promise<{ projectId: string; number: string }>;
 }) {
   const { projectId, number: storyId } = await params;
-  const [detail, conversation, environment, agents, me] = await Promise.all([
-    api.workspaceStory(projectId, storyId),
-    api.workspaceStoryConversation(projectId, storyId),
-    api.workspaceStoryEnvironment(projectId, storyId),
-    api.storyAgents(projectId),
-    api.me(),
-  ]);
+  const [detail, conversation, environment, agents, me, consultations, workflow] =
+    await Promise.all([
+      api.workspaceStory(projectId, storyId),
+      api.workspaceStoryConversation(projectId, storyId),
+      api.workspaceStoryEnvironment(projectId, storyId),
+      api.storyAgents(projectId),
+      api.me(),
+      api.workspaceStoryConsultations(projectId, storyId),
+      api.storyWorkflow(projectId, storyId),
+    ]);
 
   if (!detail.ok) {
     if (detail.offline) return <Offline />;
@@ -62,6 +71,9 @@ export default async function StoryPage({
   const permissions = me.ok ? me.data.permissions : [];
   const canExecute = can(permissions, "workspaces:execute");
   const canWrite = can(permissions, "projects:write");
+  const canConfigureIntegration = canWrite && can(permissions, "repos:write");
+  const canRecordIntegration = can(permissions, "stories:write");
+  const canComplete = canWrite && can(permissions, "github:write");
   const activeTurn =
     bundle.turns.find((turn) => turn.state === "running") ??
     bundle.turns.find((turn) => turn.state === "queued") ??
@@ -133,7 +145,13 @@ export default async function StoryPage({
           ) : null}
         </dl>
         <StoryActions
+          key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
           projectId={projectId}
+          draftOwnerId={
+            me.ok && me.data.principal?.type === "user"
+              ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+              : undefined
+          }
           story={story}
           workspace={bundle.workspace}
           agents={agentRows}
@@ -156,34 +174,105 @@ export default async function StoryPage({
           aria-label="Needs your attention"
         >
           <h2 className="mb-4 font-semibold">Needs your attention · {openAttention.length}</h2>
-          {openAttention.map((item) => (
-            <div key={item.id} className="border-t border-(--line) py-4">
-              <p className="font-medium">{item.title}</p>
-              <p className="mt-2 text-sm text-(--mut)">
-                {item.kind === "agent_waiting" ? item.detail : errorSummary(item.detail)}
-              </p>
-              {item.kind !== "agent_waiting" && item.detail ? (
-                <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer">Technical details</summary>
-                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
-                    {item.detail}
-                  </pre>
-                </details>
-              ) : null}
-              {canExecute ? (
-                <AttentionActions
-                  projectId={projectId}
-                  storyId={story.id}
-                  item={item}
-                  agentName={
-                    bundle.turns.find((turn) => turn.id === item.turnId)?.agentName ?? null
-                  }
-                />
-              ) : null}
-            </div>
-          ))}
+          {openAttention.map((item) => {
+            const deliveryNotice = ["delivery_integration", "delivery_completion"].includes(
+              item.kind,
+            );
+            return (
+              <div key={item.id} className="border-t border-(--line) py-4">
+                <p className="font-medium">{item.title}</p>
+                <p className="mt-2 text-sm text-(--mut)">
+                  {item.kind === "agent_waiting" || deliveryNotice
+                    ? item.detail
+                    : errorSummary(item.detail)}
+                </p>
+                {item.kind !== "agent_waiting" && !deliveryNotice && item.detail ? (
+                  <details className="mt-3 text-sm">
+                    <summary className="cursor-pointer">Technical details</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
+                      {item.detail}
+                    </pre>
+                  </details>
+                ) : null}
+                {canExecute ? (
+                  <AttentionActions
+                    projectId={projectId}
+                    storyId={story.id}
+                    item={item}
+                    agentName={
+                      bundle.turns.find((turn) => turn.id === item.turnId)?.agentName ?? null
+                    }
+                  />
+                ) : null}
+              </div>
+            );
+          })}
         </section>
       ) : null}
+
+      <StoryPlanPanel
+        key={`plan:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.plans}
+        agents={agentRows}
+        defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+        catalogError={agents.ok ? undefined : agents.message}
+        canWrite={canWrite && story.deletedAt === null}
+        userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}
+      />
+
+      {workflow.ok ? (
+        <StoryWorkflowPanel
+          initial={workflow.data}
+          canWrite={canWrite && story.deletedAt === null}
+          candidateReady={bundle.delivery?.candidate.state === "recorded"}
+        />
+      ) : (
+        <ErrorNotice message={`Workflow status unavailable: ${workflow.message}`} />
+      )}
+
+      <StoryDeliveryPanel
+        key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.delivery}
+        canWrite={canWrite}
+        canExecute={canExecute}
+      />
+
+      <StoryPreviewConvergencePanel
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.previewConvergence}
+        canExecute={canExecute && story.deletedAt === null}
+      />
+
+      <StoryCompletionPanel
+        projectId={projectId}
+        storyId={story.id}
+        initial={bundle.completion}
+        canConfigure={canConfigureIntegration}
+        canConfigureNotices={canWrite}
+        canRecord={canRecordIntegration}
+        canComplete={canComplete}
+      />
+
+      <StoryConsultationPanel
+        key={`consultation:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
+        projectId={projectId}
+        storyId={story.id}
+        initial={consultations.ok ? consultations.data : undefined}
+        initialError={consultations.ok ? undefined : consultations.message}
+        agents={agentRows}
+        defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+        canExecute={canExecute && story.deletedAt === null}
+        draftOwnerId={
+          me.ok && me.data.principal?.type === "user"
+            ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+            : undefined
+        }
+      />
 
       <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
         <div className="flex flex-wrap items-baseline justify-between gap-4">
@@ -201,6 +290,7 @@ export default async function StoryPage({
             initial={conversation.data}
             waitingTurnIds={waitingTurnIds}
             canExecute={canExecute && story.deletedAt === null}
+            canProposePlan={canWrite && story.deletedAt === null}
           />
         )}
       </section>

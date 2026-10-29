@@ -1,3 +1,5 @@
+import { CONSULTATION_LIMITS } from "./story-consultations.js";
+
 export type ModelPrice = {
   input: number;
   output: number;
@@ -47,6 +49,46 @@ export function normalizeModel(model: string): keyof typeof MODEL_PRICES_USD_PER
   return undated in MODEL_PRICES_USD_PER_1M
     ? (undated as keyof typeof MODEL_PRICES_USD_PER_1M)
     : null;
+}
+
+/**
+ * Tokens held against the monthly budget before measured usage replaces them.
+ * Cache writes are included because the first turn of a session pays them;
+ * later turns are usually cheaper, so this estimate blocks work that cannot
+ * afford a full turn rather than a short follow-up.
+ */
+export const TURN_RESERVATION_TOKENS = {
+  inputTokens: 100_000,
+  outputTokens: 8_000,
+  cacheWriteTokens: 100_000,
+} as const;
+
+/** Title calls send a short excerpt and expect a single line back. */
+export const TITLE_RESERVATION_TOKENS = {
+  inputTokens: 8_000,
+  outputTokens: 256,
+} as const;
+
+export function reservationCents(
+  model: string,
+  purpose: "turn" | "title" | "consultation",
+): number | null {
+  if (purpose === "consultation") {
+    const key = normalizeModel(model);
+    const price: ModelPrice | undefined = key ? MODEL_PRICES_USD_PER_1M[key] : undefined;
+    if (!price) return null;
+    const inputPrice = Math.max(price.input, price.cacheRead ?? 0, price.cacheWrite ?? 0);
+    return (
+      Math.ceil(
+        (((CONSULTATION_LIMITS.inputBytes + 1_024) * inputPrice +
+          CONSULTATION_LIMITS.outputTokens * price.output) /
+          10_000) *
+          1_000_000,
+      ) / 1_000_000
+    );
+  }
+  const tokens = purpose === "turn" ? TURN_RESERVATION_TOKENS : TITLE_RESERVATION_TOKENS;
+  return costCents({ model, ...tokens });
 }
 
 /** Calculate cents with six decimal places so low-token turns are not rounded away. */

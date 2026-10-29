@@ -1,6 +1,7 @@
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
+  attentionItems,
   engineSessions,
   type FacilityDb,
   stories,
@@ -12,10 +13,20 @@ import {
 } from "@facility/db";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
+import { ApiError } from "../errors.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
+import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
-import { CostBudgetService } from "../insights/costs.js";
+import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
+import {
+  authorizePlanExecution,
+  type PlanExecutionAuthorization,
+  planExecutionStillAuthorized,
+  recordPlanExecution,
+  WorkflowGateError,
+} from "../stories/workflow-execution.js";
+import { lockWorkflowExecution } from "../stories/workflow-policy.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -28,8 +39,9 @@ import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.
 import { TurnHealthMonitor } from "./health-monitor.js";
 import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
 import { LiveTurnEvents } from "./live-events.js";
-
+import { buildPrompt } from "./prompt.js";
 import { redactEvent as redact, redactString } from "./redaction.js";
+import { readUsageJournal } from "./usage-journal.js";
 
 export class TurnDispatcher {
   constructor(
@@ -46,31 +58,20 @@ export class TurnDispatcher {
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
-    const turn = (
-      await this.db
-        .update(turns)
-        .set({ state: "running", retryAfter: null, startedAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(
-            eq(turns.orgId, input.orgId),
-            eq(turns.projectId, input.projectId),
-            eq(turns.id, input.turnId),
-            eq(turns.state, "queued"),
-            or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
-          ),
-        )
-        .returning()
-    )[0];
-    if (!turn) {
-      const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
-      if (unclaimed?.state === "canceled") {
-        await this.activateQueuedSuccessor({
-          ...input,
-          storyId: unclaimed.storyId,
-        });
-      }
-      return { claimed: false as const };
+    const admission = await this.admit(input);
+    if (admission.kind === "unclaimed") return { claimed: false as const };
+    if (admission.kind === "held")
+      return {
+        claimed: false as const,
+        state: "held" as const,
+        code: admission.code,
+        error: admission.error,
+      };
+    if (admission.kind === "denied") {
+      return { claimed: true as const, state: "failed" as const, error: admission.error };
     }
+    const turn = admission.turn;
+    let reservationSettled = false;
 
     const cancellation = new AbortController();
     const leaseHeartbeat = new TurnLeaseHeartbeat(
@@ -89,8 +90,10 @@ export class TurnDispatcher {
     let startedGitEvidence: StartedGitEvidence | undefined;
     let gitEvidenceCompleted = false;
     let engineStarted = false;
+    let currentWorkspace: WorkspaceLocator | undefined;
     let liveEvents: LiveTurnEvents | undefined;
     let health: TurnHealthMonitor | undefined;
+    let credentialRenewal: WorkspaceCredentialRenewal | undefined;
     try {
       await this.storiesService.resolveAttention({
         orgId: input.orgId,
@@ -109,7 +112,7 @@ export class TurnDispatcher {
         });
       }
       await appendTurnEvent(this.db, { ...eventBase, type: "turn.started", data: {} });
-      const [story, workspace, conversation, messages] = await Promise.all([
+      const [story, workspace, conversation, messages, attention] = await Promise.all([
         this.scopedStory(input.orgId, input.projectId, turn.storyId),
         this.activeWorkspace(input.orgId, input.projectId, turn.storyId),
         this.db
@@ -135,14 +138,25 @@ export class TurnDispatcher {
             ),
           )
           .orderBy(asc(storyMessages.seq)),
+        this.db
+          .select()
+          .from(attentionItems)
+          .where(
+            and(
+              eq(attentionItems.orgId, input.orgId),
+              eq(attentionItems.projectId, input.projectId),
+              eq(attentionItems.storyId, turn.storyId),
+            ),
+          )
+          .orderBy(asc(attentionItems.createdAt)),
       ]);
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
+      currentWorkspace = workspaceLocator(workspace);
       const manifest = AgentManifestSchema.parse(turn.manifest);
       if (manifest.hash !== turn.manifestHash || manifest.name !== turn.agentName) {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
       }
-      await this.costs.assertTurnAllowed(input.orgId, input.projectId, manifest.model);
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.phase",
@@ -173,6 +187,7 @@ export class TurnDispatcher {
           .set({ branch, updatedAt: new Date() })
           .where(and(eq(stories.orgId, input.orgId), eq(stories.id, story.id)));
       }
+      let renewableEnvironment = credential.environment;
       if (this.runtime) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -192,6 +207,27 @@ export class TurnDispatcher {
             ),
           );
         const recovered = await this.runtime.wake(workspaceLocator(workspace));
+        credentialRenewal = new WorkspaceCredentialRenewal(
+          this.runtime,
+          { ...workspaceLocator(workspace), expectedComputeRef: recovered.computeRef },
+          turn.id,
+          credential,
+          {
+            issue: () => this.credentials.issue(input.orgId, input.projectId),
+            authorized: () => this.heartbeat(input.orgId, input.projectId, turn.id),
+            rememberSecrets: (values) => {
+              secrets = [...new Set([...secrets, ...values])];
+            },
+            report: (state) =>
+              appendTurnEvent(this.db, {
+                ...eventBase,
+                type: `github.credentials.${state}`,
+                data: {},
+              }).then(() => undefined),
+            revoked: () => cancellation.abort(),
+          },
+        );
+        renewableEnvironment = await credentialRenewal.start();
         await appendTurnEvent(this.db, {
           ...eventBase,
           type: "workspace.ready",
@@ -212,11 +248,22 @@ export class TurnDispatcher {
         projectId: input.projectId,
         workspace: workspaceLocator(workspace),
         manifest: projectManifest,
-        credentials: credential,
+        credentials: { ...credential, environment: renewableEnvironment },
         branch,
         previousSetupChecksum: workspace.setupChecksum,
       });
-      secrets = credentialSecrets(prepared.processEnvironment, prepared.secretNames);
+      if (credentialRenewal) {
+        prepared.processEnvironment = credentialRenewal.environment(
+          prepared.processEnvironment,
+          true,
+        );
+      }
+      secrets = [
+        ...new Set([
+          ...secrets,
+          ...credentialSecrets(prepared.processEnvironment, prepared.secretNames),
+        ]),
+      ];
       const session = (
         await this.db
           .select()
@@ -303,7 +350,7 @@ export class TurnDispatcher {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id),
+        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id, attention),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,
@@ -355,9 +402,11 @@ export class TurnDispatcher {
         engine: manifest.engine,
         model: manifest.model,
         usage: result.usage,
+        complete: result.usage !== undefined,
         durationMs: result.durationMs,
         status: "succeeded",
       });
+      reservationSettled = true;
       await this.persistSession({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -378,6 +427,12 @@ export class TurnDispatcher {
           secrets,
         ),
         actor: { type: "system", id: `${manifest.engine}:${result.nativeSessionId}` },
+        attention: outcome.attention
+          ? {
+              title: `${manifest.name} needs a reply`,
+              detail: redactString(outcome.attention, secrets),
+            }
+          : undefined,
         metadata: {
           content: "final_response",
           engine: manifest.engine,
@@ -385,17 +440,7 @@ export class TurnDispatcher {
           progressMessages: result.progress.length,
         },
       });
-      if (outcome.attention) {
-        await this.storiesService.flagAttention({
-          orgId: input.orgId,
-          projectId: input.projectId,
-          storyId: story.id,
-          turnId: turn.id,
-          kind: "agent_waiting",
-          title: `${manifest.name} needs a reply`,
-          detail: redactString(outcome.attention, secrets),
-        });
-      } else {
+      if (!outcome.attention) {
         const retriedAttentionId = turn.triggerKey?.match(
           /^attention-retry:(attn_[a-z0-9]+)$/,
         )?.[1];
@@ -436,6 +481,29 @@ export class TurnDispatcher {
         await this.evidence.complete(startedGitEvidence).catch(() => undefined);
         gitEvidenceCompleted = true;
       }
+      if (!reservationSettled) {
+        const retained =
+          engineStarted && this.runtime && currentWorkspace
+            ? await readUsageJournal(this.runtime, currentWorkspace, turn.id, turn.engine)
+            : undefined;
+        await this.costs.record({
+          ...input,
+          storyId: turn.storyId,
+          agentName: turn.agentName,
+          engine: turn.engine,
+          model: turn.model,
+          usage: retained?.complete
+            ? retained.usage
+            : ((error instanceof AgentEngineError ? asUsage(error.details.usage) : undefined) ??
+              retained?.usage),
+          complete: engineStarted ? retained?.complete === true : undefined,
+          durationMs: turn.startedAt ? Date.now() - turn.startedAt.getTime() : 0,
+          status: "failed",
+        });
+        // If accounting fails, retain the hold and let recovery reconcile it.
+        // Never admit a successor between releasing a hold and booking its bill.
+        reservationSettled = true;
+      }
       if (await this.isCanceled(input.orgId, input.projectId, input.turnId)) {
         await appendTurnEvent(this.db, {
           ...eventBase,
@@ -471,20 +539,6 @@ export class TurnDispatcher {
         return { claimed: true as const, state: "canceled" as const };
       }
       if (error instanceof AgentEngineError) {
-        await this.costs
-          .record({
-            orgId: input.orgId,
-            projectId: input.projectId,
-            storyId: turn.storyId,
-            turnId: turn.id,
-            agentName: turn.agentName,
-            engine: turn.engine,
-            model: turn.model,
-            usage: asUsage(error.details.usage),
-            durationMs: numberValue(error.details.durationMs) ?? 0,
-            status: "failed",
-          })
-          .catch(() => undefined);
         if (!liveEvents) await this.persistFailedEngineEvents(error, eventBase, secrets);
       }
       const detail = redactString(error instanceof Error ? error.message : String(error), secrets);
@@ -506,6 +560,7 @@ export class TurnDispatcher {
         await health?.stop();
       } finally {
         leaseHeartbeat.stop();
+        await credentialRenewal?.stop();
       }
       await this.storiesService
         .suspendFailedWorkspace(input.orgId, input.projectId, turn.storyId)
@@ -514,6 +569,191 @@ export class TurnDispatcher {
             JSON.stringify({ event: "workspace.suspend_reconciliation_failed", turnId: turn.id }),
           );
         });
+    }
+  }
+
+  private async admit(input: { orgId: string; projectId: string; turnId: string }): Promise<
+    | { kind: "unclaimed" }
+    | { kind: "denied"; error: string }
+    | { kind: "held"; code: string; error: string }
+    | {
+        kind: "running";
+        turn: typeof turns.$inferSelect;
+        reservationId: string | null;
+      }
+  > {
+    try {
+      const admitted = await this.db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as FacilityDb;
+        const [existing] = await tx
+          .select({ storyId: turns.storyId, agentName: turns.agentName })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.id, input.turnId),
+            ),
+          )
+          .limit(1);
+        if (!existing) return null;
+        const scope = { orgId: input.orgId, projectId: input.projectId, storyId: existing.storyId };
+        await lockWorkflowExecution(tx, scope, existing.agentName);
+        const [queued] = await tx
+          .select()
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.id, input.turnId),
+            ),
+          )
+          .for("update")
+          .limit(1);
+        if (queued?.state !== "queued" || (queued.retryAfter && queued.retryAfter > new Date()))
+          return null;
+        let authorization: PlanExecutionAuthorization | null;
+        try {
+          authorization = await authorizePlanExecution(
+            tx,
+            scope,
+            AgentManifestSchema.parse(queued.manifest),
+            queued.createdBy as { type: "user" | "service" | "system"; id: string },
+            queued.id,
+          );
+        } catch (error) {
+          if (
+            !(error instanceof WorkflowGateError) &&
+            !(error instanceof ApiError && error.code.startsWith("workflow_"))
+          )
+            throw error;
+          const retryAfter = new Date(Date.now() + 30_000);
+          await tx
+            .update(turns)
+            .set({ retryAfter, error: `${error.code}: ${error.message}`, updatedAt: new Date() })
+            .where(eq(turns.id, queued.id));
+          const [attention] = await tx
+            .select({ id: attentionItems.id })
+            .from(attentionItems)
+            .where(
+              and(
+                eq(attentionItems.orgId, scope.orgId),
+                eq(attentionItems.projectId, scope.projectId),
+                eq(attentionItems.storyId, scope.storyId),
+                eq(attentionItems.turnId, queued.id),
+                eq(attentionItems.kind, "workflow_approval"),
+                eq(attentionItems.status, "open"),
+              ),
+            )
+            .limit(1);
+          if (!attention) {
+            await tx.insert(attentionItems).values({
+              id: newId("attn"),
+              ...scope,
+              turnId: queued.id,
+              kind: "workflow_approval",
+              title: `${queued.agentName} is waiting for workflow approval`,
+              detail: error.message,
+            });
+            await appendTurnEvent(tx, {
+              ...scope,
+              turnId: queued.id,
+              type: "turn.workflow_held",
+              data: { code: error.code, reason: error.message },
+            });
+          }
+          await tx
+            .update(stories)
+            .set({
+              status: sql`case when ${stories.status} in ('archived', 'done') then ${stories.status} else 'attention' end`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(stories.orgId, scope.orgId),
+                eq(stories.projectId, scope.projectId),
+                eq(stories.id, scope.storyId),
+              ),
+            );
+          return { kind: "held" as const, code: error.code, error: error.message };
+        }
+        const claimed = (
+          await tx
+            .update(turns)
+            .set({
+              state: "running",
+              error: null,
+              retryAfter: null,
+              startedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(turns.orgId, input.orgId),
+                eq(turns.projectId, input.projectId),
+                eq(turns.id, input.turnId),
+                eq(turns.state, "queued"),
+                or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
+              ),
+            )
+            .returning()
+        )[0];
+        if (!claimed) return null;
+        await recordPlanExecution(tx, scope, claimed.id, authorization);
+        await tx
+          .update(attentionItems)
+          .set({
+            status: "resolved",
+            resolution: "workflow_authorized",
+            resolvedAt: new Date(),
+            resolvedBy: { type: "system", id: "workflow-admission" },
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(attentionItems.orgId, scope.orgId),
+              eq(attentionItems.projectId, scope.projectId),
+              eq(attentionItems.storyId, scope.storyId),
+              eq(attentionItems.turnId, claimed.id),
+              eq(attentionItems.kind, "workflow_approval"),
+              eq(attentionItems.status, "open"),
+            ),
+          );
+        const reservationId = await this.costs.reserveTurn(tx, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: claimed.storyId,
+          turnId: claimed.id,
+          model: claimed.model,
+        });
+        return { kind: "running" as const, turn: claimed, reservationId };
+      });
+      if (!admitted) {
+        const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
+        if (unclaimed?.state === "canceled") {
+          await this.activateQueuedSuccessor({ ...input, storyId: unclaimed.storyId });
+        }
+        return { kind: "unclaimed" };
+      }
+      if (admitted.kind === "held") return admitted;
+      return { kind: "running", turn: admitted.turn, reservationId: admitted.reservationId };
+    } catch (error) {
+      if (!(error instanceof BudgetPolicyError)) throw error;
+      const queued = await this.turn(input.orgId, input.projectId, input.turnId);
+      if (queued && queued.state === "queued") {
+        await this.storiesService.failTurn({ ...input, error: error.message });
+        await appendTurnEvent(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: queued.storyId,
+          turnId: queued.id,
+          type: "turn.failed",
+          data: { error: error.message.slice(0, 8_000) },
+        });
+        await this.activateQueuedSuccessor({ ...input, storyId: queued.storyId });
+      }
+      return { kind: "denied", error: error.message };
     }
   }
 
@@ -529,6 +769,16 @@ export class TurnDispatcher {
   }
 
   private async heartbeat(orgId: string, projectId: string, turnId: string) {
+    const turn = await this.turn(orgId, projectId, turnId);
+    if (
+      turn?.state !== "running" ||
+      !(await planExecutionStillAuthorized(
+        this.db,
+        { orgId, projectId, storyId: turn.storyId },
+        turn,
+      ))
+    )
+      return false;
     const alive = await this.db
       .update(turns)
       .set({ updatedAt: new Date() })
@@ -560,6 +810,15 @@ export class TurnDispatcher {
     storyId: string;
     turnId: string;
   }) {
+    return this.activateQueuedStorySuccessor(input);
+  }
+
+  async activateQueuedStorySuccessor(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId?: string;
+  }) {
     const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
     if (!next?.requestedAgentName) return;
     try {
@@ -589,14 +848,15 @@ export class TurnDispatcher {
         title: `Could not dispatch queued ${next.requestedAgentName} turn`,
         detail,
       });
-      await appendTurnEvent(this.db, {
-        orgId: input.orgId,
-        projectId: input.projectId,
-        storyId: input.storyId,
-        turnId: input.turnId,
-        type: "queue.activation_failed",
-        data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
-      });
+      if (input.turnId)
+        await appendTurnEvent(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: input.storyId,
+          turnId: input.turnId,
+          type: "queue.activation_failed",
+          data: { agentName: next.requestedAgentName, error: detail.slice(0, 8_000) },
+        });
     }
   }
 
@@ -774,42 +1034,6 @@ function workspaceLocator(row: typeof workspaces.$inferSelect): WorkspaceLocator
   };
 }
 
-function buildPrompt(
-  manifest: AgentManifest,
-  story: typeof stories.$inferSelect,
-  summary: string | null,
-  messages: Array<typeof storyMessages.$inferSelect>,
-  turnId: string,
-) {
-  const currentSequence = messages.find(
-    (message) => message.turnId === turnId && message.role === "user",
-  )?.seq;
-  const relevant = messages.filter(
-    (message) => currentSequence === undefined || message.seq <= currentSequence,
-  );
-  const transcript = relevant
-    .map(
-      (message) => `${message.role.toUpperCase()} (${actorLabel(message.actor)}):\n${message.body}`,
-    )
-    .join("\n\n");
-  return [
-    manifest.prompt,
-    `# Story\n${story.title}\nExternal identity: ${story.provider}:${story.externalId}`,
-    summary ? `# Conversation summary\n${summary}` : "",
-    `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
-    "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
-    "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function actorLabel(actor: unknown) {
-  if (!actor || typeof actor !== "object") return "unknown";
-  const value = actor as { type?: unknown; id?: unknown };
-  return `${String(value.type ?? "unknown")}:${String(value.id ?? "unknown")}`;
-}
-
 function storyBranch(title: string, storyId: string) {
   const slug =
     title
@@ -846,10 +1070,6 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
   return serialized.length <= 64_000
     ? value
     : { truncated: true, payload: `${serialized.slice(0, 63_900)}…` };
-}
-
-function truncateStart(value: string, limit: number) {
-  return value.length <= limit ? value : `[Earlier transcript omitted]\n${value.slice(-limit)}`;
 }
 
 function agentOutcome(output: string): { output: string; attention?: string } {

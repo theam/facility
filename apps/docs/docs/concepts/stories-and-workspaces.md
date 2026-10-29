@@ -24,6 +24,13 @@ worktrees, dependencies, engine configuration, Claude and Codex session files, a
 artifacts. Suspending stops compute. Waking attaches the same volume. Replacing a failed compute
 instance also attaches that volume.
 
+Suspending an active preview retires its compute incarnation before releasing the preview writer.
+Restore then attaches the retained volume to fresh compute, so delayed commands from the old
+preview cannot change files underneath the next agent. Compute startup is serialized with this
+retirement, preventing a revoked attempt from waking fresh compute. If the provider cannot confirm retirement,
+the preview writer remains blocked; retry suspension after provider recovery. Conversation,
+application data, Git history, and native engine sessions remain retained.
+
 The volume normally contains:
 
 - repositories under `repos/<owner>/<repository>`;
@@ -51,11 +58,17 @@ model, trigger, and native session reference used.
 When a message arrives during active work, it stays queued. Facility promotes it only after the
 current turn reaches a terminal state. A failed worker can reclaim dispatch work without creating
 a second active turn. Retrying a failed attention item creates a new attempt while preserving the
-failed attempt as history.
+failed attempt as history. Interrupted-worker recovery confirms native process termination before releasing the writer. If termination cannot be verified, the original turn stays fenced for a later retry; other stories can still recover. Native CLI groups and legacy per-turn processes are checked independently of the journal monitor.
 
 Agents share the conversation and files, but each turn still records which agent ran. Changing
 from `architect` to `builder` does not create another workspace or copy a summary into a separate
 thread.
+
+When an agent asks a blocking question, Facility retains the question with that turn's attention
+history. A rebuilt prompt includes it after the agent's message, including when the attention item
+has been resolved by a reply. A different agent can therefore interpret a brief answer such as
+"No, continue." The stored conversation body remains unchanged. Questions and responses from later
+queued turns are excluded from an earlier turn's context.
 
 Native engine continuation is compatible-session specific. Facility resumes the active session for
 the same workspace, agent name, engine, and model. Choosing another agent or changing its engine or

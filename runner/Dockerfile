@@ -62,6 +62,7 @@ RUN archive=/tmp/docker-cli.tar.gz \
   # Docker CLI keeps its reviewed module graph in vendor.mod/vendor.sum. \
   && cp vendor.mod go.mod \
   && cp vendor.sum go.sum \
+  && go mod edit -replace=github.com/go-jose/go-jose/v4=github.com/go-jose/go-jose/v4@v4.1.6 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
@@ -84,6 +85,8 @@ RUN archive=/tmp/containerd.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.18.7 \
+  && go mod edit -replace=github.com/go-jose/go-jose/v4=github.com/go-jose/go-jose/v4@v4.1.6 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.60.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
@@ -211,6 +214,22 @@ RUN for binary in /out/*; do \
        pending && $1 == "=>" { if ($2 != "golang.org/x/net") { bad = 1; exit }; version = $3; pending = 0 } \
        END { if (bad) exit 1; if (version != "") exit (version != "v0.60.0") }' || exit 1; \
   done \
+  && for binary in /out/*; do \
+    metadata="$(go version -m "$binary")" || exit 1; \
+    printf '%s\n' "$metadata" | awk \
+      '$1 == "dep" { pending = ($2 == "github.com/klauspost/compress"); if (pending) { found = 1; version = $3 }; next } \
+       pending && $1 == "=>" { if ($2 != "github.com/klauspost/compress") { bad = 1; exit }; version = $3; pending = 0 } \
+       function patched(value, parts) { if (value !~ /^v1\.[0-9]+\.[0-9]+$/) return 0; split(substr(value, 2), parts, "."); return parts[2] > 18 || (parts[2] == 18 && parts[3] >= 7) } \
+       END { exit (bad || (found && !patched(version))) }' || exit 1; \
+  done \
+  && for binary in /out/*; do \
+    metadata="$(go version -m "$binary")" || exit 1; \
+    printf '%s\n' "$metadata" | awk \
+      '$1 == "dep" { pending = ($2 == "github.com/go-jose/go-jose/v4"); if (pending) { found = 1; version = $3 }; next } \
+       pending && $1 == "=>" { if ($2 != "github.com/go-jose/go-jose/v4") { bad = 1; exit }; version = $3; pending = 0 } \
+       function patched(value, parts) { if (value !~ /^v4\.[0-9]+\.[0-9]+$/) return 0; split(substr(value, 2), parts, "."); return parts[2] > 1 || (parts[2] == 1 && parts[3] >= 6) } \
+       END { exit (bad || (found && !patched(version))) }' || exit 1; \
+  done \
   && for binary in /out/containerd /out/containerd-shim-runc-v2 /out/ctr /out/rootlesskit; do \
     go version -m "$binary" | awk \
       '$1 == "=>" && $2 == "golang.org/x/net" && $3 == "v0.60.0" { found = 1 } END { exit !found }' || exit 1; \
@@ -240,7 +259,7 @@ RUN for binary in /out/*; do \
 # database, image-processing, DNS, and web-server development stacks. Agents
 # need a native compiler toolchain, not that entire transitive surface, so start
 # from the official slim variant and install the small explicit toolchain below.
-FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS runner-base
+FROM node:24.22.2-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS runner-base
 
 # The digest-pinned Node base can lag Debian security uploads, while BuildKit
 # correctly caches an earlier apt upgrade against the unchanged base digest.
@@ -316,9 +335,9 @@ ARG NPM_VERSION=12.0.2
 RUN npm install --global "npm@${NPM_VERSION}" \
   && npm install --global --omit=dev --ignore-scripts \
     brace-expansion@5.0.12 \
-    ip-address@10.7.1 \
+    ip-address@10.7.4 \
     tar@7.5.21 \
-    undici@6.28.1 \
+    undici@6.29.1 \
   && rm -rf \
     /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     /usr/local/lib/node_modules/npm/node_modules/ip-address \
@@ -368,6 +387,7 @@ COPY runner/verify-package-security.mjs /tmp/verify-package-security.mjs
 RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packageManager")" \
   && COREPACK_HOME=/opt/facility-corepack corepack install --global --cache-only "$package_manager" \
   && node /tmp/verify-package-security.mjs /usr/local/lib/node_modules/npm /opt/facility-corepack \
+    --overlay-cached-undici /usr/local/lib/node_modules/undici \
   && chmod -R a-w /opt/facility-corepack \
   && rm -f /tmp/facility-root-package.json /tmp/verify-package-security.mjs
 
