@@ -341,7 +341,22 @@ describe("Vercel command observation through the actual SDK", () => {
     });
     expect(asUser).not.toHaveBeenCalled();
     expect(runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ cmd: "sudo", args: ["-u", "node", "--", "sh", "-c", "true"] }),
+      expect.objectContaining({
+        cmd: "sudo",
+        args: [
+          "-u",
+          "node",
+          "--preserve-env=HOME,CLAUDE_CONFIG_DIR,CODEX_HOME",
+          "--",
+          "sh",
+          "-c",
+          expect.stringContaining('exec "$@"'),
+          "sh",
+          "sh",
+          "-c",
+          "true",
+        ],
+      }),
     );
   });
 
