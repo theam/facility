@@ -139,11 +139,21 @@ it("creates work from development and retains commits and dirty files after the 
     expect(await command("cat advanced.txt", "repos/acme/app")).toBe("advanced");
     expect(await command("cat story.txt", "repos/acme/app")).toBe("story");
     const refreshed = await service.refreshPrepared(input);
+    const protectedMain = await command("git rev-parse main", "repos/acme/app");
+    // An alias must not redirect the agent handoff into the protected base.
+    await command("git symbolic-ref refs/heads/feature/story refs/heads/main", "repos/acme/app");
     await runtime.replaceCompute(workspace);
     Object.assign(workspace, await runtime.wake(workspace));
     await service.prepare({ ...input, previousSetupChecksum: refreshed.setupChecksum });
     expect(await command("git branch --show-current", "repos/acme/app")).toBe("feature/story");
     expect(await command("git rev-parse HEAD", "repos/acme/app")).toBe(candidate);
+    expect(await command("git rev-parse main", "repos/acme/app")).toBe(protectedMain);
+    expect(
+      await command(
+        "git for-each-ref --format='%(symref)' refs/heads/feature/story",
+        "repos/acme/app",
+      ),
+    ).toBe("");
     expect(await command("cat dirty.txt", "repos/acme/app")).toBe("dirty");
     expect(await command("cat retained-data.txt", "repos/acme/app")).toBe("retained");
     expect(await command(`git rev-parse ${preview.ref}`, "repos/acme/app")).toBe(candidate);

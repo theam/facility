@@ -707,6 +707,7 @@ export class ProjectEnvironmentService {
           "git",
           [
             "update-ref",
+            "--no-deref",
             `refs/heads/${input.branch}`,
             head.stdout.trim(),
             previous ?? "0".repeat(40),
