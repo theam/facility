@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:https";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { checkServerIdentity } from "node:tls";
 import { fileURLToPath } from "node:url";
 import { constants, createDeflateRaw } from "node:zlib";
 
@@ -57,7 +62,7 @@ for (const { version, module: { Address6 } } of lockedModules("ip-address")) {
   });
 }
 
-const { Agent, WebSocket } = apiRequire("undici");
+const { Agent, WebSocket, request } = apiRequire("undici");
 const { WebSocketServer } = apiRequire("ws");
 const limit = 1024 * 1024;
 
@@ -118,4 +123,64 @@ test("undici rejects a malformed compressed peer without crashing", { timeout: 5
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(messages, 0);
   assert.equal(client.readyState, WebSocket.CLOSED);
+});
+
+// Generated per run so no private key is committed. The client trusts this
+// certificate explicitly, leaving its identity callback as the only refusal.
+function throwawayCertificate() {
+  const directory = mkdtempSync(join(tmpdir(), "facility-undici-tls-"));
+  try {
+    const key = join(directory, "key.pem");
+    const cert = join(directory, "cert.pem");
+    execFileSync("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1",
+      "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", key, "-out", cert,
+    ], { stdio: "pipe" });
+    return { key: readFileSync(key, "utf8"), cert: readFileSync(cert, "utf8") };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function tlsPeer(t, identityCheck) {
+  const { key, cert } = throwawayCertificate();
+  let served = 0;
+  let agent;
+  const server = createServer({ key, cert }, (_request, response) => {
+    served += 1;
+    response.end("fixture");
+  });
+  t.after(async () => {
+    await agent?.destroy();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  // Vulnerable Agents JSON-cloned `tls`: `ca` survived, the callback did not.
+  agent = new Agent({ tls: { ca: cert, checkServerIdentity: identityCheck } });
+  const url = `https://127.0.0.1:${server.address().port}/`;
+  return {
+    served: () => served,
+    async get() {
+      const { statusCode, body } = await request(url, { dispatcher: agent });
+      return { statusCode, text: await body.text() };
+    },
+  };
+}
+
+test("undici Agent runs a TLS identity callback that accepts the peer", { timeout: 5000 }, async (t) => {
+  let checks = 0;
+  const peer = await tlsPeer(t, (host, certificate) => {
+    checks += 1;
+    return checkServerIdentity(host, certificate);
+  });
+  assert.deepEqual(await peer.get(), { statusCode: 200, text: "fixture" });
+  assert.equal(checks, 1);
+});
+
+test("undici Agent refuses a peer its TLS identity callback rejects", { timeout: 5000 }, async (t) => {
+  const peer = await tlsPeer(t, () => new Error("fixture pin mismatch"));
+  await assert.rejects(peer.get(), /fixture pin mismatch/);
+  assert.equal(peer.served(), 0);
 });
