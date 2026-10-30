@@ -25,6 +25,28 @@ Preview and browser verification are everyday environment actions. Suspend, arch
 
 A suspended Vercel machine does not accrue CPU or memory usage, but retained snapshots can incur storage charges. A running machine can accrue memory charges even when no agent is working. Facility does not infer a zero bill from missing provider cost data; consult [Vercel pricing](https://vercel.com/docs/sandbox/pricing) for current rates.
 
+## Code used by automatic previews
+
+An authorized, complete delivery PR set lets Facility rebuild the preview from
+each repository's configured development branch (or GitHub default) and the exact
+required PR heads. A manual story can declare a delivery too; merely mentioning
+a PR in its conversation does not register that delivery.
+
+Each retained workspace and repository has its own local
+`facility/preview/<scope-hash>` branch. It points to the reconstructed candidate,
+including after a force push, PR withdrawal or rewind. Facility never pushes
+this branch to GitHub or adopts it as the story's agent branch. Starting another
+agent attaches its separate work branch to the candidate; older detached previews
+remain supported. Related repositories also leave their managed preview branches
+before the agent starts.
+
+Facility records ownership and updates the preview references together with
+compare-and-swap checks. An unowned branch, a manually changed preview tip, or a
+preview branch checked out in another worktree blocks convergence. Displaced
+commits remain under local `refs/facility/retained/` references; overlapping edits,
+tracked local overlays and ignored files remain protected. A preview is ready
+only after the environment's rebuild and readiness checks pass.
+
 The presentation helpers in `apps/web/lib/story-presentation.ts` keep state interpretation, exchange grouping, run status wording and ordering independent of React; `services/api/src/turns/activity.ts` projects stored engine events into bounded, readable activity. Unit tests cover those decisions; the story page integration test covers their combined rendering, collapsed history and read-only permissions; `apps/web/test/story-conversation.test.tsx` covers paging, merging, live updates and lazy run details; `services/api/test/story-reading-routes.integration.test.ts` covers the reading endpoints, their bounds, permissions and tenant isolation.
 
 # Reading the backlog

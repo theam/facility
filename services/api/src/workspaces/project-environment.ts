@@ -14,6 +14,7 @@ import type {
 } from "../github/workspace-credentials.js";
 import { appendWorkspaceEvent } from "./events.js";
 import { isSafeGitBranch } from "./git-branch.js";
+import { isPreviewBranch, PREVIEW_MANAGED_REF, previewBranchRefs } from "./preview-branch.js";
 import type {
   CreateWorkspace,
   PreviewEndpoint,
@@ -279,6 +280,7 @@ export class ProjectEnvironmentService {
         "git identity",
       );
       if (repository.role === "primary") await this.ensureBranch(preparedInput, repository, cwd);
+      else await this.leavePreviewBranch(preparedInput, repository, cwd);
     }
 
     const setupChecksum = await this.setupChecksum(preparedInput);
@@ -611,6 +613,12 @@ export class ProjectEnvironmentService {
     if (!isSafeGitBranch(input.branch)) {
       throw new ProjectEnvironmentError("story_branch_invalid", "story branch is invalid");
     }
+    if (isPreviewBranch(input.branch)) {
+      throw new ProjectEnvironmentError(
+        "story_branch_reserved",
+        "Facility preview branches cannot be used as agent work branches",
+      );
+    }
     if (
       input.branch === repository.defaultBranch ||
       input.branch === repository.developmentBranch
@@ -634,8 +642,8 @@ export class ProjectEnvironmentService {
       cwd,
       env: input.credentials.environment,
     });
-    // Convergence publishes a detached, exact candidate. Attach the next builder
-    // to that candidate rather than checking out the displaced story branch.
+    // Attach the next builder to the exact candidate, including retained previews
+    // published by older versions on detached HEAD. The preview branch stays local.
     const symbolic = await this.runtime.exec(input.workspace, {
       signal: input.signal,
       command: "git",
@@ -643,11 +651,18 @@ export class ProjectEnvironmentService {
       cwd,
       env: input.credentials.environment,
     });
-    if (symbolic.exitCode !== 0) {
+    const preview = previewBranchRefs(input.workspace.id, cwd);
+    const onPreviewBranch = symbolic.stdout.trim() === preview.ref;
+    if (isPreviewBranch(symbolic.stdout.trim().replace(/^refs\/heads\//, "")) && !onPreviewBranch)
+      throw new ProjectEnvironmentError(
+        "story_preview_branch_changed",
+        "The current preview branch does not belong to this retained repository",
+      );
+    if (symbolic.exitCode !== 0 || onPreviewBranch) {
       const managed = await this.runtime.exec(input.workspace, {
         signal: input.signal,
         command: "git",
-        args: ["rev-parse", "--verify", "refs/facility/preview-managed^{commit}"],
+        args: ["rev-parse", "--verify", `${PREVIEW_MANAGED_REF}^{commit}`],
         cwd,
         env: input.credentials.environment,
       });
@@ -658,6 +673,25 @@ export class ProjectEnvironmentService {
         cwd,
         env: input.credentials.environment,
       });
+      if (onPreviewBranch) {
+        const owner = await this.runtime.exec(input.workspace, {
+          signal: input.signal,
+          command: "git",
+          args: ["rev-parse", "--verify", `${preview.ownershipRef}^{commit}`],
+          cwd,
+          env: input.credentials.environment,
+        });
+        if (
+          owner.exitCode !== 0 ||
+          managed.exitCode !== 0 ||
+          owner.stdout.trim() !== managed.stdout.trim() ||
+          head.stdout.trim() !== managed.stdout.trim()
+        )
+          throw new ProjectEnvironmentError(
+            "story_preview_branch_changed",
+            "Save local preview branch changes before starting an agent",
+          );
+      }
       if (managed.exitCode === 0 && head.stdout.trim() === managed.stdout.trim()) {
         const previous = local.exitCode === 0 ? local.stdout.trim().split(/\s+/)[0] : undefined;
         if (previous)
@@ -673,6 +707,7 @@ export class ProjectEnvironmentService {
           "git",
           [
             "update-ref",
+            "--no-deref",
             `refs/heads/${input.branch}`,
             head.stdout.trim(),
             previous ?? "0".repeat(40),
@@ -706,6 +741,40 @@ export class ProjectEnvironmentService {
       cwd,
       "git branch",
     );
+  }
+
+  private async leavePreviewBranch(
+    input: Parameters<ProjectEnvironmentService["prepare"]>[0],
+    repository: WorkspaceRepository,
+    cwd: string,
+  ) {
+    const symbolic = await this.runtime.exec(input.workspace, {
+      signal: input.signal,
+      command: "git",
+      args: ["symbolic-ref", "-q", "HEAD"],
+      cwd,
+      env: input.credentials.environment,
+    });
+    if (isPreviewBranch(symbolic.stdout.trim().replace(/^refs\/heads\//, "")))
+      await this.ensureBranch(input, repository, cwd);
+    else if (symbolic.exitCode === 1) {
+      const [managed, head] = await Promise.all(
+        [
+          ["rev-parse", "--verify", `${PREVIEW_MANAGED_REF}^{commit}`],
+          ["rev-parse", "HEAD"],
+        ].map((args) =>
+          this.runtime.exec(input.workspace, {
+            signal: input.signal,
+            command: "git",
+            args,
+            cwd,
+            env: input.credentials.environment,
+          }),
+        ),
+      );
+      if (managed?.exitCode === 0 && head?.stdout.trim() === managed.stdout.trim())
+        await this.ensureBranch(input, repository, cwd);
+    }
   }
 
   private async waitUntilReady(input: EnvironmentInput) {

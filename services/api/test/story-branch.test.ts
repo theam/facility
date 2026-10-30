@@ -33,6 +33,7 @@ describe("verified story branch changes", () => {
     ["failed capture", { ...evidence, captureError: "git failed" }],
     ["incomplete capture", { ...evidence, completedAt: null }],
     ["detached HEAD", { ...evidence, finalBranch: null }],
+    ["an internal preview branch", { ...evidence, finalBranch: "facility/preview/local" }],
     ["the repository default", { ...evidence, finalBranch: "main" }],
     ["the original branch", { ...evidence, finalBranch: story.branch }],
     ["an option-like branch", { ...evidence, finalBranch: "--force" }],

@@ -4,6 +4,7 @@ import { type FacilityDb, stories, workspaces } from "@facility/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
+import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../workspaces/preview-branch.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -392,12 +393,8 @@ export class PreviewWorkspaceGitApplicator {
         false,
       );
     }
-    const managed = await this.git(workspace, cwd, environment, [
-      "rev-parse",
-      "--verify",
-      "refs/facility/preview-managed",
-    ]);
-    if (!targets.length && managed.exitCode !== 0) return;
+    const managed = await this.directRef(workspace, cwd, environment, PREVIEW_MANAGED_REF);
+    if (!targets.length && !managed) return;
     const dirty = await this.dirtySnapshot(workspace, cwd, environment);
     const failure = {
       code: "preview_candidate_build_failed",
@@ -520,16 +517,52 @@ export class PreviewWorkspaceGitApplicator {
         "Save tracked local edits before publishing an exact preview candidate.",
         false,
       );
-    if (current !== candidate) {
-      // Retain every displaced commit, even a detached local branch. No reset or clean.
+    const preview = previewBranchRefs(workspace.id, cwd);
+    const previous = await this.directRef(workspace, cwd, environment, preview.ref);
+    const owner = await this.directRef(workspace, cwd, environment, preview.ownershipRef);
+    if ((previous && (!owner || previous !== owner || owner !== managed)) || (!previous && owner))
+      throw new PreviewConvergenceError(
+        "preview_branch_changed",
+        "The local preview branch is unowned or has changed outside preview convergence.",
+        false,
+      );
+    const worktrees = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["worktree", "list", "--porcelain", "-z"],
+      failure,
+    );
+    const root = (
+      await this.requireGit(workspace, cwd, environment, ["rev-parse", "--show-toplevel"], failure)
+    ).stdout.trim();
+    if (
+      worktrees.stdout.split("\0\0").some((entry) => {
+        const fields = entry.split("\0");
+        return fields.includes(`branch ${preview.ref}`) && !fields.includes(`worktree ${root}`);
+      })
+    )
+      throw new PreviewConvergenceError(
+        "preview_branch_in_use",
+        "The local preview branch is checked out in another worktree.",
+        false,
+      );
+    for (const displaced of new Set([current, previous])) {
+      if (!displaced || displaced === candidate) continue;
+      // Keep both displaced HEAD and preview tips. Never reset, clean or push.
       await this.requireGit(
         workspace,
         cwd,
         environment,
-        ["update-ref", `refs/facility/retained/${randomUUID()}`, current],
+        ["update-ref", `refs/facility/retained/${randomUUID()}`, displaced],
         failure,
       );
+    }
+    const symbolic = await this.git(workspace, cwd, environment, ["symbolic-ref", "-q", "HEAD"]);
+    if (current !== candidate || symbolic.stdout.trim() !== preview.ref) {
       await onProgress?.();
+      // First check out the exact tree without moving any branch. Ignored files
+      // remain protected even when an owned preview branch must rewind.
       await this.requireGit(
         workspace,
         cwd,
@@ -542,17 +575,46 @@ export class PreviewWorkspaceGitApplicator {
         },
       );
     }
+    const zero = "0".repeat(40);
     await this.requireGit(
       workspace,
       cwd,
       environment,
-      ["update-ref", "refs/facility/preview-managed", candidate],
-      failure,
+      ["update-ref", "--stdin"],
+      {
+        code: "preview_branch_changed",
+        message: "The local preview references changed before the candidate could be attached.",
+        retryable: false,
+      },
+      [
+        "start",
+        "option no-deref",
+        `update ${preview.ref} ${candidate} ${previous ?? zero}`,
+        `update ${preview.ownershipRef} ${candidate} ${owner ?? zero}`,
+        `update ${PREVIEW_MANAGED_REF} ${candidate} ${managed ?? zero}`,
+        "prepare",
+        "commit",
+        "",
+      ].join("\n"),
+    );
+    await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["switch", "--no-overwrite-ignore", preview.branch],
+      {
+        code: "preview_checkout_blocked",
+        message: "The exact preview candidate could not be attached to its local preview branch.",
+        retryable: false,
+      },
     );
     if (
       (
         await this.requireGit(workspace, cwd, environment, ["rev-parse", "HEAD"], failure)
-      ).stdout.trim() !== candidate
+      ).stdout.trim() !== candidate ||
+      (
+        await this.requireGit(workspace, cwd, environment, ["symbolic-ref", "-q", "HEAD"], failure)
+      ).stdout.trim() !== preview.ref
     )
       throw new PreviewConvergenceError(
         "preview_generation_verification_failed",
@@ -560,6 +622,34 @@ export class PreviewWorkspaceGitApplicator {
         false,
       );
     await this.assertDirtyPreserved(workspace, cwd, environment, dirty);
+  }
+
+  private async directRef(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    environment: Record<string, string>,
+    ref: string,
+  ) {
+    const symbolic = await this.git(workspace, cwd, environment, ["symbolic-ref", "-q", ref]);
+    if (symbolic.exitCode !== 1)
+      throw new PreviewConvergenceError(
+        "preview_branch_changed",
+        "Facility preview references must be direct local references.",
+        false,
+      );
+    const result = await this.git(workspace, cwd, environment, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      ref,
+    ]);
+    if (result.exitCode === 1) return null;
+    if (result.exitCode === 0) return result.stdout.trim();
+    throw new PreviewConvergenceError(
+      "preview_branch_unavailable",
+      "Facility could not inspect the local preview references.",
+      true,
+    );
   }
 
   private async dirtySnapshot(
@@ -670,8 +760,9 @@ export class PreviewWorkspaceGitApplicator {
       retryable: boolean;
       details?: Record<string, unknown>;
     },
+    stdin?: string,
   ) {
-    const result = await this.git(workspace, cwd, environment, args);
+    const result = await this.git(workspace, cwd, environment, args, stdin);
     if (result.exitCode !== 0) {
       throw new PreviewConvergenceError(
         failure.code,
@@ -688,6 +779,7 @@ export class PreviewWorkspaceGitApplicator {
     cwd: string,
     environment: Record<string, string>,
     args: string[],
+    stdin?: string,
   ): Promise<WorkspaceCommandResult> {
     this.signal?.throwIfAborted();
     return this.runtime.exec(workspace, {
@@ -696,6 +788,7 @@ export class PreviewWorkspaceGitApplicator {
       args,
       cwd,
       env: environment,
+      stdin,
       timeoutMs: 5 * 60_000,
     });
   }

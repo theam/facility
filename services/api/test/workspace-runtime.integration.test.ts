@@ -12,6 +12,7 @@ import { createStoryDomain } from "../src/story-domain.js";
 import { ENGINE_PROCESS_WRAPPER, stopInterruptedEngineProcess } from "../src/turns/engines.js";
 import { ENGINE_USAGE_PROCESS, readUsageJournal } from "../src/turns/usage-journal.js";
 import { DockerWorkspaceRuntime } from "../src/workspaces/docker.js";
+import { previewBranchRefs } from "../src/workspaces/preview-branch.js";
 import {
   exportWorkspaceBackup,
   restoreWorkspaceBackup,
@@ -152,6 +153,8 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
       const first = await run("git rev-parse HEAD", "source/app");
       const applicator = new PreviewWorkspaceGitApplicator(runtime);
       await applicator.apply({ workspace, credentials, repositories: [target(first)] });
+      const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+      expect(await run("git branch --show-current", "repos/acme/app")).toBe(preview.branch);
       expect(await run(`git merge-base --is-ancestor ${first} HEAD`, "repos/acme/app")).toBe("");
       expect(await run("cat local-data.txt", "repos/acme/app")).toBe("retained user data");
       expect((await runtime.inspect(workspace)).volumeRef).toBe(workspace.volumeRef);
@@ -177,6 +180,8 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
 
       await run("git restore README.md", "repos/acme/app");
       await applicator.apply({ workspace, credentials, repositories: [target(second)] });
+      expect(await run("git branch --show-current", "repos/acme/app")).toBe(preview.branch);
+      expect(await run("git rev-parse HEAD", "repos/acme/app")).toBe(second);
       expect(await run("cat README.md", "repos/acme/app")).toBe("second generation");
       expect(await run("cat local-data.txt", "repos/acme/app")).toBe("retained user data");
       expect((await runtime.inspect(workspace)).volumeRef).toBe(workspace.volumeRef);
