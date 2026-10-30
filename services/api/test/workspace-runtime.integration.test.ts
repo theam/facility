@@ -29,13 +29,34 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
       image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
     });
     const bytes = Buffer.from("synthetic private input\0not client data");
+    const exec = vi.spyOn(runtime, "exec");
     const file = {
       id: `infile_${randomBytes(12).toString("hex")}`,
       size: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     };
+    const assertNoStaging = async (target: WorkspaceLocator) => {
+      const paths = exec.mock.calls
+        .filter(([, command]) => ["publish", "export"].includes(String(command.args?.[2])))
+        .flatMap(([, command]) => {
+          const path = String(command.args?.[5]);
+          return path.endsWith("/content") ? [path, path.slice(0, path.lastIndexOf("/"))] : [path];
+        });
+      expect(paths.length).toBeGreaterThan(0);
+      const leftovers = await runtime.exec(target, {
+        command: "python3",
+        args: [
+          "-c",
+          "import os,sys,json; print(json.dumps([p for p in sys.argv[1:] if os.path.lexists(p)]))",
+          ...paths,
+        ],
+        resume: false,
+      });
+      expect(leftovers).toMatchObject({ exitCode: 0, stdout: "[]\n" });
+    };
     try {
       await runtime.writeInputFile(workspace, file, bytes);
+      await assertNoStaging(workspace);
       expect(await runtime.readInputFile(workspace, file)).toEqual(bytes);
       await runtime.suspend(workspace);
       await expect(runtime.readInputFile(workspace, file)).rejects.toThrow();
@@ -47,7 +68,23 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
       expect(await runtime.readInputFile(replacement, file)).toEqual(bytes);
       await runtime.removeInputFile(replacement, file);
       await expect(runtime.readInputFile(replacement, file)).rejects.toThrow();
+      const failed = { ...file, id: `infile_${randomBytes(12).toString("hex")}` };
+      const original = exec.getMockImplementation() ?? DockerWorkspaceRuntime.prototype.exec;
+      let skipCleanup = true;
+      exec.mockImplementation(async (target, command) => {
+        if (command.args?.[2] === "cleanup" && command.args[4] === failed.id && skipCleanup) {
+          skipCleanup = false;
+          return { exitCode: 1, stdout: "", stderr: "synthetic cleanup failure", durationMs: 1 };
+        }
+        return original.call(runtime, target, command);
+      });
+      await expect(runtime.writeInputFile(replacement, failed, bytes)).rejects.toThrow(
+        "input_file_cleanup_failed",
+      );
+      await runtime.removeInputFile(replacement, failed);
+      await assertNoStaging(replacement);
     } finally {
+      exec.mockRestore();
       await runtime.destroy(workspace);
     }
   }, 120_000);

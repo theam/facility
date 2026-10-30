@@ -22,16 +22,37 @@ remain text-only.
 - All database, CLI, and critical API suites, run directly without cached results
   or accepted skips. The API files were enumerated in the same order as
   `scripts/test-critical.mjs`, with the same Docker-suite exclusion. A subsequent
-  full dispatcher run includes the additional manifest/missing-file regression.
+  full dispatcher run includes manifest/missing-file and pre-engine retry regressions.
 - `pnpm test:uncached`; the final web suite has 204 passing tests.
-- The 14 focused file HTTP/storage/provider tests cover byte/hash mismatch,
+- The 18 focused file HTTP/storage/provider tests cover byte/hash mismatch,
   actual streamed-size limits (including no Content-Length), grant replay and
   expiry, revocation, cross-org/project/story denial, path and symlink rejection,
   quota reservation/release, deletion races, and explicit compute resumption.
 - `pnpm check:unused`, `pnpm guards`, and the committed migration-range check.
 - `pnpm audit --audit-level low` exits successfully under the repository's existing
   policy. Two pre-existing high-severity exceptions remain; this change adds no
-  dependency or scanner exception.
+  external dependency or scanner exception.
+
+## Review follow-up
+
+Three independently reviewed defects have regression coverage:
+
+- Provider writes now use a private per-file staging directory owned by the
+  command user. Docker can write a root-owned child without preventing cleanup.
+  Cleanup exit status is checked; a failed cleanup does not mark the upload
+  available. Explicit discard removes matching interrupted-transfer staging
+  before releasing its reservation. The real Docker test checks copies before
+  compute replacement and after a simulated cleanup failure and discard.
+- An attention retry preserves only the failed request's attachment IDs and
+  revalidates them. A removed file rejects the retry rather than silently losing
+  its manifest. Both pre-engine setup-failure cases run in the dispatcher suite
+  (32 passing tests), without real inference.
+- OpenAPI declares octet-stream request/response bodies. The SDK supports binary
+  PUT bodies and ArrayBuffer downloads without JSON conversion; single-use
+  binary uploads are not automatically retried. Its 18 passing tests include a
+  local HTTP round trip. API integration also runs the SDK through the real
+  Fastify handlers. A development workspace link to the existing SDK supports
+  that test; no external package was added.
 
 The local critical suites used a dedicated disposable PostgreSQL container on
 port 5469. The literal `pnpm verify` wrapper was not used: it targets the shared

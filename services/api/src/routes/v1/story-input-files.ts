@@ -33,6 +33,10 @@ const InputFile = z.object({
   expiresAt: DateValue,
 });
 const FileResult = z.object({ file: InputFile });
+// Runtime validation stays binary; the metadata describes its wire encoding.
+const BinaryBody = z
+  .custom<Buffer>((value) => Buffer.isBuffer(value))
+  .meta({ type: "string", format: "binary" });
 const Limits = z.object({
   fileBytes: z.number().int(),
   storyBytes: z.number().int(),
@@ -116,6 +120,8 @@ export async function registerStoryInputFileRoutes(app: FastifyInstance, config:
       schema: {
         params: FileScope,
         operationId: "uploadStoryInputFile",
+        consumes: ["application/octet-stream"],
+        body: BinaryBody,
         headers: z.object({ "x-facility-file-token": z.string().regex(/^[A-Za-z0-9_-]{43}$/) }),
         response: { 200: FileResult },
         description:
@@ -131,6 +137,11 @@ export async function registerStoryInputFileRoutes(app: FastifyInstance, config:
           request.id,
         );
         uploadSizes.set(request, grant.size);
+        if (
+          request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !==
+          "application/octet-stream"
+        )
+          throw new ApiError(415, "input_file_content_type", "Upload as application/octet-stream");
         if (Number(request.headers["content-length"]) > grant.size)
           throw new ApiError(413, "input_file_too_large", "Upload exceeds its declared byte limit");
         request.raw.once("aborted", () => {
@@ -191,7 +202,12 @@ export async function registerStoryInputFileRoutes(app: FastifyInstance, config:
     `${base}/:fileId/content`,
     {
       config: { permission: "workspaces:read" },
-      schema: { params: FileScope, operationId: "downloadStoryInputFile" },
+      schema: {
+        params: FileScope,
+        operationId: "downloadStoryInputFile",
+        produces: ["application/octet-stream"],
+        response: { 200: BinaryBody },
+      },
     },
     async (request, reply) => {
       const { fileId, ...scope } = request.params as z.infer<typeof FileScope>;

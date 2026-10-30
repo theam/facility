@@ -45,6 +45,18 @@ When the file is available, pass its ID in `attachmentIds` to
 `facility_send_message`. Only this explicit send queues the native agent.
 File attachments do not give no-tools consultations workspace access.
 
+## TypeScript SDK
+
+The repository's `FacilityClient.put` accepts `ArrayBuffer`, typed-array views
+and `Blob` bodies for the binary upload route. Pass the prepared upload's headers
+in the request options. Do not JSON-stringify or base64-encode the file.
+`FacilityClient.get` returns an `ArrayBuffer` for the binary download route.
+Both encodings are declared as `application/octet-stream` in OpenAPI.
+
+Binary uploads are never automatically retried, even with an idempotency key:
+the file capability is single-use. If a response is lost, read the file's metadata
+before preparing another transfer. JSON requests keep their existing retry policy.
+
 ## Limits and retention
 
 - 25 MiB per file, five files per message, and 100 MiB / 100 retained file
@@ -57,6 +69,9 @@ File attachments do not give no-tools consultations workspace access.
   This prevents interrupted storage writes from bypassing quota. Delete unused
   reservations from the UI or with `facility_remove_input_file`; cleanup can
   explicitly resume compute when necessary.
+- Per-file private staging is cleaned after transfers and on explicit discard,
+  including remnants of interrupted transfers. A cleanup failure is reported,
+  not treated as a successful available upload.
 - Suspension and archive retain input files. Explicit workspace destruction
   removes their volume and releases their reservations. Backups of the volume
   include input files.

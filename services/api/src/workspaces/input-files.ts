@@ -33,16 +33,15 @@ export async function transferInputFile(
 ) {
   inputFilePath(file.id);
   if (bytes) verifyInputBytes(file, bytes);
-  const stage = `/tmp/facility-input-${randomUUID()}`;
+  const stage = `/tmp/facility-input-${file.id}-${randomUUID()}/content`;
   const root = runtime.provider === "fake" ? workspace.volumeRef : "/workspace";
-  try {
-    if (bytes) await transport.write(stage, bytes);
+  const run = async (action: string) => {
     const result = await runtime.exec(workspace, {
       command: "python3",
       args: [
         "-c",
         INPUT_FILE_OPERATION,
-        operation,
+        action,
         root,
         file.id,
         stage,
@@ -50,26 +49,29 @@ export async function transferInputFile(
         file.sha256,
       ],
       resume: false,
-      timeoutMs: 60_000,
+      timeoutMs: action === "cleanup" ? 10_000 : 60_000,
     });
-    if (result.exitCode !== 0) throw new Error("input_file_storage_failed");
+    if (result.exitCode !== 0)
+      throw new Error(
+        action === "cleanup" ? "input_file_cleanup_failed" : "input_file_storage_failed",
+      );
+  };
+  // The provider may write as root. A private directory owned by the command
+  // user still lets that user unlink its children, unlike sticky /tmp itself.
+  let staged = false;
+  try {
+    if (operation !== "remove") {
+      await run("stage");
+      staged = true;
+    }
+    if (bytes) await transport.write(stage, bytes);
+    await run(operation);
     if (operation !== "export") return Buffer.alloc(0);
     const value = await transport.read(stage);
     verifyInputBytes(file, value);
     return value;
   } finally {
-    await runtime
-      .exec(workspace, {
-        command: "python3",
-        args: [
-          "-c",
-          "import os,sys; os.unlink(sys.argv[1]) if os.path.exists(sys.argv[1]) else None",
-          stage,
-        ],
-        resume: false,
-        timeoutMs: 10_000,
-      })
-      .catch(() => undefined);
+    if (staged) await run("cleanup");
   }
 }
 
@@ -79,12 +81,32 @@ export const INPUT_FILE_OPERATION = `
 import hashlib, os, re, stat, sys
 op, root, ident, stage, size, digest = sys.argv[1:]
 size = int(size)
-assert op in ('publish','export','remove') and re.fullmatch(r'infile_[a-z0-9]{16,64}', ident)
-assert re.fullmatch(r'/tmp/facility-input-[a-f0-9-]{36}', stage)
+assert op in ('stage','cleanup','publish','export','remove') and re.fullmatch(r'infile_[a-z0-9]{16,64}', ident)
+stage_pattern = r'facility-input-' + re.escape(ident) + r'-[a-f0-9-]{36}'
+assert re.fullmatch(r'/tmp/' + stage_pattern + r'/content', stage)
 assert 0 < size <= 25*1024*1024 and re.fullmatch(r'[a-f0-9]{64}', digest)
 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-fds = [os.open(root, flags)]
+tmp = os.open(os.path.realpath('/tmp'), flags)
+stage_name = stage.split('/')[-2]
+def clean_stage(name):
+  try: fd = os.open(name, flags, dir_fd=tmp)
+  except FileNotFoundError: return
+  try:
+    info = os.fstat(fd)
+    assert info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700
+    try: os.unlink('content', dir_fd=fd)
+    except FileNotFoundError: pass
+  finally: os.close(fd)
+  os.rmdir(name, dir_fd=tmp)
+fds = []
 try:
+  if op == 'stage':
+    os.mkdir(stage_name, 0o700, dir_fd=tmp)
+    sys.exit(0)
+  if op == 'cleanup':
+    clean_stage(stage_name)
+    sys.exit(0)
+  fds.append(os.open(root, flags))
   for part in ('.facility','inputs'):
     try: os.mkdir(part, 0o700, dir_fd=fds[-1])
     except FileExistsError: pass
@@ -94,8 +116,14 @@ try:
     for name in (ident, ident + '.partial'):
       try: os.unlink(name, dir_fd=parent)
       except FileNotFoundError: pass
+    # Also remove known per-file staging left by an interrupted transfer.
+    # Never recurse through or follow arbitrary entries in /tmp.
+    for name in os.listdir(tmp):
+      if re.fullmatch(stage_pattern, name): clean_stage(name)
   else:
-    source = os.open(stage, os.O_RDONLY | os.O_NOFOLLOW) if op == 'publish' else os.open(ident, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    stage_fd = os.open(stage_name, flags, dir_fd=tmp)
+    fds.append(stage_fd)
+    source = os.open('content', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=stage_fd) if op == 'publish' else os.open(ident, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
     try:
       info = os.fstat(source)
       assert stat.S_ISREG(info.st_mode) and info.st_size == size
@@ -107,7 +135,7 @@ try:
       assert len(content) == size and hashlib.sha256(content).hexdigest() == digest
     finally: os.close(source)
     temp = ident + '.partial'
-    target = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent) if op == 'publish' else os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    target = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent) if op == 'publish' else os.open('content', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=stage_fd)
     try:
       with os.fdopen(target, 'wb') as output:
         output.write(content); output.flush(); os.fsync(output.fileno())
@@ -117,6 +145,7 @@ try:
       if op == 'publish': os.unlink(temp, dir_fd=parent)
 finally:
   for fd in reversed(fds): os.close(fd)
+  os.close(tmp)
 `;
 
 /** A single regular tar entry for Docker's binary archive API. */

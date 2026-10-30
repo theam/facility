@@ -69,11 +69,13 @@ type OpenApiOperation<Method extends string, Path extends string> = {
     : never;
 }[FacilityOpenApiPath<Path>];
 
-type JsonContent<Value> = Value extends { content: { "application/json": infer Payload } }
+type ResponseContent<Value> = Value extends { content: { "application/json": infer Payload } }
   ? Payload
-  : Value extends { content?: never }
-    ? undefined
-    : unknown;
+  : Value extends { content: { "application/octet-stream": unknown } }
+    ? ArrayBuffer
+    : Value extends { content?: never }
+      ? undefined
+      : unknown;
 
 type SuccessfulResponse<Responses> = Responses extends { 200: infer Success }
   ? Success
@@ -87,7 +89,7 @@ type SuccessfulResponse<Responses> = Responses extends { 200: infer Success }
 
 export type FacilityGeneratedResponse<Method extends string, Path extends string> =
   OpenApiOperation<Method, Path> extends { responses: infer Responses }
-    ? JsonContent<SuccessfulResponse<Responses>>
+    ? ResponseContent<SuccessfulResponse<Responses>>
     : unknown;
 
 export type FacilityGeneratedBody<Method extends string, Path extends string> =
@@ -95,7 +97,11 @@ export type FacilityGeneratedBody<Method extends string, Path extends string> =
     requestBody: { content: { "application/json": infer Body } };
   }
     ? Body
-    : undefined;
+    : OpenApiOperation<Method, Path> extends {
+          requestBody: { content: { "application/octet-stream": unknown } };
+        }
+      ? FacilityBinaryBody
+      : undefined;
 
 export type FacilityGeneratedQuery<Method extends string, Path extends string> =
   OpenApiOperation<Method, Path> extends { parameters: { query?: infer Query } }
@@ -104,7 +110,9 @@ export type FacilityGeneratedQuery<Method extends string, Path extends string> =
 
 type ArrayItem<Value> = Value extends readonly (infer Item)[] ? Item : never;
 
-export type FacilityRouteMethod = "GET" | "POST" | "PATCH" | "DELETE";
+/** Unencoded bytes for application/octet-stream requests. */
+export type FacilityBinaryBody = ArrayBuffer | ArrayBufferView | Blob;
+export type FacilityRouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type FacilityRoutePath<Method extends FacilityRouteMethod> = {
   [Spec in Extract<keyof OpenApiPaths, string>]: Lowercase<Method> extends keyof OpenApiPaths[Spec]
     ? ExpandOpenApiPath<Spec>

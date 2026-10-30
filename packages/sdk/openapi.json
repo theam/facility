@@ -27362,6 +27362,17 @@
       "put": {
         "operationId": "uploadStoryInputFile",
         "description": "Single-use, file-scoped upload capability; send raw application/octet-stream bytes, never JSON or base64.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
         "parameters": [
           {
             "schema": {
@@ -27600,7 +27611,15 @@
         ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
           },
           "400": {
             "description": "The request is invalid.",

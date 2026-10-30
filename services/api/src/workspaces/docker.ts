@@ -43,7 +43,9 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       workspace: { ...workspace, expectedComputeRef: inspection.computeRef },
       transport: {
         write: async (path: string, bytes: Buffer) => {
-          await container.putArchive(inputFileArchive(path, bytes), { path: "/tmp" });
+          await container.putArchive(inputFileArchive(path, bytes), {
+            path: path.slice(0, path.lastIndexOf("/")),
+          });
         },
         read: async (path: string) => readInputArchive(await container.getArchive({ path }), path),
       },

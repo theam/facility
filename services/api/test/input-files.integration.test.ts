@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -19,6 +19,7 @@ import {
   turns,
   workspaces,
 } from "@facility/db";
+import { FacilityClient } from "@facility/sdk";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -207,6 +208,68 @@ describe("story input file HTTP and domain boundaries", () => {
     expect(await db.select().from(turns).where(eq(turns.storyId, scope.storyId))).toHaveLength(0);
     expect(enqueue).not.toHaveBeenCalled();
   });
+  it("publishes the binary wire contract from the running API", () => {
+    const document = app.swagger() as { paths?: Record<string, unknown> };
+    expect(
+      document.paths?.[
+        "/v1/projects/{projectId}/workspace-stories/{storyId}/input-files/{fileId}/content"
+      ],
+    ).toMatchObject({
+      put: {
+        requestBody: {
+          required: true,
+          content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+        },
+      },
+      get: {
+        responses: {
+          200: {
+            content: {
+              "application/octet-stream": { schema: { type: "string", format: "binary" } },
+            },
+          },
+        },
+      },
+    });
+  });
+  it("round-trips non-JSON content through the SDK and real Fastify upload/download handlers", async () => {
+    const value = Buffer.from([0, 255, 128, 1]);
+    const prepared = await prepare({
+      size: value.length,
+      sha256: createHash("sha256").update(value).digest("hex"),
+    });
+    const client = new FacilityClient({
+      baseUrl: "http://facility.local",
+      apiKey: secret,
+      maxRetries: 0,
+      fetch: async (input, init) => {
+        const headers: Record<string, string> = {};
+        new Headers(init?.headers).forEach((value, key) => {
+          headers[key] = value;
+        });
+        const response = await app.inject({
+          method: init?.method === "PUT" ? "PUT" : "GET",
+          url: new URL(String(input)).pathname,
+          headers,
+          payload: init?.body instanceof ArrayBuffer ? Buffer.from(init.body) : undefined,
+        });
+        const outputHeaders: Record<string, string> = {};
+        for (const [key, value] of Object.entries(response.headers))
+          if (value !== undefined) outputHeaders[key] = String(value);
+        return new Response(new Uint8Array(response.rawPayload), {
+          status: response.statusCode,
+          headers: outputHeaders,
+        });
+      },
+    });
+    const path =
+      `/v1/projects/${projectId}/workspace-stories/${scope.storyId}/input-files/${prepared.file.id}/content` as const;
+    expect(await client.put(path, value, { headers: prepared.upload.headers })).toMatchObject({
+      file: { state: "available" },
+    });
+    expect(Buffer.from(await client.get(path))).toEqual(value);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
   it("rejects unauthenticated, read-only, other-project and other-story mutations", async () => {
     expect((await app.inject({ method: "POST", url: base(), payload: {} })).statusCode).toBe(401);
     expect(
@@ -249,6 +312,44 @@ describe("story input file HTTP and domain boundaries", () => {
         })
       ).statusCode,
     ).toBe(404);
+  });
+  it("retains failed cleanup reservations until a physical discard removes staging", async () => {
+    const prepared = await prepare();
+    const original = runtime.exec.bind(runtime);
+    let stage = "",
+      fail = true;
+    const exec = vi.spyOn(runtime, "exec").mockImplementation(async (target, command) => {
+      if (command.args?.[2] === "cleanup" && command.args[4] === prepared.file.id && fail) {
+        fail = false;
+        stage = String(command.args[5]);
+        return { exitCode: 1, stdout: "", stderr: "synthetic cleanup failure", durationMs: 1 };
+      }
+      return original(target, command);
+    });
+    try {
+      expect((await upload(prepared)).statusCode).toBe(503);
+      expect(
+        (await db.select().from(storyInputFiles).where(eq(storyInputFiles.id, prepared.file.id)))[0]
+          ?.state,
+      ).toBe("failed");
+      expect(await readFile(stage)).toEqual(bytes);
+      expect(
+        (
+          await app.inject({
+            method: "DELETE",
+            url: `${base()}/${prepared.file.id}`,
+            headers: auth(),
+          })
+        ).statusCode,
+      ).toBe(200);
+      await expect(readFile(stage)).rejects.toThrow();
+      expect(
+        (await db.select().from(storyInputFiles).where(eq(storyInputFiles.id, prepared.file.id)))[0]
+          ?.state,
+      ).toBe("removed");
+    } finally {
+      exec.mockRestore();
+    }
   });
   it("checks size/hash, expiry, idempotency and live credential revocation", async () => {
     const key = `duplicate-${randomUUID()}`;

@@ -67,6 +67,31 @@ describe("private workspace input files", () => {
     await expect(runtime.writeInputFile(workspace, file, bytes)).rejects.toThrow();
     expect(await runtime.readInputFile(workspace, file)).toEqual(bytes);
   });
+  it("reports cleanup failure and removes its retained per-file staging on discard", async () => {
+    const { runtime, workspace, file, bytes } = await fixture();
+    const original = runtime.exec.bind(runtime);
+    let stage = "",
+      fail = true;
+    const exec = vi.spyOn(runtime, "exec").mockImplementation(async (target, command) => {
+      if (command.args?.[2] === "cleanup" && fail) {
+        fail = false;
+        stage = String(command.args[5]);
+        return { exitCode: 1, stdout: "", stderr: "synthetic cleanup failure", durationMs: 1 };
+      }
+      return original(target, command);
+    });
+    try {
+      await expect(runtime.writeInputFile(workspace, file, bytes)).rejects.toThrow(
+        "input_file_cleanup_failed",
+      );
+      expect(await readFile(stage)).toEqual(bytes);
+      await runtime.removeInputFile(workspace, file);
+      await expect(readFile(stage)).rejects.toThrow();
+      await expect(readFile(inputFilePath(file.id, workspace.volumeRef))).rejects.toThrow();
+    } finally {
+      exec.mockRestore();
+    }
+  });
   it("does not follow directory or target symlinks", async () => {
     const { runtime, workspace, bytes, file } = await fixture();
     const outside = await mkdtemp(join(tmpdir(), "facility-input-outside-"));

@@ -2071,6 +2071,106 @@ Review the request.
       read.mockRestore();
     }
   }, 20_000);
+
+  it.each([
+    false,
+    true,
+  ])("preserves and revalidates attachments when retrying a pre-engine failure (removed=%s)", async (removed) => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `retry-files-${removed}-${suffix}`,
+      title: "Retry a private input",
+      agent: builder,
+      message: "Read the attached retry fixture",
+      messageDedupeKey: `retry-files-start-${removed}-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.workspace?.externalRef || !started.queued.turn)
+      throw new Error("expected workspace and turn");
+    const locator = {
+      id: started.workspace.id,
+      externalRef: started.workspace.externalRef,
+      volumeRef: started.workspace.volumeRef,
+      image: "facility-runner:test",
+    };
+    const bytes = Buffer.from("synthetic-retry-input");
+    const file = {
+      id: newId("infile"),
+      name: "retry-fixture.json",
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      mediaType: "application/json",
+    };
+    await runtime.writeInputFile(locator, file, bytes);
+    await db.insert(storyInputFiles).values({
+      ...file,
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      workspaceId: started.workspace.id,
+      state: "available",
+      authorizer: { type: "user", id: "user_test" },
+      dedupeKey: file.id,
+      expiresAt: new Date(Date.now() + 600_000),
+      receivedAt: new Date(),
+    });
+    await db
+      .update(storyMessages)
+      .set({ metadata: { attachments: [file] } })
+      .where(and(eq(storyMessages.turnId, started.queued.turn.id), eq(storyMessages.role, "user")));
+    const before = engine.requests.length;
+    const setup = vi
+      .spyOn(ProjectEnvironmentService.prototype, "prepare")
+      .mockRejectedValueOnce(new Error("synthetic setup failure before engine"));
+    try {
+      expect(
+        await dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+      ).toMatchObject({ state: "failed" });
+    } finally {
+      setup.mockRestore();
+    }
+    expect(engine.requests).toHaveLength(before);
+    const attention = (await storiesService.get(orgId, projectId, started.story.id)).attention.find(
+      (item) => item.turnId === started.queued.turn?.id && item.status === "open",
+    );
+    if (!attention) throw new Error("expected retryable attention");
+    if (removed) {
+      await runtime.wake(locator);
+      await runtime.removeInputFile(locator, file);
+      await db
+        .update(storyInputFiles)
+        .set({ state: "removed" })
+        .where(eq(storyInputFiles.id, file.id));
+      await expect(
+        storiesService.retryAttention({
+          orgId,
+          projectId,
+          storyId: started.story.id,
+          attentionId: attention.id,
+          actor: { type: "user", id: "user_test" },
+        }),
+      ).rejects.toMatchObject({ code: "input_file_unavailable" });
+      expect(engine.requests).toHaveLength(before);
+      return;
+    }
+    const retry = await storiesService.retryAttention({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      attentionId: attention.id,
+      actor: { type: "user", id: "user_test" },
+    });
+    if (!retry.queued.turn) throw new Error("expected retry turn");
+    expect(retry.queued.message.metadata).toMatchObject({ attachments: [file] });
+    expect(
+      await dispatcher.dispatch({ orgId, projectId, turnId: retry.queued.turn.id }),
+    ).toMatchObject({ state: "succeeded" });
+    expect(engine.requests.at(-1)?.prompt).toContain(`/workspace/.facility/inputs/${file.id}`);
+    expect(engine.requests.at(-1)?.prompt).toContain(file.name);
+  }, 20_000);
 });
 
 async function waitFor(predicate: () => boolean) {

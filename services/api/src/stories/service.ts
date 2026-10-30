@@ -1215,11 +1215,26 @@ export class StoryWorkspaceService {
       throw new StoryServiceError("attention_resolved", "attention item is already resolved");
     }
     const failedTurn = await scopedTurn(this.db, input.orgId, input.projectId, attention.turnId);
+    const [request] = await this.db
+      .select()
+      .from(storyMessages)
+      .where(
+        and(
+          eq(storyMessages.orgId, input.orgId),
+          eq(storyMessages.projectId, input.projectId),
+          eq(storyMessages.storyId, input.storyId),
+          eq(storyMessages.turnId, failedTurn.id),
+          eq(storyMessages.role, "user"),
+        ),
+      )
+      .orderBy(asc(storyMessages.seq))
+      .limit(1);
     const queued = await this.queueMessage({
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: input.storyId,
       body: `Retry requested for ${attention.title}.`,
+      attachmentIds: messageMetadata(request?.metadata).attachments?.map((file) => file.id),
       dedupeKey: `attention-retry:${attention.id}`,
       agent: AgentManifestSchema.parse(failedTurn.manifest),
       actor: input.actor,
