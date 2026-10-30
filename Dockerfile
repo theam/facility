@@ -43,7 +43,6 @@ RUN rm -rf /usr/local/include/node \
 
 # --- deps: install with the full workspace manifest set for cache reuse ---
 FROM base AS deps
-ENV FACILITY_ALLOW_UNUSED_PATCHES=true
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY patches ./patches
 COPY packages/core/package.json packages/core/
@@ -54,7 +53,7 @@ COPY packages/mcp/package.json packages/mcp/
 COPY services/api/package.json services/api/
 # The reviewed image-size patch belongs to the docs-only graph. These filtered
 # service installs deliberately omit docs, so they may leave that patch unused.
-RUN pnpm install --frozen-lockfile --filter '@facility/core...' \
+RUN pnpm install --frozen-lockfile --config.allow-unused-patches=true --filter '@facility/core...' \
       --filter '@facility/agents...' \
       --filter '@facility/db...' --filter '@facility/sdk...' \
       --filter '@facility/mcp...' \
