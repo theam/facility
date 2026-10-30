@@ -63,6 +63,61 @@ function textPayload(result: unknown) {
 }
 
 describe("@facility/mcp 0.12", () => {
+  test("prepares binary uploads without transporting file bytes in tools, then attaches completed IDs", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return {
+          file: { id: "infile_0123456789abcdef" },
+          upload: { method: "PUT", url: "https://facility.example/input-content" },
+        };
+      },
+    });
+    await client.callTool({
+      name: "facility_prepare_file_upload",
+      arguments: {
+        projectId: "project-a",
+        storyId: "story-a",
+        name: "fixture.json",
+        size: 23,
+        sha256: "a".repeat(64),
+        resume: true,
+        idempotencyKey: "fixture-upload-1",
+      },
+    });
+    expect(calls[0]).toMatchObject([
+      "POST",
+      "/v1/projects/project-a/workspace-stories/story-a/input-files",
+      {
+        body: {
+          name: "fixture.json",
+          size: 23,
+          sha256: "a".repeat(64),
+          resume: true,
+          idempotency_key: "fixture-upload-1",
+        },
+      },
+    ]);
+    await client.callTool({
+      name: "facility_send_message",
+      arguments: {
+        projectId: "project-a",
+        storyId: "story-a",
+        message: "Read the fixture",
+        agent: "architect",
+        attachmentIds: ["infile_0123456789abcdef"],
+        idempotencyKey: "fixture-message-1",
+      },
+    });
+    expect(calls[1]).toMatchObject([
+      "POST",
+      "/v1/projects/project-a/workspace-stories/story-a/messages",
+      { body: { attachment_ids: ["infile_0123456789abcdef"], message: "Read the fixture" } },
+    ]);
+    await client.close();
+    await server.close();
+  });
   test("accepts only HTTPS or loopback HTTP authorization-server origins", () => {
     expect(canonicalAuthorizationServerUrl("auth.facility.test")).toBe(
       "https://auth.facility.test",
@@ -113,6 +168,9 @@ describe("@facility/mcp 0.12", () => {
       "facility_start_story",
       "facility_send_message",
       "facility_get_conversation",
+      "facility_prepare_file_upload",
+      "facility_list_input_files",
+      "facility_remove_input_file",
       "facility_get_environment",
       "facility_get_costs",
       "facility_get_budget",

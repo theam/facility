@@ -4,6 +4,7 @@ export const FACILITY_V1_ROUTES = [
   "DELETE /v1/members/:userId",
   "DELETE /v1/projects/:projectId",
   "DELETE /v1/projects/:projectId/repos/:repoId",
+  "DELETE /v1/projects/:projectId/workspace-stories/:storyId/input-files/:fileId",
   "DELETE /v1/projects/:projectId/workspace-stories/:storyId/workspace",
   "DELETE /v1/roles/:roleId",
   "GET /v1/github/installations",
@@ -43,6 +44,8 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/projects/:projectId/workspace-stories/:storyId/delivery-acceptance/:requestId",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/environment",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/environment/variables",
+  "GET /v1/projects/:projectId/workspace-stories/:storyId/input-files",
+  "GET /v1/projects/:projectId/workspace-stories/:storyId/input-files/:fileId/content",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/plan",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/plan/decisions/:requestId",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/plan/repositories",
@@ -84,6 +87,7 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/projects/:projectId/workspace-stories/:storyId/delivery-acceptance/:requestId/confirm",
   "POST /v1/projects/:projectId/workspace-stories/:storyId/environment/browser-test",
   "POST /v1/projects/:projectId/workspace-stories/:storyId/environment/clean-setup",
+  "POST /v1/projects/:projectId/workspace-stories/:storyId/input-files",
   "POST /v1/projects/:projectId/workspace-stories/:storyId/integration-result",
   "POST /v1/projects/:projectId/workspace-stories/:storyId/messages",
   "POST /v1/projects/:projectId/workspace-stories/:storyId/plan",
@@ -95,6 +99,7 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/projects/:projectId/workspace-stories/:storyId/suspend",
   "POST /v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/cancel",
   "POST /v1/roles",
+  "PUT /v1/projects/:projectId/workspace-stories/:storyId/input-files/:fileId/content",
 ] as const;
 
 export type FacilityV1Route = (typeof FACILITY_V1_ROUTES)[number];

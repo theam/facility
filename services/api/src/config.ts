@@ -48,6 +48,12 @@ const EnvSchema = z
     ),
     FACILITY_WORKSPACE_IMAGE: z.string().default("facility-runner:dev"),
     FACILITY_WORKSPACE_DRIVER: z.enum(["docker", "vercel"]).default("docker"),
+    FACILITY_INPUT_PROJECT_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(26214400)
+      .max(10737418240)
+      .default(262144000),
     AUTH_IDENTITY_PROVIDER: z.enum(["github", "oidc"]).default("github"),
     AUTH_CALLBACK_URL: OptionalUrl,
     GITHUB_OAUTH_CLIENT_ID: z.string().optional(),
@@ -283,6 +289,7 @@ export function readConfig(env = process.env): AppConfig {
   const webUrl = parsed.WEB_URL ?? parsed.PUBLIC_URL;
   return {
     databaseUrl: parsed.DATABASE_URL,
+    storyInputProjectMaxBytes: parsed.FACILITY_INPUT_PROJECT_MAX_BYTES,
     secretMasterKey: parsed.SECRET_MASTER_KEY,
     port: parsed.PORT,
     publicUrl: parsed.PUBLIC_URL,

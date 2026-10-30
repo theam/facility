@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import { PassThrough, Readable } from "node:stream";
 import Docker from "dockerode";
 import {
+  inputFileArchive,
+  readInputArchive,
+  transferInputFile,
+  type WorkspaceInputFile,
+} from "./input-files.js";
+import {
   assertWorkspaceId,
   type CreateWorkspace,
   type PreviewEndpoint,
@@ -23,6 +29,38 @@ const KIND = "workspace-v2";
 
 export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "docker" as const;
+
+  private async inputTransport(workspace: WorkspaceLocator) {
+    const inspection = await this.inspect(workspace);
+    if (
+      inspection.state !== "running" ||
+      !inspection.computeRef ||
+      (workspace.expectedComputeRef && workspace.expectedComputeRef !== inspection.computeRef)
+    )
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
+    const container = this.docker.getContainer(inspection.computeRef);
+    return {
+      workspace: { ...workspace, expectedComputeRef: inspection.computeRef },
+      transport: {
+        write: async (path: string, bytes: Buffer) => {
+          await container.putArchive(inputFileArchive(path, bytes), { path: "/tmp" });
+        },
+        read: async (path: string) => readInputArchive(await container.getArchive({ path }), path),
+      },
+    };
+  }
+  async writeInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile, bytes: Buffer) {
+    const target = await this.inputTransport(workspace);
+    await transferInputFile(this, target.workspace, "publish", file, target.transport, bytes);
+  }
+  async readInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile) {
+    const target = await this.inputTransport(workspace);
+    return transferInputFile(this, target.workspace, "export", file, target.transport);
+  }
+  async removeInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile) {
+    const target = await this.inputTransport(workspace);
+    await transferInputFile(this, target.workspace, "remove", file, target.transport);
+  }
 
   constructor(private readonly docker = new Docker()) {}
 

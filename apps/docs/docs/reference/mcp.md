@@ -13,7 +13,7 @@ server. Authorization-server metadata remains available at `/.well-known/oauth-a
 and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
 still require a valid bearer token.
 
-The server exposes forty-four task-oriented tools:
+The server exposes forty-seven task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -48,6 +48,9 @@ The server exposes forty-four task-oriented tools:
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
 | `facility_get_conversation` | Read the shared ordered conversation. |
+| `facility_prepare_file_upload` | Reserve private story input storage and return a short-lived binary HTTP upload grant; does not run an agent. |
+| `facility_list_input_files` | Read private input metadata without waking compute. |
+| `facility_remove_input_file` | Delete an input file and release its reservation; optionally resume compute explicitly. |
 | `facility_get_environment` | Read runtime, services, readiness, endpoints, and recent events. |
 | `facility_open_preview` | Wake and issue a short-lived authenticated preview handoff. |
 | `facility_suspend_story` | Stop compute while preserving durable state. |
@@ -122,6 +125,11 @@ Continue the same conversation, optionally choosing another repository-defined a
   }
 }
 ```
+
+Use `attachmentIds` on `facility_send_message` to reference up to five available input files.
+The [story input files guide](../guides/story-input-files.md) explains the separate binary transfer,
+explicit compute-resume consent, retention and read-evidence limits. No-tools consultations do not
+gain file access through these tools.
 
 Open the running application, suspend compute, and later restore the same workspace:
 

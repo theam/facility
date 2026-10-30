@@ -569,6 +569,13 @@ export const toolDefinitions: ToolDefinition[] = [
       storyId,
       agent,
       message: z.string().min(1).max(200_000),
+      attachmentIds: z
+        .array(z.string().regex(/^infile_[a-z0-9]{16,64}$/))
+        .max(5)
+        .optional()
+        .describe(
+          "Completed input file IDs from this story; files are referenced, not inserted into the message.",
+        ),
       idempotencyKey,
     },
     method: "POST",
@@ -577,6 +584,7 @@ export const toolDefinitions: ToolDefinition[] = [
     body: (args) => ({
       agent: args.agent,
       message: args.message,
+      attachment_ids: args.attachmentIds,
       idempotency_key: args.idempotencyKey,
     }),
     idempotencyKey: (args) => stringValue(args.idempotencyKey),
@@ -598,6 +606,62 @@ export const toolDefinitions: ToolDefinition[] = [
     path: (args) =>
       `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/conversation`,
     query: (args) => ({ after: Number(args.after ?? 0), limit: Number(args.limit ?? 50) }),
+  },
+  {
+    name: "facility_prepare_file_upload",
+    permission: "workspaces:execute",
+    description:
+      "Prepare a private input file for an existing story. Returns a ten-minute, single-file binary PUT grant; the caller uploads local bytes over HTTP, never in tool arguments. resume explicitly permits waking compute on transfer, not running an agent. Then pass the completed file ID to facility_send_message. Needs workspaces:execute.",
+    inputSchema: {
+      projectId,
+      storyId,
+      name: z.string().min(1).max(180),
+      size: z.number().int().min(1).max(26214400),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      mediaType: z.string().max(120).default("application/octet-stream"),
+      resume: z.boolean().default(false),
+      idempotencyKey,
+    },
+    method: "POST",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/input-files`,
+    body: (args) => ({
+      name: args.name,
+      size: args.size,
+      sha256: args.sha256,
+      mediaType: args.mediaType,
+      resume: args.resume,
+      idempotency_key: args.idempotencyKey,
+    }),
+    write: true,
+  },
+  {
+    name: "facility_list_input_files",
+    permission: "projects:read",
+    description:
+      "List this story's private input file metadata and limits without reading contents, waking compute or starting inference. Available is not proof that an agent read a file. Failed/expired uploads retain quota until explicitly removed. Needs projects:read.",
+    inputSchema: { projectId, storyId },
+    method: "GET",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/input-files`,
+  },
+  {
+    name: "facility_remove_input_file",
+    permission: "workspaces:execute",
+    description:
+      "Permanently remove one story input file and release its reserved storage. Existing message references become unavailable; this does not erase previous model context. resume explicitly allows waking compute for cleanup. Does not run an agent. Needs workspaces:execute.",
+    inputSchema: {
+      projectId,
+      storyId,
+      fileId: z.string().regex(/^infile_[a-z0-9]{16,64}$/),
+      resume: z.boolean().default(false),
+    },
+    method: "DELETE",
+    path: (args) =>
+      `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/input-files/${part(args.fileId)}`,
+    query: (args) => ({ resume: args.resume === true ? "true" : "false" }),
+    write: true,
+    destructive: true,
   },
   {
     name: "facility_get_environment",

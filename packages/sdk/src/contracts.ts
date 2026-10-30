@@ -424,6 +424,13 @@ export type StoryMessageContent = {
   reportedModel: string | null;
 };
 export type StoryMessage = {
+  attachments?: Array<{
+    id: string;
+    name: string;
+    size: number;
+    sha256: string;
+    mediaType: string;
+  }>;
   id: string;
   seq: number;
   role: "user" | "agent" | "system";

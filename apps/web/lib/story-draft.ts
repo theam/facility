@@ -2,6 +2,7 @@ export type StoryDraft = {
   agent: string;
   message: string;
   idempotencyKey?: string;
+  attachmentIds?: string[];
 };
 
 const lifetime = 24 * 60 * 60 * 1_000;
@@ -15,7 +16,12 @@ export function storyDraftKey(owner: string | undefined, project: string, story:
 export function readStoryDraft(key: string | null): StoryDraft | null {
   const draft = readStoredStoryDraft(key);
   return draft
-    ? { agent: draft.agent, message: draft.message, idempotencyKey: draft.idempotencyKey }
+    ? {
+        agent: draft.agent,
+        message: draft.message,
+        idempotencyKey: draft.idempotencyKey,
+        attachmentIds: draft.attachmentIds,
+      }
     : null;
 }
 
@@ -33,6 +39,12 @@ function readStoredStoryDraft(key: string | null): (StoryDraft & { updatedAt: nu
       typeof draft.agent !== "string" ||
       typeof draft.message !== "string" ||
       draft.message.length > maximumMessageLength ||
+      (draft.attachmentIds !== undefined &&
+        (!Array.isArray(draft.attachmentIds) ||
+          draft.attachmentIds.length > 5 ||
+          draft.attachmentIds.some(
+            (id: unknown) => typeof id !== "string" || !/^infile_[a-z0-9]{16,64}$/.test(id),
+          ))) ||
       (draft.idempotencyKey !== undefined &&
         (typeof draft.idempotencyKey !== "string" ||
           !/^ui-message-[a-f\d-]{36}$/i.test(draft.idempotencyKey)))
@@ -44,6 +56,7 @@ function readStoredStoryDraft(key: string | null): (StoryDraft & { updatedAt: nu
       agent: draft.agent,
       message: draft.message,
       idempotencyKey: draft.idempotencyKey,
+      attachmentIds: draft.attachmentIds,
       updatedAt: draft.updatedAt,
     };
   } catch {
@@ -54,11 +67,13 @@ function readStoredStoryDraft(key: string | null): (StoryDraft & { updatedAt: nu
 export function writeStoryDraft(key: string | null, draft: StoryDraft) {
   if (!key) return false;
   try {
-    if (!draft.message) sessionStorage.removeItem(key);
+    if (!draft.message && !draft.attachmentIds?.length) sessionStorage.removeItem(key);
     else {
       const previous = readStoredStoryDraft(key);
       const updatedAt =
-        previous?.agent === draft.agent && previous.message === draft.message
+        previous?.agent === draft.agent &&
+        previous.message === draft.message &&
+        JSON.stringify(previous.attachmentIds) === JSON.stringify(draft.attachmentIds)
           ? previous.updatedAt
           : Date.now();
       sessionStorage.setItem(key, JSON.stringify({ ...draft, version: 1, updatedAt }));
@@ -78,7 +93,8 @@ export function clearSentStoryDraft(key: string | null, attempt: StoryDraft) {
       !current ||
       current.idempotencyKey !== attempt.idempotencyKey ||
       current.agent !== attempt.agent ||
-      current.message !== attempt.message
+      current.message !== attempt.message ||
+      JSON.stringify(current.attachmentIds) !== JSON.stringify(attempt.attachmentIds)
     )
       return false;
     sessionStorage.removeItem(key);

@@ -102,6 +102,13 @@ credential revocation remains a separate operator action.
   agent responses recorded separately from progress, `combined_transcript` for older agent
   messages stored before that separation, `text` otherwise. Newest-first pages add `related`
   (older messages completing a run present on the page), `has_more` and `next_cursor`.
+- `/v1/projects/:projectId/workspace-stories/:storyId/input-files` lists private file metadata
+  (`GET`, `projects:read`) or prepares one upload (`POST`, `workspaces:execute`).
+  `/:fileId/content` accepts a bounded binary `PUT` with a single-file, ten-minute
+  `x-facility-file-token` capability, or downloads verified bytes (`GET`, `workspaces:read`).
+  `DELETE /:fileId` requires `workspaces:execute`; explicit `?resume=true` can wake compute
+  for physical cleanup. See [story input files](../guides/story-input-files.md) for limits,
+  retention and the `attachment_ids` message field. Uploading never queues an agent.
 - `/v1/projects/:projectId/workspace-stories/:storyId/timeline` pages the evidence timeline
   newest first with an opaque `before` cursor; agent events are summarized, not raw.
 - `/v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/activity` pages one run's

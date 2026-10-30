@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,8 @@ import {
   projectRepositories,
   projects,
   storyEvidenceEvents,
+  storyInputFiles,
+  storyMessages,
   turnEvents,
   turnGitEvidence,
   turns,
@@ -1966,6 +1968,109 @@ Review the request.
       await escaped;
     }
   }, 15000);
+
+  it("verifies private input bytes before handing a manifest to the native engine", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `files-${suffix}`,
+      title: "Read a private input",
+      agent: builder,
+      message: "Read the attached fixture without publishing it",
+      messageDedupeKey: `files-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [] },
+    });
+    if (!started.workspace?.externalRef || !started.queued.turn)
+      throw new Error("expected workspace and turn");
+    const bytes = Buffer.from("synthetic-private-input-not-inline-in-prompt");
+    const file = {
+      id: newId("infile"),
+      name: "fixture.json",
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      mediaType: "application/json",
+    };
+    await runtime.writeInputFile(
+      {
+        id: started.workspace.id,
+        externalRef: started.workspace.externalRef,
+        volumeRef: started.workspace.volumeRef,
+        image: "facility-runner:test",
+      },
+      file,
+      bytes,
+    );
+    await db.insert(storyInputFiles).values({
+      ...file,
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      workspaceId: started.workspace.id,
+      state: "available",
+      authorizer: { type: "user", id: "user_test" },
+      dedupeKey: `files-${suffix}`,
+      expiresAt: new Date(Date.now() + 600_000),
+      receivedAt: new Date(),
+    });
+    await db
+      .update(storyMessages)
+      .set({ metadata: { attachments: [file] } })
+      .where(and(eq(storyMessages.turnId, started.queued.turn.id), eq(storyMessages.role, "user")));
+    const read = vi.spyOn(runtime, "readInputFile");
+    try {
+      expect(
+        await dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id }),
+      ).toMatchObject({ state: "succeeded" });
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({ id: started.workspace.id }),
+        file,
+      );
+      const prompt = engine.requests.at(-1)?.prompt;
+      expect(prompt).toContain(`/workspace/.facility/inputs/${file.id}`);
+      expect(prompt).toContain(file.sha256);
+      expect(prompt).not.toContain(bytes.toString());
+      const events = await db
+        .select()
+        .from(turnEvents)
+        .where(eq(turnEvents.turnId, started.queued.turn.id));
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "turn.input_files_available",
+          data: expect.objectContaining({ evidence: "verified_bytes_and_manifest_not_agent_read" }),
+        }),
+      );
+      await runtime.removeInputFile(
+        {
+          id: started.workspace.id,
+          externalRef: started.workspace.externalRef,
+          volumeRef: started.workspace.volumeRef,
+          image: "facility-runner:test",
+        },
+        file,
+      );
+      const next = await storiesService.queueMessage({
+        orgId,
+        projectId,
+        storyId: started.story.id,
+        body: "Read the fixture again",
+        dedupeKey: `files-missing-${suffix}`,
+        attachmentIds: [file.id],
+        agent: builder,
+        actor: { type: "user", id: "user_test" },
+        trigger: { type: "manual" },
+      });
+      if (!next.turn) throw new Error("expected follow-up turn");
+      const before = engine.requests.length;
+      expect(await dispatcher.dispatch({ orgId, projectId, turnId: next.turn.id })).toMatchObject({
+        state: "failed",
+      });
+      expect(engine.requests).toHaveLength(before);
+    } finally {
+      read.mockRestore();
+    }
+  }, 20_000);
 });
 
 async function waitFor(predicate: () => boolean) {

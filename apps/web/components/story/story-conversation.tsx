@@ -303,6 +303,16 @@ function RequestBlock({ message, agentName }: { message: StoryMessage; agentName
       ) : null}
       <div className="max-w-prose text-[15px] leading-7">
         <ExpandableMarkdown source={presentation.body} label="request" />
+        {message.attachments?.length ? (
+          <ul className="mt-2 text-[12px] text-(--mut)">
+            {message.attachments.map((file) => (
+              <li key={file.id}>
+                Attached: {file.name} · {file.size.toLocaleString()} bytes · referenced by this
+                message, not proof of agent receipt or reading
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       {presentation.sourceUrl ? (
         <a

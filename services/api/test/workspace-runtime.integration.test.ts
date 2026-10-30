@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { newId } from "@facility/core";
 import { engineSessions, storyMessages, turns, workspaces } from "@facility/db";
@@ -22,6 +22,35 @@ import { consultationDatabaseUrl, consultationTestEnvironment } from "./fixtures
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it("retains private input files outside Git through suspension and compute replacement", async () => {
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const workspace = await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+    });
+    const bytes = Buffer.from("synthetic private input\0not client data");
+    const file = {
+      id: `infile_${randomBytes(12).toString("hex")}`,
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    try {
+      await runtime.writeInputFile(workspace, file, bytes);
+      expect(await runtime.readInputFile(workspace, file)).toEqual(bytes);
+      await runtime.suspend(workspace);
+      await expect(runtime.readInputFile(workspace, file)).rejects.toThrow();
+      const resumed = await runtime.wake(workspace);
+      expect(await runtime.readInputFile(resumed, file)).toEqual(bytes);
+      await runtime.retireCompute({ ...resumed, expectedComputeRef: resumed.computeRef });
+      const replacement = await runtime.wake(workspace);
+      expect(replacement.computeRef).not.toBe(resumed.computeRef);
+      expect(await runtime.readInputFile(replacement, file)).toEqual(bytes);
+      await runtime.removeInputFile(replacement, file);
+      await expect(runtime.readInputFile(replacement, file)).rejects.toThrow();
+    } finally {
+      await runtime.destroy(workspace);
+    }
+  }, 120_000);
   it("renews Git and gh credentials in an existing runner without replacing its volume", async () => {
     const runtime = new DockerWorkspaceRuntime(new Docker());
     const workspace = await runtime.create({
