@@ -18,6 +18,7 @@ import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
+import { type InputFileReference, validateInputFileReferences } from "../stories/input-files.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import {
   authorizePlanExecution,
@@ -346,11 +347,42 @@ export class TurnDispatcher {
         });
       }, turn.id);
       const engine = this.engines.get(manifest.engine);
+      const requestMessage = messages.find(
+        (message) => message.turnId === turn.id && message.role === "user",
+      );
+      const attached =
+        (requestMessage?.metadata as { attachments?: InputFileReference[] })?.attachments ?? [];
+      const inputFiles = await validateInputFileReferences(
+        this.db,
+        { orgId: turn.orgId, projectId: turn.projectId, storyId: turn.storyId },
+        attached.map((file) => file.id),
+      );
+      if (inputFiles.length) {
+        if (!this.runtime?.readInputFile) throw new Error("Workspace does not support input files");
+        for (const file of inputFiles)
+          await this.runtime.readInputFile(workspaceLocator(workspace), file);
+        await appendTurnEvent(this.db, {
+          ...eventBase,
+          type: "turn.input_files_available",
+          data: {
+            files: inputFiles.map((file) => ({ id: file.id, sha256: file.sha256 })),
+            evidence: "verified_bytes_and_manifest_not_agent_read",
+          },
+        });
+      }
       const engineRequest = {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(manifest, story, conversation.summary, messages, turn.id, attention),
+        prompt: buildPrompt(
+          manifest,
+          story,
+          conversation.summary,
+          messages,
+          turn.id,
+          attention,
+          inputFiles,
+        ),
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
         environment: prepared.processEnvironment,

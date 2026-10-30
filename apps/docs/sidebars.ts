@@ -37,6 +37,7 @@ const sidebars: SidebarsConfig = {
         "guides/kickstart",
         "guides/existing-repo",
         "guides/operate-story",
+        "guides/story-input-files",
         "guides/project-overview",
         "guides/validate-workspace-loop",
         "guides/troubleshooting",

@@ -91,6 +91,19 @@ export type WorkspaceBackup = {
 
 export interface WorkspaceRuntime {
   readonly provider: WorkspaceProvider;
+  writeInputFile?(
+    workspace: WorkspaceLocator,
+    file: import("./input-files.js").WorkspaceInputFile,
+    bytes: Buffer,
+  ): Promise<void>;
+  readInputFile?(
+    workspace: WorkspaceLocator,
+    file: import("./input-files.js").WorkspaceInputFile,
+  ): Promise<Buffer>;
+  removeInputFile?(
+    workspace: WorkspaceLocator,
+    file: import("./input-files.js").WorkspaceInputFile,
+  ): Promise<void>;
   /** Pure creation preflight: no provider calls or mutations, safe inside a DB transaction. */
   validateCreate?(input: Omit<CreateWorkspace, "id">): void;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;

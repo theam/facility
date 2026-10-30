@@ -13,6 +13,20 @@ beforeEach(() => {
 });
 
 describe("tab-local story drafts", () => {
+  it("retains file references without text and ties receipt ownership to the exact selection", () => {
+    const draft = {
+      agent: "builder",
+      message: "",
+      attachmentIds: ["infile_0123456789abcdef"],
+      idempotencyKey: `ui-message-${crypto.randomUUID()}`,
+    };
+    writeStoryDraft("files", draft);
+    expect(readStoryDraft("files")).toEqual(draft);
+    writeStoryDraft("files", { ...draft, attachmentIds: ["infile_fedcba9876543210"] });
+    expect(clearSentStoryDraft("files", draft)).toBe(false);
+    writeStoryDraft("files", { agent: "builder", message: "" });
+    expect(readStoryDraft("files")).toBeNull();
+  });
   it("clears a receipt only while the exact submitted draft still owns storage", () => {
     const attempt = {
       agent: "builder",
