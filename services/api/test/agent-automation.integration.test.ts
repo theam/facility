@@ -814,6 +814,69 @@ describe("agent automations use persistent story workspaces", async () => {
     ).resolves.toMatchObject({ state: "running", volumeRef: workspace.volumeRef });
   });
 
+  it("routes a typed story's pull request to that story and completes it on merge", async () => {
+    const builderAgent = agents.find((agent) => agent.name === "builder");
+    if (!builderAgent) throw new Error("expected builder agent");
+    // Stories typed into the UI, MCP, or API carry no repository: they belong to the primary.
+    const typed = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `manual:typed-${suffix}`,
+      title: "Document the workspace",
+      branch: "facility/document-the-workspace",
+      agent: builderAgent,
+      message: "Document the workspace and open a pull request.",
+      messageDedupeKey: `typed-pr-${suffix}`,
+      actor: { type: "user", id: "maintainer" },
+      workspace: workspaceInput(projectManifest),
+      trigger: { type: "ui" },
+    });
+    expect(typed.story.repositoryId).toBeNull();
+    const opened = {
+      id: `delivery-${randomUUID()}`,
+      orgId,
+      eventType: "pull_request",
+      payload: {
+        action: "opened",
+        repository: { owner: { login: "acme" }, name: `app-${suffix}` },
+        pull_request: {
+          number: 92,
+          title: "Document the workspace",
+          html_url: "https://github.com/acme/app/pull/92",
+          head: { ref: "facility/document-the-workspace" },
+          merged: false,
+        },
+        sender: { type: "User", login: "contributor" },
+      },
+    };
+    await expect(github.handle(opened)).resolves.toEqual({ matched: 1, queued: 1, merged: 0 });
+    await expect(storiesService.get(orgId, projectId, typed.story.id)).resolves.toMatchObject({
+      story: { pullRequestNumber: 92 },
+    });
+    expect(
+      await db
+        .select()
+        .from(stories)
+        .where(and(eq(stories.projectId, projectId), eq(stories.externalId, "pull-request:92"))),
+    ).toHaveLength(0);
+
+    await expect(
+      github.handle({
+        ...opened,
+        id: `delivery-${randomUUID()}`,
+        payload: {
+          ...opened.payload,
+          action: "closed",
+          pull_request: { ...opened.payload.pull_request, merged: true },
+        },
+      }),
+    ).resolves.toEqual({ matched: 0, queued: 0, merged: 1 });
+    await expect(storiesService.get(orgId, projectId, typed.story.id)).resolves.toMatchObject({
+      story: { status: "done", pullRequestNumber: 92 },
+    });
+  });
+
   it("routes review and workflow payloads to the matching standard agents", async () => {
     const reviewDelivery = `delivery-${randomUUID()}`;
     await expect(

@@ -14,6 +14,13 @@ import { appendStoryEvidence } from "./evidence.js";
 type Story = typeof stories.$inferSelect;
 type Evidence = typeof turnGitEvidence.$inferSelect;
 
+/** Stories started without a repository (UI, MCP, API, schedules) work in the primary. */
+export function storyRepositoryScope(repository: { id: string; role: string }) {
+  return repository.role === "primary"
+    ? or(eq(stories.repositoryId, repository.id), isNull(stories.repositoryId))
+    : eq(stories.repositoryId, repository.id);
+}
+
 export function observedStoryBranch(
   story: Pick<Story, "branch" | "pullRequestNumber" | "status">,
   evidence: Pick<Evidence, "initialBranch" | "finalBranch" | "captureError" | "completedAt">,
@@ -123,9 +130,7 @@ export async function reconcileTurnBranch(
         and(
           eq(stories.orgId, story.orgId),
           eq(stories.projectId, story.projectId),
-          repository.role === "primary"
-            ? or(eq(stories.repositoryId, repository.id), isNull(stories.repositoryId))
-            : eq(stories.repositoryId, repository.id),
+          storyRepositoryScope(repository),
           eq(stories.branch, branch),
           ne(stories.id, story.id),
         ),
