@@ -6,8 +6,10 @@ import { createDb, migrate, orgs, projects, stories, workspaces } from "@facilit
 import Docker from "dockerode";
 import { expect, it } from "vitest";
 import type { GithubWorkspaceCredentials } from "../src/github/workspace-credentials.js";
+import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
 import { DockerWorkspaceRuntime } from "../src/workspaces/docker.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import { previewBranchRefs } from "../src/workspaces/preview-branch.js";
 import {
   ProjectEnvironmentService,
   parseProjectManifest,
@@ -65,7 +67,7 @@ it("creates work from development and retains commits and dirty files after the 
     );
     const developmentSha = await command("git rev-parse develop", "seed");
     const manifest = parseProjectManifest(
-      "version: 1\nrepositories:\n  primary: github.com/acme/app\nenvironment:\n  setup: 'true'\n  start: 'true'\n",
+      'version: 1\nrepositories:\n  primary: github.com/acme/app\nenvironment:\n  setup: "true"\n  start: test -n "$(git branch --show-current)"\n',
     );
     const credentials: GithubWorkspaceCredentials = {
       repositories: [
@@ -113,6 +115,38 @@ it("creates work from development and retains commits and dirty files after the 
     expect(await command("test ! -f advanced.txt && echo preserved", "repos/acme/app")).toBe(
       "preserved",
     );
+
+    await command("git push origin feature/story", "repos/acme/app");
+    await command("printf retained > retained-data.txt", "repos/acme/app");
+    await new PreviewWorkspaceGitApplicator(runtime).apply({
+      workspace,
+      credentials,
+      repositories: [
+        {
+          repositoryId: "repo_app",
+          repository: "acme/app",
+          pullNumber: 7,
+          headRef: "feature/story",
+          headSha: head,
+          primary: true,
+        },
+      ],
+    });
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    const candidate = await command("git rev-parse HEAD", "repos/acme/app");
+    expect(await command("git branch --show-current", "repos/acme/app")).toBe(preview.branch);
+    expect(await command("git rev-parse feature/story", "repos/acme/app")).toBe(head);
+    expect(await command("cat advanced.txt", "repos/acme/app")).toBe("advanced");
+    expect(await command("cat story.txt", "repos/acme/app")).toBe("story");
+    const refreshed = await service.refreshPrepared(input);
+    await runtime.replaceCompute(workspace);
+    Object.assign(workspace, await runtime.wake(workspace));
+    await service.prepare({ ...input, previousSetupChecksum: refreshed.setupChecksum });
+    expect(await command("git branch --show-current", "repos/acme/app")).toBe("feature/story");
+    expect(await command("git rev-parse HEAD", "repos/acme/app")).toBe(candidate);
+    expect(await command("cat dirty.txt", "repos/acme/app")).toBe("dirty");
+    expect(await command("cat retained-data.txt", "repos/acme/app")).toBe("retained");
+    expect(await command(`git rev-parse ${preview.ref}`, "repos/acme/app")).toBe(candidate);
   } finally {
     await runtime.destroy(workspace);
     await client.end();
