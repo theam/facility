@@ -39,6 +39,7 @@ import {
   type OpenApiRouteRecord,
 } from "./openapi-contract.js";
 import { assertPreviewOriginSurface } from "./origin-isolation.js";
+import { createQueueEnqueuer } from "./queue-enqueue.js";
 import { safeRequestLog } from "./request-log.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGithubRoutes } from "./routes/github.js";
@@ -88,14 +89,12 @@ export async function buildApp(
   const boss = new PgBoss({ connectionString: config.databaseUrl });
   boss.on("error", (error) => app.log.error({ err: error }, "pg-boss producer error"));
   let bossStarted = false;
-  app.decorate("enqueue", async (queue: string, data: Record<string, unknown>) => {
-    if (!bossStarted) {
-      await boss.start();
-      await boss.createQueue(queue);
+  app.decorate(
+    "enqueue",
+    createQueueEnqueuer(boss, () => {
       bossStarted = true;
-    }
-    return boss.send(queue, data);
-  });
+    }),
+  );
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
