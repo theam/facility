@@ -321,3 +321,120 @@ export function timelineSummary(type: string, data: Record<string, unknown>) {
   if (value("title")) return value("title") ?? type;
   return type.replaceAll(".", " ");
 }
+
+export type GitCommitEvidence = {
+  sha: string;
+  author: string;
+  authoredAt: string;
+  subject: string;
+};
+
+export type GitChangedFileEvidence = {
+  status: string;
+  path: string;
+  previousPath?: string;
+};
+
+export type GitChangesEvidence = {
+  initialSha: string | null;
+  finalSha: string | null;
+  commits: GitCommitEvidence[];
+  changedFiles: GitChangedFileEvidence[];
+  dirty: boolean;
+  truncated: boolean;
+};
+
+export function parseGitChanges(data: Record<string, unknown>): GitChangesEvidence | null {
+  const rawCommits = Array.isArray(data.commits) ? data.commits : [];
+  const commits: GitCommitEvidence[] = [];
+  for (const item of rawCommits) {
+    const entry = record(item);
+    const sha = text(entry.sha).trim();
+    const subject = text(entry.subject).trim();
+    if (!sha && !subject) continue;
+    commits.push({
+      sha: sha || "unknown",
+      author: text(entry.author).trim() || "Unknown author",
+      authoredAt: text(entry.authoredAt).trim(),
+      subject: subject || "(no subject)",
+    });
+  }
+
+  const rawFiles = Array.isArray(data.changedFiles) ? data.changedFiles : [];
+  const changedFiles: GitChangedFileEvidence[] = [];
+  for (const item of rawFiles) {
+    const entry = record(item);
+    const path = text(entry.path).trim();
+    if (!path) continue;
+    const status = text(entry.status).trim() || "M";
+    const previousPath = text(entry.previousPath).trim();
+    changedFiles.push({
+      status,
+      path,
+      ...(previousPath ? { previousPath } : {}),
+    });
+  }
+
+  if (commits.length === 0 && changedFiles.length === 0) {
+    return null;
+  }
+
+  return {
+    initialSha: typeof data.initialSha === "string" && data.initialSha ? data.initialSha : null,
+    finalSha: typeof data.finalSha === "string" && data.finalSha ? data.finalSha : null,
+    commits,
+    changedFiles,
+    dirty: data.dirty === true,
+    truncated: data.truncated === true,
+  };
+}
+
+export type GitFileStatusTone = "ok" | "agent" | "bad" | "dim" | "info";
+
+export type GitFileStatusPresentation = {
+  code: string;
+  label: string;
+  tone: GitFileStatusTone;
+};
+
+export function gitFileStatus(status: string): GitFileStatusPresentation {
+  const normalized = status.trim().toUpperCase();
+  if (normalized === "??" || normalized === "?") {
+    return { code: "??", label: "Untracked", tone: "dim" };
+  }
+  const primary = normalized[0] ?? "M";
+  switch (primary) {
+    case "A":
+      return { code: "A", label: "Added", tone: "ok" };
+    case "M":
+      return { code: "M", label: "Modified", tone: "agent" };
+    case "D":
+      return { code: "D", label: "Deleted", tone: "bad" };
+    case "R":
+      return { code: "R", label: "Renamed", tone: "info" };
+    case "C":
+      return { code: "C", label: "Copied", tone: "info" };
+    default:
+      return { code: normalized || "M", label: "Changed", tone: "dim" };
+  }
+}
+
+export function githubCommitUrl(
+  pullRequestUrl: string | null | undefined,
+  sha: string,
+): string | null {
+  const safePrUrl = safeExternalUrl(pullRequestUrl ?? null);
+  const trimmedSha = sha.trim();
+  if (!safePrUrl || !/^[0-9a-fA-F]{7,40}$/.test(trimmedSha)) return null;
+  try {
+    const parsed = new URL(safePrUrl);
+    if (parsed.hostname !== "github.com" && !parsed.hostname.endsWith(".github.com")) {
+      return null;
+    }
+    const match = /^\/([^/]+)\/([^/]+)\/pull\/\d+/.exec(parsed.pathname);
+    if (!match) return null;
+    return `${parsed.origin}/${match[1]}/${match[2]}/commit/${trimmedSha}`;
+  } catch {
+    return null;
+  }
+}
