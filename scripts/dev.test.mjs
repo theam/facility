@@ -38,7 +38,9 @@ test("creates a private local env and fills generated secrets", async () => {
     databaseUrl: "postgres://facility:facility@localhost:5461/facility",
     devOrigins: undefined,
   });
-  assert.equal((await stat(join(root, ".env"))).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(join(root, ".env"))).mode & 0o777, 0o600);
+  }
 });
 
 test("preserves configured values and is byte-stable on rerun", async () => {
