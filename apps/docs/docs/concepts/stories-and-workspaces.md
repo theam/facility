@@ -14,8 +14,8 @@ scheduled activation to the same story. An idempotency key protects individual s
 requests from network retries. These are different concerns: the external id identifies the body
 of work, while the key identifies one requested operation.
 
-A project member can continue a story created by another member. The conversation is shared
-project state rather than a private chat transcript.
+Any organization member whose role grants it can continue a story created by another member. The
+conversation is shared project state rather than a private chat transcript.
 
 ## Durable and replaceable state
 
