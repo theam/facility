@@ -673,7 +673,70 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
     }
     await expect(runtime.inspect(workspace)).resolves.toMatchObject({ state: "destroyed" });
   }, 300_000);
+
+  it("stops canceled and timed-out commands instead of waiting for them to exit", async () => {
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const workspace = await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+    });
+    const sleepers = async () =>
+      (
+        await runtime.exec(workspace, {
+          command: "sh",
+          args: ["-c", "ps -eo args | grep -c '^sleep 30[12]$' || true"],
+        })
+      ).stdout.trim();
+    try {
+      // `sh` stays the parent of `sleep`, like the engine wrapper and its CLI.
+      const cancellation = new AbortController();
+      const canceled = runtime.exec(workspace, {
+        command: "sh",
+        args: ["-c", "touch cancel-started && sleep 301; echo finished"],
+        signal: cancellation.signal,
+      });
+      await waitUntil(async () => {
+        const started = await runtime.exec(workspace, {
+          command: "test",
+          args: ["-f", "cancel-started"],
+        });
+        return started.exitCode === 0;
+      });
+      cancellation.abort();
+      await expect(settleWithin(canceled, 15_000)).resolves.toBe("workspace_command_canceled");
+
+      const timedOut = runtime.exec(workspace, {
+        command: "sh",
+        args: ["-c", "sleep 302; echo finished"],
+        timeoutMs: 1_000,
+      });
+      await expect(settleWithin(timedOut, 15_000)).resolves.toBe("workspace_command_timeout");
+
+      expect(await sleepers()).toBe("0");
+    } finally {
+      await runtime.destroy(workspace);
+    }
+  }, 120_000);
 });
+
+/** Resolves with the command's error code, or "still running" if it has not settled in time. */
+async function settleWithin(command: Promise<unknown>, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve("still running"), ms);
+  });
+  try {
+    return await Promise.race([
+      command.then(
+        () => "completed",
+        (error: { code?: string }) => error.code ?? String(error),
+      ),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function waitUntil(predicate: () => Promise<boolean>) {
   const deadline = Date.now() + 10_000;
