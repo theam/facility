@@ -476,7 +476,6 @@ export class ProjectEnvironmentService {
       preparedInput.credentials.environment,
       preparedInput.manifest.environment.secrets,
     );
-    if (result.exitCode !== 0) throw commandFailure("environment.browser_test", script, safeResult);
     const files = await this.runtime.exec(input.workspace, {
       signal: input.signal,
       command: "find",
@@ -513,6 +512,7 @@ export class ProjectEnvironmentService {
         artifacts: artifacts.map((artifact) => artifact.uri),
       },
     );
+    if (result.exitCode !== 0) throw commandFailure("environment.browser_test", script, safeResult);
     return { result: safeResult, artifacts };
   }
 
