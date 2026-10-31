@@ -72,7 +72,12 @@ services:
       GITHUB_CLONE_TOKEN: ${GITHUB_CLONE_TOKEN:-}
       FACILITY_WORKSPACE_DRIVER: docker
       FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
-    ports: ["4400:4400"]
+    # Bound to loopback, not published on every interface. The bundle runs
+    # without TLS, and a localhost URL constrains nothing about who can reach
+    # the port: `4400:4400` would serve plaintext sessions and preview traffic
+    # to the whole network segment. Fronting this with TLS means changing the
+    # binding deliberately, not discovering it was already open.
+    ports: ["127.0.0.1:4400:4400"]
     volumes:
       # The API inspects workspace state through the host Docker daemon.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -125,7 +130,10 @@ services:
     restart: unless-stopped
     environment:
       FACILITY_API_URL: http://api:4400
-    ports: ["3400:3400"]
+    # Loopback for the same reason as the api port. Container-to-container
+    # traffic uses the Compose network (`http://api:4400`), so this publishes
+    # nothing the stack needs internally.
+    ports: ["127.0.0.1:3400:3400"]
     healthcheck:
       test:
         [
