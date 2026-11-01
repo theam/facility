@@ -46,6 +46,7 @@ export function buildPrompt(
     summary ? `# Conversation summary\n${summary}` : "",
     `# Shared conversation\n${truncateStart(transcript, 120_000)}`,
     "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
+    "Use git and gh (including gh api) for GitHub operations. Facility renews their scoped credentials during the turn. A missing GH_TOKEN environment variable does not mean GitHub access is unavailable; do not replace the managed credential helper or gh configuration with a token copied earlier in the session.",
     "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
   ]
     .filter(Boolean)

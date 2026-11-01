@@ -89,6 +89,19 @@ connected to the project. They retain the App's full configured permission set f
 repositories. Engine and project values are injected only when named in `.facility.yml` and
 resolved from project-specific operator variables.
 
+During native turns, the worker renews GitHub credentials before expiry while rechecking execution
+and repository scope. Git reads a private turn-local credential file. GitHub CLI uses the same
+current credentials through a helper and a private configuration directory, including when a
+child shell resets PATH. The GitHub App signing key stays in the control plane.
+
+Native engine processes do not receive a fixed `GH_TOKEN` or `GITHUB_TOKEN`: use Git or `gh api`
+for authenticated repository operations. Arbitrary applications that retain their own token copy
+cannot observe a later renewal. Project preparation retains its original injected values.
+Temporary credential files have owner-only access and are removed when the turn ends. If the
+worker crashes, any retained token still expires at GitHub; a resumed turn gets a new credential
+session without replacing local files or commits. Renewal errors are reported without secret
+values; unavailable or revoked credentials never grant broader repository access.
+
 Facility redacts supplied values from persisted command events and API responses. Redaction cannot
 prevent an agent or repository process from intentionally copying a value into a file, commit,
 external request, or encoded output. Connect only code and credentials appropriate for the agent

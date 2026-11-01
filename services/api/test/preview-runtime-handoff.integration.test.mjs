@@ -153,7 +153,13 @@ it("preserves the converged next turn, fences delayed stops, and advertises deli
     });
     const credentials = {
       repositories: [{ owner: "acme", name, defaultBranch: "main", role: "primary" }],
-      environment: {},
+      environment: {
+        GH_TOKEN: "synthetic-preview-token",
+        GITHUB_TOKEN: "synthetic-preview-token",
+        FACILITY_GITHUB_CREDENTIALS: JSON.stringify({
+          [`acme/${name}`]: "synthetic-preview-token",
+        }),
+      },
       gitIdentity: { name: "Review Test", email: "review@example.test" },
       expiresAt: new Date(Date.now() + 3600000),
     };
@@ -309,7 +315,7 @@ it("preserves the converged next turn, fences delayed stops, and advertises deli
       projectId: f.scope.projectId,
       turnId: queued.turn.id,
     });
-    assert.equal(dispatched.state, "succeeded");
+    assert.equal(dispatched.state, "succeeded", dispatched.error);
     assert.equal(engineObservation.head, B);
     assert.equal(engineObservation.data, "edited by user");
     assert.equal(await git(f.repo, ["branch", "--show-current"]), "feature/story");

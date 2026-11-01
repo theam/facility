@@ -5,6 +5,8 @@ import { engineSessions, storyMessages, turns, workspaces } from "@facility/db";
 import Docker from "dockerode";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
+import { WorkspaceCredentialRenewal } from "../src/github/workspace-credential-renewal.js";
+import type { GithubWorkspaceCredentials } from "../src/github/workspace-credentials.js";
 import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
 import { createStoryDomain } from "../src/story-domain.js";
 import { ENGINE_PROCESS_WRAPPER, stopInterruptedEngineProcess } from "../src/turns/engines.js";
@@ -20,6 +22,81 @@ import { consultationDatabaseUrl, consultationTestEnvironment } from "./fixtures
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it("renews Git and gh credentials in an existing runner without replacing its volume", async () => {
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const workspace = await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+    });
+    let authorized = true;
+    const credentials = (token: string): GithubWorkspaceCredentials => ({
+      repositories: [{ owner: "acme", name: "app", defaultBranch: "main", role: "primary" }],
+      environment: {
+        GH_TOKEN: token,
+        GITHUB_TOKEN: token,
+        FACILITY_GITHUB_CREDENTIALS: JSON.stringify({ "acme/app": token }),
+      },
+      expiresAt: new Date(Date.now() + 3_600_000),
+      gitIdentity: { name: "Fixture", email: "fixture@example.test" },
+    });
+    const renewal = new WorkspaceCredentialRenewal(
+      runtime,
+      { ...workspace, expectedComputeRef: workspace.computeRef },
+      "turn_dockercredentials",
+      credentials("synthetic-before"),
+      {
+        issue: async () => credentials("synthetic-after"),
+        authorized: async () => authorized,
+        rememberSecrets: () => undefined,
+        report: async () => undefined,
+        revoked: () => undefined,
+      },
+    );
+    try {
+      const environment = renewal.environment(await renewal.start(), true);
+      const git = () =>
+        runtime.exec(workspace, {
+          command: "git",
+          args: ["credential", "fill"],
+          stdin: "protocol=https\nhost=github.com\npath=acme/app.git\n\n",
+          env: { ...environment, GIT_TERMINAL_PROMPT: "0" },
+        });
+      const gh = () =>
+        runtime.exec(workspace, {
+          command: "sh",
+          args: ["-lc", "gh auth token"],
+          env: {
+            ...environment,
+            HTTPS_PROXY: "http://127.0.0.1:9",
+            HTTP_PROXY: "http://127.0.0.1:9",
+            NO_PROXY: "",
+          },
+        });
+      expect((await git()).stdout).toContain("password=synthetic-before");
+      expect((await gh()).stdout.trim()).toBe("synthetic-before");
+      const expired = await runtime.exec(workspace, {
+        command: "node",
+        args: [
+          "-e",
+          "const fs=require('node:fs'),p=require('node:path').join(process.env.GH_CONFIG_DIR,'..','credentials.json'); const v=JSON.parse(fs.readFileSync(p,'utf8')); v.expiresAt=0; fs.writeFileSync(p,JSON.stringify(v));",
+        ],
+        env: environment,
+      });
+      expect(expired.exitCode).toBe(0);
+      expect((await git()).exitCode).not.toBe(0);
+      await renewal.renew();
+      expect((await git()).stdout).toContain("password=synthetic-after");
+      expect((await gh()).stdout.trim()).toBe("synthetic-after");
+      expect((await runtime.inspect(workspace)).volumeRef).toBe(workspace.volumeRef);
+      authorized = false;
+      await renewal.renew();
+      expect((await git()).exitCode).not.toBe(0);
+      expect((await gh()).exitCode).not.toBe(0);
+    } finally {
+      await renewal.stop();
+      await runtime.destroy(workspace);
+    }
+  });
   it("converges an exact revision without replacing the retained volume or local data", async () => {
     const runtime = new DockerWorkspaceRuntime(new Docker());
     const workspace = await runtime.create({
