@@ -23,6 +23,7 @@ import {
   WORK_PHASES,
   type WorkPhase,
 } from "./phase.js";
+import { indexPullRequests } from "./pull-index.js";
 
 // The backlog reads persisted control-plane state only. It never inspects a
 // workspace provider, so listing it cannot wake a machine or start a turn.
@@ -397,6 +398,7 @@ export class ProjectBacklogService {
         author: pull.author,
       } satisfies BacklogItem["pullRequest"],
     }));
+    const pullIndex = indexPullRequests(pulls);
 
     const activeByStory = new Map(activeTurns.map((turn) => [turn.storyId, turn]));
     const turnCountByStory = new Map(turnCounts.map((row) => [row.storyId, row.count]));
@@ -426,19 +428,8 @@ export class ProjectBacklogService {
         }
       }
     }
-    const pullsForStory = (story: (typeof storyRows)[number]) =>
-      pulls.filter(
-        (pull) =>
-          pull.repositoryId === story.repositoryId &&
-          (story.pullRequestNumber === pull.number ||
-            story.externalId === `pull-request:${pull.number}` ||
-            (story.branch !== null && pull.headRef === story.branch)),
-      );
-    const pullsForIssue = (issue: (typeof issueRows)[number]) =>
-      pulls.filter(
-        (pull) =>
-          pull.repositoryId === issue.repositoryId && pull.closingIssues.includes(issue.number),
-      );
+    const pullsForStory = (story: (typeof storyRows)[number]) => pullIndex.forStory(story);
+    const pullsForIssue = (issue: (typeof issueRows)[number]) => pullIndex.forIssue(issue);
 
     const items: BacklogItem[] = [];
     const consumedStories = new Set<string>();
