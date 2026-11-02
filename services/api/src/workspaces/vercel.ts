@@ -148,8 +148,7 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
     const running = pinned
       ? await session.runCommand({
           ...submission,
-          cmd: "sudo",
-          args: ["-u", "node", "--", submission.cmd, ...(submission.args ?? [])],
+          ...pinnedUserCommand(submission),
         })
       : await sandbox.asUser("node").runCommand(submission);
     const observation = new AbortController();
@@ -540,6 +539,43 @@ export class VercelWorkspaceRuntime implements WorkspaceRuntime {
       url: sandbox.domain(gatewayPort),
     }));
   }
+}
+
+function pinnedUserCommand(command: { cmd: string; args?: string[]; env: Record<string, string> }) {
+  const pathVariable = "FACILITY_WORKSPACE_COMMAND_PATH";
+  const env = { ...command.env };
+  // Preserve only explicit names. Values remain in provider env, never sudo argv.
+  if (
+    Object.keys(env).some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) ||
+    Object.hasOwn(env, pathVariable)
+  ) {
+    throw new WorkspaceRuntimeError(
+      "workspace_command_environment_invalid",
+      "Workspace command environment contains an invalid or reserved name",
+    );
+  }
+  if (env.PATH !== undefined) {
+    // sudo's secure_path overrides PATH even when explicitly preserved.
+    env[pathVariable] = env.PATH;
+    delete env.PATH;
+  }
+  return {
+    cmd: "sudo",
+    env,
+    args: [
+      "-u",
+      "node",
+      `--preserve-env=${Object.keys(env).join(",")}`,
+      "--",
+      "sh",
+      "-c",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Shell parameter expansion, not JavaScript interpolation.
+      'if [ "${FACILITY_WORKSPACE_COMMAND_PATH+x}" = x ]; then export PATH="$FACILITY_WORKSPACE_COMMAND_PATH"; unset FACILITY_WORKSPACE_COMMAND_PATH; fi; exec "$@"',
+      "sh",
+      command.cmd,
+      ...(command.args ?? []),
+    ],
+  };
 }
 
 async function initializeSandbox(
