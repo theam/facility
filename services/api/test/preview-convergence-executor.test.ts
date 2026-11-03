@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GithubWorkspaceCredentials } from "../src/github/workspace-credentials.js";
 import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../src/workspaces/preview-branch.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -55,6 +56,170 @@ describe("preview workspace Git application", () => {
   });
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
+
+  it("attaches an unchanged candidate to an owned local branch without moving or pushing work branches", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    const applicator = new PreviewWorkspaceGitApplicator(runtime);
+    await applicator.apply({ workspace, credentials, repositories: [target(1, base)] });
+    expect(await git(repository, ["branch", "--show-current"])).toBe(preview.branch);
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(base);
+    expect(await git(repository, ["rev-parse", "main"])).toBe(base);
+    expect(await git(repository, ["rev-parse", preview.ownershipRef])).toBe(base);
+    await applicator.apply({ workspace, credentials, repositories: [target(1, base)] });
+    expect(await git(repository, ["symbolic-ref", "HEAD"])).toBe(preview.ref);
+    expect(await git(remote, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+      "refs/heads/main",
+    );
+  });
+
+  it("migrates a retained detached preview even when its candidate has not changed", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await git(repository, ["checkout", "--detach", base]);
+    await git(repository, ["update-ref", PREVIEW_MANAGED_REF, base]);
+    await new PreviewWorkspaceGitApplicator(runtime).apply({
+      workspace,
+      credentials,
+      repositories: [target(1, base)],
+    });
+    expect(await git(repository, ["symbolic-ref", "HEAD"])).toBe(
+      previewBranchRefs(workspace.id, "repos/acme/app").ref,
+    );
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(base);
+  });
+
+  it("preserves the agent branch and retains displaced committed work", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await git(repository, ["switch", "-c", "feature/story"]);
+    await writeFile(join(repository, "local.txt"), "committed work\n");
+    await git(repository, ["add", "local.txt"]);
+    await git(repository, ["commit", "-m", "local work"]);
+    const local = await git(repository, ["rev-parse", "HEAD"]);
+    await new PreviewWorkspaceGitApplicator(runtime).apply({
+      workspace,
+      credentials,
+      repositories: [target(1, base)],
+    });
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(base);
+    expect(await git(repository, ["rev-parse", "feature/story"])).toBe(local);
+    expect(await git(repository, ["show", `${local}:local.txt`])).toBe("committed work");
+    expect(
+      await git(repository, ["for-each-ref", "--format=%(objectname)", "refs/facility/retained"]),
+    ).toContain(local);
+  });
+
+  it("refuses an unowned branch collision even when its tip matches the candidate", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    await git(repository, ["branch", preview.branch, base]);
+    await expect(
+      new PreviewWorkspaceGitApplicator(runtime).apply({
+        workspace,
+        credentials,
+        repositories: [target(1, base)],
+      }),
+    ).rejects.toMatchObject({ code: "preview_branch_changed", retryable: false });
+    expect(await git(repository, ["branch", "--show-current"])).toBe("main");
+    expect(await git(repository, ["rev-parse", preview.ref])).toBe(base);
+    await expect(
+      git(repository, ["rev-parse", "--verify", preview.ownershipRef]),
+    ).rejects.toThrow();
+  });
+
+  it("blocks commits made directly on the preview branch without overwriting them", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const applicator = new PreviewWorkspaceGitApplicator(runtime);
+    await applicator.apply({ workspace, credentials, repositories: [target(1, base)] });
+    await writeFile(join(repository, "README.md"), "unreviewed commit\n");
+    await git(repository, ["add", "README.md"]);
+    await git(repository, ["commit", "-m", "unreviewed work"]);
+    const local = await git(repository, ["rev-parse", "HEAD"]);
+    await expect(
+      applicator.apply({ workspace, credentials, repositories: [target(1, base)] }),
+    ).rejects.toMatchObject({ code: "preview_branch_changed" });
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(local);
+    expect(await readFile(join(repository, "README.md"), "utf8")).toBe("unreviewed commit\n");
+  });
+
+  it("rejects a symbolic preview branch instead of moving its target", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    await git(repository, ["symbolic-ref", preview.ref, "refs/heads/main"]);
+    await expect(
+      new PreviewWorkspaceGitApplicator(runtime).apply({
+        workspace,
+        credentials,
+        repositories: [target(1, base)],
+      }),
+    ).rejects.toMatchObject({ code: "preview_branch_changed" });
+    expect(await git(repository, ["symbolic-ref", preview.ref])).toBe("refs/heads/main");
+    expect(await git(repository, ["rev-parse", "main"])).toBe(base);
+  });
+
+  it("does not move an owned preview branch checked out in another worktree", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    const applicator = new PreviewWorkspaceGitApplicator(runtime);
+    await applicator.apply({ workspace, credentials, repositories: [target(1, base)] });
+    await git(repository, ["switch", "main"]);
+    await git(repository, ["worktree", "add", join(root, "other-worktree"), preview.branch]);
+    await expect(
+      applicator.apply({ workspace, credentials, repositories: [target(1, base)] }),
+    ).rejects.toMatchObject({ code: "preview_branch_in_use", retryable: false });
+    expect(await git(repository, ["branch", "--show-current"])).toBe("main");
+    expect(await git(repository, ["rev-parse", preview.ref])).toBe(base);
+  });
+
+  it("atomically rejects a reference change between inspection and publication", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    const exec = runtime.exec.bind(runtime);
+    runtime.exec = async (locator, command) => {
+      if (command.command === "git" && command.args?.join(" ") === "update-ref --stdin") {
+        await git(repository, ["update-ref", preview.ownershipRef, base]);
+      }
+      return exec(locator, command);
+    };
+    await expect(
+      new PreviewWorkspaceGitApplicator(runtime).apply({
+        workspace,
+        credentials,
+        repositories: [target(1, base)],
+      }),
+    ).rejects.toMatchObject({ code: "preview_branch_changed" });
+    await expect(git(repository, ["rev-parse", "--verify", preview.ref])).rejects.toThrow();
+    await expect(git(repository, ["rev-parse", "--verify", PREVIEW_MANAGED_REF])).rejects.toThrow();
+    expect(await git(repository, ["rev-parse", preview.ownershipRef])).toBe(base);
+  });
+
+  it("uses separate owned local branches in every repository", async () => {
+    const related = "repos/acme/api";
+    await git(join(workspace.volumeRef, "repos/acme"), ["clone", remote, "api"]);
+    await new PreviewWorkspaceGitApplicator(runtime).apply({
+      workspace,
+      credentials: {
+        ...credentials,
+        repositories: [
+          ...credentials.repositories,
+          { owner: "acme", name: "api", defaultBranch: "main", role: "related" },
+        ],
+      },
+      repositories: [
+        target(1, base),
+        { ...target(2, base), repositoryId: "repo_api", repository: "acme/api", primary: false },
+      ],
+    });
+    const primaryBranch = await git(join(workspace.volumeRef, "repos/acme/app"), [
+      "branch",
+      "--show-current",
+    ]);
+    const relatedBranch = await git(join(workspace.volumeRef, related), [
+      "branch",
+      "--show-current",
+    ]);
+    expect(primaryBranch).not.toBe(relatedBranch);
+    expect(relatedBranch).toBe(previewBranchRefs(workspace.id, related).branch);
+  });
 
   it("combines divergent required heads and preserves unrelated local edits", async () => {
     await git(source, ["switch", "-c", "feature-one", base]);
