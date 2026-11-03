@@ -264,7 +264,13 @@ export class ProjectEnvironmentService {
           `clone ${repository.owner}/${repository.name}`,
         );
       }
-      await this.runCommand(preparedInput, "git", ["fetch", "--all", "--prune"], cwd, "git fetch");
+      await this.runCommand(
+        preparedInput,
+        "git",
+        ["fetch", "--no-recurse-submodules", "--all", "--prune"],
+        cwd,
+        "git fetch",
+      );
       await this.runCommand(
         preparedInput,
         "git",
@@ -331,7 +337,9 @@ export class ProjectEnvironmentService {
   }
 
   /** Rebuild a retained workspace after Facility has safely advanced its repositories. */
-  async refreshPrepared(input: EnvironmentInput & { previousSetupChecksum?: string | null }) {
+  async refreshPrepared(
+    input: EnvironmentInput & { previousSetupChecksum?: string | null; sourceFingerprint?: string },
+  ) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
     const preparedInput = await this.withDeclaredEnvironment(input);
     if (preparedInput.manifest.environment.stop) {
@@ -342,7 +350,7 @@ export class ProjectEnvironmentService {
         "environment.stop",
       );
     }
-    const setupChecksum = await this.setupChecksum(preparedInput);
+    const setupChecksum = await this.setupChecksum(preparedInput, input.sourceFingerprint);
     if (preparedInput.manifest.environment.setup && input.previousSetupChecksum !== setupChecksum) {
       // Retained data belongs to the story. Refresh dependencies, but never
       // rerun the creation-only seed while converging a later code generation.
@@ -579,7 +587,7 @@ export class ProjectEnvironmentService {
     };
   }
 
-  private async setupChecksum(input: EnvironmentInput) {
+  private async setupChecksum(input: EnvironmentInput, sourceFingerprint?: string) {
     const revisions: string[] = [];
     for (const repository of [...input.credentials.repositories].sort((a, b) =>
       `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`),
@@ -601,7 +609,13 @@ export class ProjectEnvironmentService {
       revisions.push(`${repository.owner}/${repository.name}:${head.stdout.trim()}`);
     }
     return createHash("sha256")
-      .update(JSON.stringify({ manifest: input.manifest.hash, revisions }))
+      .update(
+        JSON.stringify({
+          manifest: input.manifest.hash,
+          revisions,
+          ...(sourceFingerprint ? { sourceFingerprint } : {}),
+        }),
+      )
       .digest("hex");
   }
 
@@ -718,7 +732,7 @@ export class ProjectEnvironmentService {
         await this.runCommand(
           input,
           "git",
-          ["switch", "--no-overwrite-ignore", input.branch],
+          ["switch", "--no-recurse-submodules", "--no-overwrite-ignore", input.branch],
           cwd,
           "git branch",
         );
@@ -729,11 +743,19 @@ export class ProjectEnvironmentService {
       input,
       "git",
       local.exitCode === 0
-        ? ["switch", input.branch]
+        ? ["switch", "--no-recurse-submodules", input.branch]
         : remote.exitCode === 0
-          ? ["switch", "-c", input.branch, "--track", `origin/${input.branch}`]
+          ? [
+              "switch",
+              "--no-recurse-submodules",
+              "-c",
+              input.branch,
+              "--track",
+              `origin/${input.branch}`,
+            ]
           : [
               "switch",
+              "--no-recurse-submodules",
               "-c",
               input.branch,
               `origin/${repository.developmentBranch ?? repository.defaultBranch}`,

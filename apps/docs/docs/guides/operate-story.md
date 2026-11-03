@@ -227,6 +227,32 @@ until saved. Checkout refuses to overwrite ignored or untracked retained paths. 
 recovery preserve the volume and native sessions. Recovery retires abandoned compute and binds each attempt to its immutable provider identity, so delayed commands or stops cannot target a replacement. The next builder attaches to the converged revision, preserving the displaced branch under the retained refs. Dependency setup may rerun for new code; creation-only seed runs only on initial preparation or explicit clean setup.
 
 
+### Previews built from Git submodules
+
+When a candidate's `.gitmodules` maps an initialized submodule to another repository already
+connected to this project, Facility composes that checkout too. A required child PR is an explicit
+preview override of the parent's committed pin. Both the parent preview branch and the agent's
+published PR keep their original gitlinks; the effective nested head is recorded separately. This
+also lets the next builder retain that code without accidentally publishing a child integration.
+Removing the child PR from
+the complete set restores the parent's pin. Nested connected submodules follow the same rule.
+
+The independent `repos/<owner>/<name>` clone and the nested checkout are different source
+locations. The `preview.converged` workspace event records each effective checkout and commit.
+The setup checksum includes these effective sources, even if the parent and independent clone
+heads stay unchanged. Facility checks those sources again after setup/start before marking the generation ready. If a
+hook restores an older pin or leaves tracked changes, the candidate stays unverified even when
+the service answers HTTP requests.
+
+Submodule metadata does not grant repository access. Facility does not fetch arbitrary URLs from
+`.gitmodules` or add repositories to the project's installation scope. Unconnected pins are left
+unchanged. Missing or uninitialized connected checkouts, unsafe paths or Git directories, ambiguous
+metadata, and cyclic composition block the preview with an actionable error. Resolve the topology
+through the project's normal reviewed setup; do not clear a dirty worktree or weaken acceptance to
+make the preview appear ready. Staged gitlink changes and tracked edits inside a child remain local
+work that must be saved first. Ignored/untracked retained data and displaced committed tips are
+preserved under the same rules as other preview updates.
+
 ## Complete the source issue
 
 The completion panel separates the merged delivery, the configured post-merge integration and
