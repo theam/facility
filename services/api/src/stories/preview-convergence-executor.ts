@@ -23,11 +23,23 @@ import type {
   PreviewConvergenceScope,
   StoryPreviewConvergenceService,
 } from "./preview-convergence.js";
+import { PreviewConvergenceError } from "./preview-errors.js";
 import {
   PreviewComputeStopError,
   PreviewLeaseLostError,
   withPreviewLease,
 } from "./preview-lease.js";
+import {
+  type AppliedPreviewRepository,
+  connectedPreviewSubmodules,
+  type PreviewSubmodule,
+  previewSourceFingerprint,
+  previewTreeEntries,
+  safePreviewPath,
+  validatePreviewCheckout,
+} from "./preview-submodules.js";
+
+export { PreviewConvergenceError } from "./preview-errors.js";
 
 const MAX_DIRTY_PATHS = 1_000;
 
@@ -54,18 +66,6 @@ export async function retirePreviewWriter(
   const compute = await runtime.inspect(locator);
   if (compute.computeRef)
     await runtime.retireCompute({ ...locator, expectedComputeRef: compute.computeRef });
-}
-
-export class PreviewConvergenceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly retryable: boolean,
-    readonly details: Record<string, unknown> = {},
-  ) {
-    super(message);
-    this.name = "PreviewConvergenceError";
-  }
 }
 
 /** Applies one fenced generation and publishes it only after rebuild/readiness succeeds. */
@@ -183,9 +183,10 @@ export class StoryPreviewConvergenceExecutor {
             this.manifests.load(scope.orgId, scope.projectId),
           ]);
           signal.throwIfAborted();
-          await new PreviewWorkspaceGitApplicator(this.runtime, signal, (target) =>
+          const applicator = new PreviewWorkspaceGitApplicator(this.runtime, signal, (target) =>
             this.resolvePullMerge(target, credentials, signal),
-          ).apply({
+          );
+          const previewSources = await applicator.apply({
             workspace: activeLocator,
             repositories: claim.repositories,
             credentials,
@@ -193,14 +194,17 @@ export class StoryPreviewConvergenceExecutor {
               signal.throwIfAborted();
             },
           });
-          return this.environment.refreshPrepared({
+          const refreshed = await this.environment.refreshPrepared({
             ...scope,
             workspace: activeLocator,
             manifest,
             credentials,
             previousSetupChecksum: workspace.setupChecksum,
+            sourceFingerprint: previewSourceFingerprint(previewSources),
             signal,
           });
+          await applicator.verify(activeLocator, previewSources, credentials.environment);
+          return { ...refreshed, previewSources };
         },
         () => this.runtime.suspend(activeLocator),
       );
@@ -222,6 +226,7 @@ export class StoryPreviewConvergenceExecutor {
           repositoryCount: new Set(claim.repositories.map((item) => item.repositoryId)).size,
           pullRequestCount: claim.repositories.length,
           services: refreshed.endpoints.map((endpoint) => endpoint.service),
+          sources: refreshed.previewSources,
         });
       } else if (!settlement.settled) {
         await this.honorSuspension(scope, locator, workspace.id);
@@ -327,6 +332,7 @@ export class StoryPreviewConvergenceExecutor {
 }
 
 export class PreviewWorkspaceGitApplicator {
+  private readonly validatedCheckouts = new Map<string, string>();
   constructor(
     private readonly runtime: WorkspaceRuntime,
     private readonly signal?: AbortSignal,
@@ -341,6 +347,7 @@ export class PreviewWorkspaceGitApplicator {
     credentials: Awaited<ReturnType<GithubWorkspaceCredentialBroker["issue"]>>;
     onProgress?: () => Promise<unknown>;
   }) {
+    this.validatedCheckouts.clear();
     const configured = new Map(
       input.credentials.repositories.map((repository) => [
         `${repository.owner}/${repository.name}`.toLowerCase(),
@@ -360,21 +367,439 @@ export class PreviewWorkspaceGitApplicator {
       }
       grouped.set(key, [...(grouped.get(key) ?? []), target]);
     }
-    for (const name of configured.keys()) {
-      const targets = grouped.get(name) ?? [];
-      await input.onProgress?.();
-      const repository = configured.get(name);
-      if (!repository) throw new Error("preview_repository_lookup_failed");
+    const environment = input.credentials.environment;
+    const bases = new Map<
+      string,
+      { cwd: string; sha: string; active: boolean; managed: string | null }
+    >();
+    const connected = new Set(configured.keys());
+    for (const [name, repository] of configured) {
       const cwd = `repos/${repository.owner}/${repository.name}`;
+      await this.assertCheckout(input.workspace, cwd);
+      const targets = grouped.get(name) ?? [];
+      const managed = await this.directRef(input.workspace, cwd, environment, PREVIEW_MANAGED_REF);
+      const active = targets.length > 0 || !!managed;
+      const sha = active
+        ? await this.repositoryCandidate(
+            input.workspace,
+            cwd,
+            targets,
+            environment,
+            input.onProgress,
+            repository.developmentBranch ?? repository.defaultBranch,
+          )
+        : (
+            await this.requireGit(
+              input.workspace,
+              cwd,
+              environment,
+              ["rev-parse", "HEAD"],
+              candidateFailure,
+            )
+          ).stdout.trim();
+      bases.set(name, { cwd, sha, active, managed });
+    }
+    // A connected parent with no PR can still supply the build root for a
+    // required descendant. Use its integration base, never an accumulated HEAD.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [name, base] of bases) {
+        if (base.active) continue;
+        const modules = await this.submodules(
+          input.workspace,
+          base.cwd,
+          base.sha,
+          environment,
+          name,
+          connected,
+        );
+        if (!modules.some((module) => bases.get(module.repository)?.active)) continue;
+        const repository = configured.get(name);
+        if (!repository) throw new Error("preview_repository_lookup_failed");
+        base.sha = await this.repositoryCandidate(
+          input.workspace,
+          base.cwd,
+          [],
+          environment,
+          input.onProgress,
+          repository.developmentBranch ?? repository.defaultBranch,
+        );
+        base.active = true;
+        changed = true;
+      }
+    }
+    type Composition = {
+      repository: string;
+      headSha: string;
+      children: Array<{ module: PreviewSubmodule; plan: Composition }>;
+    };
+    const composed = new Map<string, Composition>();
+    const compose = async (
+      repository: string,
+      source: string,
+      trail: string[] = [],
+    ): Promise<Composition> => {
+      if (trail.includes(repository) || trail.length >= 16 || composed.size >= 100)
+        throw new PreviewConvergenceError(
+          "preview_submodule_topology_invalid",
+          "The candidate submodule topology is cyclic or too large.",
+          false,
+        );
+      const key = `${repository}:${source}`;
+      const cached = composed.get(key);
+      if (cached) return cached;
+      const base = bases.get(repository);
+      if (!base) throw new Error("preview_repository_lookup_failed");
+      if (base.sha !== source)
+        await this.ensureCommit(input.workspace, base.cwd, source, environment);
+      const modules = await this.submodules(
+        input.workspace,
+        base.cwd,
+        source,
+        environment,
+        repository,
+        connected,
+      );
+      const children: Composition["children"] = [];
+      for (const module of modules) {
+        const child = bases.get(module.repository);
+        if (!child) throw new Error("preview_repository_lookup_failed");
+        const pin = grouped.has(module.repository) ? child.sha : module.pin;
+        children.push({
+          module,
+          plan: await compose(module.repository, pin, [...trail, repository]),
+        });
+      }
+      // Cross-repository overrides are an explicit working view, not commits
+      // that a later builder could accidentally publish in the parent PR.
+      const plan = { repository, headSha: source, children };
+      composed.set(key, plan);
+      return plan;
+    };
+    const checkouts = new Map<string, { plan: Composition; modules: string[] }>();
+    const addCheckout = (cwd: string, plan: Composition) => {
+      if (checkouts.size >= 100 || !safePreviewPath(cwd))
+        throw new PreviewConvergenceError(
+          "preview_submodule_topology_invalid",
+          "The candidate has too many or invalid preview checkouts.",
+          false,
+        );
+      const previous = checkouts.get(cwd);
+      if (previous && previous.plan.headSha !== plan.headSha)
+        throw new PreviewConvergenceError(
+          "preview_submodule_topology_invalid",
+          "The candidate maps conflicting heads to the same checkout.",
+          false,
+        );
+      if (previous) return;
+      checkouts.set(cwd, { plan, modules: plan.children.map((child) => child.module.path) });
+      for (const child of plan.children) addCheckout(`${cwd}/${child.module.path}`, child.plan);
+    };
+    for (const [name, base] of bases)
+      if (base.active) addCheckout(base.cwd, await compose(name, base.sha));
+    // Validate all nested paths and staged/working edits before moving any
+    // parent. Only validated gitlink commit differences are managed overlays.
+    const physicalCheckouts = new Map<string, string>();
+    for (const [cwd, { modules }] of checkouts) {
+      const physical = await this.assertCheckout(input.workspace, cwd);
+      const alias = physicalCheckouts.get(physical);
+      if (alias && alias !== cwd)
+        throw new PreviewConvergenceError(
+          "preview_submodule_topology_invalid",
+          "Different candidate paths resolve to the same checkout.",
+          false,
+        );
+      physicalCheckouts.set(physical, cwd);
+      if (modules.length || ![...bases.values()].some((base) => base.cwd === cwd))
+        await this.assertCompositionClean(input.workspace, cwd, modules, environment);
+    }
+    const applied: AppliedPreviewRepository[] = [];
+    for (const [cwd, { plan, modules }] of checkouts) {
+      await input.onProgress?.();
+      const base = bases.get(plan.repository);
+      if (!base) throw new Error("preview_repository_lookup_failed");
+      if (cwd !== base.cwd) {
+        const source = await this.assertCheckout(input.workspace, base.cwd);
+        // Local object transport is restricted to an already validated,
+        // connected clone inside this same retained workspace.
+        await this.requireGit(
+          input.workspace,
+          cwd,
+          environment,
+          [
+            "-c",
+            "protocol.file.allow=always",
+            "fetch",
+            "--no-recurse-submodules",
+            "--no-tags",
+            "--no-write-fetch-head",
+            source,
+            plan.headSha,
+          ],
+          candidateFailure,
+        );
+      }
       await this.applyRepository(
         input.workspace,
         cwd,
-        [...targets].sort((left, right) => left.pullNumber - right.pullNumber),
-        input.credentials.environment,
+        grouped.get(plan.repository) ?? [],
+        environment,
         input.onProgress,
-        repository.developmentBranch ?? repository.defaultBranch,
+        configured.get(plan.repository)?.developmentBranch ??
+          configured.get(plan.repository)?.defaultBranch,
+        plan.headSha,
+        modules,
+        cwd === base.cwd ? base.managed : undefined,
+      );
+      applied.push({
+        repository: plan.repository,
+        cwd,
+        headSha: plan.headSha,
+        submodules: plan.children.map((child) => ({
+          path: child.module.path,
+          repository: child.module.repository,
+          pinnedSha: child.module.pin,
+          headSha: child.plan.headSha,
+        })),
+      });
+    }
+    return applied;
+  }
+
+  async verify(
+    workspace: WorkspaceLocator,
+    sources: AppliedPreviewRepository[],
+    environment: Record<string, string>,
+  ) {
+    this.validatedCheckouts.clear();
+    for (const source of sources) {
+      await this.assertCheckout(workspace, source.cwd);
+      const head = await this.requireGit(
+        workspace,
+        source.cwd,
+        environment,
+        ["rev-parse", "HEAD"],
+        candidateFailure,
+      );
+      const complete = source.submodules.every((module) =>
+        sources.some(
+          (child) =>
+            child.cwd === `${source.cwd}/${module.path}` &&
+            child.repository === module.repository &&
+            child.headSha === module.headSha,
+        ),
+      );
+      if (head.stdout.trim() !== source.headSha || !complete)
+        throw new PreviewConvergenceError(
+          "preview_generation_verification_failed",
+          "Prepared application source differs from the exact composed preview candidate.",
+          false,
+          { repository: source.repository, path: source.cwd },
+        );
+      await this.assertCompositionClean(
+        workspace,
+        source.cwd,
+        source.submodules.map((module) => module.path),
+        environment,
       );
     }
+  }
+
+  private async assertCheckout(workspace: WorkspaceLocator, cwd: string) {
+    const validated = this.validatedCheckouts.get(cwd);
+    if (validated) return validated;
+    if (!safePreviewPath(cwd))
+      throw new PreviewConvergenceError(
+        "preview_submodule_checkout_unsafe",
+        "A preview checkout path is invalid.",
+        false,
+      );
+    const result = await this.runtime.exec(workspace, {
+      signal: this.signal,
+      command: "node",
+      args: ["-e", validatePreviewCheckout, cwd],
+      cwd: ".",
+      timeoutMs: 30_000,
+    });
+    if (result.exitCode !== 0)
+      throw new PreviewConvergenceError(
+        "preview_submodule_checkout_unsafe",
+        "A required preview checkout is missing, uninitialized or escapes the retained workspace.",
+        false,
+        { path: cwd },
+      );
+    await this.requireGit(workspace, cwd, {}, ["rev-parse", "--git-dir"], candidateFailure);
+    const top = await this.requireGit(
+      workspace,
+      cwd,
+      {},
+      ["rev-parse", "--show-toplevel"],
+      candidateFailure,
+    );
+    if (top.stdout.trim() !== result.stdout.trim())
+      throw new PreviewConvergenceError(
+        "preview_submodule_checkout_unsafe",
+        "A preview Git directory points at another worktree.",
+        false,
+        { path: cwd },
+      );
+    this.validatedCheckouts.set(cwd, result.stdout.trim());
+    return result.stdout.trim();
+  }
+
+  private async assertCompositionClean(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    modules: string[],
+    environment: Record<string, string>,
+  ) {
+    const staged = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["diff", "--cached", "--name-only", "--no-renames", "-z", "--"],
+      dirtyReadFailure,
+    );
+    const tracked = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      [
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+        "--ignore-submodules=untracked",
+        "--",
+        ".",
+        ...modules.map((path) => `:(exclude,literal)${path}`),
+      ],
+      dirtyReadFailure,
+    );
+    if (staged.stdout || tracked.stdout.trim())
+      throw new PreviewConvergenceError(
+        "preview_dirty_worktree",
+        "Save tracked local edits before publishing an exact preview candidate.",
+        false,
+        { path: cwd },
+      );
+  }
+
+  private async ensureCommit(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    sha: string,
+    environment: Record<string, string>,
+  ) {
+    if (!/^[a-f0-9]{40}$/.test(sha))
+      throw new PreviewConvergenceError(
+        "preview_submodule_topology_invalid",
+        "The submodule candidate does not identify a commit.",
+        false,
+      );
+    const present = await this.git(workspace, cwd, environment, [
+      "cat-file",
+      "-e",
+      `${sha}^{commit}`,
+    ]);
+    if (present.exitCode !== 0)
+      await this.requireGit(
+        workspace,
+        cwd,
+        environment,
+        ["fetch", "--no-recurse-submodules", "--no-tags", "origin", sha],
+        candidateFailure,
+      );
+    await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["cat-file", "-e", `${sha}^{commit}`],
+      candidateFailure,
+    );
+  }
+
+  private async submodules(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    sha: string,
+    environment: Record<string, string>,
+    repository: string,
+    connected: Set<string>,
+  ) {
+    const metadata = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["ls-tree", "-z", sha, "--", ".gitmodules"],
+      candidateFailure,
+    );
+    const entry = previewTreeEntries(metadata.stdout)[0];
+    if (!entry) {
+      if (connected.size > 1) {
+        const modes = await this.requireGit(
+          workspace,
+          cwd,
+          environment,
+          ["ls-tree", "-r", "--format=%(objectmode)", sha],
+          candidateFailure,
+        );
+        if (modes.stdout.split("\n").includes("160000"))
+          throw new PreviewConvergenceError(
+            "preview_submodule_topology_invalid",
+            "A candidate contains gitlinks without tracked submodule metadata.",
+            false,
+          );
+      }
+      return [];
+    }
+    if (entry.type !== "blob" || !["100644", "100755"].includes(entry.mode))
+      throw new PreviewConvergenceError(
+        "preview_submodule_topology_invalid",
+        "Candidate submodule metadata must be a regular tracked file.",
+        false,
+      );
+    const size = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["cat-file", "-s", entry.sha],
+      candidateFailure,
+    );
+    if (Number(size.stdout.trim()) > 64_000)
+      throw new PreviewConvergenceError(
+        "preview_submodule_topology_invalid",
+        "Candidate submodule metadata is too large.",
+        false,
+      );
+    const config = await this.git(workspace, cwd, environment, [
+      "config",
+      "--null",
+      "--no-includes",
+      "--blob",
+      `${sha}:.gitmodules`,
+      "--get-regexp",
+      "^submodule\\..*\\.(path|url)$",
+    ]);
+    if (![0, 1].includes(config.exitCode))
+      throw new PreviewConvergenceError(
+        "preview_submodule_topology_invalid",
+        "Candidate submodule metadata is invalid.",
+        false,
+      );
+    const tree = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["ls-tree", "-r", "-z", sha],
+      candidateFailure,
+    );
+    return connectedPreviewSubmodules(
+      config.stdout,
+      previewTreeEntries(tree.stdout),
+      repository,
+      connected,
+    );
   }
 
   private async applyRepository(
@@ -384,12 +809,11 @@ export class PreviewWorkspaceGitApplicator {
     environment: Record<string, string>,
     onProgress?: () => Promise<unknown>,
     baseBranch = "main",
+    candidateOverride?: string,
+    composedPaths: string[] = [],
+    managedOverride?: string | null,
   ) {
-    await this.requireGit(workspace, cwd, environment, ["rev-parse", "--git-dir"], {
-      code: "preview_repository_missing",
-      message: "A required repository is missing from the retained workspace.",
-      retryable: false,
-    });
+    await this.assertCheckout(workspace, cwd);
     const unmerged = await this.git(workspace, cwd, environment, [
       "diff",
       "--name-only",
@@ -403,9 +827,213 @@ export class PreviewWorkspaceGitApplicator {
         false,
       );
     }
-    const managed = await this.directRef(workspace, cwd, environment, PREVIEW_MANAGED_REF);
-    if (!targets.length && !managed) return;
-    const dirty = await this.dirtySnapshot(workspace, cwd, environment);
+    const managed =
+      managedOverride === undefined
+        ? await this.directRef(workspace, cwd, environment, PREVIEW_MANAGED_REF)
+        : managedOverride;
+    if (!targets.length && !managed && !candidateOverride) return;
+    const dirty = await this.dirtySnapshot(workspace, cwd, environment, composedPaths);
+    const failure = candidateFailure;
+    const candidate =
+      candidateOverride ??
+      (await this.repositoryCandidate(
+        workspace,
+        cwd,
+        targets,
+        environment,
+        onProgress,
+        baseBranch,
+      ));
+    const current = (
+      await this.requireGit(workspace, cwd, environment, ["rev-parse", "HEAD"], failure)
+    ).stdout.trim();
+    const changed = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["diff", "--name-only", "--no-renames", "-z", current, candidate, "--"],
+      failure,
+    );
+    const overlap = paths(changed.stdout).filter((path) => dirty.has(path));
+    if (overlap.length)
+      throw new PreviewConvergenceError(
+        "preview_dirty_overlap",
+        "Local workspace edits overlap the current preview candidate.",
+        false,
+        { paths: overlap.slice(0, 50) },
+      );
+    // Only independently validated child commit overrides are excluded. All
+    // other tracked overlays, including staged gitlinks, remain unfinished work.
+    const tracked = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      [
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+        "--ignore-submodules=untracked",
+        "--",
+        ".",
+        ...composedPaths.map((path) => `:(exclude,literal)${path}`),
+      ],
+      dirtyReadFailure,
+    );
+    if (tracked.stdout.trim())
+      throw new PreviewConvergenceError(
+        "preview_dirty_worktree",
+        "Save tracked local edits before publishing an exact preview candidate.",
+        false,
+      );
+    const preview = previewBranchRefs(workspace.id, cwd);
+    const previous = await this.directRef(workspace, cwd, environment, preview.ref);
+    const owner = await this.directRef(workspace, cwd, environment, preview.ownershipRef);
+    if ((previous && (!owner || previous !== owner || owner !== managed)) || (!previous && owner))
+      throw new PreviewConvergenceError(
+        "preview_branch_changed",
+        "The local preview branch is unowned or has changed outside preview convergence.",
+        false,
+      );
+    const worktrees = await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["worktree", "list", "--porcelain", "-z"],
+      failure,
+    );
+    const root = (
+      await this.requireGit(workspace, cwd, environment, ["rev-parse", "--show-toplevel"], failure)
+    ).stdout.trim();
+    const other = worktrees.stdout.split("\0\0").filter((entry) => {
+      const fields = entry.split("\0");
+      return fields.includes(`branch ${preview.ref}`) && !fields.includes(`worktree ${root}`);
+    });
+    let ownSubmodule = false;
+    if (other.length === 1) {
+      const superproject = await this.requireGit(
+        workspace,
+        cwd,
+        environment,
+        ["rev-parse", "--show-superproject-working-tree"],
+        failure,
+      );
+      if (superproject.stdout.trim()) {
+        const directory = (
+          await this.requireGit(
+            workspace,
+            cwd,
+            environment,
+            ["rev-parse", "--absolute-git-dir"],
+            failure,
+          )
+        ).stdout.trim();
+        const common = (
+          await this.requireGit(
+            workspace,
+            cwd,
+            environment,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            failure,
+          )
+        ).stdout.trim();
+        // Git reports a submodule's main worktree using its absorbed Git
+        // directory. This does not authorize a branch in a linked worktree.
+        ownSubmodule =
+          directory === common && !!other[0]?.split("\0").includes(`worktree ${directory}`);
+      }
+    }
+    if (other.length && !ownSubmodule)
+      throw new PreviewConvergenceError(
+        "preview_branch_in_use",
+        "The local preview branch is checked out in another worktree.",
+        false,
+        { path: cwd },
+      );
+    for (const displaced of new Set([current, previous])) {
+      if (!displaced || displaced === candidate) continue;
+      // Keep both displaced HEAD and preview tips. Never reset, clean or push.
+      await this.requireGit(
+        workspace,
+        cwd,
+        environment,
+        ["update-ref", `refs/facility/retained/${randomUUID()}`, displaced],
+        failure,
+      );
+    }
+    const symbolic = await this.git(workspace, cwd, environment, ["symbolic-ref", "-q", "HEAD"]);
+    if (current !== candidate || symbolic.stdout.trim() !== preview.ref) {
+      await onProgress?.();
+      // First check out the exact tree without moving any branch. Ignored files
+      // remain protected even when an owned preview branch must rewind.
+      await this.requireGit(
+        workspace,
+        cwd,
+        environment,
+        ["checkout", "--no-recurse-submodules", "--detach", "--no-overwrite-ignore", candidate],
+        {
+          code: "preview_checkout_blocked",
+          message: "The preview candidate would overwrite a retained local path.",
+          retryable: false,
+        },
+      );
+    }
+    const zero = "0".repeat(40);
+    await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["update-ref", "--stdin"],
+      {
+        code: "preview_branch_changed",
+        message: "The local preview references changed before the candidate could be attached.",
+        retryable: false,
+      },
+      [
+        "start",
+        "option no-deref",
+        `update ${preview.ref} ${candidate} ${previous ?? zero}`,
+        `update ${preview.ownershipRef} ${candidate} ${owner ?? zero}`,
+        `update ${PREVIEW_MANAGED_REF} ${candidate} ${managed ?? zero}`,
+        "prepare",
+        "commit",
+        "",
+      ].join("\n"),
+    );
+    await this.requireGit(
+      workspace,
+      cwd,
+      environment,
+      ["switch", "--no-recurse-submodules", "--no-overwrite-ignore", preview.branch],
+      {
+        code: "preview_checkout_blocked",
+        message: "The exact preview candidate could not be attached to its local preview branch.",
+        retryable: false,
+      },
+    );
+    if (
+      (
+        await this.requireGit(workspace, cwd, environment, ["rev-parse", "HEAD"], failure)
+      ).stdout.trim() !== candidate ||
+      (
+        await this.requireGit(workspace, cwd, environment, ["symbolic-ref", "-q", "HEAD"], failure)
+      ).stdout.trim() !== preview.ref
+    )
+      throw new PreviewConvergenceError(
+        "preview_generation_verification_failed",
+        "The retained repository is not the exact reconstructed candidate.",
+        false,
+      );
+    await this.assertDirtyPreserved(workspace, cwd, environment, dirty);
+  }
+
+  private async repositoryCandidate(
+    workspace: WorkspaceLocator,
+    cwd: string,
+    targets: PreviewGenerationRepository[],
+    environment: Record<string, string>,
+    onProgress?: () => Promise<unknown>,
+    baseBranch = "main",
+  ) {
     const failure = {
       code: "preview_candidate_build_failed",
       message: "Facility could not reconstruct the complete preview candidate.",
@@ -417,7 +1045,7 @@ export class PreviewWorkspaceGitApplicator {
       workspace,
       cwd,
       environment,
-      ["fetch", "--no-tags", "origin", `refs/heads/${baseBranch}`],
+      ["fetch", "--no-recurse-submodules", "--no-tags", "origin", `refs/heads/${baseBranch}`],
       failure,
     );
     let candidate = (
@@ -435,7 +1063,7 @@ export class PreviewWorkspaceGitApplicator {
         workspace,
         cwd,
         environment,
-        ["fetch", "--no-tags", "origin", target.headSha],
+        ["fetch", "--no-recurse-submodules", "--no-tags", "origin", target.headSha],
         {
           code: "preview_commit_unavailable",
           message: "A required preview commit is not fetchable.",
@@ -467,7 +1095,7 @@ export class PreviewWorkspaceGitApplicator {
           workspace,
           cwd,
           environment,
-          ["fetch", "--no-tags", "origin", integrated],
+          ["fetch", "--no-recurse-submodules", "--no-tags", "origin", integrated],
           {
             code: "preview_commit_unavailable",
             message: "A required PR's integration commit is not fetchable.",
@@ -525,144 +1153,7 @@ export class PreviewWorkspaceGitApplicator {
         )
       ).stdout.trim();
     }
-    const current = (
-      await this.requireGit(workspace, cwd, environment, ["rev-parse", "HEAD"], failure)
-    ).stdout.trim();
-    const changed = await this.requireGit(
-      workspace,
-      cwd,
-      environment,
-      ["diff", "--name-only", "--no-renames", "-z", current, candidate, "--"],
-      failure,
-    );
-    const overlap = paths(changed.stdout).filter((path) => dirty.has(path));
-    if (overlap.length)
-      throw new PreviewConvergenceError(
-        "preview_dirty_overlap",
-        "Local workspace edits overlap the current preview candidate.",
-        false,
-        { paths: overlap.slice(0, 50) },
-      );
-    // A tracked local overlay cannot be labelled the exact candidate. Preserve it
-    // in place and ask the user to save it before retrying, including staged edits.
-    const tracked = await this.requireGit(
-      workspace,
-      cwd,
-      environment,
-      ["status", "--porcelain", "--untracked-files=no"],
-      dirtyReadFailure,
-    );
-    if (tracked.stdout.trim())
-      throw new PreviewConvergenceError(
-        "preview_dirty_worktree",
-        "Save tracked local edits before publishing an exact preview candidate.",
-        false,
-      );
-    const preview = previewBranchRefs(workspace.id, cwd);
-    const previous = await this.directRef(workspace, cwd, environment, preview.ref);
-    const owner = await this.directRef(workspace, cwd, environment, preview.ownershipRef);
-    if ((previous && (!owner || previous !== owner || owner !== managed)) || (!previous && owner))
-      throw new PreviewConvergenceError(
-        "preview_branch_changed",
-        "The local preview branch is unowned or has changed outside preview convergence.",
-        false,
-      );
-    const worktrees = await this.requireGit(
-      workspace,
-      cwd,
-      environment,
-      ["worktree", "list", "--porcelain", "-z"],
-      failure,
-    );
-    const root = (
-      await this.requireGit(workspace, cwd, environment, ["rev-parse", "--show-toplevel"], failure)
-    ).stdout.trim();
-    if (
-      worktrees.stdout.split("\0\0").some((entry) => {
-        const fields = entry.split("\0");
-        return fields.includes(`branch ${preview.ref}`) && !fields.includes(`worktree ${root}`);
-      })
-    )
-      throw new PreviewConvergenceError(
-        "preview_branch_in_use",
-        "The local preview branch is checked out in another worktree.",
-        false,
-      );
-    for (const displaced of new Set([current, previous])) {
-      if (!displaced || displaced === candidate) continue;
-      // Keep both displaced HEAD and preview tips. Never reset, clean or push.
-      await this.requireGit(
-        workspace,
-        cwd,
-        environment,
-        ["update-ref", `refs/facility/retained/${randomUUID()}`, displaced],
-        failure,
-      );
-    }
-    const symbolic = await this.git(workspace, cwd, environment, ["symbolic-ref", "-q", "HEAD"]);
-    if (current !== candidate || symbolic.stdout.trim() !== preview.ref) {
-      await onProgress?.();
-      // First check out the exact tree without moving any branch. Ignored files
-      // remain protected even when an owned preview branch must rewind.
-      await this.requireGit(
-        workspace,
-        cwd,
-        environment,
-        ["checkout", "--detach", "--no-overwrite-ignore", candidate],
-        {
-          code: "preview_checkout_blocked",
-          message: "The preview candidate would overwrite a retained local path.",
-          retryable: false,
-        },
-      );
-    }
-    const zero = "0".repeat(40);
-    await this.requireGit(
-      workspace,
-      cwd,
-      environment,
-      ["update-ref", "--stdin"],
-      {
-        code: "preview_branch_changed",
-        message: "The local preview references changed before the candidate could be attached.",
-        retryable: false,
-      },
-      [
-        "start",
-        "option no-deref",
-        `update ${preview.ref} ${candidate} ${previous ?? zero}`,
-        `update ${preview.ownershipRef} ${candidate} ${owner ?? zero}`,
-        `update ${PREVIEW_MANAGED_REF} ${candidate} ${managed ?? zero}`,
-        "prepare",
-        "commit",
-        "",
-      ].join("\n"),
-    );
-    await this.requireGit(
-      workspace,
-      cwd,
-      environment,
-      ["switch", "--no-overwrite-ignore", preview.branch],
-      {
-        code: "preview_checkout_blocked",
-        message: "The exact preview candidate could not be attached to its local preview branch.",
-        retryable: false,
-      },
-    );
-    if (
-      (
-        await this.requireGit(workspace, cwd, environment, ["rev-parse", "HEAD"], failure)
-      ).stdout.trim() !== candidate ||
-      (
-        await this.requireGit(workspace, cwd, environment, ["symbolic-ref", "-q", "HEAD"], failure)
-      ).stdout.trim() !== preview.ref
-    )
-      throw new PreviewConvergenceError(
-        "preview_generation_verification_failed",
-        "The retained repository is not the exact reconstructed candidate.",
-        false,
-      );
-    await this.assertDirtyPreserved(workspace, cwd, environment, dirty);
+    return candidate;
   }
 
   private async directRef(
@@ -697,6 +1188,7 @@ export class PreviewWorkspaceGitApplicator {
     workspace: WorkspaceLocator,
     cwd: string,
     environment: Record<string, string>,
+    composedPaths: string[] = [],
   ) {
     const results = await Promise.all([
       this.requireGit(
@@ -721,7 +1213,9 @@ export class PreviewWorkspaceGitApplicator {
         dirtyReadFailure,
       ),
     ]);
-    const names = [...new Set(results.flatMap((result) => paths(result.stdout)))].sort();
+    const names = [...new Set(results.flatMap((result) => paths(result.stdout)))]
+      .filter((path) => !composedPaths.includes(path))
+      .sort();
     if (names.length > MAX_DIRTY_PATHS) {
       throw new PreviewConvergenceError(
         "preview_dirty_set_too_large",
@@ -838,6 +1332,12 @@ export class PreviewWorkspaceGitApplicator {
 const dirtyReadFailure = {
   code: "preview_dirty_state_unavailable",
   message: "Facility could not inspect local workspace edits safely.",
+  retryable: true,
+};
+
+const candidateFailure = {
+  code: "preview_candidate_build_failed",
+  message: "Facility could not reconstruct the complete preview candidate.",
   retryable: true,
 };
 
