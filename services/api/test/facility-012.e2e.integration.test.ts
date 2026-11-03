@@ -34,6 +34,7 @@ import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { StoryCompletionService } from "../src/stories/completion.js";
 import { GithubConsultationSources } from "../src/stories/consultation-sources.js";
 import { StoryConsultationService } from "../src/stories/consultations.js";
+import { StoryInputFileService } from "../src/stories/input-files.js";
 import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
 import { StoryPreviewConvergenceExecutor } from "../src/stories/preview-convergence-executor.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
@@ -269,6 +270,7 @@ environment:
       previewConvergence,
     );
     const domain: StoryDomain = {
+      inputFiles: new StoryInputFileService(db, runtime, config.secretMasterKey),
       variables: new WorkspaceVariablesService(db, config.secretMasterKey),
       runtime,
       stories,

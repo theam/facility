@@ -8,6 +8,7 @@ import {
   WORKSPACE_HEALTH_COMMAND,
   type WorkspaceDiagnostics,
 } from "./diagnostics.js";
+import { INPUT_FILE_MAX_BYTES, transferInputFile, type WorkspaceInputFile } from "./input-files.js";
 import { nativePreviewOrigin } from "./native-preview.js";
 import { observeJournalCommand } from "./observe-journal-command.js";
 import {
@@ -32,6 +33,52 @@ const MAX_COMMAND_TIMEOUT_MS = 5 * 60 * 60 * 1_000;
 
 export class VercelWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "vercel" as const;
+
+  private async inputTransport(workspace: WorkspaceLocator) {
+    const sandbox = await this.get(workspace, false);
+    const session = sandbox.currentSession();
+    if (
+      sandbox.status !== "running" ||
+      (workspace.expectedComputeRef && workspace.expectedComputeRef !== session.sessionId)
+    )
+      throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
+    return {
+      workspace: { ...workspace, expectedComputeRef: session.sessionId },
+      transport: {
+        write: async (path: string, bytes: Buffer) =>
+          session.writeFiles([{ path, content: bytes, mode: 0o644 }], {
+            signal: AbortSignal.timeout(60_000),
+          }),
+        read: async (path: string) => {
+          const stream = await session.readFile({ path }, { signal: AbortSignal.timeout(60_000) });
+          if (!stream) throw new Error("input_file_missing");
+          const parts: Buffer[] = [];
+          let size = 0;
+          for await (const part of stream as AsyncIterable<Buffer>) {
+            size += part.length;
+            if (size > INPUT_FILE_MAX_BYTES) {
+              if ("destroy" in stream) (stream as import("node:stream").Readable).destroy();
+              throw new Error("input_file_too_large");
+            }
+            parts.push(part);
+          }
+          return Buffer.concat(parts);
+        },
+      },
+    };
+  }
+  async writeInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile, bytes: Buffer) {
+    const target = await this.inputTransport(workspace);
+    await transferInputFile(this, target.workspace, "publish", file, target.transport, bytes);
+  }
+  async readInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile) {
+    const target = await this.inputTransport(workspace);
+    return transferInputFile(this, target.workspace, "export", file, target.transport);
+  }
+  async removeInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile) {
+    const target = await this.inputTransport(workspace);
+    await transferInputFile(this, target.workspace, "remove", file, target.transport);
+  }
 
   constructor(
     private readonly credentials?: { token: string; teamId: string; projectId: string },
