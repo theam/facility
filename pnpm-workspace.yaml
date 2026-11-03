@@ -95,9 +95,12 @@ auditConfig:
     - GHSA-vfj7-8cjw-p6xm
     # Temporary accepted risk: these moderate advisories are fixed only in the
     # glob 14 and minimatch 11 majors, outside the ranges that @fastify/static 10,
-    # serve-handler 6 and Redocly openapi-core 1 declare. None passes glob an abort
-    # signal or minimatch an untrusted pattern; minimatch 3/5 also lack the affected
-    # preprocessing. current-security-floors.test.mjs pins the reviewed consumers.
+    # serve-handler 6 and Redocly openapi-core 1 declare. Swagger UI's wildcard
+    # @fastify/static never runs glob, which would get no abort signal anyway; no
+    # caller passes minimatch an untrusted pattern, and minimatch 3/5 lack the
+    # affected preprocessing. current-security-floors.test.mjs pins the consumers.
+    # Owner: @javiertoledo; human review by 2026-11-17 (not an automatic expiry).
+    # Remove once the consumers accept patched releases: https://github.com/theam/facility/issues/530
     - GHSA-3g3m-2fjr-6pw4
     - GHSA-g3hv-75wg-m249
 

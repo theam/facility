@@ -74,11 +74,14 @@ see [release and dependency controls](hardening.md#release-and-dependency-contro
 The docs toolchain floors include `follow-redirects` 1.16.2 and `joi` 17.13.9 for
 the October 30, 2026 redirect credential and email validation advisories. Two
 moderate advisories from the same day are fixed only in new major releases, so
-the audit ignores them temporarily. GHSA-3g3m-2fjr-6pw4 affects `glob`, which the
-API's Swagger UI static files use. GHSA-g3hv-75wg-m249 affects `minimatch`, used
+the audit ignores them temporarily. GHSA-3g3m-2fjr-6pw4 affects `glob`, a
+dependency of the static file plugin behind the API's Swagger UI, which serves
+those files without running `glob`. GHSA-g3hv-75wg-m249 affects `minimatch`, used
 by that `glob` and by docs and SDK tooling. No caller passes `glob` an abort signal or
 `minimatch` an untrusted pattern. A lockfile test limits both exceptions to the
 reviewed consumer versions, so a new consumer or version requires reassessment.
+Their removal is tracked in [issue 530](https://github.com/theam/facility/issues/530),
+with a human review by November 17, 2026.
 
 The docs SVG optimizer `@svgr/plugin-svgo` 8.1.0 declares an unused `deepmerge`
 dependency affected by GHSA-gcqx-w48m-w2h4. A version-scoped override removes
