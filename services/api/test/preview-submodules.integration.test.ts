@@ -170,6 +170,46 @@ describe("complete previews with connected Git submodules", () => {
     );
   });
 
+  it.each([
+    "squash",
+    "rebase",
+  ] as const)("keeps later child changes after a %s integration while preserving the parent's publication pin", async (method) => {
+    await git(childSource, ["switch", "main"]);
+    await writeFile(join(childSource, "parallel.txt"), "independent base change\n");
+    await git(childSource, ["add", "."]);
+    await git(childSource, ["commit", "-m", "advance child base"]);
+    if (method === "squash") {
+      await git(childSource, ["merge", "--squash", "feature/client"]);
+      await git(childSource, ["commit", "-m", "integrate child feature"]);
+    } else {
+      await git(childSource, ["cherry-pick", childHead]);
+    }
+    const integrated = await git(childSource, ["rev-parse", "HEAD"]);
+    expect(integrated).not.toBe(childHead);
+    await writeFile(join(childSource, "feature.txt"), "later reviewed child improvement\n");
+    await git(childSource, ["add", "."]);
+    await git(childSource, ["commit", "-m", "improve integrated child feature"]);
+    const currentBase = await git(childSource, ["rev-parse", "HEAD"]);
+    await git(childSource, ["push", "origin", "main"]);
+    const resolveIntegration = vi.fn(async (target: PreviewGenerationRepository) =>
+      target.repository === "acme/client" ? integrated : null,
+    );
+    const applicator = new PreviewWorkspaceGitApplicator(runtime, undefined, resolveIntegration);
+    const sources = await applicator.apply({ workspace, credentials, repositories: targets() });
+    await applicator.verify(workspace, sources, credentials.environment);
+    expect(resolveIntegration).toHaveBeenCalledWith(targets()[1]);
+    expect(await git(child, ["rev-parse", "HEAD"])).toBe(currentBase);
+    expect(await git(rawChild, ["rev-parse", "HEAD"])).toBe(currentBase);
+    expect(await readFile(join(child, "feature.txt"), "utf8")).toBe(
+      "later reviewed child improvement\n",
+    );
+    expect(await git(parent, ["rev-parse", "HEAD"])).toBe(parentHead);
+    expect(await git(parent, ["ls-tree", "HEAD", "client"])).toContain(childBase);
+    expect(await git(parent, ["ls-tree", "feature/story", "client"])).toContain(childBase);
+    expect(await git(child, ["rev-parse", "feature/client"])).toBe(childHead);
+    expect(await readFile(join(parent, "data/control.json"), "utf8")).toContain("keep me");
+  });
+
   it("restores the parent's pin when a child PR is removed from the complete set", {
     timeout: 15_000,
   }, async () => {

@@ -12,6 +12,7 @@ import {
   storyAssignees,
   storyConversations,
   storyEvidenceEvents,
+  storyInputFiles,
   storyMessages,
   storyPreviewConvergences,
   turnEvents,
@@ -37,6 +38,7 @@ import type {
   WorkspaceRuntime,
 } from "../workspaces/runtime.js";
 import { reconcileTurnBranch } from "./branch.js";
+import { type InputFileReference, validateInputFileReferences } from "./input-files.js";
 import { isGithubIssueStory } from "./phase.js";
 import { authorizePlanExecution } from "./workflow-execution.js";
 import { lockWorkflowExecution, lockWorkflowProject } from "./workflow-policy.js";
@@ -71,6 +73,7 @@ export type StoryWorkspaceBundle = Awaited<ReturnType<StoryWorkspaceService["get
 
 /** How an agent response was recorded; older rows have no metadata and stay combined. */
 export type StoryMessageMetadata = {
+  attachments?: InputFileReference[];
   content?: "final_response";
   engine?: string;
   model?: string;
@@ -332,6 +335,7 @@ export class StoryWorkspaceService {
   }
 
   async queueMessage(input: {
+    attachmentIds?: string[];
     orgId: string;
     projectId: string;
     storyId: string;
@@ -398,6 +402,8 @@ export class StoryWorkspaceService {
         return { message: duplicate, turn, queued: !turn, created: false };
       }
 
+      const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
+
       const activeTurn = (
         await tx
           .select()
@@ -444,6 +450,7 @@ export class StoryWorkspaceService {
             seq: sequence,
             role: "user",
             body: input.body,
+            metadata: attachments.length ? { attachments } : {},
             actor: input.actor,
             turnId: turn?.id,
             requestedAgentName: input.agent.name,
@@ -1208,11 +1215,26 @@ export class StoryWorkspaceService {
       throw new StoryServiceError("attention_resolved", "attention item is already resolved");
     }
     const failedTurn = await scopedTurn(this.db, input.orgId, input.projectId, attention.turnId);
+    const [request] = await this.db
+      .select()
+      .from(storyMessages)
+      .where(
+        and(
+          eq(storyMessages.orgId, input.orgId),
+          eq(storyMessages.projectId, input.projectId),
+          eq(storyMessages.storyId, input.storyId),
+          eq(storyMessages.turnId, failedTurn.id),
+          eq(storyMessages.role, "user"),
+        ),
+      )
+      .orderBy(asc(storyMessages.seq))
+      .limit(1);
     const queued = await this.queueMessage({
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: input.storyId,
       body: `Retry requested for ${attention.title}.`,
+      attachmentIds: messageMetadata(request?.metadata).attachments?.map((file) => file.id),
       dedupeKey: `attention-retry:${attention.id}`,
       agent: AgentManifestSchema.parse(failedTurn.manifest),
       actor: input.actor,
@@ -1473,6 +1495,7 @@ export class StoryWorkspaceService {
         author: conversationAuthor(row, turn, userById),
         turn: turn ? conversationTurn(turn) : null,
         content: conversationContent(row.role, metadata),
+        attachments: metadata.attachments ?? [],
       };
     };
     const messages = contiguous.map(enrich);
@@ -2171,6 +2194,17 @@ export class StoryWorkspaceService {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await tx
+        .update(storyInputFiles)
+        .set({ state: "removed", updatedAt: now })
+        .where(
+          and(
+            eq(storyInputFiles.orgId, input.orgId),
+            eq(storyInputFiles.projectId, input.projectId),
+            eq(storyInputFiles.storyId, input.storyId),
+            eq(storyInputFiles.workspaceId, workspace.id),
+          ),
+        );
+      await tx
         .update(workspaces)
         .set({ state: "destroyed", destroyedAt: now, updatedAt: now })
         .where(and(eq(workspaces.orgId, input.orgId), eq(workspaces.id, workspace.id)));
@@ -2346,6 +2380,9 @@ function messageMetadata(value: unknown): StoryMessageMetadata {
   const record = value as Record<string, unknown>;
   return {
     content: record.content === "final_response" ? "final_response" : undefined,
+    attachments: Array.isArray(record.attachments)
+      ? (record.attachments as InputFileReference[])
+      : undefined,
     engine: typeof record.engine === "string" ? record.engine : undefined,
     model: typeof record.model === "string" ? record.model : undefined,
     progressMessages:

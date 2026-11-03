@@ -77,6 +77,10 @@ const StartStoryBody = z.object({
   idempotency_key: z.string().min(1).max(200),
 });
 const SendMessageBody = z.object({
+  attachment_ids: z
+    .array(z.string().regex(/^infile_[a-z0-9]{16,64}$/))
+    .max(5)
+    .optional(),
   agent: z.string().min(1).max(64).optional(),
   message: z.string().min(1).max(200_000),
   idempotency_key: z.string().min(1).max(200),
@@ -863,6 +867,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           projectId,
           storyId,
           body: body.message,
+          attachmentIds: body.attachment_ids,
           dedupeKey: body.idempotency_key,
           agent: manifest,
           actor: principalActor(actor),

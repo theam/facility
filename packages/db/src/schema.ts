@@ -1261,6 +1261,12 @@ export const workspaces = pgTable(
   },
   (table) => [
     uniqueIndex("workspaces_org_project_id_uidx").on(table.orgId, table.projectId, table.id),
+    unique("workspaces_story_identity_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.id,
+    ),
     uniqueIndex("workspaces_org_id_uidx").on(table.orgId, table.id),
     uniqueIndex("workspaces_story_active_uidx")
       .on(table.storyId)
@@ -1933,6 +1939,60 @@ export const turnEvents = pgTable(
       columns: [table.orgId, table.projectId, table.storyId, table.turnId],
       foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
     }),
+  ],
+);
+
+export const storyInputFiles = pgTable(
+  "story_input_files",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+    mediaType: text("media_type").notNull(),
+    state: text("state").notNull().default("prepared"),
+    uploadAttemptId: text("upload_attempt_id"),
+    authorizer: jsonb("authorizer").$type<{ type: "user" | "key"; id: string }>().notNull(),
+    allowResume: boolean("allow_resume").notNull().default(false),
+    dedupeKey: text("dedupe_key").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    unique("story_input_files_scope_uidx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.id,
+    ),
+    unique("story_input_files_dedupe_uidx").on(table.storyId, table.dedupeKey),
+    index("story_input_files_scope_idx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.createdAt,
+    ),
+    foreignKey({
+      name: "story_input_files_story_fk",
+      columns: [table.orgId, table.projectId, table.storyId],
+      foreignColumns: [stories.orgId, stories.projectId, stories.id],
+    }),
+    foreignKey({
+      name: "story_input_files_workspace_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.workspaceId],
+      foreignColumns: [workspaces.orgId, workspaces.projectId, workspaces.storyId, workspaces.id],
+    }),
+    check(
+      "story_input_files_state_check",
+      sql`${table.state} in ('prepared','uploading','available','failed','removed')`,
+    ),
+    check("story_input_files_size_check", sql`${table.size} between 1 and 26214400`),
   ],
 );
 

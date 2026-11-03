@@ -19,6 +19,7 @@ import {
   writeStoryDraft,
 } from "@/lib/story-draft";
 import { safeExternalUrl } from "@/lib/story-presentation";
+import { StoryInputFiles } from "./story-input-files";
 
 type Turn = WorkspaceStoryBundle["turns"][number];
 type Artifact = WorkspaceStoryBundle["artifacts"][number];
@@ -233,6 +234,8 @@ export function StoryComposer({
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const form = useRef<HTMLFormElement>(null);
@@ -286,7 +289,7 @@ export function StoryComposer({
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending.current || !agent || !message.trim()) return;
+    if (sending.current || uploadBusy || !agent || !message.trim()) return;
     sending.current = true;
     setPending(true);
     setError("");
@@ -297,7 +300,7 @@ export function StoryComposer({
     const result = await clientApi<{ queued: { queued: boolean } }>(
       "POST",
       storyPath(projectId, storyId, "/messages"),
-      { agent, message, idempotency_key: key },
+      { agent, message, attachment_ids: draft.attachmentIds, idempotency_key: key },
     );
     if (result.ok) clearSentStoryDraft(storageKey, attempt);
     if (!mounted.current) return;
@@ -335,12 +338,36 @@ export function StoryComposer({
           maxLength={200_000}
           onChange={(event) => {
             setNotice("");
-            setDraft({ agent: draft.agent, message: event.target.value });
+            setDraft({ ...draft, message: event.target.value, idempotencyKey: undefined });
           }}
           placeholder="Ask for the next change, review, diagnosis, or verification."
           rows={4}
         />
       </Field>
+      <Button
+        type="button"
+        size="sm"
+        disabled={pending || uploadBusy}
+        onClick={() => setFilesOpen((value) => !value)}
+      >
+        {filesOpen
+          ? "hide files"
+          : draft.attachmentIds?.length
+            ? `files (${draft.attachmentIds.length})`
+            : "attach files"}
+      </Button>
+      {filesOpen ? (
+        <StoryInputFiles
+          projectId={projectId}
+          storyId={storyId}
+          selected={draft.attachmentIds ?? []}
+          onChange={(attachmentIds) =>
+            setDraft((current) => ({ ...current, attachmentIds, idempotencyKey: undefined }))
+          }
+          onBusy={setUploadBusy}
+          disabled={pending}
+        />
+      ) : null}
       <p className="text-[12px] text-(--dim)">
         {saved
           ? "Closing keeps your draft. Restore it in this tab for up to 24 hours."
@@ -353,7 +380,7 @@ export function StoryComposer({
             disabled={pending}
             onChange={(event) => {
               setNotice("");
-              setDraft({ agent: event.target.value, message });
+              setDraft({ ...draft, agent: event.target.value, idempotencyKey: undefined });
             }}
           >
             {!agent ? <option value="">Choose an available agent</option> : null}
@@ -368,7 +395,7 @@ export function StoryComposer({
           <Button
             type="button"
             size="sm"
-            disabled={pending || !message}
+            disabled={pending || uploadBusy || (!message && !draft.attachmentIds?.length)}
             onClick={() => {
               setDraft({ agent: draft.agent, message: "" });
               setError("");
@@ -387,7 +414,7 @@ export function StoryComposer({
             type="submit"
             variant="primary"
             tone="agent"
-            disabled={pending || !agent || !message.trim()}
+            disabled={pending || uploadBusy || !agent || !message.trim()}
           >
             {pending ? "queueing…" : "send to agent"}
           </Button>

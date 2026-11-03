@@ -15,6 +15,7 @@ import { ProjectBacklogService } from "./stories/backlog.js";
 import { StoryCompletionService } from "./stories/completion.js";
 import { GithubConsultationSources } from "./stories/consultation-sources.js";
 import { StoryConsultationService } from "./stories/consultations.js";
+import { StoryInputFileService } from "./stories/input-files.js";
 import { StoryPreviewConvergenceService } from "./stories/preview-convergence.js";
 import {
   retirePreviewWriter,
@@ -38,6 +39,7 @@ import { WorkspaceVariablesService } from "./workspaces/variables.js";
 import { VercelWorkspaceRuntime } from "./workspaces/vercel.js";
 
 export type StoryDomain = {
+  inputFiles: StoryInputFileService;
   runtime: WorkspaceRuntime;
   stories: StoryWorkspaceService;
   catalog: AgentCatalogService;
@@ -190,6 +192,12 @@ export function createStoryDomain(input: {
     githubFactory === unavailableGithubFactory ? undefined : githubFactory,
   );
   return {
+    inputFiles: new StoryInputFileService(
+      input.db,
+      runtime,
+      input.config.secretMasterKey,
+      input.config.storyInputProjectMaxBytes,
+    ),
     runtime,
     stories,
     catalog,

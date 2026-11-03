@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoryActions } from "../components/story/story-actions";
 import type { StoryAgent, WorkspaceStory } from "../lib/api";
+import { storyDraftKey, writeStoryDraft } from "../lib/story-draft";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("../components/story/story-conversation", () => ({
@@ -113,6 +114,43 @@ async function submit() {
 }
 
 describe("story composer continuity", () => {
+  it("can hide selected files without dropping their references or loading them on page read", async () => {
+    const id = "infile_0123456789abcdef";
+    writeStoryDraft(storyDraftKey("person-a", "project-a", "story-a"), {
+      agent: "designer",
+      message: "Read the fixture",
+      attachmentIds: [id],
+    });
+    fetch.mockImplementation(async (_url, init) =>
+      Response.json(
+        init?.method === "GET"
+          ? {
+              items: [
+                {
+                  id,
+                  name: "fixture.json",
+                  size: 12,
+                  sha256: "a".repeat(64),
+                  state: "available",
+                  errorCode: null,
+                },
+              ],
+              limits: { fileBytes: 26214400, messageFiles: 5 },
+            }
+          : { queued: { queued: false } },
+      ),
+    );
+    await render();
+    await click("send a task");
+    expect(fetch).not.toHaveBeenCalled();
+    await click("files (1)");
+    expect(container.querySelector('section[aria-label="Story input files"]')).not.toBeNull();
+    await click("hide files");
+    expect(container.querySelector('section[aria-label="Story input files"]')).toBeNull();
+    await submit();
+    const send = fetch.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(send?.[1]?.body)).attachment_ids).toEqual([id]);
+  });
   it("retargets and focuses every Reply while preserving the open draft without dispatching", async () => {
     await render();
     await reply("designer");
