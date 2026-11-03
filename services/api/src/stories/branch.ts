@@ -9,6 +9,7 @@ import {
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { repositoryDevelopmentBranch } from "../github/development-branch.js";
 import { isSafeGitBranch } from "../workspaces/git-branch.js";
+import { isPreviewBranch } from "../workspaces/preview-branch.js";
 import { appendStoryEvidence } from "./evidence.js";
 
 type Story = typeof stories.$inferSelect;
@@ -32,6 +33,7 @@ export function observedStoryBranch(
     branch === story.branch ||
     branch === defaultBranch ||
     branch === developmentBranch ||
+    isPreviewBranch(branch) ||
     !isSafeGitBranch(branch)
   )
     return null;
