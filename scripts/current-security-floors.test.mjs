@@ -29,6 +29,8 @@ const floors = {
   undici: { 6: UNDICI_6_SECURITY_FLOOR, 7: "7.30.1", 8: "8.12.2" },
   "serialize-javascript": { 7: "7.1.3" },
   "fast-uri": { 3: "3.1.9", 4: "4.2.3" },
+  "follow-redirects": { 1: "1.16.2" },
+  joi: { 17: "17.13.9" },
 };
 for (const [name, majors] of Object.entries(floors)) {
   test(`every locked ${name} copy meets its reviewed major-specific security floor`, () => {
@@ -41,5 +43,31 @@ for (const [name, majors] of Object.entries(floors)) {
       assert.ok(minimum, `Unreviewed ${name} major ${version}`);
       assertPatchedVersion(version, minimum, name);
     }
+  });
+}
+
+function isBelow(version, fixed) {
+  const [actual, floor] = [version, fixed].map(value => value.split(".").map(Number));
+  const index = actual.findIndex((part, position) => part !== floor[position]);
+  return index !== -1 && actual[index] < floor[index];
+}
+
+// GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249 are audit exceptions only for these
+// consumers. Reassess the exception before accepting another one or a new version.
+const auditExceptions = {
+  glob: { fixed: "14.0.2", consumers: ["@fastify/static@10.1.2"] },
+  minimatch: { fixed: "11.0.1", consumers: ["@redocly/openapi-core@1.34.17", "glob@13.0.6", "serve-handler@6.1.7"] },
+};
+for (const [name, { fixed, consumers }] of Object.entries(auditExceptions)) {
+  test(`unpatched ${name} stays limited to the consumers reviewed for its audit exception`, () => {
+    const found = new Set();
+    for (const [key, entry] of Object.entries({ ...lock.importers, ...lock.snapshots })) {
+      for (const dependencies of [entry.dependencies, entry.devDependencies, entry.optionalDependencies]) {
+        const locked = dependencies?.[name];
+        const version = (locked?.version ?? locked)?.replace(/\(.*$/, "");
+        if (version && isBelow(version, fixed)) found.add(key.replace(/\(.*$/, ""));
+      }
+    }
+    assert.deepEqual([...found].sort(), consumers);
   });
 }

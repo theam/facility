@@ -71,6 +71,15 @@ The all-severity audit remains part of `pnpm verify`; the refresh does not add
 audit exceptions or change existing exceptions. For deployment and verification,
 see [release and dependency controls](hardening.md#release-and-dependency-controls).
 
+The docs toolchain floors include `follow-redirects` 1.16.2 and `joi` 17.13.9 for
+the October 30, 2026 redirect credential and email validation advisories. Two
+moderate advisories from the same day are fixed only in new major releases, so
+the audit ignores them temporarily. GHSA-3g3m-2fjr-6pw4 affects `glob`, which the
+API's Swagger UI static files use. GHSA-g3hv-75wg-m249 affects `minimatch`, used
+by that `glob` and by docs and SDK tooling. No caller passes `glob` an abort signal or
+`minimatch` an untrusted pattern. A lockfile test limits both exceptions to the
+reviewed consumer versions, so a new consumer or version requires reassessment.
+
 The docs SVG optimizer `@svgr/plugin-svgo` 8.1.0 declares an unused `deepmerge`
 dependency affected by GHSA-gcqx-w48m-w2h4. A version-scoped override removes
 that dependency edge rather than ignoring the advisory. Installed-consumer
