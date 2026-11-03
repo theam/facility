@@ -55,14 +55,33 @@ URL is created.
 The workspace pins minimum patched versions for transitive dependencies in
 `pnpm-workspace.yaml`, with the resolved graph committed in `pnpm-lock.yaml`.
 Network dependency floors include `fast-uri` 3.1.7/4.1.4, `ip-address` 10.5.1,
-and `undici` 7.29.1 on the affected 7.x line. These address malformed URI
-authorities, IPv6 special-use classification and compressed WebSocket error
-handling. They do not establish that every dependency advisory is exploitable
-through a Facility route, or replace application authorization and egress policy.
+and `undici` 7.30.1/8.12.2 on the affected 7.x and 8.x lines. These address
+malformed URI authorities, IPv6 special-use classification, compressed WebSocket
+error handling, and the October 2026 undici advisories, including the `Agent` TLS
+identity-callback bypass. They do not establish that every dependency advisory is
+exploitable through a Facility route, or replace application authorization and
+egress policy.
+
+The API, web, and runner images build from the same digest-pinned
+`node:24.22.2-trixie-slim` base. The October 2026 Node.js security release first
+shipped in 24.22.1, and the image test rejects an older base. Running containers
+keep their previous Node.js runtime until the images are rebuilt and redeployed.
 
 The all-severity audit remains part of `pnpm verify`; the refresh does not add
 audit exceptions or change existing exceptions. For deployment and verification,
 see [release and dependency controls](hardening.md#release-and-dependency-controls).
+
+The docs toolchain floors include `follow-redirects` 1.16.2 and `joi` 17.13.9 for
+the October 30, 2026 redirect credential and email validation advisories. Two
+moderate advisories from the same day are fixed only in new major releases, so
+the audit ignores them temporarily. GHSA-3g3m-2fjr-6pw4 affects `glob`, a
+dependency of the static file plugin behind the API's Swagger UI, which serves
+those files without running `glob`. GHSA-g3hv-75wg-m249 affects `minimatch`, used
+by that `glob` and by docs and SDK tooling. No caller passes `glob` an abort signal or
+`minimatch` an untrusted pattern. A lockfile test limits both exceptions to the
+reviewed consumer versions, so a new consumer or version requires reassessment.
+Their removal is tracked in [issue 530](https://github.com/theam/facility/issues/530),
+with a human review by November 17, 2026.
 
 The docs SVG optimizer `@svgr/plugin-svgo` 8.1.0 declares an unused `deepmerge`
 dependency affected by GHSA-gcqx-w48m-w2h4. A version-scoped override removes
@@ -113,9 +132,11 @@ unrecoverable, while disclosure alongside a database backup defeats that protect
 
 ## Dependency security updates
 
-The reviewed dependency floors include Next.js 16.4.1, MCP SDK 1.31.0, sharp 0.35.5
-with bundled librsvg 2.63.2, and shell-quote 1.11.0. Keep the lockfile and transitive
-overrides together when upgrading; run `pnpm verify`, including the full-severity
+The reviewed dependency floors include Next.js 16.4.4, MCP SDK 1.31.0, sharp 0.35.5
+with bundled librsvg 2.63.2, and shell-quote 1.11.0. Next.js 16.4.1 first fixed the
+October 22, 2026 Image Optimization SVG and `use cache` remote code execution
+advisories and the App Router Server Actions denial of service. Keep the lockfile
+and transitive overrides together when upgrading; run `pnpm verify`, including the full-severity
 dependency audit and the installed-consumer regression tests. These package updates
 do not change database schemas, permissions, or credentials.
 
