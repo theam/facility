@@ -32,6 +32,15 @@ each repository's configured development branch (or GitHub default) and the exac
 required PR heads. A manual story can declare a delivery too; merely mentioning
 a PR in its conversation does not register that delivery.
 
+Before combining divergent heads, Facility confirms the PR's repository, number
+and exact head with GitHub using that repository's installation credential.
+For a merged PR, GitHub's integration commit is used only as evidence: if Git
+proves it is already in the reconstructed candidate, the original head is not
+reapplied. This preserves later integration changes after squash or rebase
+merges. Open PRs' synthetic merge commits are never evidence of integration.
+An unavailable or mismatched confirmation blocks publication; an integration
+commit outside the candidate does not hide a genuine merge conflict.
+
 Each retained workspace and repository has its own local
 `facility/preview/<scope-hash>` branch. It points to the reconstructed candidate,
 including after a force push, PR withdrawal or rewind. Facility never pushes
