@@ -33,6 +33,37 @@ function fakeSandbox() {
 }
 
 describe("Vercel persistent workspace runtime", () => {
+  it.each([
+    "UNSAFE,UNREQUESTED_SECRET",
+    "BAD=VALUE",
+    "FACILITY_WORKSPACE_COMMAND_PATH",
+  ])("rejects invalid or reserved environment name %s before submitting a pinned command", async (name) => {
+    const sandbox = fakeSandbox();
+    const runCommand = vi.fn();
+    sandbox.currentSession = () => ({
+      sessionId: "session_current",
+      getCommand: vi.fn(),
+      runCommand,
+    });
+    sandboxApi.get.mockResolvedValue(sandbox);
+    await expect(
+      new VercelWorkspaceRuntime().exec(
+        {
+          id: sandbox.name,
+          externalRef: sandbox.name,
+          volumeRef: "snap_retained",
+          image: "runner:retained",
+          expectedComputeRef: "session_current",
+        },
+        { command: "true", env: { [name]: "literal" } },
+      ),
+    ).rejects.toMatchObject({
+      code: "workspace_command_environment_invalid",
+    });
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(sandbox.asUser).not.toHaveBeenCalled();
+  });
+
   it("never stops or executes on a replacement session through an old compute target", async () => {
     const sandbox = fakeSandbox();
     sandboxApi.get.mockResolvedValue(sandbox);
