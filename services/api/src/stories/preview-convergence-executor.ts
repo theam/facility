@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { PreviewGenerationRepository } from "@facility/core";
 import { type FacilityDb, stories, workspaces } from "@facility/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
+import {
+  type PreviewPullMergeResolver,
+  readPreviewPullMerge,
+} from "../github/preview-pull-merge.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../workspaces/preview-branch.js";
@@ -76,6 +80,7 @@ export class StoryPreviewConvergenceExecutor {
     private readonly onWriterReleased: (
       scope: PreviewConvergenceScope,
     ) => Promise<unknown> = async () => undefined,
+    private readonly resolvePullMerge: PreviewPullMergeResolver = readPreviewPullMerge,
   ) {}
 
   async dispatch(scope: PreviewConvergenceScope, now = new Date()) {
@@ -178,7 +183,9 @@ export class StoryPreviewConvergenceExecutor {
             this.manifests.load(scope.orgId, scope.projectId),
           ]);
           signal.throwIfAborted();
-          await new PreviewWorkspaceGitApplicator(this.runtime, signal).apply({
+          await new PreviewWorkspaceGitApplicator(this.runtime, signal, (target) =>
+            this.resolvePullMerge(target, credentials, signal),
+          ).apply({
             workspace: activeLocator,
             repositories: claim.repositories,
             credentials,
@@ -323,6 +330,9 @@ export class PreviewWorkspaceGitApplicator {
   constructor(
     private readonly runtime: WorkspaceRuntime,
     private readonly signal?: AbortSignal,
+    private readonly integratedCommit?: (
+      target: PreviewGenerationRepository,
+    ) => Promise<string | null>,
   ) {}
 
   async apply(input: {
@@ -443,6 +453,37 @@ export class PreviewWorkspaceGitApplicator {
       if (await this.isAncestor(workspace, cwd, environment, candidate, target.headSha)) {
         candidate = target.headSha;
         continue;
+      }
+      const integrated = await this.integratedCommit?.(target);
+      if (integrated) {
+        if (!/^[a-f\d]{40}$/i.test(integrated)) {
+          throw new PreviewConvergenceError(
+            "preview_merge_commit_invalid",
+            "The required PR's integration commit is invalid.",
+            false,
+          );
+        }
+        await this.requireGit(
+          workspace,
+          cwd,
+          environment,
+          ["fetch", "--no-tags", "origin", integrated],
+          {
+            code: "preview_commit_unavailable",
+            message: "A required PR's integration commit is not fetchable.",
+            retryable: true,
+          },
+        );
+        await this.requireGit(
+          workspace,
+          cwd,
+          environment,
+          ["cat-file", "-e", `${integrated}^{commit}`],
+          failure,
+        );
+        // Squash and rebase merges replace the original PR head's ancestry.
+        // Skip it only when Git proves its confirmed integration is already here.
+        if (await this.isAncestor(workspace, cwd, environment, integrated, candidate)) continue;
       }
       const tree = await this.git(workspace, cwd, environment, [
         "merge-tree",

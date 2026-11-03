@@ -268,6 +268,8 @@ environment:
       projectManifests,
       environment,
       previewConvergence,
+      undefined,
+      async () => null,
     );
     const domain: StoryDomain = {
       inputFiles: new StoryInputFileService(db, runtime, config.secretMasterKey),

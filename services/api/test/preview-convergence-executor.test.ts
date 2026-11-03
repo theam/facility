@@ -57,6 +57,51 @@ describe("preview workspace Git application", () => {
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
 
+  it.each([
+    "squash",
+    "rebase",
+  ] as const)("does not reapply a %s-merged head after its integrated code has evolved", async (method) => {
+    await git(source, ["switch", "-c", "feature/integrated", base]);
+    await writeFile(join(source, "README.md"), "delivered feature\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "delivered feature"]);
+    const head = await git(source, ["rev-parse", "HEAD"]);
+    await git(source, ["push", "origin", "feature/integrated"]);
+    await git(source, ["switch", "main"]);
+    await writeFile(join(source, "parallel.txt"), "independent base change\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "advance integration base"]);
+    if (method === "squash") {
+      await git(source, ["merge", "--squash", "feature/integrated"]);
+      await git(source, ["commit", "-m", "squash delivered feature"]);
+    } else {
+      await git(source, ["cherry-pick", head]);
+    }
+    const integrated = await git(source, ["rev-parse", "HEAD"]);
+    expect(integrated).not.toBe(head);
+    await writeFile(join(source, "README.md"), "later reviewed improvement\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "improve integrated feature"]);
+    const currentBase = await git(source, ["rev-parse", "HEAD"]);
+    await git(source, ["push", "origin", "main"]);
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await writeFile(join(repository, "retained.txt"), "user data\n");
+    await new PreviewWorkspaceGitApplicator(runtime, undefined, async () => integrated).apply({
+      workspace,
+      credentials,
+      repositories: [target(1, head)],
+    });
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(currentBase);
+    expect(await readFile(join(repository, "README.md"), "utf8")).toBe(
+      "later reviewed improvement\n",
+    );
+    expect(await readFile(join(repository, "retained.txt"), "utf8")).toBe("user data\n");
+    expect(await git(repository, ["rev-parse", "main"])).toBe(base);
+    expect(await git(repository, ["symbolic-ref", "HEAD"])).toBe(
+      previewBranchRefs(workspace.id, "repos/acme/app").ref,
+    );
+  });
+
   it("attaches an unchanged candidate to an owned local branch without moving or pushing work branches", async () => {
     const repository = join(workspace.volumeRef, "repos/acme/app");
     const preview = previewBranchRefs(workspace.id, "repos/acme/app");
@@ -71,6 +116,95 @@ describe("preview workspace Git application", () => {
     expect(await git(remote, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
       "refs/heads/main",
     );
+  });
+
+  it("does not skip a genuine conflict when the confirmed merge is on another branch", async () => {
+    await git(source, ["switch", "-c", "feature/requested", base]);
+    await writeFile(join(source, "README.md"), "requested change\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "requested change"]);
+    const head = await git(source, ["rev-parse", "HEAD"]);
+    await git(source, ["push", "origin", "feature/requested"]);
+    await git(source, ["switch", "-c", "other-integration", base]);
+    await git(source, ["cherry-pick", "--no-commit", head]);
+    await git(source, ["commit", "-m", "integrated on another branch"]);
+    const elsewhere = await git(source, ["rev-parse", "HEAD"]);
+    await git(source, ["push", "origin", "other-integration"]);
+    await git(source, ["switch", "main"]);
+    await writeFile(join(source, "README.md"), "conflicting base change\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "advance the selected base"]);
+    await git(source, ["push", "origin", "main"]);
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await writeFile(join(repository, "retained.txt"), "user data\n");
+    await expect(
+      new PreviewWorkspaceGitApplicator(runtime, undefined, async () => elsewhere).apply({
+        workspace,
+        credentials,
+        repositories: [target(1, head)],
+      }),
+    ).rejects.toMatchObject({ code: "preview_merge_conflict" });
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(base);
+    expect(await readFile(join(repository, "retained.txt"), "utf8")).toBe("user data\n");
+  });
+
+  it.each([
+    "HEAD",
+    "--upload-pack=untrusted",
+  ])("rejects invalid integration reference %s", async (proof) => {
+    await git(source, ["switch", "-c", "feature/requested", base]);
+    await writeFile(join(source, "README.md"), "requested change\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "requested change"]);
+    const head = await git(source, ["rev-parse", "HEAD"]);
+    await git(source, ["push", "origin", "feature/requested"]);
+    await git(source, ["switch", "main"]);
+    await writeFile(join(source, "parallel.txt"), "base advance\n");
+    await git(source, ["add", "."]);
+    await git(source, ["commit", "-m", "advance base"]);
+    await git(source, ["push", "origin", "main"]);
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await expect(
+      new PreviewWorkspaceGitApplicator(runtime, undefined, async () => proof).apply({
+        workspace,
+        credentials,
+        repositories: [target(1, head)],
+      }),
+    ).rejects.toMatchObject({ code: "preview_merge_commit_invalid" });
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(base);
+  });
+
+  it("does not publish a partial candidate when another required PR cannot be confirmed", async () => {
+    const heads: string[] = [];
+    for (const [branch, file] of [
+      ["first", "first.txt"],
+      ["second", "second.txt"],
+    ] as const) {
+      await git(source, ["switch", "-c", branch, base]);
+      await writeFile(join(source, file), `${branch}\n`);
+      await git(source, ["add", "."]);
+      await git(source, ["commit", "-m", branch]);
+      heads.push(await git(source, ["rev-parse", "HEAD"]));
+      await git(source, ["push", "origin", branch]);
+    }
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await writeFile(join(repository, "retained.txt"), "user data\n");
+    const applicator = new PreviewWorkspaceGitApplicator(runtime, undefined, async () => {
+      throw new Error("integration confirmation unavailable");
+    });
+    await expect(
+      applicator.apply({
+        workspace,
+        credentials,
+        repositories: heads.map((head, index) => target(index + 1, head)),
+      }),
+    ).rejects.toThrow("integration confirmation unavailable");
+    expect(await git(repository, ["rev-parse", "HEAD"])).toBe(base);
+    expect(await readFile(join(repository, "retained.txt"), "utf8")).toBe("user data\n");
+    await expect(readFile(join(repository, "first.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(repository, "second.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("migrates a retained detached preview even when its candidate has not changed", async () => {

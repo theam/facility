@@ -258,6 +258,8 @@ it("preserves the converged next turn, fences delayed stops, and advertises deli
       f.manifests,
       f.environment,
       preview,
+      undefined,
+      async () => null,
     );
     const ready = await executor.dispatch(f.scope);
     assert.equal(ready.state, "ready");
@@ -376,6 +378,8 @@ it("preserves the converged next turn, fences delayed stops, and advertises deli
         suspended.manifests,
         suspended.environment,
         suspendedPreview,
+        undefined,
+        async () => null,
       );
       const suspendedRun = suspendedExecutor.dispatch(suspended.scope);
       const nativeEntered = barrier(),
@@ -533,6 +537,8 @@ it("preserves the converged next turn, fences delayed stops, and advertises deli
       g.manifests,
       g.environment,
       convergence,
+      undefined,
+      async () => null,
     );
     const oldRun = raceExecutor.dispatch(g.scope);
     await oldStart.promise;
