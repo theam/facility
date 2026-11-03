@@ -9,6 +9,7 @@ import {
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../workspaces/preview-branch.js";
+import { previewGitCommand } from "../workspaces/preview-git-command.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -1319,11 +1320,9 @@ export class PreviewWorkspaceGitApplicator {
     this.signal?.throwIfAborted();
     return this.runtime.exec(workspace, {
       signal: this.signal,
-      command: "git",
-      args,
+      ...previewGitCommand(args, stdin),
       cwd,
       env: environment,
-      stdin,
       timeoutMs: 5 * 60_000,
     });
   }
