@@ -159,6 +159,21 @@ describe("agent manifests", () => {
     expect(() => parseAgentManifest(source, "builder.md")).toThrow(AgentManifestError);
   });
 
+  it("rejects an unknown schedule timezone that the scheduler cannot use", () => {
+    const schedule = (timezone: string) =>
+      manifest().replace(
+        "  - type: manual",
+        `  - type: schedule\n    name: weekly\n    cron: "0 9 * * 1"\n    timezone: ${timezone}`,
+      );
+    expect(parseAgentManifest(schedule("Europe/Madrid"), "builder.md").triggers[0]).toMatchObject({
+      type: "schedule",
+      timezone: "Europe/Madrid",
+    });
+    expect(() => parseAgentManifest(schedule("Europe/Atlantis"), "builder.md")).toThrow(
+      /triggers\.0\.timezone: must be a valid IANA timezone/,
+    );
+  });
+
   it("rejects a filename that disagrees with the manifest identity", () => {
     expect(() => parseAgentManifest(manifest(), "architect.md")).toThrow(
       /filename must be builder\.md/,
