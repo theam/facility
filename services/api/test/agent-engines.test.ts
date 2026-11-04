@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
+import { costCents } from "@facility/core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AgentEngineError,
@@ -209,6 +210,37 @@ describe("native agent engines", () => {
     ]);
     expect(runtime.command?.args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(runtime.command?.args).toEqual(expect.arrayContaining(["codex-thread", "continue"]));
+  });
+
+  it("prices Codex cached prompt tokens at the cache rate, not on top of input", () => {
+    const codex = new CodexEventParser();
+    codex.push(
+      `${JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 100_000, cached_input_tokens: 90_000, output_tokens: 1_000 },
+      })}\n`,
+    );
+    codex.finish();
+    const usage = codex.result().usage;
+    if (!usage) throw new Error("expected Codex usage");
+    expect(usage).toEqual({
+      inputTokens: 10_000,
+      outputTokens: 1_000,
+      cacheReadTokens: 90_000,
+      cacheWriteTokens: 0,
+    });
+    // gpt-5.5: 10k uncached x $10/M + 90k cached x $1/M + 1k output x $30/M = $0.22, not $1.12.
+    expect(costCents({ model: "gpt-5.5", ...usage })).toBe(22);
+
+    const inconsistent = new CodexEventParser();
+    inconsistent.push(
+      `${JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 10, cached_input_tokens: 11, output_tokens: 1 },
+      })}\n`,
+    );
+    inconsistent.finish();
+    expect(inconsistent.result().usage).toBeUndefined();
   });
 
   it("rejects malformed engine output and non-zero exits", async () => {
