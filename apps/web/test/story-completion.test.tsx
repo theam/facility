@@ -150,6 +150,69 @@ describe("story completion UI", () => {
     expect(request.headers["idempotency-key"]).toBe(body.idempotency_key);
   });
 
+  it("reuses an idempotency key only while the failed request is unchanged", async () => {
+    fetch.mockImplementation(async () =>
+      Response.json(
+        { error: { message: "Reload the current delivery candidate" } },
+        { status: 409 },
+      ),
+    );
+    const initial = snapshot();
+    await render(initial);
+    const complete = async () => {
+      const button = [...container.querySelectorAll("button")].find(
+        (item) => item.textContent === "Complete source issue",
+      );
+      if (!button) throw new Error("Missing completion button");
+      await act(async () => button.click());
+    };
+    await complete();
+    await complete();
+    const refreshed = snapshot();
+    refreshed.candidate = { ...refreshed.candidate, revision: "b".repeat(64) };
+    await render(refreshed);
+    await complete();
+    const [first, retry, changed] = fetch.mock.calls.map(([, request]) => JSON.parse(request.body));
+    expect(container.textContent).toContain("Reload the current delivery candidate");
+    expect(retry.idempotency_key).toBe(first.idempotency_key);
+    expect(changed.candidate_revision).toBe("b".repeat(64));
+    expect(changed.idempotency_key).not.toBe(first.idempotency_key);
+  });
+
+  it("uses a new integration-result key when a different result is recorded", async () => {
+    fetch.mockImplementation(async () =>
+      Response.json({ error: { message: "The result must identify the event" } }, { status: 409 }),
+    );
+    const initial = snapshot("record_integration");
+    initial.integration = {
+      ...initial.integration,
+      policy: { mode: "manual", repository: null },
+      candidateRevision: initial.candidate.revision,
+      state: "pending",
+    };
+    await render(initial);
+    const summary = container.querySelector("textarea");
+    if (!summary) throw new Error("Missing integration summary");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
+        summary,
+        "Staging deploy",
+      );
+      summary.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    for (const label of ["Record success", "Record failure"]) {
+      const button = [...container.querySelectorAll("button")].find(
+        (item) => item.textContent === label,
+      );
+      if (!button) throw new Error(`Missing ${label}`);
+      await act(async () => button.click());
+    }
+    const [success, failure] = fetch.mock.calls.map(([, request]) => JSON.parse(request.body));
+    expect(success).toMatchObject({ state: "succeeded", summary: "Staging deploy" });
+    expect(failure).toMatchObject({ state: "failed", summary: "Staging deploy" });
+    expect(failure.idempotency_key).not.toBe(success.idempotency_key);
+  });
+
   it("saves only the in-app notice preference and explains the external-channel boundary", async () => {
     await render(snapshot());
     const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
