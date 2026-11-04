@@ -6,6 +6,7 @@ import { parseAgentManifest } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
   attentionItems,
+  budgetReservations,
   createDb,
   githubInstallations,
   migrate,
@@ -15,6 +16,8 @@ import {
   stories,
   storyEvidenceEvents,
   storyMessages,
+  storyPreviewConvergences,
+  storyPreviewGenerations,
   turnGitEvidence,
   turns,
   workspaces,
@@ -23,6 +26,7 @@ import { and, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GithubMirrorService } from "../src/github/mirror.js";
+import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
 import { StoryServiceError, StoryWorkspaceService } from "../src/stories/service.js";
 import { appendTurnEvent } from "../src/turns/events.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
@@ -1345,6 +1349,144 @@ environment:
     await claiming;
     await rejected;
     expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe("running");
+  });
+
+  it.each([
+    false,
+    true,
+  ])("protects preview writers and fences pending convergence (expired=%s)", async (expired) => {
+    const result = await service.start(startInput(`preview-delete-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("missing turn");
+    await service.completeTurn({
+      orgId,
+      projectId,
+      turnId: result.queued.turn.id,
+      output: "done",
+      actor: { type: "system", id: "test" },
+    });
+    const scope = { orgId, projectId, storyId: result.story.id };
+    const generation = "a".repeat(64);
+    await db.insert(storyPreviewGenerations).values({
+      ...scope,
+      generation,
+      deliveryRevision: generation,
+      sourceObservedAt: new Date(),
+      repositories: [
+        {
+          repositoryId,
+          repository: "acme/app",
+          pullNumber: 1,
+          headRef: "feature/story",
+          headSha: "b".repeat(40),
+          primary: true,
+        },
+      ],
+    });
+    await db.insert(storyPreviewConvergences).values({
+      ...scope,
+      desiredGeneration: generation,
+      desiredObservedAt: new Date(),
+      state: "applying",
+      leaseToken: randomUUID(),
+      leaseGeneration: generation,
+      leaseExpiresAt: new Date(Date.now() + (expired ? -60_000 : 60_000)),
+    });
+    const request = { ...scope, actor: { type: "system" as const, id: "test" }, confirm: true };
+    const destroy = vi.spyOn(runtime, "destroy");
+    try {
+      await expect(service.deleteWorkspace(request)).rejects.toMatchObject({
+        code: "workspace_busy",
+        statusCode: 409,
+      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "running",
+      );
+      await db
+        .update(storyPreviewConvergences)
+        .set({ state: "pending", leaseToken: null, leaseGeneration: null, leaseExpiresAt: null })
+        .where(eq(storyPreviewConvergences.storyId, result.story.id));
+      const convergence = new StoryPreviewConvergenceService(db, async () => undefined);
+      destroy.mockImplementationOnce(async (workspace) => {
+        await expect(convergence.claim(scope)).resolves.toMatchObject({
+          claimed: false,
+          reason: "suspended",
+        });
+        return FakeWorkspaceRuntime.prototype.destroy.call(runtime, workspace);
+      });
+      await expect(service.deleteWorkspace(request)).resolves.toMatchObject({
+        workspace: { state: "destroyed" },
+      });
+      await expect(convergence.claim(scope)).resolves.toMatchObject({
+        claimed: false,
+        reason: "suspended",
+      });
+    } finally {
+      destroy.mockRestore();
+    }
+  });
+
+  it.each([
+    "queued-open",
+    "queued-settled-title",
+    "running-open",
+  ] as const)("preserves budget cancellation policy on deletion: %s", async (kind) => {
+    const result = await service.start(startInput(`budget-delete-${randomUUID()}`));
+    if (!result.queued.turn) throw new Error("missing turn");
+    const turnId = result.queued.turn.id;
+    const reservationId = newId("bud");
+    await db.insert(budgetReservations).values({
+      id: reservationId,
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      turnId: kind === "queued-settled-title" ? null : turnId,
+      purpose: kind === "queued-settled-title" ? "title" : "turn",
+      state: kind === "queued-settled-title" ? "settled" : "open",
+      model: builder.model,
+      reservedCents: 5,
+    });
+    if (kind === "running-open")
+      await db
+        .update(turns)
+        .set({ state: "running", startedAt: new Date() })
+        .where(eq(turns.id, turnId));
+    const deletion = service.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: { type: "system", id: "test" },
+      confirm: true,
+    });
+    if (kind === "running-open")
+      await expect(deletion).rejects.toMatchObject({ code: "workspace_busy" });
+    else await deletion;
+    const reservations = await db
+      .select()
+      .from(budgetReservations)
+      .where(eq(budgetReservations.id, reservationId));
+    expect(reservations).toHaveLength(kind === "queued-open" ? 0 : 1);
+  });
+
+  it("publishes suspension hooks after commit and skips hooks for deleted resources", async () => {
+    const result = await service.start(startInput(`hook-delete-${randomUUID()}`));
+    const onSuspend = vi.fn(async () => {
+      expect((await service.get(orgId, projectId, result.story.id)).workspace?.state).toBe(
+        "sleeping",
+      );
+    });
+    const hooked = new StoryWorkspaceService(db, runtime, undefined, { onSuspend });
+    await hooked.suspend(orgId, projectId, result.story.id);
+    expect(onSuspend).toHaveBeenCalledOnce();
+    await hooked.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId: result.story.id,
+      actor: { type: "system", id: "test" },
+      confirm: true,
+    });
+    await hooked.suspend(orgId, projectId, result.story.id);
+    expect(onSuspend).toHaveBeenCalledOnce();
   });
 
   it("records runtime failures as visible attention instead of losing the story", async () => {

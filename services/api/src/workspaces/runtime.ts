@@ -22,6 +22,8 @@ export type CreateWorkspace = {
 export type WorkspaceLocator = CreateWorkspace & {
   externalRef: string;
   volumeRef: string;
+  /** Fence a controller attempt to one immutable provider compute incarnation. */
+  expectedComputeRef?: string;
 };
 
 export type WorkspaceHandle = WorkspaceLocator & {
@@ -89,6 +91,19 @@ export type WorkspaceBackup = {
 
 export interface WorkspaceRuntime {
   readonly provider: WorkspaceProvider;
+  writeInputFile?(
+    workspace: WorkspaceLocator,
+    file: import("./input-files.js").WorkspaceInputFile,
+    bytes: Buffer,
+  ): Promise<void>;
+  readInputFile?(
+    workspace: WorkspaceLocator,
+    file: import("./input-files.js").WorkspaceInputFile,
+  ): Promise<Buffer>;
+  removeInputFile?(
+    workspace: WorkspaceLocator,
+    file: import("./input-files.js").WorkspaceInputFile,
+  ): Promise<void>;
   /** Pure creation preflight: no provider calls or mutations, safe inside a DB transaction. */
   validateCreate?(input: Omit<CreateWorkspace, "id">): void;
   create(input: CreateWorkspace): Promise<WorkspaceHandle>;
@@ -107,6 +122,8 @@ export interface WorkspaceRuntime {
     signal: AbortSignal,
   ): Promise<WorkspaceDiagnostics>;
   suspend(workspace: WorkspaceLocator): Promise<void>;
+  /** Retire the targeted compute, preserving the complete durable workspace volume. */
+  retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void>;
   destroy(workspace: WorkspaceLocator): Promise<void>;
 }
 

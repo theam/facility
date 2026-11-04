@@ -36,21 +36,27 @@ function fixture(rows: unknown[][]) {
   return { dispatcher, service, catalog };
 }
 
-it("does not resolve agents or activate retained messages without an active workspace", async () => {
+it.each([
+  "activateQueuedSuccessor",
+  "activateQueuedStorySuccessor",
+] as const)("%s does not resolve agents or activate retained messages without an active workspace", async (method) => {
   const { dispatcher, service, catalog } = fixture([[]]);
-  await dispatcher.activateQueuedSuccessor(input);
+  await dispatcher[method](input);
   expect(catalog.get).not.toHaveBeenCalled();
   expect(service.activateNextMessage).not.toHaveBeenCalled();
   expect(service.flagAttention).not.toHaveBeenCalled();
 });
 
-it("does not create a retry notice when deletion wins during catalog lookup", async () => {
+it.each([
+  "activateQueuedSuccessor",
+  "activateQueuedStorySuccessor",
+] as const)("%s does not create a retry notice when deletion wins during catalog lookup", async (method) => {
   const { dispatcher, service, catalog } = fixture([
     [{ id: "ws_test" }],
     [{ requestedAgentName: "builder" }],
     [],
   ]);
-  await expect(dispatcher.activateQueuedSuccessor(input)).resolves.toBeUndefined();
+  await expect(dispatcher[method](input)).resolves.toBeUndefined();
   expect(catalog.get).toHaveBeenCalledOnce();
   expect(service.activateNextMessage).not.toHaveBeenCalled();
   expect(service.flagAttention).not.toHaveBeenCalled();

@@ -3,6 +3,7 @@ import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
   attentionItems,
+  budgetReservations,
   type FacilityDb,
   githubIssues,
   previewSessions,
@@ -11,17 +12,23 @@ import {
   storyAssignees,
   storyConversations,
   storyEvidenceEvents,
+  storyInputFiles,
   storyMessages,
+  storyPreviewConvergences,
   turnEvents,
+  turnGitEvidence,
   turns,
+  turnUsage,
   userIdentities,
   users,
   workspaces,
 } from "@facility/db";
 import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
 import { ACTIVITY_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
+import { readUsageJournal } from "../turns/usage-journal.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { shouldSuspendFailedWorkspace } from "../workspaces/failed-turn-policy.js";
 import type {
@@ -31,7 +38,10 @@ import type {
   WorkspaceRuntime,
 } from "../workspaces/runtime.js";
 import { reconcileTurnBranch } from "./branch.js";
+import { type InputFileReference, validateInputFileReferences } from "./input-files.js";
 import { isGithubIssueStory } from "./phase.js";
+import { authorizePlanExecution } from "./workflow-execution.js";
+import { lockWorkflowExecution, lockWorkflowProject } from "./workflow-policy.js";
 
 export type StoryActor = { type: "user" | "service" | "system"; id: string };
 
@@ -63,6 +73,7 @@ export type StoryWorkspaceBundle = Awaited<ReturnType<StoryWorkspaceService["get
 
 /** How an agent response was recorded; older rows have no metadata and stay combined. */
 export type StoryMessageMetadata = {
+  attachments?: InputFileReference[];
   content?: "final_response";
   engine?: string;
   model?: string;
@@ -114,12 +125,21 @@ export class StoryWorkspaceService {
     private readonly runtime: WorkspaceRuntime,
     private readonly onTurnQueued: (turn: typeof turns.$inferSelect) => Promise<void> = async () =>
       undefined,
+    private readonly lifecycleHooks: {
+      onSuspend?: (scope: {
+        orgId: string;
+        projectId: string;
+        storyId: string;
+      }) => Promise<unknown>;
+      onResume?: (scope: { orgId: string; projectId: string; storyId: string }) => Promise<unknown>;
+    } = {},
   ) {}
 
   async start(input: StartStoryInput) {
     validateStartInput(input);
     const aggregate = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
       await lockIdentity(
         tx,
         `${input.orgId}:${input.projectId}:${input.repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
@@ -169,8 +189,19 @@ export class StoryWorkspaceService {
           "this story's workspace was explicitly deleted; start a new story identity",
         );
       }
+      await lockWorkflowExecution(
+        tx,
+        { orgId: input.orgId, projectId: input.projectId, storyId: story.id },
+        input.agent.name,
+      );
       await lockStory(tx, input.orgId, input.projectId, story.id);
       await this.assertWorkspaceNotDeleting(tx, input.orgId, input.projectId, story.id);
+      await authorizePlanExecution(
+        tx,
+        { orgId: input.orgId, projectId: input.projectId, storyId: story.id },
+        input.agent,
+        input.actor,
+      );
       await recordParticipation(tx, story, input.actor);
 
       let conversation = (
@@ -323,6 +354,7 @@ export class StoryWorkspaceService {
   }
 
   async queueMessage(input: {
+    attachmentIds?: string[];
     orgId: string;
     projectId: string;
     storyId: string;
@@ -390,17 +422,20 @@ export class StoryWorkspaceService {
         return { message: duplicate, turn, queued: !turn, created: false };
       }
 
-      const active = (
+      const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
+
+      const activeTurn = (
         await tx
           .select()
           .from(turns)
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
+      const activePreview = await activePreviewWriter(tx, input);
       await recordParticipation(tx, story, input.actor);
       const sequence = await allocateMessageSequence(tx, conversation.id);
       let turn: typeof turns.$inferSelect | undefined;
-      if (!active) {
+      if (!activeTurn && !activePreview) {
         turn = (
           await tx
             .insert(turns)
@@ -435,6 +470,7 @@ export class StoryWorkspaceService {
             seq: sequence,
             role: "user",
             body: input.body,
+            metadata: attachments.length ? { attachments } : {},
             actor: input.actor,
             turnId: turn?.id,
             requestedAgentName: input.agent.name,
@@ -468,6 +504,7 @@ export class StoryWorkspaceService {
     output: string;
     actor: StoryActor;
     metadata?: StoryMessageMetadata;
+    attention?: { title: string; detail: string };
   }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
@@ -502,10 +539,22 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.orgId, input.orgId), eq(turns.id, turn.id)))
           .returning()
       )[0];
+      if (input.attention) {
+        await tx.insert(attentionItems).values({
+          id: newId("attn"),
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: turn.storyId,
+          turnId: turn.id,
+          kind: "agent_waiting",
+          title: input.attention.title,
+          detail: input.attention.detail,
+        });
+      }
       await tx
         .update(stories)
         .set({
-          status: lifecycleStatusAfterTurn(story.status, "working"),
+          status: lifecycleStatusAfterTurn(story.status, input.attention ? "attention" : "working"),
           activeAgentName: null,
           updatedAt: new Date(),
         })
@@ -562,11 +611,13 @@ export class StoryWorkspaceService {
   }) {
     const result = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
-      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
+      await lockStory(tx, input.orgId, input.projectId, input.storyId);
+      // Admission updates this same row before reserving provider spending. Keep
+      // its queued/running classification stable through cancellation and release.
+      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId, true);
       if (turn.storyId !== input.storyId) {
         throw new StoryServiceError("turn_not_found", "turn not found", 404);
       }
-      await lockStory(tx, input.orgId, input.projectId, input.storyId);
       if (["succeeded", "failed", "canceled"].includes(turn.state)) {
         return { turn, changed: false };
       }
@@ -591,6 +642,8 @@ export class StoryWorkspaceService {
           changed: false,
         };
       }
+      // A running provider may already have charged even when its dispatcher is lost.
+      if (turn.state === "queued") await releaseOpenTurnReservation(tx, input);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       const remainingAttention = (
         await tx
@@ -638,6 +691,7 @@ export class StoryWorkspaceService {
     turnId: string;
     staleBefore: Date;
   }) {
+    let processCleanup = "workspace unavailable";
     const recovered = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
@@ -665,6 +719,78 @@ export class StoryWorkspaceService {
           .returning()
       )[0];
       if (!updated) return undefined;
+      // Keep failure uncommitted and retain the story/turn writer locks until the
+      // native process is confirmed stopped. A failed cleanup rolls this back.
+      const evidence = (
+        await tx
+          .select({ workspaceId: turnGitEvidence.workspaceId })
+          .from(turnGitEvidence)
+          .where(
+            and(
+              eq(turnGitEvidence.orgId, input.orgId),
+              eq(turnGitEvidence.projectId, input.projectId),
+              eq(turnGitEvidence.turnId, turn.id),
+            ),
+          )
+          .limit(1)
+      )[0];
+      const workspace = (
+        await tx
+          .select()
+          .from(workspaces)
+          .where(
+            and(
+              eq(workspaces.orgId, input.orgId),
+              eq(workspaces.projectId, input.projectId),
+              eq(workspaces.storyId, turn.storyId),
+              ...(evidence?.workspaceId ? [eq(workspaces.id, evidence.workspaceId)] : []),
+            ),
+          )
+          .orderBy(desc(workspaces.createdAt))
+          .limit(1)
+      )[0];
+      if (workspace?.externalRef) {
+        processCleanup = await stopInterruptedEngineProcess(
+          this.runtime,
+          locatorFromRow(workspace),
+          turn.id,
+        );
+        if (!["stopped", "absent", "stale-marker"].includes(processCleanup))
+          throw new StoryServiceError(
+            "turn_cleanup_unconfirmed",
+            "The native writer has not stopped",
+            409,
+          );
+      }
+
+      // Book uncertainty before committing failure or admitting a successor. A
+      // legacy turn without phase evidence may already have charged its provider.
+      const phases = await tx
+        .select({ data: turnEvents.data })
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.orgId, input.orgId),
+            eq(turnEvents.projectId, input.projectId),
+            eq(turnEvents.turnId, turn.id),
+            eq(turnEvents.type, "turn.phase"),
+          ),
+        );
+      const mayHaveSpent = providerMayHaveRun(phases);
+      if (mayHaveSpent)
+        await new CostBudgetService(tx).record({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: turn.storyId,
+          turnId: turn.id,
+          agentName: turn.agentName,
+          engine: turn.engine,
+          model: turn.model,
+          durationMs: turn.startedAt ? now.getTime() - turn.startedAt.getTime() : 0,
+          status: "failed",
+          complete: false,
+        });
+      await releaseOpenTurnReservation(tx, input);
       await tx
         .update(stories)
         .set({
@@ -682,14 +808,26 @@ export class StoryWorkspaceService {
         kind: "worker_interrupted",
         title: `${turn.agentName} was interrupted`,
         detail:
-          "The worker heartbeat expired. The message, worktree, and native session files were retained; retry this attention item after inspecting any partial changes.",
+          "The worker heartbeat expired. Retained usage will be reconciled where available. Unconfirmed spending blocks new model calls while the project budget is enabled; inspect the usage and partial work before retrying. The message, worktree, and native session files were retained.",
       });
-      return updated;
+      return { ...updated, mayHaveSpent };
     });
     if (!recovered) return false;
 
-    let processCleanup = "workspace unavailable";
     try {
+      const evidence = (
+        await this.db
+          .select({ workspaceId: turnGitEvidence.workspaceId })
+          .from(turnGitEvidence)
+          .where(
+            and(
+              eq(turnGitEvidence.orgId, input.orgId),
+              eq(turnGitEvidence.projectId, input.projectId),
+              eq(turnGitEvidence.turnId, recovered.id),
+            ),
+          )
+          .limit(1)
+      )[0];
       const workspace = (
         await this.db
           .select()
@@ -699,17 +837,36 @@ export class StoryWorkspaceService {
               eq(workspaces.orgId, input.orgId),
               eq(workspaces.projectId, input.projectId),
               eq(workspaces.storyId, recovered.storyId),
+              ...(evidence?.workspaceId ? [eq(workspaces.id, evidence.workspaceId)] : []),
             ),
           )
           .orderBy(desc(workspaces.createdAt))
           .limit(1)
       )[0];
       if (workspace?.externalRef) {
-        processCleanup = await stopInterruptedEngineProcess(
-          this.runtime,
-          locatorFromRow(workspace),
-          recovered.id,
-        );
+        if (recovered.mayHaveSpent) {
+          const measured = await readUsageJournal(
+            this.runtime,
+            locatorFromRow(workspace),
+            recovered.id,
+            recovered.engine,
+          );
+          await new CostBudgetService(this.db).record({
+            orgId: input.orgId,
+            projectId: input.projectId,
+            storyId: recovered.storyId,
+            turnId: recovered.id,
+            agentName: recovered.agentName,
+            engine: recovered.engine,
+            model: recovered.model,
+            ...measured,
+            durationMs:
+              recovered.startedAt && recovered.endedAt
+                ? recovered.endedAt.getTime() - recovered.startedAt.getTime()
+                : 0,
+            status: "failed",
+          });
+        }
       }
     } catch (error) {
       processCleanup =
@@ -724,6 +881,126 @@ export class StoryWorkspaceService {
       data: { processCleanup: processCleanup.slice(0, 1_000) },
     });
     return true;
+  }
+
+  /** Retry accounting without waking compute or rerunning a provider call. */
+  async reconcileInterruptedUsage(input: { orgId: string; projectId: string; turnId: string }) {
+    const turn = await scopedTurn(this.db, input.orgId, input.projectId, input.turnId);
+    if (!["succeeded", "failed", "canceled"].includes(turn.state)) return false;
+    const settled = await this.db
+      .select({ priced: turnUsage.priced })
+      .from(turnUsage)
+      .where(
+        and(
+          eq(turnUsage.orgId, input.orgId),
+          eq(turnUsage.projectId, input.projectId),
+          eq(turnUsage.turnId, turn.id),
+        ),
+      )
+      .limit(1);
+    if (settled[0]?.priced) {
+      await releaseOpenTurnReservation(this.db, input);
+      return false;
+    }
+    if (!settled[0]) {
+      const hold = await this.db
+        .select({ id: budgetReservations.id })
+        .from(budgetReservations)
+        .where(
+          and(
+            eq(budgetReservations.orgId, input.orgId),
+            eq(budgetReservations.projectId, input.projectId),
+            eq(budgetReservations.turnId, turn.id),
+            eq(budgetReservations.state, "open"),
+          ),
+        )
+        .limit(1);
+      const legacyInterrupted =
+        turn.state === "failed" &&
+        turn.error === "Worker heartbeat expired before the agent turn completed.";
+      if (!hold[0] && !legacyInterrupted) return false;
+      // Upgrade recovery: old workers marked failure without writing any usage row.
+      const phases = await this.db
+        .select({ data: turnEvents.data })
+        .from(turnEvents)
+        .where(
+          and(
+            eq(turnEvents.orgId, input.orgId),
+            eq(turnEvents.projectId, input.projectId),
+            eq(turnEvents.turnId, turn.id),
+            eq(turnEvents.type, "turn.phase"),
+          ),
+        );
+      if (!providerMayHaveRun(phases)) {
+        await new CostBudgetService(this.db).record({
+          ...input,
+          storyId: turn.storyId,
+          agentName: turn.agentName,
+          engine: turn.engine,
+          model: turn.model,
+          durationMs: 0,
+          status: "failed",
+        });
+        return false;
+      }
+      await new CostBudgetService(this.db).record({
+        ...input,
+        storyId: turn.storyId,
+        agentName: turn.agentName,
+        engine: turn.engine,
+        model: turn.model,
+        durationMs:
+          turn.startedAt && turn.endedAt ? turn.endedAt.getTime() - turn.startedAt.getTime() : 0,
+        status: "failed",
+        complete: false,
+      });
+    }
+    const evidence = await this.db
+      .select({ workspaceId: turnGitEvidence.workspaceId })
+      .from(turnGitEvidence)
+      .where(
+        and(
+          eq(turnGitEvidence.orgId, input.orgId),
+          eq(turnGitEvidence.projectId, input.projectId),
+          eq(turnGitEvidence.turnId, turn.id),
+        ),
+      )
+      .limit(1);
+    const workspace = (
+      await this.db
+        .select()
+        .from(workspaces)
+        .where(
+          and(
+            eq(workspaces.orgId, input.orgId),
+            eq(workspaces.projectId, input.projectId),
+            eq(workspaces.storyId, turn.storyId),
+            ...(evidence[0]?.workspaceId ? [eq(workspaces.id, evidence[0].workspaceId)] : []),
+          ),
+        )
+        .orderBy(desc(workspaces.createdAt))
+        .limit(1)
+    )[0];
+    if (!workspace?.externalRef) return false;
+    const measured = await readUsageJournal(
+      this.runtime,
+      locatorFromRow(workspace),
+      turn.id,
+      turn.engine,
+    );
+    if (!measured.usage) return false;
+    const recorded = await new CostBudgetService(this.db).record({
+      ...input,
+      storyId: turn.storyId,
+      agentName: turn.agentName,
+      engine: turn.engine,
+      model: turn.model,
+      ...measured,
+      durationMs:
+        turn.startedAt && turn.endedAt ? turn.endedAt.getTime() - turn.startedAt.getTime() : 0,
+      status: turn.state === "succeeded" ? "succeeded" : "failed",
+    });
+    return recorded?.priced === true;
   }
 
   async flagAttention(input: {
@@ -968,11 +1245,26 @@ export class StoryWorkspaceService {
       throw new StoryServiceError("attention_resolved", "attention item is already resolved");
     }
     const failedTurn = await scopedTurn(this.db, input.orgId, input.projectId, attention.turnId);
+    const [request] = await this.db
+      .select()
+      .from(storyMessages)
+      .where(
+        and(
+          eq(storyMessages.orgId, input.orgId),
+          eq(storyMessages.projectId, input.projectId),
+          eq(storyMessages.storyId, input.storyId),
+          eq(storyMessages.turnId, failedTurn.id),
+          eq(storyMessages.role, "user"),
+        ),
+      )
+      .orderBy(asc(storyMessages.seq))
+      .limit(1);
     const queued = await this.queueMessage({
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: input.storyId,
       body: `Retry requested for ${attention.title}.`,
+      attachmentIds: messageMetadata(request?.metadata).attachments?.map((file) => file.id),
       dedupeKey: `attention-retry:${attention.id}`,
       agent: AgentManifestSchema.parse(failedTurn.manifest),
       actor: input.actor,
@@ -1006,7 +1298,7 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
-      if (active) return undefined;
+      if (active || (await activePreviewWriter(tx, input))) return undefined;
       const message = (
         await tx
           .select()
@@ -1241,6 +1533,7 @@ export class StoryWorkspaceService {
         author: conversationAuthor(row, turn, userById),
         turn: turn ? conversationTurn(turn) : null,
         content: conversationContent(row.role, metadata),
+        attachments: metadata.attachments ?? [],
       };
     };
     const messages = contiguous.map(enrich);
@@ -1507,7 +1800,7 @@ export class StoryWorkspaceService {
 
   /** Rechecked under the same lock as message submission and explicit wake. */
   async suspendFailedWorkspace(orgId: string, projectId: string, storyId: string) {
-    return this.db.transaction(async (rawTx) => {
+    const suspended = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, orgId, projectId, storyId);
       const workspace = await this.activeWorkspace(orgId, projectId, storyId, false, tx);
@@ -1591,6 +1884,8 @@ export class StoryWorkspaceService {
       });
       return true;
     });
+    if (suspended) await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
+    return suspended;
   }
 
   /** Scheduler retry also covers a worker exiting before terminal cleanup. */
@@ -1633,7 +1928,7 @@ export class StoryWorkspaceService {
   }
 
   async suspend(orgId: string, projectId: string, storyId: string) {
-    await this.db.transaction(async (rawTx) => {
+    const suspended = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       // Keep provider suspension and its state writeback under deletion's lock.
       // Re-read after locking so deleting/destroyed workspaces remain untouched.
@@ -1646,7 +1941,9 @@ export class StoryWorkspaceService {
         .set({ state: "sleeping", updatedAt: new Date() })
         .where(and(eq(workspaces.orgId, orgId), eq(workspaces.id, workspace.id)));
       await appendWorkspaceEvent(tx, workspace.id, orgId, "workspace.suspended", {});
+      return true;
     });
+    if (suspended) await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -1677,6 +1974,7 @@ export class StoryWorkspaceService {
       await lockStory(tx, orgId, projectId, storyId);
       await this.restoreLocked(tx, orgId, projectId, storyId);
     });
+    await this.lifecycleHooks.onResume?.({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -1922,6 +2220,13 @@ export class StoryWorkspaceService {
         tx,
       );
       if (!workspace || workspace.state === "destroyed") return undefined;
+      if (await activePreviewWriter(tx, input)) {
+        throw new StoryServiceError(
+          "workspace_busy",
+          "wait for preview convergence to finish before deleting the workspace",
+          409,
+        );
+      }
       // Lock the same rows dispatch claims with UPDATE. Whichever operation wins
       // determines whether deletion cancels a queued turn or refuses a running one.
       const active = await tx
@@ -1945,6 +2250,11 @@ export class StoryWorkspaceService {
       }
       const now = new Date();
       for (const turn of active) {
+        await releaseOpenTurnReservation(tx, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          turnId: turn.id,
+        });
         await tx
           .update(turns)
           .set({ state: "canceled", endedAt: now, retryAfter: null, error: null, updatedAt: now })
@@ -1975,6 +2285,25 @@ export class StoryWorkspaceService {
             eq(previewSessions.workspaceId, workspace.id),
           ),
         );
+      // Claiming preview writers takes the same story lock. Fence pending work
+      // before releasing it so no new preview can race provider destruction.
+      await tx
+        .update(storyPreviewConvergences)
+        .set({
+          state: "suspended",
+          leaseToken: null,
+          leaseGeneration: null,
+          leaseExpiresAt: null,
+          retryAt: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(storyPreviewConvergences.orgId, input.orgId),
+            eq(storyPreviewConvergences.projectId, input.projectId),
+            eq(storyPreviewConvergences.storyId, input.storyId),
+          ),
+        );
       return workspace;
     });
     if (!workspace) return this.get(input.orgId, input.projectId, input.storyId);
@@ -1986,6 +2315,17 @@ export class StoryWorkspaceService {
     const now = new Date();
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await tx
+        .update(storyInputFiles)
+        .set({ state: "removed", updatedAt: now })
+        .where(
+          and(
+            eq(storyInputFiles.orgId, input.orgId),
+            eq(storyInputFiles.projectId, input.projectId),
+            eq(storyInputFiles.storyId, input.storyId),
+            eq(storyInputFiles.workspaceId, workspace.id),
+          ),
+        );
       await tx
         .update(workspaces)
         .set({ state: "destroyed", destroyedAt: now, updatedAt: now })
@@ -2176,6 +2516,9 @@ function messageMetadata(value: unknown): StoryMessageMetadata {
   const record = value as Record<string, unknown>;
   return {
     content: record.content === "final_response" ? "final_response" : undefined,
+    attachments: Array.isArray(record.attachments)
+      ? (record.attachments as InputFileReference[])
+      : undefined,
     engine: typeof record.engine === "string" ? record.engine : undefined,
     model: typeof record.model === "string" ? record.model : undefined,
     progressMessages:
@@ -2350,14 +2693,19 @@ async function scopedStory(db: FacilityDb, orgId: string, projectId: string, sto
   return story;
 }
 
-async function scopedTurn(db: FacilityDb, orgId: string, projectId: string, turnId: string) {
-  const turn = (
-    await db
-      .select()
-      .from(turns)
-      .where(and(eq(turns.orgId, orgId), eq(turns.projectId, projectId), eq(turns.id, turnId)))
-      .limit(1)
-  )[0];
+async function scopedTurn(
+  db: FacilityDb,
+  orgId: string,
+  projectId: string,
+  turnId: string,
+  lock = false,
+) {
+  const query = db
+    .select()
+    .from(turns)
+    .where(and(eq(turns.orgId, orgId), eq(turns.projectId, projectId), eq(turns.id, turnId)))
+    .limit(1);
+  const [turn] = await (lock ? query.for("update") : query);
   if (!turn) throw new StoryServiceError("turn_not_found", "turn not found", 404);
   return turn;
 }
@@ -2365,6 +2713,26 @@ async function scopedTurn(db: FacilityDb, orgId: string, projectId: string, turn
 async function lockStory(db: FacilityDb, orgId: string, projectId: string, storyId: string) {
   await scopedStory(db, orgId, projectId, storyId);
   await lockIdentity(db, `${orgId}:${projectId}:${storyId}`);
+}
+
+async function activePreviewWriter(
+  db: FacilityDb,
+  scope: { orgId: string; projectId: string; storyId: string },
+) {
+  return (
+    await db
+      .select({ storyId: storyPreviewConvergences.storyId })
+      .from(storyPreviewConvergences)
+      .where(
+        and(
+          eq(storyPreviewConvergences.orgId, scope.orgId),
+          eq(storyPreviewConvergences.projectId, scope.projectId),
+          eq(storyPreviewConvergences.storyId, scope.storyId),
+          eq(storyPreviewConvergences.state, "applying"),
+        ),
+      )
+      .limit(1)
+  )[0];
 }
 
 async function lockIdentity(db: FacilityDb, identity: string) {
@@ -2398,6 +2766,16 @@ function workspaceConfiguration(input: Omit<CreateWorkspace, "id">) {
     ports: input.ports ?? [],
     resources: input.resources ?? { cpu: 2, memoryMb: 4_096 },
   };
+}
+
+function providerMayHaveRun(phases: Array<{ data: unknown }>) {
+  if (phases.length === 0) return true;
+  return phases.some(({ data }) => {
+    const phase =
+      data && typeof data === "object" ? (data as { phase?: unknown }).phase : undefined;
+    // Only explicit pre-engine phases establish that no provider call began.
+    return !["credentials", "workspace", "environment"].includes(String(phase));
+  });
 }
 
 function workspaceInput(row: typeof workspaces.$inferSelect): Omit<CreateWorkspace, "id"> {
