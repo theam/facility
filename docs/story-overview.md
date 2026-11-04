@@ -50,8 +50,9 @@ remain supported. Related repositories also leave their managed preview branches
 before the agent starts.
 
 Facility records ownership and updates the preview references together with
-compare-and-swap checks. An unowned branch, a manually changed preview tip, or a
-preview branch checked out in another worktree blocks convergence. Displaced
+compare-and-swap checks in one Git transaction, without requiring stdin support
+from the provider's command API. An unowned branch, a manually changed preview tip,
+or a preview branch checked out in another worktree blocks convergence. Displaced
 commits remain under local `refs/facility/retained/` references; overlapping edits,
 tracked local overlays and ignored files remain protected. A preview is ready
 only after the environment's rebuild and readiness checks pass.

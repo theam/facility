@@ -9,6 +9,7 @@ import type { GithubWorkspaceCredentials } from "../src/github/workspace-credent
 import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../src/workspaces/preview-branch.js";
+import { WorkspaceRuntimeError } from "../src/workspaces/runtime.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -56,6 +57,35 @@ describe("preview workspace Git application", () => {
   });
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
+
+  it("publishes an owned branch from a retained detached checkout without runtime stdin", async () => {
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await git(repository, ["checkout", "--detach", base]);
+    await writeFile(join(repository, "retained.txt"), "valuable retained data\n");
+    const execute = runtime.exec.bind(runtime);
+    runtime.exec = async (target, command) => {
+      if (command.stdin !== undefined) {
+        throw new WorkspaceRuntimeError("workspace_stdin_unsupported", "stdin is unavailable");
+      }
+      return execute(target, command);
+    };
+    await new PreviewWorkspaceGitApplicator(runtime).apply({
+      workspace,
+      credentials,
+      repositories: [target(1, base)],
+    });
+    const preview = previewBranchRefs(workspace.id, "repos/acme/app");
+    expect(await git(repository, ["symbolic-ref", "HEAD"])).toBe(preview.ref);
+    for (const reference of [preview.ref, preview.ownershipRef, PREVIEW_MANAGED_REF, "main"]) {
+      expect(await git(repository, ["rev-parse", reference])).toBe(base);
+    }
+    expect(await readFile(join(repository, "retained.txt"), "utf8")).toBe(
+      "valuable retained data\n",
+    );
+    expect(await git(remote, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+      "refs/heads/main",
+    );
+  });
 
   it.each([
     "squash",
@@ -309,7 +339,7 @@ describe("preview workspace Git application", () => {
     const preview = previewBranchRefs(workspace.id, "repos/acme/app");
     const exec = runtime.exec.bind(runtime);
     runtime.exec = async (locator, command) => {
-      if (command.command === "git" && command.args?.join(" ") === "update-ref --stdin") {
+      if (command.args?.slice(-2).join(" ") === "update-ref --stdin") {
         await git(repository, ["update-ref", preview.ownershipRef, base]);
       }
       return exec(locator, command);
