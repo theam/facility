@@ -206,6 +206,98 @@ describe("GitHub webhook authentication and tenant binding", async () => {
     expect(queued).toHaveLength(beforeQueue);
   });
 
+  it("applies installation lifecycle events, including unsuspend while suspended", async () => {
+    const suspendedAt = async (rowId: string) =>
+      (
+        await db
+          .select({ suspendedAt: githubInstallations.suspendedAt })
+          .from(githubInstallations)
+          .where(eq(githubInstallations.id, rowId))
+      )[0]?.suspendedAt ?? null;
+    const beforeRows = (await db.select().from(githubWebhookEvents)).length;
+    const beforeQueue = queued.length;
+    await db
+      .update(githubInstallations)
+      .set({ suspendedAt: new Date("2026-01-01T00:00:00Z") })
+      .where(eq(githubInstallations.id, installationRowId));
+
+    // The suspended gate must not swallow the event that lifts the suspension.
+    const unsuspend = await deliverLifecycle(
+      `unsuspend-${suffix}`,
+      installationNumber,
+      "unsuspend",
+      null,
+    );
+    expect(unsuspend.statusCode).toBe(202);
+    expect(await suspendedAt(installationRowId)).toBeNull();
+
+    const suspend = await deliverLifecycle(
+      `suspend-${suffix}`,
+      installationNumber,
+      "suspend",
+      "2026-02-03T04:05:06Z",
+    );
+    expect(suspend.statusCode).toBe(202);
+    expect(await suspendedAt(installationRowId)).toEqual(new Date("2026-02-03T04:05:06Z"));
+
+    // Unrelated lifecycle actions leave the state alone.
+    await deliverLifecycle(`created-${suffix}`, installationNumber, "created", undefined);
+    expect(await suspendedAt(installationRowId)).toEqual(new Date("2026-02-03T04:05:06Z"));
+
+    // Another installation's event never changes this one.
+    await db
+      .update(githubInstallations)
+      .set({ suspendedAt: null })
+      .where(eq(githubInstallations.id, installationRowId));
+    await deliverLifecycle(
+      `other-${suffix}`,
+      otherInstallationNumber,
+      "suspend",
+      "2026-02-03T04:05:06Z",
+    );
+    expect(await suspendedAt(installationRowId)).toBeNull();
+    expect(await suspendedAt(otherInstallationRowId)).toEqual(new Date("2026-02-03T04:05:06Z"));
+
+    // A wrongly signed lifecycle event is rejected and changes nothing.
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/webhooks/github",
+      headers: headers(`forged-${suffix}`, "sha256=00", "installation"),
+      payload: installationPayload(installationNumber, "deleted", undefined),
+    });
+    expect(rejected.statusCode).toBe(401);
+    expect(await suspendedAt(installationRowId)).toBeNull();
+
+    // Uninstalling keeps the row and suspends it, so every existing gate closes.
+    const deleted = await deliverLifecycle(
+      `deleted-${suffix}`,
+      installationNumber,
+      "deleted",
+      undefined,
+    );
+    expect(deleted.statusCode).toBe(202);
+    expect(await suspendedAt(installationRowId)).toBeInstanceOf(Date);
+
+    // Lifecycle events are applied directly: no webhook receipt, no worker job.
+    expect(await db.select().from(githubWebhookEvents)).toHaveLength(beforeRows);
+    expect(queued).toHaveLength(beforeQueue);
+  });
+
+  function deliverLifecycle(
+    delivery: string,
+    installation: number,
+    action: string,
+    suspendedAt: string | null | undefined,
+  ) {
+    const body = installationPayload(installation, action, suspendedAt);
+    return app.inject({
+      method: "POST",
+      url: "/webhooks/github",
+      headers: headers(delivery, sign(body), "installation"),
+      payload: body,
+    });
+  }
+
   function deliver(delivery: string, installation: number) {
     const body = payload(installation);
     return app.inject({
@@ -228,13 +320,29 @@ function payload(installationId: number) {
   );
 }
 
-function headers(delivery: string, signature: string) {
+function headers(delivery: string, signature: string, eventType = "issues") {
   return {
     "content-type": "application/json",
     "x-hub-signature-256": signature,
     "x-github-delivery": delivery,
-    "x-github-event": "issues",
+    "x-github-event": eventType,
   };
+}
+
+function installationPayload(
+  installationId: number,
+  action: string,
+  suspendedAt: string | null | undefined,
+) {
+  return Buffer.from(
+    JSON.stringify({
+      action,
+      installation: {
+        id: installationId,
+        ...(suspendedAt === undefined ? {} : { suspended_at: suspendedAt }),
+      },
+    }),
+  );
 }
 
 function sign(body: Buffer) {
