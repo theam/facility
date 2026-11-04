@@ -47,7 +47,8 @@ at creation; store it as a secret.
 - `/v1/projects/:projectId/kickstart` opens the configuration pull request.
 
 Repository connections are organization- and installation-bound. A project-scoped key requesting
-another project receives 404 rather than a distinguishable authorization error.
+another project receives 404 rather than a distinguishable authorization error, and creating a
+project with `POST /v1/projects` rejects project-scoped keys with 403 `project_scope_forbidden`.
 
 ### Disconnect a repository
 
