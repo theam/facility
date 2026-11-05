@@ -1,6 +1,6 @@
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
-import { ExternalIdentityProvider } from "../src/auth/identity-provider.js";
+import { ExternalIdentityProvider, normalizedEmail } from "../src/auth/identity-provider.js";
 import type { AppConfig } from "../src/types.js";
 
 const base: AppConfig = {
@@ -215,6 +215,16 @@ describe("commercial OIDC broker integration", () => {
       statusCode: 403,
       code: "identity_mismatch",
     });
+  });
+});
+
+describe("invitation email identity", () => {
+  it.each([
+    ["Jane.Doe@Example.COM"],
+    [" jane.doe@example.com "],
+    [{ email: "JANE.DOE@example.com" }],
+  ])("normalizes %j to the address GitHub login compares", (value) => {
+    expect(normalizedEmail(value)).toBe("jane.doe@example.com");
   });
 });
 
