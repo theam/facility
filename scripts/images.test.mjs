@@ -527,8 +527,7 @@ test("runner rejects Chromium packages older than the reviewed security fix", ()
 test("image security refreshes invalidate cached distro layers and audit the cached package manager", () => {
   for (const path of ["Dockerfile", "apps/web/Dockerfile", "runner/Dockerfile"]) {
     const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-    const epoch = path === "runner/Dockerfile" ? "20261105" : "20261005";
-    assert.ok(dockerfile.includes(`ARG DEBIAN_SECURITY_REFRESH=${epoch}`));
+    assert.ok(dockerfile.includes("ARG DEBIAN_SECURITY_REFRESH=20261105"));
     assert.match(dockerfile, /test -n "\$DEBIAN_SECURITY_REFRESH"/);
   }
   assert.match(runnerDockerfile, /brace-expansion@5\.0\.12/);
@@ -539,4 +538,53 @@ test("image security refreshes invalidate cached distro layers and audit the cac
   const audit = runnerDockerfile.indexOf("node /tmp/verify-package-security.mjs");
   const freeze = runnerDockerfile.indexOf("chmod -R a-w /opt/facility-corepack");
   assert.ok(seed > 0 && audit > seed && freeze > audit);
+});
+
+test("API and web reject APT packages older than the reviewed security fix", () => {
+  for (const path of ["Dockerfile", "apps/web/Dockerfile"]) {
+    const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    assert.match(dockerfile, /ARG APT_MIN_VERSION=3\.0\.4/);
+    for (const name of ["apt", "libapt-pkg7.0"]) {
+      assert.ok(
+        dockerfile.includes(
+          `dpkg --compare-versions "$(dpkg-query -W -f='\${Version}' ${name})" ge "$APT_MIN_VERSION"`,
+        ),
+      );
+    }
+  }
+});
+
+test("runner source builds and binary audits use the reviewed x/net version", () => {
+  const replacements = [
+    ...runnerDockerfile.matchAll(/-replace=golang\.org\/x\/net=golang\.org\/x\/net@(\S+)/g),
+  ].map((match) => match[1]);
+  assert.equal(replacements.length, 8);
+  assert.ok(replacements.every((version) => version === "v0.62.0"));
+  assert.match(runnerDockerfile, /exit \(version != "v0\.62\.0"\)/);
+  assert.match(runnerDockerfile, /\$3 == "v0\.62\.0" \{ found = 1 \}/);
+});
+
+test("runner x/net audit rejects stale or substituted embedded modules", () => {
+  const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
+    ([loop]) => loop.includes('pending = ($2 == "golang.org/x/net")'),
+  );
+  assert.ok(audit, "missing executable x/net audit");
+  assert.equal(audit[1], "/out/*");
+  const command = `
+    go() { printf '%s\\n' "$AUDIT_TEST_METADATA"; }
+    ${audit[0].replace("in /out/*;", "in /out/test;").replaceAll(/\\\n/g, " ")}
+  `;
+  const runAudit = (metadata) =>
+    spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_METADATA: metadata },
+    });
+  for (const replacement of [
+    "golang.org/x/net v0.62.0",
+    "golang.org/x/net v0.60.0",
+    "example.com/fork v0.62.0",
+  ]) {
+    const result = runAudit(`dep golang.org/x/net v0.60.0\n=> ${replacement}`);
+    assert.equal(result.status, replacement === "golang.org/x/net v0.62.0" ? 0 : 1, result.stderr);
+  }
 });
