@@ -46,6 +46,7 @@ export class ExternalIdentityProvider {
       url.search = new URLSearchParams({
         client_id: requiredConfig(this.config.githubOauthClientId),
         redirect_uri: callbackUrl(this.config),
+        scope: "user:email",
         state: transaction.state,
         code_challenge: challenge,
         code_challenge_method: "S256",

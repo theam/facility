@@ -65,6 +65,7 @@ describe("GitHub external identity integration", () => {
     const authorization = new URL(await provider.authorizationUrl(transaction));
     expect(authorization.searchParams.get("state")).toBe("state");
     expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorization.searchParams.get("scope")).toBe("user:email");
     await expect(provider.exchange("code", transaction)).resolves.toEqual({
       provider: "github",
       githubUserId: "123",
