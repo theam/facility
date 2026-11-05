@@ -21,6 +21,9 @@ import {
   retirePreviewWriter,
   StoryPreviewConvergenceExecutor,
 } from "./stories/preview-convergence-executor.js";
+import { StoryReviewCycles } from "./stories/review-cycle.js";
+import { ReviewCycleExecutor } from "./stories/review-cycle-executor.js";
+import { ReviewCycleSource } from "./stories/review-cycle-source.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
@@ -34,6 +37,7 @@ import {
   ProjectEnvironmentService,
 } from "./workspaces/project-environment.js";
 import { nativePreviewsEnabledForWorkspace } from "./workspaces/project-native-previews.js";
+import { dockerReviewSandbox, type ReviewSandbox } from "./workspaces/review-sandbox.js";
 import type { WorkspaceRuntime } from "./workspaces/runtime.js";
 import { WorkspaceVariablesService } from "./workspaces/variables.js";
 import { VercelWorkspaceRuntime } from "./workspaces/vercel.js";
@@ -49,6 +53,7 @@ export type StoryDomain = {
   variables: WorkspaceVariablesService;
   engines: AgentEngineRegistry;
   dispatcher: TurnDispatcher;
+  reviewCycles: StoryReviewCycles;
   previews: WorkspacePreviewService;
   scheduler: AgentScheduler;
   githubTriggers: GithubAgentTriggerService;
@@ -70,6 +75,8 @@ export function createStoryDomain(input: {
   runtime?: WorkspaceRuntime;
   githubFactory?: GithubClientFactory;
   maintainerTokenFactory?: GithubMaintainerTokenFactory;
+  reviewSandbox?: ReviewSandbox;
+  reviewInference?: ConstructorParameters<typeof ReviewCycleExecutor>[4];
 }): StoryDomain {
   const runtime = input.runtime ?? workspaceRuntime(input.config, input.db);
   const githubFactory =
@@ -118,6 +125,25 @@ export function createStoryDomain(input: {
       onResume: (scope) => previewConvergence.resume(scope),
     },
   );
+  const reviewSource = new ReviewCycleSource(input.db, githubFactory);
+  const reviewCycles = new StoryReviewCycles(
+    input.db,
+    stories,
+    catalog,
+    reviewSource,
+    input.enqueue,
+  );
+  const reviewExecutor = new ReviewCycleExecutor(
+    input.db,
+    reviewSource,
+    async (scope, provider) =>
+      titleCredentials(scope.projectId, await variables.projectValues(scope))[provider],
+    input.reviewSandbox ??
+      (runtime.provider === "docker"
+        ? dockerReviewSandbox(input.config.workspaceImage)
+        : undefined),
+    input.reviewInference,
+  );
   const completion = new StoryCompletionService(input.db, githubFactory, stories, input.enqueue);
   const mirror = new GithubMirrorService(
     input.db,
@@ -126,6 +152,7 @@ export function createStoryDomain(input: {
     async (repositoryId, pullNumber) => {
       await previewConvergence.observePull(repositoryId, pullNumber);
       await completion.observePull(repositoryId, pullNumber);
+      await reviewCycles.observePull(repositoryId, pullNumber);
     },
   );
   const engines = new AgentEngineRegistry([
@@ -157,6 +184,7 @@ export function createStoryDomain(input: {
     evidence,
     costs,
     runtime,
+    { cycles: reviewCycles, executor: reviewExecutor },
   );
   const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
     input.db,
@@ -207,6 +235,7 @@ export function createStoryDomain(input: {
     variables,
     engines,
     dispatcher,
+    reviewCycles,
     previews,
     scheduler,
     githubTriggers,

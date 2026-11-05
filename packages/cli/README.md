@@ -38,7 +38,7 @@ Existing files are preserved unless `--force` is explicit. Agent manifests do
 not contain permission profiles: every enabled agent receives the same full
 workspace and GitHub maintainer capability for the connected project.
 
-Init creates `architect`, `builder`, `pr-reviewer`, `address-review`,
+Init creates `architect`, `builder`, `pr-reviewer`,
 `ci-doctor`, and `security-audit`. Model flags customize the initial templates:
 
 ```text

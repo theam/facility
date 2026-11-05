@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { PlanActorSchema } from "./story-plans.js";
-import { ReviewCycleStatusSchema } from "./story-review-cycle.js";
+import { ReviewCyclePolicySchema, ReviewCycleStatusSchema } from "./story-review-cycle.js";
 
 const Revision = z.number().int().min(0).max(2_147_483_646);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -11,6 +11,7 @@ const StoryWorkflowPolicyFields = z
     holdAfterFailure: z.boolean().default(false),
     requireDeliveryAcceptance: z.boolean().default(false),
     requirePreviewForAcceptance: z.boolean().default(false),
+    reviewCycle: ReviewCyclePolicySchema.optional(),
   })
   .strict();
 export const StoryWorkflowPolicySchema = StoryWorkflowPolicyFields.superRefine((value, context) => {
@@ -26,6 +27,18 @@ export const StoryWorkflowPolicySchema = StoryWorkflowPolicyFields.superRefine((
       path: ["planApprovalAgents"],
       message: "Use configured agent names",
     });
+  if (
+    value.reviewCycle &&
+    (!value.planApprovalAgents.includes(value.reviewCycle.builderAgent) ||
+      !value.holdAfterFailure ||
+      !value.requireDeliveryAcceptance)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["reviewCycle"],
+      message:
+        "Require the Builder's plan approval, hold after failure, and human delivery acceptance",
+    });
   if (value.requirePreviewForAcceptance && !value.requireDeliveryAcceptance)
     context.addIssue({
       code: "custom",
@@ -34,7 +47,14 @@ export const StoryWorkflowPolicySchema = StoryWorkflowPolicyFields.superRefine((
     });
 })
   .transform((value) => ({ ...value, planApprovalAgents: [...value.planApprovalAgents].sort() }))
-  .pipe(StoryWorkflowPolicyFields.required());
+  .pipe(
+    StoryWorkflowPolicyFields.required({
+      planApprovalAgents: true,
+      holdAfterFailure: true,
+      requireDeliveryAcceptance: true,
+      requirePreviewForAcceptance: true,
+    }),
+  );
 export const StoryWorkflowPolicyStateSchema = z.object({
   revision: Revision,
   policy: StoryWorkflowPolicySchema,

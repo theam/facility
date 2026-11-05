@@ -336,7 +336,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_workflow_policy",
     permission: "projects:read",
     description:
-      "Read the current project plan/execution and delivery acceptance policy. Changes require an interactive Facility settings confirmation; this tool never changes policy. Needs projects:read.",
+      "Read the current project plan, review cycle and delivery acceptance policy. Changes require an interactive Facility settings confirmation; this tool never changes policy. Needs projects:read.",
     inputSchema: { projectId },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/workflow-policy`,
@@ -345,7 +345,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story_workflow",
     permission: "projects:read",
     description:
-      "Read plan approval, retained turn scope, execution recorded under the exact decision, and delivery acceptance as separate states. execution reports observed turn states linked by admission evidence, never inferred from approval alone; older decisions stay historical. Scope checks are dated observations, not execution authorization. Reading starts no work. Needs projects:read.",
+      "Read plan approval, retained turn scope, execution recorded under the exact decision, delivery acceptance and the automatic review cycle (its exact candidate, reports and decision state) as separate states. execution reports observed turn states linked by admission evidence, never inferred from approval alone; older decisions stay historical. Scope checks are dated observations, not execution authorization. Reading starts no work. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) =>

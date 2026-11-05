@@ -69,7 +69,14 @@ export class CostBudgetService {
    */
   async reserveTurn(
     tx: FacilityDb,
-    input: { orgId: string; projectId: string; storyId: string; turnId: string; model: string },
+    input: {
+      orgId: string;
+      projectId: string;
+      storyId: string;
+      turnId: string;
+      model: string;
+      isolatedReview?: boolean;
+    },
     now = new Date(),
   ) {
     const budget = await lockBudget(tx, input.orgId, input.projectId);
@@ -81,7 +88,7 @@ export class CostBudgetService {
         "Project spending is unconfirmed; new model calls are blocked while the budget is enabled.",
       );
     }
-    const estimate = reservationCents(input.model, "turn");
+    const estimate = reservationCents(input.model, input.isolatedReview ? "consultation" : "turn");
     if (estimate === null) {
       throw new BudgetPolicyError(
         "budget_model_unpriced",

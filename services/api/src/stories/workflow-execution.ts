@@ -260,10 +260,10 @@ export async function recordPlanExecution(
       data: authorization,
     });
 }
-export async function planExecutionStillAuthorized(
+export async function readPlanExecutionReceipt(
   db: FacilityDb,
   scope: WorkflowScope,
-  turn: typeof turns.$inferSelect,
+  turnId: string,
 ) {
   const [receipt] = await db
     .select()
@@ -273,12 +273,19 @@ export async function planExecutionStillAuthorized(
         eq(storyEvidenceEvents.orgId, scope.orgId),
         eq(storyEvidenceEvents.projectId, scope.projectId),
         eq(storyEvidenceEvents.storyId, scope.storyId),
-        eq(storyEvidenceEvents.externalKey, `workflow:execution:${turn.id}`),
+        eq(storyEvidenceEvents.externalKey, `workflow:execution:${turnId}`),
       ),
     )
     .limit(1);
+  return receipt ? PlanExecutionAuthorizationSchema.parse(receipt.data) : null;
+}
+export async function planExecutionStillAuthorized(
+  db: FacilityDb,
+  scope: WorkflowScope,
+  turn: typeof turns.$inferSelect,
+) {
   try {
-    const expected = receipt ? PlanExecutionAuthorizationSchema.parse(receipt.data) : null;
+    const expected = await readPlanExecutionReceipt(db, scope, turn.id);
     const actual = await authorizePlanExecution(
       db,
       scope,

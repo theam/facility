@@ -15,6 +15,7 @@ export type AgentTurnRequest = {
   cwd: string;
   nativeSessionId?: string;
   timeoutMs?: number;
+  maxBudgetUsd?: number;
   signal?: AbortSignal;
   environment?: Record<string, string>;
   onEvent?: (event: AgentTurnEvent) => void;
@@ -204,6 +205,8 @@ export class ClaudeCodeEngine extends CliAgentEngine {
       "--model",
       request.manifest.model,
     ];
+    if (request.maxBudgetUsd !== undefined)
+      args.push("--max-budget-usd", request.maxBudgetUsd.toFixed(6));
     if (request.nativeSessionId) args.push("--resume", request.nativeSessionId);
     return this.execute(request, "claude", args, new ClaudeEventParser());
   }

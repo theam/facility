@@ -199,6 +199,25 @@ or coalesce intermediate changes; GitHub acceptance is not workflow completion.
 See the [integration contract](https://github.com/theam/facility/blob/main/docs/story-integrations.md)
 for payloads, persistence, failure recovery, permissions and worker operation.
 
+## Automatic delivery review
+
+Read the saved project policy at GET `/v1/projects/:projectId/workflow-policy`. Send the full
+policy to the existing review and confirm routes as an interactive project and repository
+configuration writer. Omit `reviewCycle` to leave automatic review off. When configured, the
+object takes `builderAgent`, `reviewerAgent`, `timeoutMinutes` from 1 to 120 and `maxCostCents`
+from 1 to 10,000. Optional `requiredPullLabel` must be present on every required PR.
+`requiredChecks` contains up to 40 entries with `repository` and check `name`.
+`sources` contains up to 12 regular text files selected by `repository`, `path` and optional
+`revision` of `head` or `base`. The Docker-only `syntheticTest.argv` accepts up to 16
+arguments. Facility executes this fixed command over the selected head files in a new isolated
+container. When several PRs target the same repository, the scratch paths include the PR number.
+
+GET `/v1/projects/:projectId/workspace-stories/:storyId/workflow` and
+`facility_get_story_workflow` expose the same optional cycle, including waiting, review,
+correction, human review and decision required states. Each report retains its exact PR set,
+the plan/policy revisions and the Reviewer manifest hash. Read the
+[setup and migration guide](../concepts/agents-as-code.md#automatic-delivery-review) before enabling it.
+
 ## Environments, previews, and lifecycle
 
 - `/v1/projects/:projectId/workspace-stories/:storyId/environment` returns provider inspection,

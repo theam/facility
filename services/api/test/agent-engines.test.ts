@@ -117,7 +117,7 @@ describe("native agent engines", () => {
     if (expected) expect(JSON.stringify(runtime.command?.args)).not.toContain(expected);
   });
 
-  it("parses chunked Claude stream-json and resumes with full access", async () => {
+  it("parses chunked Claude stream-json and resumes with a budget when supplied", async () => {
     const stdout = `${[
       JSON.stringify({ type: "system", subtype: "init", session_id: "claude-session" }),
       JSON.stringify({
@@ -145,6 +145,7 @@ describe("native agent engines", () => {
       prompt: "continue",
       cwd: "repos/app",
       nativeSessionId: "claude-session",
+      maxBudgetUsd: 0.85,
     });
     expect(result).toMatchObject({
       nativeSessionId: "claude-session",
@@ -163,6 +164,8 @@ describe("native agent engines", () => {
       env: { FACILITY_TURN_ID: "turn_claude" },
     });
     expect(runtime.command?.args).toContain("claude");
+    expect(runtime.command?.args).toContain("--max-budget-usd");
+    expect(runtime.command?.args).toContain("0.850000");
     expect(runtime.command?.args).toEqual(
       expect.arrayContaining([
         "--permission-mode",

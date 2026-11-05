@@ -12,6 +12,7 @@ import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
+import { workflowPolicyFromSettings } from "../stories/workflow-policy.js";
 import {
   type ProjectManifestSource,
   projectWorkspaceInput,
@@ -120,6 +121,7 @@ export class GithubAgentTriggerService {
           orgId: projects.orgId,
           repositoryId: projectRepositories.id,
           installationId: projectRepositories.installationId,
+          settings: projects.settings,
         })
         .from(projectRepositories)
         .innerJoin(
@@ -200,8 +202,12 @@ export class GithubAgentTriggerService {
         ),
       ),
     );
+    const cycle = workflowPolicyFromSettings(project.settings).policy.reviewCycle;
     const matches = manifests
       .filter((manifest) => manifest.enabled)
+      .filter(
+        (manifest) => !cycle || ![cycle.reviewerAgent, "address-review"].includes(manifest.name),
+      )
       .flatMap((manifest) =>
         manifest.triggers
           .filter(

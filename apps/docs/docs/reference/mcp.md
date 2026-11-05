@@ -24,8 +24,8 @@ The server exposes forty-eight task-oriented tools:
 | `facility_get_story` | Story, workspace, turns, artifacts, attention, delivery PR set, plans/decisions, and ordered evidence timeline. |
 | `facility_get_delivery` | Read the declared complete PR set, observed heads, CI/reviews and partial merges; optionally search the project's mirrored PRs. |
 | `facility_set_delivery` | Replace delivery links with revision checking and idempotency; does not accept work, merge or run an agent. |
-| `facility_get_workflow_policy` | Current opt-in plan/execution and delivery acceptance policy; changes require interactive Settings confirmation. |
-| `facility_get_story_workflow` | Plan state, queued agents, hold reason and current/missing/stale delivery acceptance. |
+| `facility_get_workflow_policy` | Current plan, automatic delivery review and human acceptance policy; changes require interactive Settings confirmation. |
+| `facility_get_story_workflow` | Plan state, held turns, [review cycle, pinned candidate and findings](../concepts/agents-as-code.md#automatic-delivery-review), and human acceptance. |
 | `facility_get_delivery_acceptance` | Immutable human acceptance receipt and whether it still matches the current exact candidate. |
 | `facility_request_delivery_acceptance` | Request an expiring interactive review link for exact candidate and plan revisions; cannot confirm for a person. |
 | `facility_get_delivery_integration_policy` | Current post-merge integration policy. |

@@ -18,7 +18,17 @@ import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
+import { ConsultationProviderError } from "../stories/consultation-provider.js";
 import { type InputFileReference, validateInputFileReferences } from "../stories/input-files.js";
+import type { StoryReviewCycles } from "../stories/review-cycle.js";
+import type { ReviewCycleExecutor } from "../stories/review-cycle-executor.js";
+import {
+  isIsolatedReview,
+  REVIEW_DELIVERY_INSTRUCTIONS,
+  REVIEW_TRIGGER,
+  ReviewCycleStop,
+} from "../stories/review-cycle-rules.js";
+import { type ReviewCycle, reviewHoldsQueue } from "../stories/review-cycle-state.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import {
   authorizePlanExecution,
@@ -27,7 +37,11 @@ import {
   recordPlanExecution,
   WorkflowGateError,
 } from "../stories/workflow-execution.js";
-import { lockWorkflowExecution } from "../stories/workflow-policy.js";
+import {
+  lockWorkflowExecution,
+  lockWorkflowStory,
+  readWorkflowPolicy,
+} from "../stories/workflow-policy.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -56,6 +70,7 @@ export class TurnDispatcher {
     private readonly evidence: TurnGitEvidenceService,
     private readonly costs = new CostBudgetService(db),
     private readonly runtime?: WorkspaceRuntime,
+    private readonly review?: { cycles: StoryReviewCycles; executor: ReviewCycleExecutor },
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -72,9 +87,14 @@ export class TurnDispatcher {
       return { claimed: true as const, state: "failed" as const, error: admission.error };
     }
     const turn = admission.turn;
+    const cycle = admission.reviewCycle;
+    if (cycle?.phase === "review") return this.dispatchIsolatedReview(turn, cycle);
     let reservationSettled = false;
 
     const cancellation = new AbortController();
+    const cycleTimer = cycle
+      ? setTimeout(() => cancellation.abort(), Math.max(1, cycle.deadline.getTime() - Date.now()))
+      : undefined;
     const leaseHeartbeat = new TurnLeaseHeartbeat(
       () => this.heartbeat(input.orgId, input.projectId, input.turnId),
       () => cancellation.abort(),
@@ -252,6 +272,7 @@ export class TurnDispatcher {
         credentials: { ...credential, environment: renewableEnvironment },
         branch,
         previousSetupChecksum: workspace.setupChecksum,
+        ...(cycle ? { signal: cancellation.signal } : {}),
       });
       if (credentialRenewal) {
         prepared.processEnvironment = credentialRenewal.environment(
@@ -283,6 +304,15 @@ export class TurnDispatcher {
           )
           .limit(1)
       )[0];
+      if (cycle) {
+        const original = await this.review?.cycles.requireBuilderSession(this.db, cycle);
+        if (
+          !original ||
+          original.id !== session?.id ||
+          original.nativeSessionId !== session.nativeSessionId
+        )
+          throw new ReviewCycleStop("The correction must resume the original Builder session.");
+      }
       const engineSessionId = session?.id ?? newId("esess");
       startedGitEvidence = await this.evidence.start({
         orgId: input.orgId,
@@ -299,6 +329,16 @@ export class TurnDispatcher {
         engine: manifest.engine,
         model: manifest.model,
       });
+      if (cycle) {
+        const primary = cycle.data.status.candidate?.pullRequests.find((pull) => pull.primary);
+        if (
+          !primary ||
+          primary.headSha !== startedGitEvidence.initialSha ||
+          primary.headRef !== startedGitEvidence.initialBranch
+        )
+          throw new ReviewCycleStop("The retained checkout is not at the reviewed primary head.");
+        await this.review?.cycles.revalidateBeforeExecution(cycle, cancellation.signal);
+      }
       liveEvents = new LiveTurnEvents(async (events, firstIndex) => {
         await this.db.transaction(async (rawTx) => {
           const tx = rawTx as unknown as FacilityDb;
@@ -370,21 +410,31 @@ export class TurnDispatcher {
           },
         });
       }
+      const workflow = this.review ? await readWorkflowPolicy(this.db, eventBase) : undefined;
+      const deliveryInstruction =
+        workflow?.policy.reviewCycle?.builderAgent === manifest.name
+          ? `\n\n${REVIEW_DELIVERY_INSTRUCTIONS}`
+          : "";
       const engineRequest = {
         turnId: turn.id,
         manifest,
         workspace: workspaceLocator(workspace),
-        prompt: buildPrompt(
-          manifest,
-          story,
-          conversation.summary,
-          messages,
-          turn.id,
-          attention,
-          inputFiles,
-        ),
+        prompt:
+          buildPrompt(
+            manifest,
+            story,
+            conversation.summary,
+            messages,
+            turn.id,
+            attention,
+            inputFiles,
+          ) + deliveryInstruction,
         cwd: prepared.primaryCwd,
         nativeSessionId: session?.nativeSessionId,
+        maxBudgetUsd:
+          cycle && manifest.engine === "claude_code" && cycle.data.status.costCents !== null
+            ? (cycle.data.policy.maxCostCents - cycle.data.status.costCents) / 100
+            : undefined,
         environment: prepared.processEnvironment,
         signal: cancellation.signal,
         onEvent: (event: AgentTurnResult["events"][number]) => liveEvents?.append(event),
@@ -424,6 +474,7 @@ export class TurnDispatcher {
       await liveEvents.finish(result.events);
       await this.evidence.complete(startedGitEvidence);
       gitEvidenceCompleted = true;
+      if (cycle) cancellation.signal.throwIfAborted();
       const outcome = agentOutcome(result.output);
       await this.costs.record({
         orgId: input.orgId,
@@ -439,6 +490,8 @@ export class TurnDispatcher {
         status: "succeeded",
       });
       reservationSettled = true;
+      if (cycle && result.nativeSessionId !== session?.nativeSessionId)
+        throw new ReviewCycleStop("The correction did not retain the original Builder session.");
       await this.persistSession({
         orgId: input.orgId,
         projectId: input.projectId,
@@ -545,7 +598,7 @@ export class TurnDispatcher {
         await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
         return { claimed: true as const, state: "canceled" as const };
       }
-      const retryAfter = !engineStarted ? githubRateLimitRetryAt(error) : undefined;
+      const retryAfter = !engineStarted && !cycle ? githubRateLimitRetryAt(error) : undefined;
       if (retryAfter) {
         const deferred = await this.db
           .update(turns)
@@ -591,6 +644,7 @@ export class TurnDispatcher {
       try {
         await health?.stop();
       } finally {
+        clearTimeout(cycleTimer);
         leaseHeartbeat.stop();
         await credentialRenewal?.stop();
       }
@@ -604,6 +658,114 @@ export class TurnDispatcher {
     }
   }
 
+  private async dispatchIsolatedReview(turn: typeof turns.$inferSelect, cycle: ReviewCycle) {
+    const scope = { orgId: turn.orgId, projectId: turn.projectId, storyId: turn.storyId };
+    const event = { ...scope, turnId: turn.id };
+    const cancellation = new AbortController();
+    const heartbeat = new TurnLeaseHeartbeat(
+      () => this.heartbeat(scope.orgId, scope.projectId, turn.id),
+      () => cancellation.abort(),
+      turn.id,
+    );
+    const signal = AbortSignal.any([
+      cancellation.signal,
+      AbortSignal.timeout(Math.max(1, cycle.deadline.getTime() - Date.now())),
+    ]);
+    const started = Date.now();
+    const manifest = AgentManifestSchema.parse(turn.manifest);
+    let modelAdmitted = false;
+    let usage: AgentTurnResult["usage"];
+    let settled = false;
+    try {
+      if (!this.review || !isIsolatedReview(turn))
+        throw new ReviewCycleStop("The isolated review worker is unavailable.");
+      await appendTurnEvent(this.db, {
+        ...event,
+        type: "turn.started",
+        data: { mode: "isolated_review" },
+      });
+      const completion = await this.review.executor.run(
+        cycle,
+        manifest,
+        turn.id,
+        signal,
+        async () => {
+          await this.review?.cycles.revalidateBeforeExecution(cycle, signal);
+          if (!(await this.heartbeat(scope.orgId, scope.projectId, turn.id)))
+            throw new ReviewCycleStop("Review execution authorization changed before inference.");
+          signal.throwIfAborted();
+          await appendTurnEvent(this.db, {
+            ...event,
+            type: "turn.phase",
+            data: { phase: "agent", mode: "isolated_review" },
+          });
+          modelAdmitted = true;
+        },
+      );
+      usage = completion.usage;
+      await this.costs.record({
+        ...event,
+        agentName: manifest.name,
+        engine: manifest.engine,
+        model: manifest.model,
+        usage,
+        complete: true,
+        durationMs: Date.now() - started,
+        status: completion.outcome === "completed" ? "succeeded" : "failed",
+      });
+      settled = true;
+      signal.throwIfAborted();
+      if (completion.outcome !== "completed")
+        throw new ReviewCycleStop("The isolated Reviewer did not complete its response.");
+      await this.storiesService.completeTurn({
+        ...event,
+        actor: { type: "system", id: "isolated-review" },
+        output: completion.text,
+        metadata: { content: "final_response", engine: manifest.engine, model: completion.model },
+      });
+      await appendTurnEvent(this.db, {
+        ...event,
+        type: "turn.succeeded",
+        data: { durationMs: Date.now() - started },
+      });
+      return { claimed: true as const, state: "succeeded" as const };
+    } catch (error) {
+      if (!settled) {
+        const provider = error instanceof ConsultationProviderError ? error : undefined;
+        await this.costs.record({
+          ...event,
+          agentName: manifest.name,
+          engine: manifest.engine,
+          model: manifest.model,
+          usage: usage ?? provider?.usage,
+          complete:
+            !modelAdmitted ||
+            Boolean(usage) ||
+            provider?.certainty === "unbilled" ||
+            provider?.certainty === "confirmed",
+          durationMs: Date.now() - started,
+          status: "failed",
+        });
+      }
+      if (await this.isCanceled(scope.orgId, scope.projectId, turn.id)) {
+        await appendTurnEvent(this.db, { ...event, type: "turn.canceled", data: {} });
+        return { claimed: true as const, state: "canceled" as const };
+      }
+      const detail =
+        error instanceof ReviewCycleStop
+          ? error.message
+          : signal.aborted
+            ? "The isolated review expired or lost execution authorization."
+            : "The isolated review could not complete its evidence or inference request.";
+      await this.storiesService.failTurn({ ...event, error: detail });
+      await appendTurnEvent(this.db, { ...event, type: "turn.failed", data: { error: detail } });
+      return { claimed: true as const, state: "failed" as const, error: detail };
+    } finally {
+      heartbeat.stop();
+      await this.activateQueuedSuccessor(event);
+    }
+  }
+
   private async admit(input: { orgId: string; projectId: string; turnId: string }): Promise<
     | { kind: "unclaimed" }
     | { kind: "denied"; error: string }
@@ -612,13 +774,23 @@ export class TurnDispatcher {
         kind: "running";
         turn: typeof turns.$inferSelect;
         reservationId: string | null;
+        reviewCycle?: ReviewCycle;
       }
   > {
     try {
+      const initial = this.review
+        ? await this.turn(input.orgId, input.projectId, input.turnId)
+        : undefined;
+      if (initial?.triggerType === REVIEW_TRIGGER && initial.state === "queued")
+        await this.review?.cycles.refresh({ ...input, storyId: initial.storyId });
       const admitted = await this.db.transaction(async (rawTx) => {
         const tx = rawTx as unknown as FacilityDb;
         const [existing] = await tx
-          .select({ storyId: turns.storyId, agentName: turns.agentName })
+          .select({
+            storyId: turns.storyId,
+            agentName: turns.agentName,
+            triggerType: turns.triggerType,
+          })
           .from(turns)
           .where(
             and(
@@ -630,7 +802,8 @@ export class TurnDispatcher {
           .limit(1);
         if (!existing) return null;
         const scope = { orgId: input.orgId, projectId: input.projectId, storyId: existing.storyId };
-        await lockWorkflowExecution(tx, scope, existing.agentName);
+        if (existing.triggerType === REVIEW_TRIGGER) await lockWorkflowStory(tx, scope);
+        else await lockWorkflowExecution(tx, scope, existing.agentName);
         const [queued] = await tx
           .select()
           .from(turns)
@@ -645,6 +818,21 @@ export class TurnDispatcher {
           .limit(1);
         if (queued?.state !== "queued" || (queued.retryAfter && queued.retryAfter > new Date()))
           return null;
+        if (queued.triggerType === "github" || queued.triggerType === "schedule") {
+          const { policy } = await readWorkflowPolicy(tx, scope);
+          if (
+            policy.reviewCycle &&
+            [policy.reviewCycle.reviewerAgent, "address-review"].includes(queued.agentName)
+          )
+            throw new ReviewCycleStop(
+              "This project assigns automatic review and correction to the delivery cycle.",
+            );
+        }
+        let reviewCycle: ReviewCycle | undefined;
+        if (queued.triggerType === REVIEW_TRIGGER) {
+          if (!this.review) throw new ReviewCycleStop("The isolated review worker is unavailable.");
+          reviewCycle = await this.review.cycles.authorizeTurn(tx, scope, queued);
+        }
         let authorization: PlanExecutionAuthorization | null;
         try {
           authorization = await authorizePlanExecution(
@@ -660,6 +848,7 @@ export class TurnDispatcher {
             !(error instanceof ApiError && error.code.startsWith("workflow_"))
           )
             throw error;
+          if (reviewCycle) throw new ReviewCycleStop(error.message);
           const retryAfter = new Date(Date.now() + 30_000);
           await tx
             .update(turns)
@@ -758,8 +947,10 @@ export class TurnDispatcher {
           storyId: claimed.storyId,
           turnId: claimed.id,
           model: claimed.model,
+          isolatedReview: reviewCycle?.phase === "review",
         });
-        return { kind: "running" as const, turn: claimed, reservationId };
+        if (reviewCycle) await this.review?.cycles.recordStart(tx, reviewCycle, claimed.id);
+        return { kind: "running" as const, turn: claimed, reservationId, reviewCycle };
       });
       if (!admitted) {
         const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
@@ -769,9 +960,9 @@ export class TurnDispatcher {
         return { kind: "unclaimed" };
       }
       if (admitted.kind === "held") return admitted;
-      return { kind: "running", turn: admitted.turn, reservationId: admitted.reservationId };
+      return admitted;
     } catch (error) {
-      if (!(error instanceof BudgetPolicyError)) throw error;
+      if (!(error instanceof BudgetPolicyError || error instanceof ReviewCycleStop)) throw error;
       const queued = await this.turn(input.orgId, input.projectId, input.turnId);
       if (queued && queued.state === "queued") {
         await this.storiesService.failTurn({ ...input, error: error.message });
@@ -806,6 +997,14 @@ export class TurnDispatcher {
       turn?.state !== "running" ||
       !(await planExecutionStillAuthorized(
         this.db,
+        { orgId, projectId, storyId: turn.storyId },
+        turn,
+      ))
+    )
+      return false;
+    if (
+      turn.triggerType === REVIEW_TRIGGER &&
+      !(await this.review?.cycles.stillAuthorized(
         { orgId, projectId, storyId: turn.storyId },
         turn,
       ))
@@ -851,6 +1050,17 @@ export class TurnDispatcher {
     storyId: string;
     turnId?: string;
   }) {
+    if (this.review) {
+      try {
+        await this.review.cycles.reconcile(input);
+        if (await reviewHoldsQueue(this.db, input)) return;
+      } catch {
+        console.warn(
+          JSON.stringify({ event: "review_cycle.reconciliation_deferred", storyId: input.storyId }),
+        );
+        return;
+      }
+    }
     const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
     if (!next?.requestedAgentName) return;
     try {

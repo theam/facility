@@ -81,6 +81,7 @@ export function WorkflowPolicy({
       ...policy.planApprovalAgents,
     ]),
   ].sort();
+  const cycle = policy.reviewCycle;
   return (
     <section
       aria-label="Workflow approvals"
@@ -168,6 +169,128 @@ export function WorkflowPolicy({
           <span>Require a ready preview of that exact candidate before acceptance.</span>
         </label>
       </fieldset>
+      <fieldset
+        disabled={!canWrite || busy || !!review}
+        className="flex min-w-0 flex-col gap-3 text-sm"
+      >
+        <legend className="mb-2 font-semibold">Automatic delivery review</legend>
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={!!cycle}
+            disabled={names.length < 2 && !cycle}
+            onChange={(event) => {
+              if (!event.target.checked) {
+                const { reviewCycle: _cycle, ...remaining } = policy;
+                setPolicy(remaining);
+                return;
+              }
+              const builderAgent = names.includes("builder") ? "builder" : names[0];
+              const reviewerAgent = names.includes("pr-reviewer")
+                ? "pr-reviewer"
+                : names.find((name) => name !== builderAgent);
+              if (builderAgent && reviewerAgent)
+                setPolicy({
+                  ...policy,
+                  holdAfterFailure: true,
+                  requireDeliveryAcceptance: true,
+                  planApprovalAgents: [
+                    ...new Set([...policy.planApprovalAgents, builderAgent]),
+                  ].sort(),
+                  reviewCycle: {
+                    builderAgent,
+                    reviewerAgent,
+                    timeoutMinutes: 30,
+                    maxCostCents: 200,
+                  },
+                });
+            }}
+          />
+          <span>
+            Review a complete delivery with up to two reviews and one correction by its Builder.
+          </span>
+        </label>
+        {cycle ? (
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="grid gap-1">
+              <label htmlFor="review-cycle-builder">Builder</label>
+              <select
+                id="review-cycle-builder"
+                className="border border-(--line) p-1"
+                value={cycle.builderAgent}
+                onChange={(event) => {
+                  const builderAgent = event.target.value;
+                  setPolicy({
+                    ...policy,
+                    reviewCycle: { ...cycle, builderAgent },
+                    planApprovalAgents: [
+                      ...new Set([...policy.planApprovalAgents, builderAgent]),
+                    ].sort(),
+                  });
+                }}
+              >
+                {names.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-1">
+              <label htmlFor="review-cycle-reviewer">Reviewer</label>
+              <select
+                id="review-cycle-reviewer"
+                className="border border-(--line) p-1"
+                value={cycle.reviewerAgent}
+                onChange={(event) =>
+                  setPolicy({
+                    ...policy,
+                    reviewCycle: { ...cycle, reviewerAgent: event.target.value },
+                  })
+                }
+              >
+                {[...new Set([...names, cycle.reviewerAgent])].map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="grid gap-1">
+              Time limit (minutes)
+              <input
+                className="w-24 border border-(--line) p-1"
+                type="number"
+                min={1}
+                max={120}
+                value={cycle.timeoutMinutes}
+                onChange={(event) =>
+                  setPolicy({
+                    ...policy,
+                    reviewCycle: { ...cycle, timeoutMinutes: Number(event.target.value) },
+                  })
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              Cost limit (cents)
+              <input
+                className="w-24 border border-(--line) p-1"
+                type="number"
+                min={1}
+                max={10000}
+                value={cycle.maxCostCents}
+                onChange={(event) =>
+                  setPolicy({
+                    ...policy,
+                    reviewCycle: { ...cycle, maxCostCents: Number(event.target.value) },
+                  })
+                }
+              />
+            </label>
+          </div>
+        ) : null}
+      </fieldset>
       {review ? (
         <div
           role="status"
@@ -183,6 +306,31 @@ export function WorkflowPolicy({
             {review.policy.requireDeliveryAcceptance ? "required" : "optional"}. Ready preview:{" "}
             {review.policy.requirePreviewForAcceptance ? "required" : "optional"}.
           </p>
+          {review.policy.reviewCycle ? (
+            <p className="text-(--mut)">
+              {review.policy.reviewCycle.builderAgent} → {review.policy.reviewCycle.reviewerAgent}.
+              Up to {review.policy.reviewCycle.timeoutMinutes} minutes and{" "}
+              {review.policy.reviewCycle.maxCostCents} cents.
+              {review.policy.reviewCycle.requiredPullLabel ? (
+                <>
+                  {" "}
+                  Required PR label <code>{review.policy.reviewCycle.requiredPullLabel}</code>.
+                </>
+              ) : null}
+              {review.policy.reviewCycle.requiredChecks?.length ? (
+                <>
+                  {" "}
+                  Required CI checks{" "}
+                  {review.policy.reviewCycle.requiredChecks.map((check) => check.name).join(", ")}.
+                </>
+              ) : null}
+              {review.policy.reviewCycle.syntheticTest ? (
+                <> Isolated synthetic verification configured.</>
+              ) : null}
+            </p>
+          ) : (
+            <p className="text-(--mut)">Automatic delivery review is off.</p>
+          )}
           <div className="flex flex-wrap gap-3">
             <Button variant="primary" disabled={busy} onClick={() => void confirm()}>
               {busy ? "Saving…" : "Confirm workflow policy"}

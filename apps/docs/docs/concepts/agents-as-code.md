@@ -46,13 +46,80 @@ Only agent manifests and `SKILL.md` files are downloaded. A failed or incomplete
 the last valid catalog; successfully reading a commit that removes definitions removes them from
 the catalog.
 
-The default kickstart catalog includes `architect`, `builder`, `pr-reviewer`, `address-review`,
+The default kickstart catalog includes `architect`, `builder`, `pr-reviewer`,
 `ci-doctor`, and `security-audit`. They are ordinary manifests rather than built-in runtime roles.
 You can edit, disable, or replace them and add more `.md` files using the same schema.
 
 For a human decision, an agent can include an [author decision brief](../reference/decision-brief.md)
 with its complete plan. The shared format supports summary, comparison and diagram views without
 another model call. It works with any configured role; the brief grants no execution authority.
+
+## Automatic delivery review
+
+Install or configure `pr-reviewer` in the project's canonical catalog. Give the Reviewer UI and
+MCP triggers for attended use. The automatic cycle is off until a project and repository
+configuration writer confirms a workflow policy in Settings. Choose the Builder and Reviewer,
+require plan approval for that Builder, hold after failure, and require human delivery
+acceptance. The story's approved plan must select both exact manifests and all connected
+repositories. Configure a supported priced Reviewer model with a project API credential for its
+provider.
+
+Register the complete set of required PRs in the story delivery panel. The automatic path expects
+open PRs whose base and head belong to their connected repository. The Builder finishes with its published
+commits in this block.
+
+```text
+<facility-delivery-heads>
+[{"repository":"example/app","number":10,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+</facility-delivery-heads>
+```
+
+Facility compares the declaration against GitHub and the retained primary checkout. It pins
+each PR's base and head, waits for exact-head CI, and uses the exact preview generation when
+the project requires it. The read-only Reviewer receives the approved plan, recent story context,
+the full bounded diff, observed CI and preview evidence, and any configured files outside the
+diff. A project can require named checks, a PR label for exclusive review ownership, and pinned
+base or head files under `reviewCycle` in the workflow policy API. Use those files for repository
+rules and important consumers. A truncated or unsupported diff or an oversized snapshot requires
+a human decision.
+
+For a synthetic reproduction, a Docker-backed worker can run the project's fixed
+`reviewCycle.syntheticTest.argv` with the configured head files copied into a disposable
+container. Paths are relative to its scratch directory under `owner/repository/`. The container
+has no project credentials, story volume, Docker socket, or network. It runs unprivileged with a
+read-only root and bounded scratch space. The model receives the result as evidence and has no
+shell, GitHub client, or tool calls. Projects on other workspace drivers can supply observed CI
+and preview evidence and leave `syntheticTest` unset.
+
+A valid result with only suggestions goes to human review after the first turn. P0 and P1 findings
+block. P2 findings block when they demonstrate an acceptance, correctness, security, or data
+defect. In-scope blockers can request a single correction in the original Builder session.
+The Builder updates the same PRs with fast-forward pushes using its approved native capability.
+The second Reviewer verifies the new candidate, earlier findings and regressions. Facility
+keeps both candidate snapshots and reports. It stops for missing evidence, failed work, changed
+heads or bases, changed authorization, a scope decision, or persistent blockers. A fresh
+automatic cycle after a decision requires a new human-approved plan decision and a new human
+Builder turn.
+
+The cycle deadline covers waiting and automatic execution. A separate cycle cost ceiling admits
+turns using estimated reservations and settled spending, alongside the project budget. The
+isolated Reviewer has bounded provider input and output. Claude Code corrections receive the
+remaining cycle allowance as a CLI budget. Codex corrections use the existing admission estimate
+and deadline and settle measured cost after execution. Unconfirmed spending or an
+exhausted ceiling stops the cycle. The story workflow panel and `facility_get_story_workflow`
+show the same phase, rounds, findings and pending human decision. A human can inspect the
+candidate and use the existing acceptance flow.
+
+### Migrate an existing catalog
+
+`facility init` and kickstart install the five standard manifests in new repositories.
+`facility doctor` reports an existing `.agents/address-review.md`. In a reviewed repository
+change, move its review-thread instructions to the existing Builder, preserve its PRs, and remove
+the manifest. For existing feedback, send the current PR and review threads to the Builder in the
+same story. Check GitHub workflows separately. Keep a single automatic owner for each PR and
+remove the Reviewer's GitHub and schedule triggers before enabling the Facility cycle. A project
+that delegates other PRs to GitHub Actions can use a dedicated label and exclude labelled PRs
+from both GitHub review and correction before provisioning.
 
 ## Installed skills
 

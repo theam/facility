@@ -49,7 +49,6 @@ Init writes only `.facility.yml` and these manifests:
 - `.agents/architect.md`
 - `.agents/builder.md`
 - `.agents/pr-reviewer.md`
-- `.agents/address-review.md`
 - `.agents/ci-doctor.md`
 - `.agents/security-audit.md`
 

@@ -9305,6 +9305,26 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                maxCostCents: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                                sources?: {
+                                    repository: string;
+                                    path: string;
+                                    /** @enum {string} */
+                                    revision?: "base" | "head";
+                                }[];
+                                syntheticTest?: {
+                                    argv: string[];
+                                };
+                            };
                         };
                     };
                 };
@@ -9408,6 +9428,26 @@ export interface operations {
                         requireDeliveryAcceptance?: boolean;
                         /** @default false */
                         requirePreviewForAcceptance?: boolean;
+                        reviewCycle?: {
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            timeoutMinutes: number;
+                            maxCostCents: number;
+                            requiredPullLabel?: string;
+                            requiredChecks?: {
+                                repository: string;
+                                name: string;
+                            }[];
+                            sources?: {
+                                repository: string;
+                                path: string;
+                                /** @enum {string} */
+                                revision?: "base" | "head";
+                            }[];
+                            syntheticTest?: {
+                                argv: string[];
+                            };
+                        };
                     };
                     idempotency_key: string;
                 };
@@ -9431,6 +9471,26 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                maxCostCents: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                                sources?: {
+                                    repository: string;
+                                    path: string;
+                                    /** @enum {string} */
+                                    revision?: "base" | "head";
+                                }[];
+                                syntheticTest?: {
+                                    argv: string[];
+                                };
+                            };
                         };
                         nonce: string;
                         /** Format: date-time */
@@ -9538,6 +9598,26 @@ export interface operations {
                         requireDeliveryAcceptance?: boolean;
                         /** @default false */
                         requirePreviewForAcceptance?: boolean;
+                        reviewCycle?: {
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            timeoutMinutes: number;
+                            maxCostCents: number;
+                            requiredPullLabel?: string;
+                            requiredChecks?: {
+                                repository: string;
+                                name: string;
+                            }[];
+                            sources?: {
+                                repository: string;
+                                path: string;
+                                /** @enum {string} */
+                                revision?: "base" | "head";
+                            }[];
+                            syntheticTest?: {
+                                argv: string[];
+                            };
+                        };
                     };
                     nonce: string;
                     /** Format: date-time */
@@ -9565,6 +9645,26 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                maxCostCents: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                                sources?: {
+                                    repository: string;
+                                    path: string;
+                                    /** @enum {string} */
+                                    revision?: "base" | "head";
+                                }[];
+                                syntheticTest?: {
+                                    argv: string[];
+                                };
+                            };
                         };
                     };
                 };
@@ -9678,6 +9778,26 @@ export interface operations {
                                 requireDeliveryAcceptance: boolean;
                                 /** @default false */
                                 requirePreviewForAcceptance: boolean;
+                                reviewCycle?: {
+                                    builderAgent: string;
+                                    reviewerAgent: string;
+                                    timeoutMinutes: number;
+                                    maxCostCents: number;
+                                    requiredPullLabel?: string;
+                                    requiredChecks?: {
+                                        repository: string;
+                                        name: string;
+                                    }[];
+                                    sources?: {
+                                        repository: string;
+                                        path: string;
+                                        /** @enum {string} */
+                                        revision?: "base" | "head";
+                                    }[];
+                                    syntheticTest?: {
+                                        argv: string[];
+                                    };
+                                };
                             };
                         };
                         plan: {
@@ -9919,6 +10039,152 @@ export interface operations {
                                 /** @enum {string} */
                                 method: "interactive_session";
                             } | null;
+                        };
+                        reviewCycle?: {
+                            id: string;
+                            /** @enum {string} */
+                            phase: "waiting_for_evidence" | "review" | "correction" | "human_review" | "decision_required";
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            reviewsStarted: number;
+                            correctionsStarted: number;
+                            deadline: string;
+                            maxCostCents: number;
+                            costCents: number | null;
+                            reason: string | null;
+                            activeTurnId: string | null;
+                            candidate: {
+                                id: string;
+                                deliveryRevision: string;
+                                scopeRevision: number;
+                                pullRequests: {
+                                    repository: string;
+                                    number: number;
+                                    headSha: string;
+                                    baseSha: string;
+                                    repositoryId: string;
+                                    primary: boolean;
+                                    headRef: string;
+                                    baseRef: string;
+                                    /** Format: uri */
+                                    url: string;
+                                    changedFiles: number;
+                                    checks: {
+                                        headSha: string | null;
+                                        /** @enum {string} */
+                                        state: "pending" | "success" | "failure" | "unobserved";
+                                        observedAt: string | null;
+                                        runs: {
+                                            id: string;
+                                            name: string;
+                                            status: string;
+                                            conclusion: string | null;
+                                            observedAt: string;
+                                        }[];
+                                    };
+                                }[];
+                                preview: {
+                                    generation: string;
+                                    observedAt: string;
+                                    sources?: {
+                                        repository: string;
+                                        headSha: string;
+                                        submodules: {
+                                            repository: string;
+                                            path: string;
+                                            pinnedSha: string;
+                                            headSha: string;
+                                        }[];
+                                    }[];
+                                } | null;
+                            } | null;
+                            reviews: {
+                                turnId: string;
+                                reviewerManifestHash: string;
+                                policyRevision: number;
+                                planRevision: number;
+                                candidate: {
+                                    id: string;
+                                    deliveryRevision: string;
+                                    scopeRevision: number;
+                                    pullRequests: {
+                                        repository: string;
+                                        number: number;
+                                        headSha: string;
+                                        baseSha: string;
+                                        repositoryId: string;
+                                        primary: boolean;
+                                        headRef: string;
+                                        baseRef: string;
+                                        /** Format: uri */
+                                        url: string;
+                                        changedFiles: number;
+                                        checks: {
+                                            headSha: string | null;
+                                            /** @enum {string} */
+                                            state: "pending" | "success" | "failure" | "unobserved";
+                                            observedAt: string | null;
+                                            runs: {
+                                                id: string;
+                                                name: string;
+                                                status: string;
+                                                conclusion: string | null;
+                                                observedAt: string;
+                                            }[];
+                                        };
+                                    }[];
+                                    preview: {
+                                        generation: string;
+                                        observedAt: string;
+                                        sources?: {
+                                            repository: string;
+                                            headSha: string;
+                                            submodules: {
+                                                repository: string;
+                                                path: string;
+                                                pinnedSha: string;
+                                                headSha: string;
+                                            }[];
+                                        }[];
+                                    } | null;
+                                };
+                                result: {
+                                    candidateId: string;
+                                    reviewedPulls: {
+                                        repository: string;
+                                        number: number;
+                                        headSha: string;
+                                        baseSha: string;
+                                    }[];
+                                    acceptance: {
+                                        id: string;
+                                        criterion: string;
+                                        /** @enum {string} */
+                                        state: "verified" | "violated" | "unverified";
+                                        evidence: string;
+                                    }[];
+                                    findings: {
+                                        repository: string;
+                                        number: number;
+                                        id: string;
+                                        /** @enum {string} */
+                                        priority: "P0" | "P1" | "P2" | "P3";
+                                        /** @enum {string} */
+                                        category: "acceptance" | "correctness" | "security" | "data" | "suggestion";
+                                        requirement: string;
+                                        path: string;
+                                        line: number;
+                                        evidence: string;
+                                        impact: string;
+                                        fix: string;
+                                        /** @enum {string} */
+                                        disposition: "open" | "resolved";
+                                        /** @enum {string} */
+                                        correction: "within_plan" | "requires_decision";
+                                    }[];
+                                    missingEvidence: string[];
+                                };
+                            }[];
                         };
                     };
                 };
