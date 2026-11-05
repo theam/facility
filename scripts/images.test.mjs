@@ -508,7 +508,7 @@ test("Vercel runner supports SDK user switching without granting node sudo privi
 });
 
 test("runner rejects Chromium packages older than the reviewed security fix", () => {
-  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=155\.0\.8059\.79-1~deb13u1/);
+  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=156\.0\.8078\.79-1~deb13u1/);
   for (const name of ["chromium", "chromium-common"]) {
     assert.ok(
       runnerDockerfile.includes(
@@ -527,7 +527,7 @@ test("runner rejects Chromium packages older than the reviewed security fix", ()
 test("image security refreshes invalidate cached distro layers and audit the cached package manager", () => {
   for (const path of ["Dockerfile", "apps/web/Dockerfile", "runner/Dockerfile"]) {
     const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-    const epoch = path === "runner/Dockerfile" ? "20261019" : "20261005";
+    const epoch = path === "runner/Dockerfile" ? "20261105" : "20261005";
     assert.ok(dockerfile.includes(`ARG DEBIAN_SECURITY_REFRESH=${epoch}`));
     assert.match(dockerfile, /test -n "\$DEBIAN_SECURITY_REFRESH"/);
   }

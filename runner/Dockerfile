@@ -266,8 +266,8 @@ FROM node:24.22.2-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20261019
-ARG CHROMIUM_MIN_VERSION=155.0.8059.79-1~deb13u1
+ARG DEBIAN_SECURITY_REFRESH=20261105
+ARG CHROMIUM_MIN_VERSION=156.0.8078.79-1~deb13u1
 ARG EXPAT_MIN_VERSION=2.9.0-1~deb13u1
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
