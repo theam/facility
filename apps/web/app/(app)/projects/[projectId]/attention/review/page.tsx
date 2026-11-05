@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { DeliveryReview } from "@/components/attention/delivery-review";
+import { ProjectConditions } from "@/components/attention/project-conditions";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { DecisionBrief } from "@/components/story/decision-brief";
 import { type AttentionStoriesQuery, api } from "@/lib/api";
@@ -20,7 +22,10 @@ export default async function AttentionReviewPage({
   const q = first(raw.q)?.trim().slice(0, 200) ?? "";
   const category = first(raw.category);
   const query: AttentionStoriesQuery = {
-    category: category === "plans" || category === "notices" ? category : "all",
+    category:
+      category === "plans" || category === "notices" || category === "deliveries"
+        ? category
+        : "all",
     q: q || undefined,
     limit: 10,
     offset: 0,
@@ -50,14 +55,14 @@ export default async function AttentionReviewPage({
     <div className="flex min-w-0 flex-col gap-6">
       <header className="flex flex-col gap-3">
         <p className="text-xs text-(--mut)">Attention · preview</p>
-        <h1 className="text-3xl font-semibold tracking-tight">Next review</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Attention</h1>
         <p className="max-w-2xl text-sm text-(--mut)">
-          Pending plans and open notices, grouped by story. Each decision keeps its own review and
+          Plans, notices and delivery sets, grouped by story. Each decision keeps its own review and
           confirmation.
         </p>
         <nav aria-label="Related project views" className="flex flex-wrap gap-3">
           <Link href={base} className={control}>
-            Project overview, checks and budget
+            Project overview and unlinked PRs
           </Link>
           <Link href={`${base}/attention?status=resolved`} className={control}>
             Resolved notices
@@ -67,6 +72,8 @@ export default async function AttentionReviewPage({
           </Link>
         </nav>
       </header>
+      {result.ok ? <ProjectConditions data={result.data} base={base} /> : null}
+      <h2 className="text-xl font-semibold">Next review</h2>
       <form
         method="get"
         action={`${base}/attention/review`}
@@ -91,9 +98,10 @@ export default async function AttentionReviewPage({
             defaultValue={query.category}
             className="min-h-11 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
           >
-            <option value="all">Plans and notices</option>
+            <option value="all">All pending stories</option>
             <option value="plans">Stories with pending plans</option>
             <option value="notices">Stories with open notices</option>
+            <option value="deliveries">Stories with deliveries</option>
           </select>
         </label>
         <button type="submit" className={control}>
@@ -111,7 +119,7 @@ export default async function AttentionReviewPage({
         <>
           <p className="text-sm text-(--mut)" role="status">
             {result.data.counts.stories} stories · {result.data.counts.plans} pending plans ·{" "}
-            {result.data.counts.notices} open notices
+            {result.data.counts.notices} open notices · {result.data.counts.deliveries} deliveries
             {q || query.category !== "all" ? " in matching stories" : ""}.
           </p>
           <p className="text-xs text-(--mut)">
@@ -130,11 +138,11 @@ export default async function AttentionReviewPage({
                   ? "No stories on this page"
                   : q || query.category !== "all"
                     ? "No matching pending stories"
-                    : "No pending plans or notices"}
+                    : "No pending plans, notices or deliveries"}
               </h2>
               <p className="mt-2 text-sm text-(--mut)">
-                Check the project overview for delivery reviews, checks and budget, or open Stories
-                to follow ongoing work.
+                Check the project overview for pull requests without a linked delivery, or open
+                Stories to follow ongoing work.
               </p>
             </section>
           ) : (
@@ -157,12 +165,18 @@ export default async function AttentionReviewPage({
                           {relativeTime(item.waitingSince, now)}
                         </p>
                       </div>
-                      <Link
-                        href={`${target}${item.plan ? "#story-plan" : "#story-attention"}`}
-                        className={control}
-                      >
-                        {item.plan ? "Open current plan" : "Open notices"}
-                      </Link>
+                      {item.plan || !item.delivery ? (
+                        <Link
+                          href={`${target}${item.plan ? "#story-plan" : "#story-attention"}`}
+                          className={control}
+                        >
+                          {item.plan
+                            ? "Open current plan"
+                            : item.delivery
+                              ? "Open delivery"
+                              : "Open notices"}
+                        </Link>
+                      ) : null}
                     </div>
                     {item.plan ? (
                       <div className="mt-4 flex flex-col gap-3">
@@ -198,6 +212,9 @@ export default async function AttentionReviewPage({
                           current plan; confirm the revision before deciding.
                         </p>
                       </div>
+                    ) : null}
+                    {item.delivery ? (
+                      <DeliveryReview delivery={item.delivery} storyUrl={target} />
                     ) : null}
                     {item.noticeCount > 0 ? (
                       <div className="mt-4 border-t border-(--line) pt-3 text-sm">

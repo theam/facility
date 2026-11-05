@@ -1,4 +1,10 @@
-import { can, DecisionBriefProjectionSchema } from "@facility/core";
+import {
+  can,
+  DecisionBriefProjectionSchema,
+  DeliveryPullRequestSchema,
+  PlanActorSchema,
+  StoryDeliverySchema,
+} from "@facility/core";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ATTENTION_STATUSES, ProjectAttentionService } from "../../insights/project-attention.js";
@@ -63,15 +69,78 @@ export const ProjectAttentionResponse = z.object({
   items: z.array(AttentionNotice),
 });
 const AttentionStoriesQuery = z.object({
-  category: z.enum(["all", "plans", "notices"]).default("all"),
+  category: z.enum(["all", "plans", "notices", "deliveries"]).default("all"),
   q: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(25).default(10),
   offset: z.coerce.number().int().min(0).default(0),
 });
+const AttentionDelivery = z.object({
+  candidate: StoryDeliverySchema.shape.candidate,
+  scopeRevision: z.number(),
+  storyStatus: z.string(),
+  pullRequests: z.array(
+    DeliveryPullRequestSchema.pick({
+      repository: true,
+      number: true,
+      url: true,
+      title: true,
+      required: true,
+      primary: true,
+      state: true,
+      draft: true,
+      headSha: true,
+      stale: true,
+      checks: true,
+    }),
+  ),
+  acceptance: z.object({
+    required: z.boolean().nullable(),
+    status: z.enum(["missing", "current", "stale"]),
+    receipt: z
+      .object({
+        id: z.string(),
+        revision: z.number(),
+        candidateRevision: z.string(),
+        confirmedAt: DateValue,
+        confirmedBy: PlanActorSchema.extend({ type: z.literal("user") }),
+      })
+      .nullable(),
+  }),
+  preview: z
+    .object({
+      state: z.string(),
+      desiredGeneration: z.string(),
+      deployedGeneration: z.string().nullable(),
+      observedAt: DateValue,
+    })
+    .nullable(),
+  acceptanceReady: z.boolean(),
+  blocked: z.object({ code: z.string(), message: z.string() }).nullable(),
+  waitingSince: DateValue,
+});
 export const ProjectAttentionStoriesResponse = z.object({
   generatedAt: DateValue,
   total: z.number(),
-  counts: z.object({ stories: z.number(), plans: z.number(), notices: z.number() }),
+  counts: z.object({
+    stories: z.number(),
+    plans: z.number(),
+    notices: z.number(),
+    deliveries: z.number(),
+  }),
+  workflowPolicy: z.object({ available: z.boolean(), error: z.string().nullable() }),
+  budget: z.union([
+    z.object({ available: z.literal(false), reason: z.literal("permission") }),
+    z.object({
+      available: z.literal(true),
+      state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded", "unconfirmed"]),
+      enabled: z.boolean(),
+      monthlyLimitCents: z.number().nullable(),
+      spentCents: z.number(),
+      remainingCents: z.number().nullable(),
+      windowStart: DateValue,
+      windowEnd: DateValue,
+    }),
+  ]),
   limit: z.number(),
   offset: z.number(),
   items: z.array(
@@ -79,6 +148,7 @@ export const ProjectAttentionStoriesResponse = z.object({
       waitingSince: DateValue,
       noticeCount: z.number(),
       noticeKinds: z.array(z.object({ kind: z.string(), count: z.number() })),
+      delivery: AttentionDelivery.nullable(),
       plan: z
         .object({
           revision: z.number(),
@@ -221,6 +291,8 @@ export async function registerProjectOverviewRoutes(app: FastifyInstance, contex
         actor.orgId,
         projectId,
         request.query as z.infer<typeof AttentionStoriesQuery>,
+        new Date(),
+        { budgets: can(actor.permissions, "budgets:read") },
       );
     },
   );

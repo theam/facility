@@ -59,8 +59,8 @@ export function storyPlanDigest(
 }
 
 export function planState(
-  row: typeof storyPlanStates.$inferSelect | undefined,
-  decision: DecisionRow | undefined,
+  row: Pick<typeof storyPlanStates.$inferSelect, "revision" | "decisionRevision"> | undefined,
+  decision: Pick<DecisionRow, "planRevision" | "intent"> | undefined,
 ): PlanState {
   const revision = row?.revision ?? 0;
   return {

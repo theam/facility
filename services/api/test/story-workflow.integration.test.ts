@@ -19,6 +19,8 @@ import {
   storyEvidenceEvents,
   storyPlanDecisions,
   storyPlanRepositoryRefs,
+  storyPreviewConvergences,
+  storyPreviewGenerations,
   turns,
   users,
 } from "@facility/db";
@@ -1022,5 +1024,213 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       await authorizePlanExecution(db, scope, builder, { type: "user", id: userId }),
     ).toMatchObject({ decisionRevision: 2 });
     await savePolicy();
+  });
+  it("projects the complete delivery and rechecks receipt authority in a read-only snapshot", async () => {
+    await savePolicy(policy({ requirePreviewForAcceptance: true }));
+    await db
+      .update(githubPullRequests)
+      .set({ headSha: "a".repeat(40), syncedAt: new Date() })
+      .where(eq(githubPullRequests.repositoryId, repoId));
+    const secondRepo = newId("repo");
+    await db.insert(projectRepositories).values({
+      id: secondRepo,
+      orgId,
+      projectId,
+      owner: projectId,
+      name: "api",
+      role: "related",
+      defaultBranch: "main",
+    });
+    await db.insert(githubPullRequests).values({
+      id: newId("ghp"),
+      orgId,
+      projectId,
+      repositoryId: secondRepo,
+      number: 2,
+      title: "Second required change",
+      state: "open",
+      draft: false,
+      headRef: "feature",
+      baseRef: "main",
+      headSha: "b".repeat(40),
+      htmlUrl: `https://github.com/${projectId}/api/pull/2`,
+      ciState: "failure",
+      ciHeadSha: "b".repeat(40),
+      syncedAt: new Date(),
+    });
+    const value = await delivery();
+    await db
+      .update(stories)
+      .set({ title: `Review queue ${value.id}` })
+      .where(eq(stories.id, value.id));
+    const set = await post(
+      `${path(value.id)}/delivery`,
+      {
+        expected_revision: 1,
+        declared_complete: true,
+        pull_requests: [
+          { repository: `${projectId}/app`, number: 1, required: true, primary: true },
+          { repository: `${projectId}/api`, number: 2, required: true, primary: false },
+        ],
+        idempotency_key: randomUUID(),
+      },
+      headers(),
+    );
+    expect(set.statusCode, set.body).toBe(200);
+    const candidate = set.json<StoryDelivery>();
+    async function readQueue() {
+      const response = await app.inject({
+        url: `/v1/projects/${projectId}/attention/stories?category=deliveries&q=${value.id}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().counts).toEqual({ stories: 1, plans: 0, notices: 0, deliveries: 1 });
+      return response.json().items[0].delivery;
+    }
+    const beforeRequests = await db
+      .select()
+      .from(storyDeliveryAcceptanceRequests)
+      .where(eq(storyDeliveryAcceptanceRequests.storyId, value.id));
+    const enqueued = enqueue.mock.calls.length;
+    let observed = await readQueue();
+    expect(observed.candidate).toEqual(candidate.candidate);
+    expect(observed.pullRequests).toHaveLength(2);
+    expect(observed.pullRequests[1].checks).toMatchObject({ state: "failure", current: true });
+    expect(observed.blocked.code).toBe("workflow_preview_not_ready");
+    expect(observed.acceptanceReady).toBe(false);
+    expect(enqueue).toHaveBeenCalledTimes(enqueued);
+    expect(
+      await db
+        .select()
+        .from(storyDeliveryAcceptanceRequests)
+        .where(eq(storyDeliveryAcceptanceRequests.storyId, value.id)),
+    ).toEqual(beforeRequests);
+
+    const generation = candidate.candidate.revision;
+    if (!generation) throw Error("Missing candidate");
+    await db
+      .insert(storyPreviewGenerations)
+      .values({
+        orgId,
+        projectId,
+        storyId: value.id,
+        generation,
+        deliveryRevision: generation,
+        repositories: candidate.pullRequests.map((pull) => ({
+          repositoryId: pull.repositoryId,
+          repository: pull.repository,
+          pullNumber: pull.number,
+          headRef: pull.headRef,
+          headSha: pull.headSha ?? "",
+          primary: pull.primary,
+        })),
+        sourceObservedAt: new Date(),
+      })
+      .onConflictDoNothing();
+    await db
+      .insert(storyPreviewConvergences)
+      .values({
+        orgId,
+        projectId,
+        storyId: value.id,
+        state: "ready",
+        desiredGeneration: generation,
+        deployedGeneration: generation,
+        desiredObservedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: storyPreviewConvergences.storyId,
+        set: { state: "ready", desiredGeneration: generation, deployedGeneration: generation },
+      });
+    expect((await readQueue()).acceptanceReady).toBe(true);
+    const requested = await request(value.id, candidate, { cookie: writerCookie });
+    const reviewed = await review(value.id, requested.id, { cookie: writerCookie });
+    expect(
+      (await confirm(value.id, requested.id, reviewed.json().proof, { cookie: writerCookie }))
+        .statusCode,
+    ).toBe(200);
+    observed = await readQueue();
+    expect(observed.acceptance.status).toBe("current");
+    expect(observed.acceptanceReady).toBe(false);
+    await db
+      .update(storyPreviewConvergences)
+      .set({ state: "suspended" })
+      .where(eq(storyPreviewConvergences.storyId, value.id));
+    expect((await readQueue()).acceptance.status).toBe("current");
+
+    await db
+      .update(roles)
+      .set({ permissions: ["projects:read"] })
+      .where(eq(roles.id, writerRole));
+    expect((await readQueue()).acceptance.status).toBe("stale");
+    expect(
+      (
+        await app.inject({ url: `${path(value.id)}/delivery-acceptance`, headers: { cookie } })
+      ).json().status,
+    ).toBe("stale");
+    await db
+      .update(roles)
+      .set({ permissions: ["projects:read", "projects:write"] })
+      .where(eq(roles.id, writerRole));
+    await db.update(users).set({ status: "disabled" }).where(eq(users.id, writerId));
+    expect((await readQueue()).acceptance.status).toBe("stale");
+    await db.update(users).set({ status: "active" }).where(eq(users.id, writerId));
+    expect((await readQueue()).acceptance.status).toBe("current");
+
+    await db
+      .update(githubPullRequests)
+      .set({ headSha: "c".repeat(40) })
+      .where(eq(githubPullRequests.repositoryId, secondRepo));
+    observed = await readQueue();
+    expect(observed.candidate.revision).not.toBe(generation);
+    expect(observed.acceptance.status).toBe("stale");
+    expect(observed.preview.deployedGeneration).toBe(generation);
+    expect(observed.pullRequests[1].checks.current).toBe(false);
+    expect(observed.acceptanceReady).toBe(false);
+    const canonical = await app.inject({
+      url: `${path(value.id)}/delivery-acceptance`,
+      headers: { cookie },
+    });
+    expect(canonical.json().status).toBe(observed.acceptance.status);
+    const canonicalDelivery = await app.inject({
+      url: `${path(value.id)}/delivery`,
+      headers: { cookie },
+    });
+    expect(canonicalDelivery.json().candidate).toEqual(observed.candidate);
+    await savePolicy();
+  });
+
+  it("counts delivery stories beyond the old twenty-item overview and preserves whole pages", async () => {
+    await savePolicy();
+    const prefix = `Queue batch ${randomUUID()}`;
+    const ids: string[] = [];
+    for (let index = 0; index < 23; index++) {
+      const value = await delivery();
+      ids.push(value.id);
+      await db
+        .update(stories)
+        .set({ title: `${prefix} ${index}` })
+        .where(eq(stories.id, value.id));
+    }
+    const seen: string[] = [];
+    for (const offset of [0, 10, 20]) {
+      const response = await app.inject({
+        url: `/v1/projects/${projectId}/attention/stories?category=deliveries&q=${encodeURIComponent(prefix)}&offset=${offset}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().total).toBe(23);
+      expect(response.json().counts.deliveries).toBe(23);
+      seen.push(...response.json().items.map((item: { storyId: string }) => item.storyId));
+    }
+    expect(new Set(seen)).toEqual(new Set(ids));
+    const deletedId = ids[0];
+    if (!deletedId) throw new Error("Missing test story");
+    await db.update(stories).set({ deletedAt: new Date() }).where(eq(stories.id, deletedId));
+    const response = await app.inject({
+      url: `/v1/projects/${projectId}/attention/stories?q=${encodeURIComponent(prefix)}`,
+      headers: { cookie },
+    });
+    expect(response.json().total).toBe(22);
   });
 });

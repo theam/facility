@@ -1,6 +1,8 @@
 import { readDecisionBrief } from "@facility/core";
 import { attentionItems, type FacilityDb, stories, storyPlanRevisions } from "@facility/db";
 import { and, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
+import { CostBudgetService } from "./costs.js";
+import { readProjectDeliveryReviews } from "./project-delivery-reviews.js";
 import { attentionAction, type StoryStatus } from "./project-overview.js";
 
 // Every notice a project raised for a person: an agent waiting for a reply, a
@@ -23,7 +25,7 @@ export type AttentionQuery = {
 const DETAIL_EXCERPT = 1_000;
 
 export type AttentionStoriesQuery = {
-  category: "all" | "plans" | "notices";
+  category: "all" | "plans" | "notices" | "deliveries";
   q?: string;
   limit: number;
   offset: number;
@@ -36,6 +38,7 @@ type AttentionStoryRow = {
   waitingSince: string;
   noticeCount: number;
   planRevision: number | null;
+  hasDelivery: boolean;
 };
 
 export class ProjectAttentionService {
@@ -50,10 +53,39 @@ export class ProjectAttentionService {
     projectId: string,
     query: AttentionStoriesQuery,
     now = new Date(),
+    access = { budgets: false },
   ) {
     const pattern = `%${(query.q?.trim() ?? "").replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const candidates = sql`
-      with notice_groups as (
+    return this.db.transaction(
+      async (rawTx) => {
+        const tx = rawTx;
+        const scopedDb = rawTx as unknown as FacilityDb;
+        const [deliverySnapshot, budget] = await Promise.all([
+          readProjectDeliveryReviews(scopedDb, { orgId, projectId }, now),
+          access.budgets
+            ? new CostBudgetService(scopedDb).budgetState(orgId, projectId, now)
+            : null,
+        ]);
+        const deliveries = new Map(
+          [...deliverySnapshot.stories].filter(
+            ([, review]) =>
+              !["done", "archived"].includes(review.storyStatus) &&
+              (review.pullRequests.some(
+                (pull) => pull.state === "open" || pull.state === "unobserved",
+              ) ||
+                review.candidate.state !== "recorded" ||
+                (review.acceptance.required !== false && review.acceptance.status !== "current")),
+          ),
+        );
+        const deliveryRows = [...deliveries].map(([storyId, review]) => ({
+          story_id: storyId,
+          waiting_since: review.waitingSince.toISOString(),
+        }));
+        const candidates = sql`
+      with delivery_groups as (
+        select * from jsonb_to_recordset(${JSON.stringify(deliveryRows)}::jsonb)
+          as r(story_id text, waiting_since timestamptz)
+      ), notice_groups as (
         select story_id, count(*)::int as notice_count, min(created_at) as waiting_since
         from attention_items
         where org_id = ${orgId} and project_id = ${projectId} and status = 'open'
@@ -69,28 +101,36 @@ export class ProjectAttentionService {
           and (d.plan_revision is null or d.plan_revision <> s.revision)
       ), candidates as (
         select s.id as "storyId", s.title as "storyTitle", s.status as "storyStatus",
-          least(n.waiting_since, p.proposed_at) as "waitingSince",
+          least(n.waiting_since, p.proposed_at, d.waiting_since) as "waitingSince",
+          (d.story_id is not null) as "hasDelivery",
           coalesce(n.notice_count, 0)::int as "noticeCount", p.revision as "planRevision"
         from stories s
         left join notice_groups n on n.story_id = s.id
         left join pending_plans p on p.story_id = s.id
+        left join delivery_groups d on d.story_id = s.id
         where s.org_id = ${orgId} and s.project_id = ${projectId}
-          and (n.story_id is not null or p.story_id is not null)
+          and s.deleted_at is null
+          and (n.story_id is not null or p.story_id is not null or d.story_id is not null)
           and (${query.category} = 'all'
             or (${query.category} = 'plans' and p.story_id is not null)
-            or (${query.category} = 'notices' and n.story_id is not null))
+            or (${query.category} = 'notices' and n.story_id is not null)
+            or (${query.category} = 'deliveries' and d.story_id is not null))
           and (s.title ilike ${pattern} or exists (
             select 1 from attention_items a
             where a.org_id = s.org_id and a.project_id = s.project_id and a.story_id = s.id
               and a.status = 'open' and (a.title ilike ${pattern} or a.detail ilike ${pattern})
           ))
       )`;
-    return this.db.transaction(
-      async (tx) => {
-        const [counts] = await tx.execute<{ stories: number; plans: number; notices: number }>(sql`
+        const [counts] = await tx.execute<{
+          stories: number;
+          plans: number;
+          notices: number;
+          deliveries: number;
+        }>(sql`
         ${candidates}
         select count(*)::int as stories, count("planRevision")::int as plans,
-          coalesce(sum("noticeCount"), 0)::int as notices from candidates
+          coalesce(sum("noticeCount"), 0)::int as notices,
+          count(*) filter (where "hasDelivery")::int as deliveries from candidates
       `);
         if (!counts) throw new Error("Attention story count was not returned");
         const rows = await tx.execute<AttentionStoryRow>(sql`
@@ -151,13 +191,30 @@ export class ProjectAttentionService {
           generatedAt: now,
           total: counts.stories,
           counts,
+          workflowPolicy: {
+            available: !deliverySnapshot.policyError,
+            error: deliverySnapshot.policyError,
+          },
+          budget: budget
+            ? {
+                available: true as const,
+                state: budget.state,
+                enabled: budget.budget?.enabled ?? false,
+                monthlyLimitCents: budget.budget?.monthlyLimitCents ?? null,
+                spentCents: budget.spentCents,
+                remainingCents: budget.remainingCents,
+                windowStart: budget.windowStart,
+                windowEnd: budget.windowEnd,
+              }
+            : { available: false as const, reason: "permission" as const },
           limit: query.limit,
           offset: query.offset,
           items: rows.map((row) => {
             const plan = plans.find((plan) => plan.storyId === row.storyId);
-            const { planRevision: _revision, ...story } = row;
+            const { planRevision: _revision, hasDelivery: _hasDelivery, ...story } = row;
             return {
               ...story,
+              delivery: deliveries.get(row.storyId) ?? null,
               waitingSince: new Date(story.waitingSince),
               noticeKinds: kinds
                 .filter((kind) => kind.storyId === row.storyId)

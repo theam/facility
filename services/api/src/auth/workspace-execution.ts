@@ -1,7 +1,40 @@
 import { can } from "@facility/core";
 import { apiKeys, type FacilityDb, orgMembers, roles, users } from "@facility/db";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { ApiError } from "../errors.js";
+
+function userAuthorityRows(db: FacilityDb, orgId: string, userIds: string[]) {
+  return db
+    .select({ userId: users.id, grants: roles.permissions })
+    .from(orgMembers)
+    .innerJoin(users, eq(users.id, orgMembers.userId))
+    .innerJoin(roles, eq(roles.id, orgMembers.roleId))
+    .where(
+      and(
+        eq(orgMembers.orgId, orgId),
+        inArray(users.id, userIds),
+        eq(users.status, "active"),
+        or(isNull(roles.orgId), eq(roles.orgId, orgId)),
+      ),
+    );
+}
+
+/** Snapshot evidence for read-only projections, never authorization for a write.
+ * Mutations must still call authorizePrincipal and hold its authority locks. */
+export async function observeUserAuthorities(
+  db: FacilityDb,
+  orgId: string,
+  userIds: string[],
+  required: readonly string[],
+) {
+  if (!userIds.length) return new Set<string>();
+  const rows = await userAuthorityRows(db, orgId, userIds);
+  return new Set(
+    rows
+      .filter((row) => required.every((permission) => can(row.grants, permission)))
+      .map((row) => row.userId),
+  );
+}
 
 /** Durable jobs re-read current authority; captured permission arrays never authorize an API call. */
 export async function authorizePrincipal(
@@ -12,21 +45,7 @@ export async function authorizePrincipal(
   errorCode = "execution_authorization_revoked",
 ) {
   if (actor.type === "user") {
-    const [row] = await db
-      .select({ grants: roles.permissions })
-      .from(orgMembers)
-      .innerJoin(users, eq(users.id, orgMembers.userId))
-      .innerJoin(roles, eq(roles.id, orgMembers.roleId))
-      .where(
-        and(
-          eq(orgMembers.orgId, scope.orgId),
-          eq(users.id, actor.id),
-          eq(users.status, "active"),
-          or(isNull(roles.orgId), eq(roles.orgId, scope.orgId)),
-        ),
-      )
-      .limit(1)
-      .for("share");
+    const [row] = await userAuthorityRows(db, scope.orgId, [actor.id]).limit(1).for("share");
     if (row && required.every((permission) => can(row.grants, permission))) return;
   } else {
     const [row] = await db

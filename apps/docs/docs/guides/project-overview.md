@@ -86,36 +86,72 @@ action it accepts (`reply`, `retry`, or `dismiss`); resolved notices carry `reso
 `resolvedAt` instead. It requires `projects:read`. MCP clients use `facility_list_attention`.
 
 
-## Review plans and notices by story (preview)
+## Review pending stories (preview)
 
-From Attention, choose **Review plans and notices by story**. The preview at
-`/projects/{projectId}/attention/review` groups open notices and pending formal
-plans by story, oldest pending item first. A plan can appear without a notice.
-An approved or rejected current plan is not pending; a newer proposal appears
-again. Several notices in one story remain separate actions.
+From Attention, choose **Review pending stories**. The preview at
+`/projects/{projectId}/attention/review` groups open notices, pending formal
+plans and delivery sets by story, oldest pending item first. A plan can appear
+without a notice. An approved or rejected current plan is not pending; a newer
+proposal appears again. Several notices in one story remain separate actions.
 
-The counters describe the entire filtered set, not just the visible page. Search
-matches story titles and open notice text, then keeps all open notices and the
-pending plan of each matching story. The category selector narrows the set to
-stories with plans or with notices. No recipient, urgency or deadline is inferred.
+Counters describe the entire filtered set, not just the visible page. Search
+matches story titles and open notice text, then keeps all pending information
+for each matching story. Categories select stories with plans, notices or
+deliveries. Deleted stories are excluded. Delivery sets in done or archived
+stories remain on their history, outside this queue. No recipient, severity or
+deadline is inferred.
 
-Expand the saved author's brief for the recommendation, alternatives, risk and
-sources. These are the author's statements, not independently verified facts.
+Expand the saved author's plan brief for the recommendation, alternatives, risk
+and sources. These are the author's statements, not independently verified facts.
 **Open current plan** reads the current story: compare its revision with the
 observed revision before deciding. The exact original and existing confirmation
-flow remain on the story. Each notice keeps its own action there. Opening the
-queue creates no confirmation request, model call, turn or workspace operation.
-Refresh explicitly after reading; the page does not reorder while reviewing a brief.
+flow remain on the story. Each notice keeps its own action there.
 
-This preview covers plans and notices. Use the project overview for delivery
-reviews, check status and budget; an empty preview does not mean all project
-work is complete. The existing notice list retains filters and resolved history.
-A failed or denied read is shown as an error, not an empty queue.
+### Review the complete delivery
+
+The delivery card shows every registered PR, which ones are required and primary,
+the observed heads, and whether the recorded checks belong to those heads.
+A registered candidate does not mean CI passed. Drafts, stale observations,
+unobserved checks and checks from a previous head stay distinguishable.
+Legacy primary PRs do not silently become a declared complete delivery set.
+
+Acceptance is shown separately as missing, current or stale. Its binding uses
+the same domain rules as the existing request and confirmation flow: required
+heads, delivery scope, plan, policy and current authority of the accepting member.
+Changed heads or revoked authority make a prior receipt historical. Suspending
+compute alone does not invalidate acceptance. When policy requires it, requesting
+acceptance still needs the exact current candidate recorded as ready and served.
+The card distinguishes the desired preview, last recorded served preview and
+accepted candidate. It neither wakes the environment nor claims a live inspection.
+
+A delivery remains in this queue while its active story has open or unobserved
+PRs, an incomplete or stale candidate, or outstanding required acceptance. This
+is an inspection inventory, not a claim that every row requires immediate human
+action. An eligible candidate does not grant the viewer permission to accept it.
+**Review delivery** opens the current story and its existing authorized actions.
+PR links open GitHub's current state; compare the heads before deciding.
+
+### Project limits
+
+An exhausted budget or unconfirmed spending appears once above the story list,
+with the effect on new model calls. Work already running is separate. A warning
+threshold remains a warning. Missing budget permission is shown as unavailable,
+not as zero, and unconfirmed spending is not presented as a complete known cost.
+An invalid workflow policy directs the reader to project settings without
+inventing acceptance eligibility.
+
+Opening the queue creates no confirmation request, model call, turn or workspace
+operation. Refresh explicitly after reading; the page does not reorder while
+reviewing a brief. The preview covers linked story deliveries. Use the project
+overview for pull requests without a linked delivery; an empty preview does not
+mean all project work is complete. The existing notice list retains resolved
+history. A failed or denied read is shown as an error, not an empty queue.
 
 `GET /v1/projects/{projectId}/attention/stories` and MCP
-`facility_list_attention_stories` share this read-only projection and require
-`projects:read`. Parameters: `category` (`all`, `plans`, `notices`), `q`, `limit`
-(default 10, maximum 25 stories) and `offset`. Counts, page and revision details
-come from one database snapshot. Each plan carries its revision, digest and saved
-brief; `facility_get_plan` can read that exact revision. The response contains
-no cost or budget data. Existing notice API and MCP contracts are unchanged.
+`facility_list_attention_stories` share this projection and require
+`projects:read`. Parameters: `category` (`all`, `plans`, `notices`, `deliveries`),
+`q`, `limit` (default 10, maximum 25 stories) and `offset`. Counts, page and
+revision details come from one read-only database snapshot. Delivery metadata
+is fetched in batches for complete counts; only the page's plan Markdown is
+loaded. The response includes the project budget only with `budgets:read`.
+Existing notice API and MCP contracts are unchanged.

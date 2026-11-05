@@ -23,7 +23,9 @@ const page: ProjectAttentionStories = {
   total: 12,
   limit: 10,
   offset: 0,
-  counts: { stories: 12, plans: 5, notices: 25 },
+  counts: { stories: 12, plans: 5, notices: 25, deliveries: 0 },
+  budget: { available: false, reason: "permission" },
+  workflowPolicy: { available: true, error: null },
   items: [
     {
       storyId: "plan-story",
@@ -32,6 +34,7 @@ const page: ProjectAttentionStories = {
       waitingSince: "2026-11-05T10:00:00Z",
       noticeCount: 2,
       noticeKinds: [{ kind: "runtime_error", count: 2 }],
+      delivery: null,
       plan: {
         revision: 3,
         digest: "a".repeat(64),
@@ -46,6 +49,7 @@ const page: ProjectAttentionStories = {
       waitingSince: "2026-11-05T11:00:00Z",
       noticeCount: 1,
       noticeKinds: [{ kind: "agent_waiting", count: 1 }],
+      delivery: null,
       plan: null,
     },
   ],
@@ -104,10 +108,17 @@ describe("whole-story review queue", () => {
     expect((await render({ page: "5" })).textContent).toContain("No stories on this page");
     mocks.result = {
       ok: true,
-      data: { ...page, items: [], total: 0, counts: { stories: 0, plans: 0, notices: 0 } },
+      data: {
+        ...page,
+        items: [],
+        total: 0,
+        counts: { stories: 0, plans: 0, notices: 0, deliveries: 0 },
+      },
     };
     const empty = await render();
-    expect(empty.textContent).toContain("No pending plans or notices");
-    expect(empty.textContent).toContain("Check the project overview for delivery reviews");
+    expect(empty.textContent).toContain("No pending plans, notices or deliveries");
+    expect(empty.textContent).toContain(
+      "Check the project overview for pull requests without a linked delivery",
+    );
   });
 });

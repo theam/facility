@@ -8949,7 +8949,8 @@
               "enum": [
                 "all",
                 "plans",
-                "notices"
+                "notices",
+                "deliveries"
               ]
             },
             "in": "query",
@@ -9022,14 +9023,116 @@
                         },
                         "notices": {
                           "type": "number"
+                        },
+                        "deliveries": {
+                          "type": "number"
                         }
                       },
                       "required": [
                         "stories",
                         "plans",
-                        "notices"
+                        "notices",
+                        "deliveries"
                       ],
                       "additionalProperties": false
+                    },
+                    "workflowPolicy": {
+                      "type": "object",
+                      "properties": {
+                        "available": {
+                          "type": "boolean"
+                        },
+                        "error": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "available",
+                        "error"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "budget": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "available": {
+                              "type": "boolean",
+                              "enum": [
+                                false
+                              ]
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "permission"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "available",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "available": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            },
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "not_configured",
+                                "disabled",
+                                "ok",
+                                "warning",
+                                "exceeded",
+                                "unconfirmed"
+                              ]
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "monthlyLimitCents": {
+                              "nullable": true,
+                              "type": "number"
+                            },
+                            "spentCents": {
+                              "type": "number"
+                            },
+                            "remainingCents": {
+                              "nullable": true,
+                              "type": "number"
+                            },
+                            "windowStart": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "windowEnd": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          },
+                          "required": [
+                            "available",
+                            "state",
+                            "enabled",
+                            "monthlyLimitCents",
+                            "spentCents",
+                            "remainingCents",
+                            "windowStart",
+                            "windowEnd"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
                     },
                     "limit": {
                       "type": "number"
@@ -9084,6 +9187,291 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "delivery": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "candidate": {
+                                "type": "object",
+                                "properties": {
+                                  "revision": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "scope_incomplete",
+                                      "unobserved",
+                                      "stale",
+                                      "recorded"
+                                    ]
+                                  },
+                                  "requiredCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mergedCount": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "allRequiredMerged": {
+                                    "nullable": true,
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "revision",
+                                  "state",
+                                  "requiredCount",
+                                  "mergedCount",
+                                  "allRequiredMerged"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "scopeRevision": {
+                                "type": "number"
+                              },
+                              "storyStatus": {
+                                "type": "string"
+                              },
+                              "pullRequests": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "repository": {
+                                      "type": "string"
+                                    },
+                                    "number": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "url": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "required": {
+                                      "type": "boolean"
+                                    },
+                                    "primary": {
+                                      "type": "boolean"
+                                    },
+                                    "state": {
+                                      "type": "string",
+                                      "enum": [
+                                        "open",
+                                        "closed",
+                                        "merged",
+                                        "unobserved"
+                                      ]
+                                    },
+                                    "draft": {
+                                      "nullable": true,
+                                      "type": "boolean"
+                                    },
+                                    "headSha": {
+                                      "nullable": true,
+                                      "type": "string"
+                                    },
+                                    "stale": {
+                                      "type": "boolean"
+                                    },
+                                    "checks": {
+                                      "type": "object",
+                                      "properties": {
+                                        "state": {
+                                          "type": "string",
+                                          "enum": [
+                                            "unobserved",
+                                            "pending",
+                                            "success",
+                                            "failure"
+                                          ]
+                                        },
+                                        "headSha": {
+                                          "nullable": true,
+                                          "type": "string"
+                                        },
+                                        "current": {
+                                          "type": "boolean"
+                                        },
+                                        "observedAt": {
+                                          "nullable": true,
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "state",
+                                        "headSha",
+                                        "current",
+                                        "observedAt"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "repository",
+                                    "number",
+                                    "url",
+                                    "title",
+                                    "required",
+                                    "primary",
+                                    "state",
+                                    "draft",
+                                    "headSha",
+                                    "stale",
+                                    "checks"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "acceptance": {
+                                "type": "object",
+                                "properties": {
+                                  "required": {
+                                    "nullable": true,
+                                    "type": "boolean"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "missing",
+                                      "current",
+                                      "stale"
+                                    ]
+                                  },
+                                  "receipt": {
+                                    "nullable": true,
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "revision": {
+                                        "type": "number"
+                                      },
+                                      "candidateRevision": {
+                                        "type": "string"
+                                      },
+                                      "confirmedAt": {
+                                        "type": "string",
+                                        "format": "date-time"
+                                      },
+                                      "confirmedBy": {
+                                        "type": "object",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "enum": [
+                                              "user"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "nullable": true,
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "type",
+                                          "id",
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "revision",
+                                      "candidateRevision",
+                                      "confirmedAt",
+                                      "confirmedBy"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "required",
+                                  "status",
+                                  "receipt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "preview": {
+                                "nullable": true,
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string"
+                                  },
+                                  "desiredGeneration": {
+                                    "type": "string"
+                                  },
+                                  "deployedGeneration": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "observedAt": {
+                                    "type": "string",
+                                    "format": "date-time"
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "desiredGeneration",
+                                  "deployedGeneration",
+                                  "observedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "acceptanceReady": {
+                                "type": "boolean"
+                              },
+                              "blocked": {
+                                "nullable": true,
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "message"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "waitingSince": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            },
+                            "required": [
+                              "candidate",
+                              "scopeRevision",
+                              "storyStatus",
+                              "pullRequests",
+                              "acceptance",
+                              "preview",
+                              "acceptanceReady",
+                              "blocked",
+                              "waitingSince"
+                            ],
+                            "additionalProperties": false
                           },
                           "plan": {
                             "nullable": true,
@@ -9416,6 +9804,7 @@
                           "waitingSince",
                           "noticeCount",
                           "noticeKinds",
+                          "delivery",
                           "plan"
                         ],
                         "additionalProperties": false
@@ -9426,6 +9815,8 @@
                     "generatedAt",
                     "total",
                     "counts",
+                    "workflowPolicy",
+                    "budget",
                     "limit",
                     "offset",
                     "items"

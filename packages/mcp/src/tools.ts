@@ -822,10 +822,10 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_list_attention_stories",
     permission: "projects:read",
     description:
-      "Read pending plans and open agent notices grouped by story, oldest first. Pages and filtered counts cover whole stories; each proposed plan includes its exact revision, digest and saved author brief. An approved or rejected current plan is not pending. Grouping does not combine decisions or grant authority. Read-only; does not run agents, wake workspaces or request confirmation. This is not the delivery-review, CI or budget inventory; use the overview and delivery reads for those. Needs projects:read.",
+      "Read pending plans, open notices and delivery sets grouped by story, oldest first. Counts cover whole matching stories. Plans carry exact revision/digest and the author brief; deliveries show their candidate, current-head checks, preview and observed acceptance. Acceptance eligibility does not grant authority or mean CI passed. Project budget is visible only with budgets:read. Read-only; no agent, wake or confirmation request. Pull requests without a story delivery link remain in the project overview. Needs projects:read.",
     inputSchema: {
       projectId,
-      category: z.enum(["all", "plans", "notices"]).default("all"),
+      category: z.enum(["all", "plans", "notices", "deliveries"]).default("all"),
       q: z
         .string()
         .max(200)

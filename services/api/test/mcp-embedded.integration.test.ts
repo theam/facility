@@ -257,6 +257,9 @@ describe("embedded MCP control plane", async () => {
       (part) => part.type === "text",
     )?.text;
     const groupedPage = JSON.parse(groupedText ?? "{}");
+    expect(groupedPage.budget).toMatchObject({ available: true, state: "not_configured" });
+    expect(groupedPage.counts.deliveries).toBe(0);
+    expect(groupedPage.workflowPolicy).toEqual({ available: true, error: null });
     expect(
       groupedPage.items.find((item: { storyId: string }) => item.storyId === id)?.plan,
     ).toMatchObject({ revision: 1, digest, decisionBrief: { status: "available", brief } });

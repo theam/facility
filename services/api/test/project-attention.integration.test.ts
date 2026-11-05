@@ -7,6 +7,7 @@ import {
   createDb,
   migrate,
   orgs,
+  projectBudgets,
   projects,
   roles,
   seed,
@@ -495,7 +496,7 @@ describe("project attention list", async () => {
   it("pages whole stories with pending plans even when no notice exists", async () => {
     const query = { category: "all" as const, limit: 1, offset: 0 };
     const first = await service.listStories(orgId, projectId, query, now);
-    expect(first.counts).toEqual({ stories: 4, plans: 3, notices: 3 });
+    expect(first.counts).toEqual({ stories: 4, plans: 3, notices: 3, deliveries: 0 });
     expect(first.total).toBe(4);
     const pages = await Promise.all(
       [0, 1, 2, 3].map((offset) =>
@@ -529,22 +530,23 @@ describe("project attention list", async () => {
   it("filters matching stories without discarding their other notices or plan", async () => {
     const query = { category: "all" as const, limit: 10, offset: 0 };
     const found = await service.listStories(orgId, projectId, { ...query, q: "%" }, now);
-    expect(found.counts).toEqual({ stories: 1, plans: 1, notices: 2 });
+    expect(found.counts).toEqual({ stories: 1, plans: 1, notices: 2, deliveries: 0 });
     expect(found.items[0]?.noticeKinds).toHaveLength(2);
     expect((await service.listStories(orgId, projectId, { ...query, q: "_" }, now)).total).toBe(0);
     expect(
       (await service.listStories(orgId, projectId, { ...query, category: "plans" }, now)).counts,
-    ).toEqual({ stories: 3, plans: 3, notices: 2 });
+    ).toEqual({ stories: 3, plans: 3, notices: 2, deliveries: 0 });
     expect(
       (await service.listStories(orgId, projectId, { ...query, category: "notices" }, now)).counts,
-    ).toEqual({ stories: 2, plans: 1, notices: 3 });
+    ).toEqual({ stories: 2, plans: 1, notices: 3, deliveries: 0 });
     expect((await service.listStories(otherOrgId, projectId, query, now)).counts).toEqual({
       stories: 0,
       plans: 0,
       notices: 0,
+      deliveries: 0,
     });
     const other = await service.listStories(otherOrgId, otherProjectId, query, now);
-    expect(other.counts).toEqual({ stories: 1, plans: 1, notices: 1 });
+    expect(other.counts).toEqual({ stories: 1, plans: 1, notices: 1, deliveries: 0 });
   });
 
   it("serves grouped reads with the same permission boundary and no cost data", async () => {
@@ -587,5 +589,32 @@ describe("project attention list", async () => {
         ).statusCode,
       ).toBe(400);
     }
+  });
+  it("shows a project budget once and omits its state and figures without budget permission", async () => {
+    await db
+      .insert(projectBudgets)
+      .values({ id: newId("bud"), orgId, projectId, enabled: true, monthlyLimitCents: 0 });
+    const url = `/v1/projects/${projectId}/attention/stories`;
+    const owner = await app.inject({ url, headers: { cookie: ownerCookie } });
+    expect(owner.statusCode, owner.body).toBe(200);
+    expect(owner.json().budget).toMatchObject({
+      available: true,
+      state: "exceeded",
+      spentCents: 0,
+      monthlyLimitCents: 0,
+    });
+    expect(owner.json().items.every((item: Record<string, unknown>) => !("budget" in item))).toBe(
+      true,
+    );
+    const reader = await app.inject({ url, headers: { authorization: `Bearer ${readerSecret}` } });
+    expect(reader.json().budget).toEqual({ available: false, reason: "permission" });
+    expect(reader.json().counts).toEqual(owner.json().counts);
+    await db
+      .update(projectBudgets)
+      .set({ enabled: false })
+      .where(eq(projectBudgets.projectId, projectId));
+    expect((await app.inject({ url, headers: { cookie: ownerCookie } })).json().budget.state).toBe(
+      "disabled",
+    );
   });
 });

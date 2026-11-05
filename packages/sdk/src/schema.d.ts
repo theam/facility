@@ -6716,7 +6716,7 @@ export interface operations {
     listProjectAttentionStories: {
         parameters: {
             query?: {
-                category?: "all" | "plans" | "notices";
+                category?: "all" | "plans" | "notices" | "deliveries";
                 q?: string;
                 limit?: number;
                 offset?: number;
@@ -6743,6 +6743,30 @@ export interface operations {
                             stories: number;
                             plans: number;
                             notices: number;
+                            deliveries: number;
+                        };
+                        workflowPolicy: {
+                            available: boolean;
+                            error: string | null;
+                        };
+                        budget: {
+                            /** @enum {boolean} */
+                            available: false;
+                            /** @enum {string} */
+                            reason: "permission";
+                        } | {
+                            /** @enum {boolean} */
+                            available: true;
+                            /** @enum {string} */
+                            state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
+                            enabled: boolean;
+                            monthlyLimitCents: number | null;
+                            spentCents: number;
+                            remainingCents: number | null;
+                            /** Format: date-time */
+                            windowStart: string;
+                            /** Format: date-time */
+                            windowEnd: string;
                         };
                         limit: number;
                         offset: number;
@@ -6758,6 +6782,70 @@ export interface operations {
                                 kind: string;
                                 count: number;
                             }[];
+                            delivery: {
+                                candidate: {
+                                    revision: string | null;
+                                    /** @enum {string} */
+                                    state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                                    requiredCount: number;
+                                    mergedCount: number;
+                                    allRequiredMerged: boolean | null;
+                                };
+                                scopeRevision: number;
+                                storyStatus: string;
+                                pullRequests: {
+                                    repository: string;
+                                    number: number;
+                                    url: string | null;
+                                    title: string | null;
+                                    required: boolean;
+                                    primary: boolean;
+                                    /** @enum {string} */
+                                    state: "open" | "closed" | "merged" | "unobserved";
+                                    draft: boolean | null;
+                                    headSha: string | null;
+                                    stale: boolean;
+                                    checks: {
+                                        /** @enum {string} */
+                                        state: "unobserved" | "pending" | "success" | "failure";
+                                        headSha: string | null;
+                                        current: boolean;
+                                        observedAt: string | null;
+                                    };
+                                }[];
+                                acceptance: {
+                                    required: boolean | null;
+                                    /** @enum {string} */
+                                    status: "missing" | "current" | "stale";
+                                    receipt: {
+                                        id: string;
+                                        revision: number;
+                                        candidateRevision: string;
+                                        /** Format: date-time */
+                                        confirmedAt: string;
+                                        confirmedBy: {
+                                            /** @enum {string} */
+                                            type: "user";
+                                            id: string;
+                                            name: string | null;
+                                        };
+                                    } | null;
+                                };
+                                preview: {
+                                    state: string;
+                                    desiredGeneration: string;
+                                    deployedGeneration: string | null;
+                                    /** Format: date-time */
+                                    observedAt: string;
+                                } | null;
+                                acceptanceReady: boolean;
+                                blocked: {
+                                    code: string;
+                                    message: string;
+                                } | null;
+                                /** Format: date-time */
+                                waitingSince: string;
+                            } | null;
                             plan: {
                                 revision: number;
                                 digest: string;

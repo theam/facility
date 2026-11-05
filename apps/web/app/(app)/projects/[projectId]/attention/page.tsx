@@ -64,7 +64,7 @@ export default async function ProjectAttentionPage({
           href={`${base}/attention/review`}
           className="inline-flex min-h-11 w-fit items-center text-sm text-(--info) underline underline-offset-4"
         >
-          Review plans and notices by story →
+          Review pending stories →
         </Link>
         <Eyebrow>attention</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
