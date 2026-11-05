@@ -1,6 +1,7 @@
 import { readDecisionBrief } from "@facility/core";
 import { attentionItems, type FacilityDb, stories, storyPlanRevisions } from "@facility/db";
 import { and, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
+import { readDeliveryBriefs } from "../stories/delivery-decision-brief.js";
 import { CostBudgetService } from "./costs.js";
 import { deliveryNeedsReview, readProjectDeliveryReviews } from "./project-delivery-reviews.js";
 import { attentionAction, type StoryStatus } from "./project-overview.js";
@@ -146,6 +147,16 @@ export class ProjectAttentionService {
         order by "waitingSince" asc, "storyId" asc limit ${query.limit} offset ${query.offset}
       `);
         const ids = rows.map((row) => row.storyId);
+        const deliveryBriefs = await readDeliveryBriefs(
+          scopedDb,
+          { orgId, projectId },
+          new Map(
+            ids.flatMap((id) => {
+              const delivery = deliveries.get(id);
+              return delivery ? [[id, delivery] as const] : [];
+            }),
+          ),
+        );
         // Only this page's original plans are read and parsed; counts never load
         // Markdown. The persisted current revision was selected above.
         const planFilters = rows.flatMap((row) =>
@@ -225,10 +236,16 @@ export class ProjectAttentionService {
           offset: query.offset,
           items: rows.map((row) => {
             const plan = plans.find((plan) => plan.storyId === row.storyId);
+            const delivery = deliveries.get(row.storyId);
             const { planRevision: _revision, hasDelivery: _hasDelivery, ...story } = row;
             return {
               ...story,
-              delivery: deliveries.get(row.storyId) ?? null,
+              delivery: delivery
+                ? {
+                    ...delivery,
+                    decisionBrief: deliveryBriefs.get(row.storyId) ?? { status: "absent" as const },
+                  }
+                : null,
               waitingSince: new Date(story.waitingSince),
               noticeKinds: kinds
                 .filter((kind) => kind.storyId === row.storyId)

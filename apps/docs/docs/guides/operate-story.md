@@ -358,6 +358,17 @@ make the preview appear ready. Staged gitlink changes and tracked edits inside a
 work that must be saved first. Ignored/untracked retained data and displaced committed tips are
 preserved under the same rules as other preview updates.
 
+### Read the author’s delivery brief
+
+A final response can include a [delivery brief](../reference/decision-brief.md#delivery-decisions).
+Attention and the story show the same saved summary, options and sources. Switch between Summary,
+Comparison and Diagram without submitting a decision. Open the original message to inspect its
+recorded author and full text. Every required and optional head must still match; changed scope
+or heads make the brief historical, and stale observations or an unverified source are explicit.
+A new invalid brief does not reuse an older recommendation. The observed PRs, checks, preview and
+acceptance remain separate from the author’s statements. Without a brief, review that evidence
+directly. Editing the PR set preserves the stored original and reevaluates its binding after save.
+
 ## Complete the source issue
 
 The completion panel separates the merged delivery, the configured post-merge integration and

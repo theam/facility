@@ -335,6 +335,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
       storyStatus: story.status,
       pullRequests: pulls.map(
         ({
+          repositoryId,
           repository,
           number,
           url,
@@ -347,6 +348,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
           stale,
           checks,
         }) => ({
+          repositoryId,
           repository,
           number,
           url,
@@ -487,6 +489,7 @@ export type ProjectDeliveryReview = {
     Pick<
       StoryDelivery["pullRequests"][number],
       | "repository"
+      | "repositoryId"
       | "number"
       | "url"
       | "title"

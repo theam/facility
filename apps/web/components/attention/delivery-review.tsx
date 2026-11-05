@@ -1,5 +1,6 @@
 import type { ProjectAttentionStories } from "@facility/sdk";
 import Link from "next/link";
+import { DeliveryDecisionBrief } from "@/components/story/delivery-decision-brief";
 import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
 
 type Delivery = NonNullable<ProjectAttentionStories["items"][number]["delivery"]>;
@@ -52,6 +53,7 @@ export function DeliveryReview({ delivery, storyUrl }: { delivery: Delivery; sto
           Review delivery
         </Link>
       </div>
+      <DeliveryDecisionBrief projection={delivery.decisionBrief} storyUrl={storyUrl} />
       <p>
         {candidateLabel}.{" "}
         <span className="text-(--mut)">

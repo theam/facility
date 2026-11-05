@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { StoryDelivery } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
+import { DeliveryDecisionBrief } from "./delivery-decision-brief";
 
 type Pull = StoryDelivery["pullRequests"][number];
 type Selection = Pick<Pull, "repository" | "number" | "required" | "primary">;
@@ -185,6 +186,12 @@ export function StoryDeliveryPanel({
           </Button>
         ) : null}
       </div>
+      {!editing && current ? (
+        <DeliveryDecisionBrief
+          projection={current.decisionBrief}
+          storyUrl={`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`}
+        />
+      ) : null}
       {!current ? (
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-(--mut)">
           <p>The delivery register is unavailable.</p>

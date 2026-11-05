@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
-import { newId } from "@facility/core";
+import { newId, readDeliveryDecisionBrief } from "@facility/core";
 import {
   attentionItems,
   budgetReservations,
@@ -510,7 +510,12 @@ export class StoryWorkspaceService {
         body: input.output,
         actor: input.actor,
         turnId: turn.id,
-        metadata: input.metadata ?? {},
+        metadata: {
+          ...input.metadata,
+          // Derived here from the redacted final output, never supplied as authority.
+          deliveryDecisionBrief:
+            readDeliveryDecisionBrief(input.output).status === "absent" ? null : 1,
+        },
       });
       const completed = (
         await tx

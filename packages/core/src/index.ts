@@ -1,5 +1,6 @@
 export * from "./crypto.js";
 export * from "./decision-brief.js";
+export * from "./delivery-decision-brief.js";
 export * from "./fingerprints.js";
 export * from "./ids.js";
 export * from "./permissions.js";

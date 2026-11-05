@@ -8,7 +8,15 @@ type Claim = Brief["summary"];
 type Format = "summary" | "comparison" | "diagram";
 
 /** Formats explain the same saved statements; none of these controls makes a decision. */
-export function DecisionBrief({ brief, revision }: { brief: Brief; revision: number }) {
+export function DecisionBrief({
+  brief,
+  revision,
+  delivery,
+}: { brief: Brief } & (
+  | { revision: number; delivery?: never }
+  | { revision?: never; delivery: { scopeRevision: number; candidateRevision: string } }
+)) {
+  const subject = delivery ? `delivery scope r${delivery.scopeRevision}` : `plan r${revision}`;
   const [format, setFormat] = useState<Format>("summary");
   const group = useId();
   const recommended = brief.options.find((option) => option.id === brief.recommendation?.optionId);
@@ -56,14 +64,15 @@ export function DecisionBrief({ brief, revision }: { brief: Brief; revision: num
   }
   return (
     <section
-      aria-label={`Author’s decision brief for plan r${revision}`}
+      aria-label={`Author’s decision brief for ${subject}`}
       className="grid min-w-0 gap-4 text-sm sm:grid-cols-2"
     >
       <div className="flex flex-col gap-2 sm:col-span-2">
         <h3 className="font-medium">The decision in brief</h3>
         {claim(brief.summary)}
         <p className="text-xs text-(--mut)">
-          Supplied in plan r{revision}. Sources and recommendations are the author’s statements.
+          {delivery ? `Supplied for ${subject}` : `Supplied in ${subject}`}. Sources and
+          recommendations are the author’s statements.
         </p>
       </div>
       <div className="flex flex-col gap-2">
@@ -110,7 +119,8 @@ export function DecisionBrief({ brief, revision }: { brief: Brief; revision: num
         <section className="min-w-0 overflow-x-auto sm:col-span-2" aria-label="Option comparison">
           <table className="w-full table-fixed border-collapse text-left text-sm">
             <caption className="sr-only">
-              Options and consequences from the same plan revision
+              Options and consequences from the same{" "}
+              {delivery ? "delivery candidate" : "plan revision"}
             </caption>
             <thead>
               <tr>
@@ -206,8 +216,8 @@ export function DecisionBrief({ brief, revision }: { brief: Brief; revision: num
             ))}
           </ul>
           <p className="mt-3">
-            References are saved with this plan; their current contents have not been checked by
-            opening this page.
+            References are saved with this {delivery ? "source message" : "plan"}; their current
+            contents have not been checked by opening this page.
           </p>
         </details>
       ) : (
@@ -216,8 +226,9 @@ export function DecisionBrief({ brief, revision }: { brief: Brief; revision: num
         </p>
       )}
       <p className="text-xs text-(--mut) sm:col-span-2">
-        Reviewing options does not change the plan. Approval applies to the complete revision and
-        scope below; a different scope needs a new plan revision.
+        {delivery
+          ? "Reviewing options submits nothing. Delivery acceptance, PR review, merge and completion retain their own checks."
+          : "Reviewing options does not change the plan. Approval applies to the complete revision and scope below; a different scope needs a new plan revision."}
       </p>
     </section>
   );

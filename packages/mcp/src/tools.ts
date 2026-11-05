@@ -153,7 +153,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_delivery",
     permission: "projects:read",
     description:
-      "Read the story's declared delivery PR set, exact observed heads, current or older CI/reviews and partial merges. Reads never start agents, refresh GitHub or wake workspaces. Needs projects:read.",
+      "Read the story's declared delivery PR set, exact observed heads, current or older CI/reviews and partial merges. Includes the latest recorded author brief, its source message and whether it still matches every required and optional head. Reading or changing presentation never starts agents, refreshes GitHub or wakes workspaces. Needs projects:read.",
     inputSchema: {
       projectId,
       storyId,

@@ -98,3 +98,149 @@ checks. A source being linked does not grant access to its destination or certif
 
 Continue with [operating a story](../guides/operate-story.md) or the
 [MCP plan workflow](mcp.md#propose-and-review-a-plan).
+
+
+## Delivery decisions
+
+For a PR or delivery decision, include one top-level `facility-delivery` block in
+an agent's **final response**. The summary, options, recommendation, risk and sources
+use the same `brief` contract above. Facility stores the response unchanged and
+presents its summary, comparison or diagram alongside the observed delivery state.
+The original message and its recorded agent turn remain one link away.
+
+Add this guidance to Builder, Reviewer, QA or another relevant agent through the
+project's normal reviewed configuration flow:
+
+> Before asking for a delivery decision, read `facility_get_delivery`. Copy its
+> scope revision, candidate revision and every PR's repositoryId, number, headSha,
+> required and primary values into `subject`. Include optional PRs too. If heads
+> or the complete scope cannot be established, explain the missing evidence and
+> do not invent a valid candidate. Write the decision brief in one `facility-delivery`
+> block in your final response, using the claims, alternatives and source rules
+> above. Explain findings against the examined heads. Your recommendation does
+> not accept, approve, merge or complete the delivery, nor start a correction round.
+
+The envelope has `schemaVersion: 1`, `subject` and `brief`. `subject` contains
+`scopeRevision`, `candidateRevision` (64 lowercase hexadecimal characters), and
+1–50 unique `pullRequests`. Each PR contains its canonical `repositoryId`, positive
+`number`, `headSha` (40 or 64 lowercase hexadecimal characters), `required` and
+`primary`. Exactly one primary must be required. Keep the block within 32,000
+characters and the final response within 100,000 characters for brief extraction.
+The whole original remains stored even when its brief exceeds these limits.
+
+Synthetic example; actual identifiers and heads must come from the delivery read:
+
+```facility-delivery
+{
+  "schemaVersion": 1,
+  "subject": {
+    "scopeRevision": 4,
+    "candidateRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pullRequests": [
+      {
+        "repositoryId": "repo-app",
+        "number": 11,
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "required": true,
+        "primary": true
+      },
+      {
+        "repositoryId": "repo-api",
+        "number": 22,
+        "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "required": false,
+        "primary": false
+      }
+    ]
+  },
+  "brief": {
+    "schemaVersion": 1,
+    "summary": {
+      "text": "Review the application and API changes as one delivery.",
+      "evidenceIds": [
+        "review"
+      ]
+    },
+    "whyNow": {
+      "text": "The author has finished the changes and asks for a delivery decision.",
+      "evidenceIds": [
+        "review"
+      ]
+    },
+    "options": [
+      {
+        "id": "accept",
+        "label": "Accept this delivery",
+        "consequence": {
+          "text": "Record acceptance of the exact candidate after checking the evidence. Merge remains a separate action.",
+          "evidenceIds": [
+            "review"
+          ]
+        }
+      },
+      {
+        "id": "revise",
+        "label": "Request changes",
+        "consequence": {
+          "text": "Continue work on the same story and review its next candidate.",
+          "evidenceIds": []
+        }
+      }
+    ],
+    "recommendation": {
+      "optionId": "accept",
+      "reason": {
+        "text": "The reviewed behavior matches the requested objective.",
+        "evidenceIds": [
+          "review"
+        ]
+      }
+    },
+    "decisiveRisk": {
+      "text": "Compatibility outside the tested environment remains unverified.",
+      "evidenceIds": []
+    },
+    "unknowns": [
+      {
+        "text": "The author has not tested production traffic.",
+        "evidenceIds": []
+      }
+    ],
+    "evidence": [
+      {
+        "id": "review",
+        "label": "Recorded review",
+        "reference": "Synthetic review of the cited heads",
+        "url": "https://example.com/reviews/delivery-4"
+      }
+    ]
+  }
+}
+```
+
+`StoryDelivery.decisionBrief` and the paged delivery entries in
+`facility_list_attention_stories` expose the same additive projection. The read
+selects the latest marked final agent message within the story, even beyond the
+recent conversation page. Ordinary later messages do not replace it; a newer
+invalid brief is shown as invalid instead of silently selecting an older one.
+Only final responses recorded with this support are indexed; old unmarked messages
+remain readable as originals, and older servers retain their existing delivery UI.
+
+- `available`: the subject matches the observed complete set and every required
+  and optional head. This verifies the binding, not the author's claims or checks.
+- `stale`: the scope, PR set, flags, heads or candidate changed. The saved statements
+  are historical and remain available under an explicit disclosure.
+- `unverifiable`: the source turn or current observations cannot be established,
+  or a required or optional PR observation is stale. No current recommendation is implied.
+- `invalid`: the latest block is malformed, duplicated, oversized, unsupported or
+  has invalid fields. Its original is still accessible.
+- `absent`: no indexed delivery brief is recorded.
+
+The source identifies the immutable message, sequence, recording time and native
+turn, including the configured agent/engine/model. The conversation distinguishes
+a separately reported model. Its digest hashes the complete original when it fits
+the bounded read; an oversized source has `digest: null`, not a hash of a truncated
+excerpt. Briefs stay in their story's organization/project scope and use the same
+`projects:read` permission as delivery. Reading them does not enqueue work, reserve
+budget, call a model, inspect compute or refresh GitHub. Existing plan, delivery
+acceptance, merge and completion checks remain authoritative.

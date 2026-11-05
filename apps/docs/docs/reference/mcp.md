@@ -283,6 +283,12 @@ Read `facility_get_delivery` with `projectId`, `storyId` and `includeAvailable: 
 the current `scope.revision` and find PRs already in this project's GitHub mirror. Optional `q`,
 `limit` and `offset` page the available PRs. Reading does not synchronize GitHub or wake compute.
 
+The optional `decisionBrief` projection contains the latest indexed [author delivery
+brief](decision-brief.md#delivery-decisions), its exact original message and its binding to
+all required and optional PR heads. Attention exposes the same projection. An available
+brief verifies that binding; the author's recommendation is not human acceptance or proof
+that checks passed. Historical, unverifiable and invalid briefs remain explicitly identified.
+
 Declare the full set explicitly, using the revision you just read:
 
 ```json

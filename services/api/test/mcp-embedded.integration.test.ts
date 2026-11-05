@@ -9,6 +9,7 @@ import {
   stories,
   storyConversations,
   storyDeliveryPullRequests,
+  storyDeliveryScopes,
   storyMessages,
   storyPlanRevisions,
   storyPlanStates,
@@ -17,12 +18,13 @@ import {
 } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { ProjectAttentionService } from "../src/insights/project-attention.js";
 import { ProjectBacklogService } from "../src/stories/backlog.js";
+import { readStoryDelivery } from "../src/stories/delivery.js";
 import { storyPlanDigest } from "../src/stories/plan-state.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -522,6 +524,145 @@ describe("embedded MCP control plane", async () => {
       expect(actualBacklog.total).toBe(repository[0] === "foreign-repo" ? 0 : 4);
     }
   });
+  it("reads the same delivery brief through authenticated MCP and Attention, including optional head drift", async () => {
+    const [original] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));
+    if (!original) throw Error("Missing story");
+    const id = newId("story"),
+      repositoryId = newId("repo"),
+      conversationId = newId("sess"),
+      turnId = newId("turn"),
+      messageId = newId("msg");
+    const scope = { orgId: original.orgId, projectId, storyId: id };
+    await app.facilityDb.insert(stories).values({ ...original, id, externalId: id });
+    await app.facilityDb.insert(projectRepositories).values({
+      id: repositoryId,
+      orgId: scope.orgId,
+      projectId,
+      owner: "example",
+      name: repositoryId,
+      defaultBranch: "main",
+    });
+    await app.facilityDb.insert(githubPullRequests).values(
+      [1, 2].map((number) => ({
+        id: newId("ghp"),
+        orgId: scope.orgId,
+        projectId,
+        repositoryId,
+        number,
+        title: "Reviewed delivery",
+        state: "open",
+        headRef: "feature",
+        headSha: "b".repeat(40),
+        baseRef: "main",
+        htmlUrl: `https://github.com/example/app/pull/${number}`,
+      })),
+    );
+    await app.facilityDb.insert(storyDeliveryScopes).values({
+      ...scope,
+      revision: 1,
+      declaredComplete: true,
+      updatedBy: { type: "user", id: "synthetic" },
+    });
+    await app.facilityDb.insert(storyDeliveryPullRequests).values(
+      [1, 2].map((pullNumber) => ({
+        ...scope,
+        repositoryId,
+        pullNumber,
+        required: pullNumber === 1,
+        isPrimary: pullNumber === 1,
+      })),
+    );
+    const delivery = await readStoryDelivery(app.facilityDb, scope);
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../packages/core/test/fixtures/delivery-decision-brief.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    const envelope = {
+      ...fixture,
+      subject: {
+        scopeRevision: 1,
+        candidateRevision: delivery.candidate.revision,
+        pullRequests: delivery.pullRequests.map(
+          ({ repositoryId, number, headSha, required, primary }) => ({
+            repositoryId,
+            number,
+            headSha,
+            required,
+            primary,
+          }),
+        ),
+      },
+    };
+    await app.facilityDb
+      .insert(storyConversations)
+      .values({ ...scope, id: conversationId, nextSeq: 2 });
+    await app.facilityDb.insert(turns).values({
+      ...scope,
+      id: turnId,
+      conversationId,
+      agentName: "qa-custom",
+      manifestHash: "fixture",
+      manifest: {},
+      engine: "codex",
+      model: "fixture",
+      state: "succeeded",
+      triggerType: "ui",
+      createdBy: original.createdBy,
+    });
+    await app.facilityDb.insert(storyMessages).values({
+      ...scope,
+      id: messageId,
+      conversationId,
+      turnId,
+      seq: 1,
+      role: "agent",
+      actor: { type: "system", id: "fixture" },
+      body: `\`\`\`facility-delivery\n${JSON.stringify(envelope)}\n\`\`\``,
+      metadata: { content: "final_response", deliveryDecisionBrief: 1 },
+    });
+    async function call(name: string, args: object) {
+      const result = await client.callTool({ name, arguments: { projectId, ...args } });
+      expect(result.isError).not.toBe(true);
+      return JSON.parse(
+        (result.content as Array<{ type: string; text?: string }>).find(
+          (part) => part.type === "text",
+        )?.text ?? "{}",
+      );
+    }
+    const expected = (await readStoryDelivery(app.facilityDb, scope)).decisionBrief;
+    expect(expected).toMatchObject({
+      status: "available",
+      source: { messageId, turn: { agentName: "qa-custom" } },
+    });
+    expect((await call("facility_get_delivery", { storyId: id })).decisionBrief).toEqual(expected);
+    const attention = await call("facility_list_attention_stories", {
+      category: "deliveries",
+      limit: 25,
+    });
+    expect(
+      attention.items.find((item: { storyId: string }) => item.storyId === id)?.delivery
+        .decisionBrief,
+    ).toEqual(expected);
+    await app.facilityDb
+      .update(githubPullRequests)
+      .set({ headSha: "c".repeat(40) })
+      .where(
+        and(eq(githubPullRequests.repositoryId, repositoryId), eq(githubPullRequests.number, 2)),
+      );
+    expect((await call("facility_get_delivery", { storyId: id })).decisionBrief).toMatchObject({
+      status: "stale",
+      reason: "heads_changed",
+      source: { messageId },
+    });
+    const [unchanged] = await app.facilityDb.select().from(turns).where(eq(turns.id, turnId));
+    expect(unchanged?.state).toBe("succeeded");
+  });
+
   it("reads workflow policy and acceptance from the same authenticated domain as the UI", async () => {
     for (const name of ["facility_get_story_workflow", "facility_get_delivery_acceptance"]) {
       const result = await client.callTool({ name, arguments: { projectId, storyId } });

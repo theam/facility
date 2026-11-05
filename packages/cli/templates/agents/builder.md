@@ -48,6 +48,10 @@ If a human decision is needed, include a `facility-decision` brief with the comp
 plan, following the [author brief contract](https://github.com/theam/facility/blob/main/apps/docs/docs/reference/decision-brief.md).
 State alternatives, consequences, your recommendation, decisive risk and missing evidence with
 exact source references. The brief does not authorize a changed scope or replace required review.
+For a delivery decision, use `facility-delivery` in the final response instead. Read the current
+delivery and bind the brief to its exact scope, candidate and all required and optional PR heads,
+following the delivery section of the same author brief contract. Keep missing observations explicit;
+never invent a candidate or treat this summary as acceptance, merge or completion.
 </output_contract>
 
 <completion_criteria>

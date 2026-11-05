@@ -1,6 +1,7 @@
 import {
   can,
   DecisionBriefProjectionSchema,
+  DeliveryDecisionBriefProjectionSchema,
   DeliveryPullRequestSchema,
   PlanActorSchema,
   StoryDeliverySchema,
@@ -76,6 +77,7 @@ const AttentionStoriesQuery = z.object({
   pullOffset: z.coerce.number().int().min(0).default(0),
 });
 const AttentionDelivery = z.object({
+  decisionBrief: DeliveryDecisionBriefProjectionSchema.optional(),
   candidate: StoryDeliverySchema.shape.candidate,
   scopeRevision: z.number(),
   storyStatus: z.string(),
