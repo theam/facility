@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { BacklogFilters } from "@/components/story/backlog-filters";
-import { BacklogList, PhaseChips } from "@/components/story/backlog-list";
+import { BacklogList, PhaseChips, WorkGroups } from "@/components/story/backlog-list";
 import { NewStory } from "@/components/story/new-story";
 import { SyncGithub } from "@/components/story/sync-github";
 import { api } from "@/lib/api";
@@ -34,11 +34,22 @@ export default async function ProjectStoriesPage({
 }) {
   const [{ projectId }, rawSearch] = await Promise.all([params, searchParams]);
   const search = parseStoriesSearch(rawSearch);
-  const [backlog, agentsResult, me] = await Promise.all([
+  const [initialBacklog, agentsResult, me] = await Promise.all([
     api.projectBacklog(projectId, toBacklogQuery(search)),
     api.storyAgents(projectId),
     api.me(),
   ]);
+  const legacyFallback =
+    !initialBacklog.ok &&
+    initialBacklog.status === 400 &&
+    (search.sort === "activity" || !!search.group);
+  const backlog = legacyFallback
+    ? await api.projectBacklog(projectId, {
+        ...toBacklogQuery(search),
+        group: undefined,
+        sort: search.sort === "activity" ? "priority" : search.sort,
+      })
+    : initialBacklog;
   if (!backlog.ok && backlog.offline) return <Offline />;
 
   const now = new Date();
@@ -60,8 +71,6 @@ export default async function ProjectStoriesPage({
   const last = first === 0 ? 0 : first + items.length - 1;
   const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const linked = startTarget(search.start, items);
-  const openCount = counts.attention + counts.in_progress + counts.review + counts.not_started;
-  const runningCount = items.filter((item) => item.activity.state === "running").length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -71,26 +80,12 @@ export default async function ProjectStoriesPage({
           <Eyebrow>backlog</Eyebrow>
           <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Stories</h1>
           <p className="text-[12.5px] text-(--mut)">
-            {backlog.ok ? (
-              <>
-                {openCount} open
-                {counts.attention > 0 ? (
-                  <>
-                    {" · "}
-                    <span className="text-(--bad)">{counts.attention} need attention</span>
-                  </>
-                ) : null}
-                {counts.review > 0 ? ` · ${counts.review} in review` : ""}
-                {runningCount > 0 ? (
-                  <>
-                    {" · "}
-                    <span className="text-(--accent)">{runningCount} running on this page</span>
-                  </>
-                ) : null}
-              </>
-            ) : (
-              "Backlog unavailable"
-            )}
+            {backlog.ok
+              ? `${total} matching record${total === 1 ? "" : "s"}`
+              : "Backlog unavailable"}
+            {backlog.ok && !backlog.data.groupCounts && counts.attention > 0
+              ? ` · ${counts.attention} need attention`
+              : null}
           </p>
         </div>
         {canSync ? <SyncGithub projectId={projectId} /> : null}
@@ -125,7 +120,31 @@ export default async function ProjectStoriesPage({
       ) : null}
 
       <section className="flex flex-col gap-3" aria-label="Backlog">
-        <PhaseChips projectId={projectId} search={search} counts={counts} />
+        {backlog.ok ? (
+          <>
+            {legacyFallback ? (
+              <p role="status" className="text-sm text-(--mut)">
+                This server could not apply work groups. Showing the recorded backlog with the other
+                filters.
+              </p>
+            ) : null}
+            <WorkGroups projectId={projectId} search={search} counts={backlog.data.groupCounts} />
+            <p className="text-xs text-(--mut)">
+              Counts include every matching record, across pages. Last checked{" "}
+              <time dateTime={backlog.data.generatedAt}>
+                {new Date(backlog.data.generatedAt).toLocaleString("en-GB", { timeZone: "UTC" })}{" "}
+                UTC
+              </time>
+              .
+            </p>
+            <details>
+              <summary className="min-h-11 cursor-pointer py-3 text-sm text-(--mut)">
+                Browse phases, completed work and archives
+              </summary>
+              <PhaseChips projectId={projectId} search={search} counts={counts} />
+            </details>
+          </>
+        ) : null}
         {backlog.ok ? (
           <BacklogFilters
             projectId={projectId}
@@ -140,7 +159,7 @@ export default async function ProjectStoriesPage({
         ) : items.length === 0 ? (
           <EmptyState
             projectId={projectId}
-            filtered={activeFilterCount(search) > 0 || search.phase.length > 0}
+            filtered={activeFilterCount(search) > 0 || search.phase.length > 0 || !!search.group}
             hasAnything={Object.values(counts).some((count) => count > 0)}
             search={search}
           />
@@ -151,6 +170,7 @@ export default async function ProjectStoriesPage({
               items={items}
               search={search}
               counts={counts}
+              groupCounts={backlog.ok ? backlog.data.groupCounts : undefined}
               canStart={canStart}
               now={now}
             />
@@ -165,7 +185,7 @@ export default async function ProjectStoriesPage({
                 {search.page > 1 ? (
                   <Link
                     href={storiesHref(projectId, search, { page: search.page - 1 })}
-                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className="inline-flex min-h-11 items-center border border-(--line) px-3 py-1.5 hover:text-(--ink)"
                   >
                     ← Newer
                   </Link>
@@ -176,7 +196,7 @@ export default async function ProjectStoriesPage({
                 {search.page < lastPage ? (
                   <Link
                     href={storiesHref(projectId, search, { page: search.page + 1 })}
-                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className="inline-flex min-h-11 items-center border border-(--line) px-3 py-1.5 hover:text-(--ink)"
                   >
                     Older →
                   </Link>

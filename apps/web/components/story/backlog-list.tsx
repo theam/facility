@@ -1,6 +1,6 @@
 import { cx, StatusDot } from "@facility/ui";
 import Link from "next/link";
-import type { BacklogItem, BacklogPerson } from "@/lib/api";
+import type { BacklogItem, BacklogPerson, ProjectBacklog } from "@/lib/api";
 import {
   activityLine,
   PHASES,
@@ -10,9 +10,11 @@ import {
   relativeTime,
   type StoriesSearch,
   storiesHref,
+  TRACKING_GROUPS,
   titleStatus,
 } from "@/lib/backlog-presentation";
 import { safeExternalUrl } from "@/lib/story-presentation";
+import { storyReviewHref } from "@/lib/story-review-navigation";
 
 const LABEL_LIMIT = 3;
 const PERSON_LIMIT = 4;
@@ -26,6 +28,7 @@ export function BacklogList({
   items,
   search,
   counts,
+  groupCounts,
   canStart,
   now,
 }: {
@@ -33,23 +36,33 @@ export function BacklogList({
   items: BacklogItem[];
   search: StoriesSearch;
   counts: Record<BacklogItem["phase"], number>;
+  groupCounts?: ProjectBacklog["groupCounts"];
   canStart: boolean;
   now: Date;
 }) {
-  const grouped = search.sort === "priority" && search.phase.length !== 1;
-  let lastPhase: BacklogItem["phase"] | null = null;
+  const grouped =
+    (search.sort === "priority" || (search.sort === "activity" && groupCounts === undefined)) &&
+    search.phase.length !== 1;
+  const trackingGroups = search.sort === "activity" && groupCounts !== undefined;
+  let lastPhase: string | null = null;
   return (
     <ol className="flex flex-col border border-(--line)">
       {items.map((item) => {
-        const header = grouped && item.phase !== lastPhase;
-        lastPhase = item.phase;
+        const group = trackingGroups
+          ? TRACKING_GROUPS.find((group) => group.value === item.tracking?.group)
+          : null;
+        const key = group?.value ?? item.phase;
+        const header = (trackingGroups || grouped) && key !== lastPhase;
+        lastPhase = key;
         return (
           <li key={item.key} className="flex flex-col">
             {header ? (
               <h3 className="flex items-center gap-2 border-b border-(--line) bg-(--bg-subtle) px-4 py-2 text-[11.5px] font-medium text-(--mut) sm:px-5">
-                <StatusDot tone={phaseTone(item.phase)} />
-                {phaseLabel(item.phase)}
-                <span className="font-mono text-(--dim)">{counts[item.phase]}</span>
+                <StatusDot tone={group?.tone ?? phaseTone(item.phase)} />
+                {group?.label ?? phaseLabel(item.phase)}
+                <span className="font-mono text-(--dim)">
+                  {group ? groupCounts?.[group.value] : counts[item.phase]}
+                </span>
               </h3>
             ) : null}
             <BacklogRow
@@ -191,7 +204,10 @@ function BacklogRow({
         </p>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-(--dim) lg:justify-end">
           <People people={item.assignees} projectId={projectId} search={search} />
-          <time dateTime={item.lastActivityAt} title="Last activity">
+          <time
+            dateTime={item.lastActivityAt}
+            title="Last recorded update; workspace health is not task progress"
+          >
             {relativeTime(item.lastActivityAt, now)}
           </time>
         </div>
@@ -242,6 +258,11 @@ function BacklogRow({
           ) : null}
         </nav>
       </div>
+      {item.tracking ? (
+        <div className="min-w-0 border-t border-(--line) pt-2 lg:col-span-2">
+          <TrackingDetails projectId={projectId} item={item} storyHref={storyHref} />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -326,11 +347,12 @@ export function PhaseChips({
           key={chip.value}
           href={storiesHref(projectId, search, {
             phase: chip.value === "open" ? [] : [chip.value],
+            group: undefined,
             page: 1,
           })}
           aria-current={selected === chip.value ? "page" : undefined}
           className={cx(
-            "inline-flex h-8 items-center gap-1.5 border px-2.5 text-[12px] transition-colors",
+            "inline-flex min-h-11 items-center gap-1.5 border px-2.5 text-[12px] transition-colors",
             selected === chip.value
               ? "border-(--line-strong) text-(--ink)"
               : "border-(--line) text-(--mut) hover:text-(--ink)",
@@ -338,6 +360,120 @@ export function PhaseChips({
         >
           {chip.label}
           <span className="font-mono text-[10.5px] text-(--dim)">{chip.count}</span>
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+function TrackingDetails({
+  projectId,
+  item,
+  storyHref,
+}: {
+  projectId: string;
+  item: BacklogItem;
+  storyHref: string | null;
+}) {
+  const tracking = item.tracking;
+  if (!tracking) return null;
+  const planHref =
+    tracking.plan && item.story ? storyReviewHref(projectId, item.story.id, tracking.plan) : null;
+  return (
+    <div className="flex flex-col gap-1 break-words text-sm text-(--mut)">
+      {tracking.previewApplying ? <p>Preview preparation is using the workspace.</p> : null}
+      {tracking.pendingMessages > 0 ? (
+        <p>
+          {tracking.pendingMessages} pending message{tracking.pendingMessages === 1 ? "" : "s"} ·{" "}
+          {tracking.messageWait === "previous_turn"
+            ? "waiting for the current turn"
+            : tracking.messageWait === "preview"
+              ? "waiting for preview preparation"
+              : "awaiting dispatch; cause unavailable"}
+        </p>
+      ) : null}
+      {tracking.wait ? (
+        <p>
+          {tracking.wait.detail}
+          {tracking.wait.retryAfter ? (
+            <>
+              {" "}
+              Retry time:{" "}
+              <time dateTime={tracking.wait.retryAfter}>
+                {new Date(tracking.wait.retryAfter).toLocaleString("en-GB", { timeZone: "UTC" })}{" "}
+                UTC
+              </time>
+              .
+            </>
+          ) : null}
+        </p>
+      ) : null}
+      {planHref ? (
+        <Link className="inline-flex min-h-11 items-center text-(--info) underline" href={planHref}>
+          Review plan r{tracking.plan?.revision}
+        </Link>
+      ) : null}
+      {item.attention.some((notice) => notice.source === "facility") && storyHref ? (
+        <Link
+          className="inline-flex min-h-11 items-center text-(--info) underline"
+          href={`${storyHref}#story-attention`}
+        >
+          {item.attention.filter((notice) => notice.source === "facility").length} open notice
+          {item.attention.filter((notice) => notice.source === "facility").length === 1 ? "" : "s"}
+        </Link>
+      ) : null}
+      {tracking.wait?.kind === "workflow" && storyHref ? (
+        <Link
+          className="inline-flex min-h-11 items-center text-(--info) underline"
+          href={`${storyHref}#story-plan`}
+        >
+          Review what holds this turn
+        </Link>
+      ) : null}
+      {tracking.delivery ? <p>{tracking.delivery.detail}</p> : null}
+    </div>
+  );
+}
+
+export function WorkGroups({
+  projectId,
+  search,
+  counts,
+}: {
+  projectId: string;
+  search: StoriesSearch;
+  counts: ProjectBacklog["groupCounts"];
+}) {
+  if (!counts)
+    return (
+      <p role="status" className="text-sm text-(--mut)">
+        Work groups are unavailable from this server. The recorded backlog is shown below.
+      </p>
+    );
+  return (
+    <nav aria-label="Work groups" className="flex flex-wrap gap-2">
+      {[
+        {
+          value: undefined,
+          label: "All matching",
+          count: Object.values(counts).reduce((a, b) => a + b, 0),
+        },
+        ...TRACKING_GROUPS.filter(
+          (group) => !["done", "archived"].includes(group.value) || counts[group.value] > 0,
+        ).map((group) => ({ ...group, count: counts[group.value] })),
+      ].map((group) => (
+        <Link
+          key={group.value ?? "all"}
+          href={storiesHref(projectId, search, { group: group.value, page: 1, sort: "activity" })}
+          aria-current={search.group === group.value ? "page" : undefined}
+          className={cx(
+            "inline-flex min-h-11 items-center gap-2 border px-3 text-sm focus-visible:outline-2 focus-visible:outline-(--info)",
+            search.group === group.value
+              ? "border-(--info) text-(--ink)"
+              : "border-(--line) text-(--mut)",
+          )}
+        >
+          {group.label} <span className="font-mono">{group.count}</span>
         </Link>
       ))}
     </nav>

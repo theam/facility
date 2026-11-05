@@ -285,6 +285,38 @@ describe("embedded MCP control plane", async () => {
       arguments: { projectId, storyId, turnId, after: 0 },
     });
     expect(wrongStory.isError).toBe(true);
+    const backlog = await client.callTool({
+      name: "facility_list_backlog",
+      arguments: { projectId, group: "in_progress", sort: "activity", limit: 1 },
+    });
+    expect(backlog.isError).not.toBe(true);
+    const backlogText = (backlog.content as Array<{ type: string; text?: string }>).find(
+      (part) => part.type === "text",
+    )?.text;
+    expect(JSON.parse(backlogText ?? "{}")).toMatchObject({
+      total: 1,
+      groupCounts: { in_progress: 1 },
+      items: [
+        {
+          story: { id },
+          activity: { state: "running", agentName: "reviewer" },
+          tracking: { group: "in_progress", pendingMessages: 0, wait: null },
+        },
+      ],
+    });
+    const otherGroup = await client.callTool({
+      name: "facility_list_backlog",
+      arguments: { projectId, group: "waiting", sort: "activity" },
+    });
+    expect(otherGroup.isError).not.toBe(true);
+    const otherText = (otherGroup.content as Array<{ type: string; text?: string }>).find(
+      (part) => part.type === "text",
+    )?.text;
+    expect(JSON.parse(otherText ?? "{}")).toMatchObject({
+      total: 0,
+      groupCounts: { in_progress: 1, waiting: 0 },
+      items: [],
+    });
     const [unchanged] = await app.facilityDb.select().from(turns).where(eq(turns.id, turnId));
     expect(unchanged?.state).toBe("running");
   });

@@ -11,11 +11,28 @@ actions.
 ## Find work
 
 The Stories page is the project's backlog. It lists mirrored GitHub issues that nobody has started
-next to work started from a request, one entry per unit of work, and groups open entries by phase:
-needs attention, in progress, in review, not started. Done and archived work stay one filter away.
+next to work started from a request, one entry per unit of work. The default work groups are
+**In progress**, **Waiting**, **For review**, and **Backlog**. Browse phases to find completed,
+archived, or other lifecycle states. A pending plan or open notice can put a story in For review
+while its running agent and pending messages remain visible. An incomplete delivery or checks
+still running are distinct from an available acceptance review. A PR review is not proof of
+merge readiness.
 Search accepts a ticket number (`#42`) or words; labels, assignees (including "assigned to me" and
 "unassigned"), repository, and sort combine, and every combination is a shareable URL. Listing the
 backlog never starts an agent or wakes a machine. `facility_list_backlog` returns the same view.
+Group counts cover all records matching the search and phase filters before the group filter
+and pagination; they are not counts of this page. The lifecycle phase counts ignore the group,
+and choosing a phase clears it. `sort=activity` orders by work group; the existing `priority`,
+`updated`, and `created` sorts remain available. A server that does not support groups shows the
+recorded backlog with an explicit limitation instead of claiming the requested group was applied.
+
+Pending messages have not yet acquired their own turn. They may wait for the current turn or
+for an applying preview to release the workspace. For queued turns on the displayed page,
+Facility rechecks the retained agent's current workflow gate and reports its reason or an
+unavailable assessment. A future retry time is a recorded deferral. Neither a historical error,
+a heartbeat nor a queued turn proves a current shortage of worker capacity; capacity is
+reported as unavailable. The last-checked time applies to this persisted snapshot. These reads
+do not authorize execution, reserve budget, create notices, or repair a retained configuration.
 
 Each entry shows the phase, what is actually happening (a running or queued agent, a waiting
 question, failing checks, a review decision), who is involved, and links to the issue, pull

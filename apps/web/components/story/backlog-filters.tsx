@@ -51,7 +51,7 @@ export function BacklogFilters({
         const params = new URLSearchParams();
         for (const [key, value] of data.entries()) {
           if (typeof value !== "string" || !value) continue;
-          if (key === "sort" && value === "priority") continue;
+          if (key === "sort" && value === "activity") continue;
           params.append(key, value);
         }
         router.push(
@@ -61,6 +61,7 @@ export function BacklogFilters({
       className="flex flex-col gap-3"
       aria-label="Filter the backlog"
     >
+      {search.group ? <input type="hidden" name="group" value={search.group} /> : null}
       {search.phase.map((phase) => (
         <input key={phase} type="hidden" name="phase" value={phase} />
       ))}
@@ -74,7 +75,7 @@ export function BacklogFilters({
           name="q"
           defaultValue={search.q}
           placeholder="Search #123 or words"
-          className="h-9 w-full min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-64"
+          className="min-h-11 w-full min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-64"
         />
         <Menu label="Labels" count={search.label.length}>
           {facets.labels.length === 0 ? (
@@ -148,7 +149,7 @@ export function BacklogFilters({
             ))}
           </Menu>
         ) : null}
-        <label className="flex h-9 items-center gap-2 border border-(--line) px-3 text-[12.5px] text-(--mut)">
+        <label className="flex min-h-11 items-center gap-2 border border-(--line) px-3 text-[12.5px] text-(--mut)">
           <span className="text-(--dim)">Sort</span>
           <select
             name="sort"
@@ -156,6 +157,7 @@ export function BacklogFilters({
             onChange={submit}
             className="bg-transparent text-(--ink) outline-none"
           >
+            <option value="activity">Work groups</option>
             <option value="priority">Needs action first</option>
             <option value="updated">Recently active</option>
             <option value="created">Recently added</option>
@@ -163,7 +165,7 @@ export function BacklogFilters({
         </label>
         <button
           type="submit"
-          className="h-9 border border-(--line) px-3 text-[12.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
+          className="min-h-11 border border-(--line) px-3 text-[12.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
         >
           Apply
         </button>
@@ -174,7 +176,7 @@ export function BacklogFilters({
               label: [],
               assignee: [],
               repository: [],
-              sort: "priority",
+              sort: "activity",
               page: 1,
             })}
             className="text-[12px] text-(--dim) underline-offset-4 hover:text-(--ink) hover:underline"
@@ -200,7 +202,7 @@ function Menu({
     <details className="relative">
       <summary
         className={cx(
-          "flex h-9 cursor-pointer list-none items-center gap-2 border px-3 text-[12.5px] hover:border-(--line-strong) hover:text-(--ink) [&::-webkit-details-marker]:hidden",
+          "flex min-h-11 cursor-pointer list-none items-center gap-2 border px-3 text-[12.5px] hover:border-(--line-strong) hover:text-(--ink) [&::-webkit-details-marker]:hidden",
           count > 0 ? "border-(--line-strong) text-(--ink)" : "border-(--line) text-(--mut)",
         )}
       >

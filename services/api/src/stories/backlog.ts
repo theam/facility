@@ -15,6 +15,13 @@ import {
 } from "@facility/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
+  type BacklogTracking,
+  observeBacklogWaits,
+  TRACKING_GROUPS,
+  type TrackingGroup,
+  trackBacklog,
+} from "./backlog-tracking.js";
+import {
   derivePhase,
   isGithubIssueStory,
   type PhaseReason,
@@ -37,11 +44,12 @@ export type BacklogPhaseFilter = WorkPhase | "open" | "all";
 
 export type BacklogQuery = {
   q?: string;
+  group?: TrackingGroup;
   phase?: BacklogPhaseFilter[];
   label?: string[];
   assignee?: string[];
   repository?: string[];
-  sort?: "priority" | "updated" | "created";
+  sort?: "priority" | "updated" | "created" | "activity";
   limit?: number;
   offset?: number;
 };
@@ -57,6 +65,7 @@ export type BacklogPerson = {
 };
 
 export type BacklogItem = {
+  tracking?: BacklogTracking;
   key: string;
   kind: "story" | "issue" | "pull_request";
   title: string;
@@ -124,6 +133,7 @@ export type BacklogResult = {
   limit: number;
   offset: number;
   counts: Record<WorkPhase, number>;
+  groupCounts?: Record<TrackingGroup, number>;
   items: BacklogItem[];
   facets: {
     labels: Array<{ name: string; count: number }>;
@@ -163,9 +173,35 @@ export class ProjectBacklogService {
     viewer: BacklogViewer = {},
     now = new Date(),
   ): Promise<BacklogResult> {
+    return this.db.transaction(
+      async (tx) =>
+        new ProjectBacklogService(tx as unknown as FacilityDb).listSnapshot(
+          orgId,
+          projectId,
+          query,
+          viewer,
+          now,
+        ),
+      { isolationLevel: "repeatable read" },
+    );
+  }
+
+  private async listSnapshot(
+    orgId: string,
+    projectId: string,
+    query: BacklogQuery,
+    viewer: BacklogViewer,
+    now: Date,
+  ): Promise<BacklogResult> {
     const limit = Math.min(MAX_LIMIT, Math.max(1, query.limit ?? 50));
     const offset = Math.max(0, query.offset ?? 0);
-    const items = await this.items(orgId, projectId, now);
+    const items = await trackBacklog(
+      this.db,
+      orgId,
+      projectId,
+      await this.items(orgId, projectId, now),
+      now,
+    );
 
     const phases = expandPhases(query.phase);
     const labels = new Set((query.label ?? []).map((label) => label.toLowerCase()));
@@ -197,8 +233,18 @@ export class ProjectBacklogService {
       number
     >;
     for (const item of narrowed) counts[item.phase] += 1;
-    const selected = narrowed.filter((item) => phases.has(item.phase));
+    const phaseSelected = narrowed.filter((item) => phases.has(item.phase));
+    const groupCounts = Object.fromEntries(TRACKING_GROUPS.map((group) => [group, 0])) as Record<
+      TrackingGroup,
+      number
+    >;
+    for (const item of phaseSelected) groupCounts[item.tracking.group]++;
+    const selected = phaseSelected.filter(
+      (item) => !query.group || item.tracking.group === query.group,
+    );
     selected.sort(sorter(query.sort ?? "priority"));
+    const page = selected.slice(offset, offset + limit);
+    await observeBacklogWaits(this.db, orgId, projectId, page, now);
 
     return {
       generatedAt: now,
@@ -206,7 +252,8 @@ export class ProjectBacklogService {
       limit,
       offset,
       counts,
-      items: selected.slice(offset, offset + limit),
+      groupCounts,
+      items: page,
       facets: facets(items),
     };
   }
@@ -844,6 +891,12 @@ function resolveAssigneeFilter(
 }
 
 function sorter(sort: NonNullable<BacklogQuery["sort"]>) {
+  if (sort === "activity")
+    return (left: BacklogItem, right: BacklogItem) =>
+      TRACKING_GROUPS.indexOf(left.tracking?.group ?? "backlog") -
+        TRACKING_GROUPS.indexOf(right.tracking?.group ?? "backlog") ||
+      right.lastActivityAt.getTime() - left.lastActivityAt.getTime() ||
+      left.key.localeCompare(right.key);
   if (sort === "created") {
     return (left: BacklogItem, right: BacklogItem) =>
       right.createdAt.getTime() - left.createdAt.getTime() || left.key.localeCompare(right.key);

@@ -63,6 +63,44 @@ function textPayload(result: unknown) {
 }
 
 describe("@facility/mcp 0.12", () => {
+  test("forwards tracking groups and activity ordering to the shared backlog reader", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { total: 63, groupCounts: { waiting: 63 }, items: [] };
+      },
+    });
+    try {
+      const response = await client.callTool({
+        name: "facility_list_backlog",
+        arguments: { projectId: "p/a", group: "waiting", sort: "activity", offset: 50 },
+      });
+      expect(response.isError).not.toBe(true);
+      expect(calls[0]).toMatchObject([
+        "GET",
+        "/v1/projects/p%2Fa/backlog",
+        { query: { group: "waiting", sort: "activity", offset: 50 } },
+      ]);
+      expect(JSON.parse(textPayload(response))).toMatchObject({
+        total: 63,
+        groupCounts: { waiting: 63 },
+      });
+      expect(
+        (
+          await client.callTool({
+            name: "facility_list_backlog",
+            arguments: { projectId: "p", group: "capacity" },
+          })
+        ).isError,
+      ).toBe(true);
+      expect(calls).toHaveLength(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   test("reads incremental run activity through the shared endpoint and forwards cursor zero", async () => {
     const calls: unknown[][] = [];
     const { client, server } = await connect({

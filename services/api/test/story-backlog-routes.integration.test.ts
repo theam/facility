@@ -98,6 +98,7 @@ describe("backlog and story creation routes", async () => {
   const completions: string[] = [];
   const catalogSource: AgentCatalogSource = {
     load: async () => ({
+      repositoryId,
       commitSha: "c".repeat(40),
       sources: [
         { file: ".agents/builder.md", source: agent("builder", "codex").source },
@@ -526,5 +527,171 @@ describe("backlog and story creation routes", async () => {
     expect(
       (await db.select().from(workspaces).where(eq(workspaces.projectId, projectId))).length,
     ).toBe((await db.select().from(stories).where(eq(stories.projectId, projectId))).length);
+  });
+  it("counts complete groups and rechecks waits without trusting a historical error or writing", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/workspace-stories`,
+      headers: {
+        cookie: ownerCookie,
+        "idempotency-key": `tracking-${suffix}`,
+        "x-facility-surface": "ui",
+      },
+      payload: {
+        title: "Tracking probe",
+        message: "Investigate the queue",
+        idempotency_key: `tracking-${suffix}`,
+      },
+    });
+    expect(created.statusCode, created.body).toBe(202);
+    const storyId = created.json().story.id;
+    const turnId = created.json().queued.turn.id;
+    for (let i = 0; i < 3; i++) {
+      const reply = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/workspace-stories/${storyId}/messages`,
+        headers: { cookie: ownerCookie, "idempotency-key": `tracking-reply-${suffix}-${i}` },
+        payload: { message: `Follow-up ${i}`, idempotency_key: `tracking-reply-${suffix}-${i}` },
+      });
+      expect(reply.statusCode, reply.body).toBe(202);
+    }
+    const retryAfter = new Date(Date.now() + 600_000);
+    await db
+      .update(turns)
+      .set({ retryAfter, error: "workflow_previous_turn_failed: historical" })
+      .where(eq(turns.id, turnId));
+    const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+    if (!project) throw new Error("fixture project missing");
+    const read = async () => {
+      const response = await app.inject({
+        url: `/v1/projects/${projectId}/backlog?q=Tracking%20probe&group=waiting&sort=activity`,
+        headers: { authorization: `Bearer ${viewerSecret}` },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ total: 1, groupCounts: { waiting: 1 } });
+      return response.json().items[0].tracking;
+    };
+    const jobCount = enqueued.length;
+    const turnBefore = await db.select().from(turns).where(eq(turns.id, turnId));
+    expect(await read()).toMatchObject({
+      pendingMessages: 3,
+      messageWait: "previous_turn",
+      wait: { kind: "retry_delay", retryAfter: retryAfter.toISOString() },
+    });
+    expect(await db.select().from(turns).where(eq(turns.id, turnId))).toEqual(turnBefore);
+    try {
+      await db
+        .update(projects)
+        .set({
+          settings: {
+            ...(project.settings as Record<string, unknown>),
+            storyWorkflow: { revision: 1, policy: { planApprovalAgents: ["builder"] } },
+          },
+        })
+        .where(eq(projects.id, projectId));
+      expect(await read()).toMatchObject({
+        wait: {
+          kind: "workflow",
+          detail: "Review and approve the current plan before this agent starts",
+        },
+      });
+    } finally {
+      await db
+        .update(projects)
+        .set({ settings: project.settings })
+        .where(eq(projects.id, projectId));
+    }
+    expect(await read()).toMatchObject({ wait: { kind: "retry_delay" } });
+    await db
+      .update(turns)
+      .set({ retryAfter: new Date(0) })
+      .where(eq(turns.id, turnId));
+    expect(await read()).toMatchObject({ wait: { kind: "dispatch", retryAfter: null } });
+    await db.update(turns).set({ manifest: {} }).where(eq(turns.id, turnId));
+    expect(await read()).toMatchObject({ wait: { kind: "unavailable" } });
+    expect(enqueued).toHaveLength(jobCount);
+    expect(await db.select().from(turns).where(eq(turns.storyId, storyId))).toHaveLength(1);
+
+    await db
+      .update(turns)
+      .set({ state: "running", manifest: turnBefore[0]?.manifest, startedAt: new Date() })
+      .where(eq(turns.id, turnId));
+    const proposed = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/workspace-stories/${storyId}/plan`,
+      headers: { cookie: ownerCookie, "idempotency-key": `tracking-plan-${suffix}` },
+      payload: {
+        expected_revision: 0,
+        markdown: "## Review the next step",
+        repositories: [`acme/app-${suffix}`],
+        agents: ["builder"],
+        idempotency_key: `tracking-plan-${suffix}`,
+      },
+    });
+    expect(proposed.statusCode, proposed.body).toBe(200);
+    const review = await app.inject({
+      url: `/v1/projects/${projectId}/backlog?q=Tracking%20probe&group=review&sort=activity`,
+      headers: { authorization: `Bearer ${viewerSecret}` },
+    });
+    expect(review.statusCode, review.body).toBe(200);
+    expect(review.json()).toMatchObject({
+      total: 1,
+      groupCounts: { review: 1, in_progress: 0, waiting: 0 },
+      items: [
+        {
+          activity: { state: "running" },
+          tracking: {
+            group: "review",
+            pendingMessages: 3,
+            messageWait: "previous_turn",
+            wait: null,
+            plan: { revision: 1, digest: proposed.json().plan.digest },
+          },
+        },
+      ],
+    });
+
+    const bulk = Array.from({ length: 63 }, (_, i) => ({
+      id: newId("story"),
+      orgId: "org_local",
+      projectId,
+      provider: "manual",
+      externalId: `tracking-bulk-${suffix}-${i}`,
+      title: `Tracking bulk ${i}`,
+      status: "ready",
+      createdBy: { type: "user", id: "user_local_admin" },
+    }));
+    await db.insert(stories).values(bulk);
+    const pages = [];
+    for (const offset of [0, 50]) {
+      const page = await app.inject({
+        url: `/v1/projects/${projectId}/backlog?q=Tracking%20bulk&group=backlog&sort=activity&offset=${offset}`,
+        headers: { authorization: `Bearer ${viewerSecret}` },
+      });
+      expect(page.statusCode, page.body).toBe(200);
+      expect(page.json()).toMatchObject({
+        total: 63,
+        groupCounts: { backlog: 63, waiting: 0, review: 0 },
+      });
+      pages.push(...page.json().items);
+    }
+    expect(new Set(pages.map((item) => item.key)).size).toBe(63);
+    for (const url of [
+      `/v1/projects/${projectId}/backlog?group=unknown`,
+      `/v1/projects/${projectId}/backlog?group=waiting&sort=bogus`,
+    ]) {
+      expect(
+        (await app.inject({ url, headers: { authorization: `Bearer ${viewerSecret}` } }))
+          .statusCode,
+      ).toBe(400);
+    }
+    expect(
+      (
+        await app.inject({
+          url: `/v1/projects/${otherProjectId}/backlog?group=waiting`,
+          headers: { authorization: `Bearer ${viewerSecret}` },
+        })
+      ).statusCode,
+    ).toBe(404);
   });
 });

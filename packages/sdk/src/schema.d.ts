@@ -6484,11 +6484,12 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string;
+                group?: "review" | "in_progress" | "waiting" | "backlog" | "done" | "archived";
                 phase?: ("not_started" | "in_progress" | "attention" | "review" | "done" | "archived" | "open" | "all")[];
                 label?: string[];
                 assignee?: string[];
                 repository?: string[];
-                sort?: "priority" | "updated" | "created";
+                sort?: "priority" | "updated" | "created" | "activity";
                 limit?: number;
                 offset?: number;
             };
@@ -6520,7 +6521,37 @@ export interface operations {
                             done: number;
                             archived: number;
                         };
+                        groupCounts?: {
+                            review: number;
+                            in_progress: number;
+                            waiting: number;
+                            backlog: number;
+                            done: number;
+                            archived: number;
+                        };
                         items: {
+                            tracking?: {
+                                /** @enum {string} */
+                                group: "review" | "in_progress" | "waiting" | "backlog" | "done" | "archived";
+                                pendingMessages: number;
+                                /** @enum {string|null} */
+                                messageWait: "previous_turn" | "preview" | "dispatch" | null;
+                                previewApplying: boolean;
+                                plan: {
+                                    revision: number;
+                                    digest: string;
+                                } | null;
+                                delivery: {
+                                    ready: boolean;
+                                    detail: string;
+                                } | null;
+                                wait: {
+                                    /** @enum {string} */
+                                    kind: "workflow" | "retry_delay" | "dispatch" | "unavailable";
+                                    detail: string;
+                                    retryAfter: string | null;
+                                } | null;
+                            };
                             key: string;
                             /** @enum {string} */
                             kind: "story" | "issue" | "pull_request";

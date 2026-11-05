@@ -8138,6 +8138,22 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "review",
+                "in_progress",
+                "waiting",
+                "backlog",
+                "done",
+                "archived"
+              ]
+            },
+            "in": "query",
+            "name": "group",
+            "required": false
+          },
+          {
+            "schema": {
               "maxItems": 50,
               "type": "array",
               "items": {
@@ -8207,7 +8223,8 @@
               "enum": [
                 "priority",
                 "updated",
-                "created"
+                "created",
+                "activity"
               ]
             },
             "in": "query",
@@ -8298,11 +8315,146 @@
                       ],
                       "additionalProperties": false
                     },
+                    "groupCounts": {
+                      "type": "object",
+                      "properties": {
+                        "review": {
+                          "type": "number"
+                        },
+                        "in_progress": {
+                          "type": "number"
+                        },
+                        "waiting": {
+                          "type": "number"
+                        },
+                        "backlog": {
+                          "type": "number"
+                        },
+                        "done": {
+                          "type": "number"
+                        },
+                        "archived": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "review",
+                        "in_progress",
+                        "waiting",
+                        "backlog",
+                        "done",
+                        "archived"
+                      ],
+                      "additionalProperties": false
+                    },
                     "items": {
                       "type": "array",
                       "items": {
                         "type": "object",
                         "properties": {
+                          "tracking": {
+                            "type": "object",
+                            "properties": {
+                              "group": {
+                                "type": "string",
+                                "enum": [
+                                  "review",
+                                  "in_progress",
+                                  "waiting",
+                                  "backlog",
+                                  "done",
+                                  "archived"
+                                ]
+                              },
+                              "pendingMessages": {
+                                "type": "number"
+                              },
+                              "messageWait": {
+                                "nullable": true,
+                                "type": "string",
+                                "enum": [
+                                  "previous_turn",
+                                  "preview",
+                                  "dispatch"
+                                ]
+                              },
+                              "previewApplying": {
+                                "type": "boolean"
+                              },
+                              "plan": {
+                                "nullable": true,
+                                "type": "object",
+                                "properties": {
+                                  "revision": {
+                                    "type": "number"
+                                  },
+                                  "digest": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "revision",
+                                  "digest"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "delivery": {
+                                "nullable": true,
+                                "type": "object",
+                                "properties": {
+                                  "ready": {
+                                    "type": "boolean"
+                                  },
+                                  "detail": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "ready",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "wait": {
+                                "nullable": true,
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "workflow",
+                                      "retry_delay",
+                                      "dispatch",
+                                      "unavailable"
+                                    ]
+                                  },
+                                  "detail": {
+                                    "type": "string"
+                                  },
+                                  "retryAfter": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "detail",
+                                  "retryAfter"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "group",
+                              "pendingMessages",
+                              "messageWait",
+                              "previewApplying",
+                              "plan",
+                              "delivery",
+                              "wait"
+                            ],
+                            "additionalProperties": false
+                          },
                           "key": {
                             "type": "string"
                           },

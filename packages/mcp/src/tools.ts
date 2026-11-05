@@ -783,10 +783,11 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_list_backlog",
     permission: "projects:read",
     description:
-      "Read the unified project backlog: mirrored GitHub issues not yet started, stories in progress, blocked, in review, done, or archived, each with its phase, agent activity, assignees, and links. Supports search, phase, label, assignee, and repository filters with pagination. Needs projects:read.",
+      "Read the unified project backlog: mirrored GitHub issues not yet started, stories in progress, blocked, in review, done, or archived, each with its phase, agent activity, assignees, and links. Includes shared tracking groups, complete group counts within the phase/search filters, pending messages and current queued-turn workflow checks. Worker capacity remains unavailable. Supports search, group, phase, label, assignee, and repository filters with pagination. Needs projects:read.",
     inputSchema: {
       projectId,
       q: z.string().max(200).optional().describe("Ticket number or words to search for."),
+      group: z.enum(["review", "in_progress", "waiting", "backlog", "done", "archived"]).optional(),
       phase: z
         .array(
           z.enum([
@@ -808,7 +809,7 @@ export const toolDefinitions: ToolDefinition[] = [
         .optional()
         .describe("unassigned, me, user:<id>, or github:<login>."),
       repository: z.array(z.string().min(1).max(200)).optional(),
-      sort: z.enum(["priority", "updated", "created"]).default("priority"),
+      sort: z.enum(["priority", "updated", "created", "activity"]).default("priority"),
       limit: z.number().int().min(1).max(100).default(50),
       offset: z.number().int().min(0).default(0),
     },
@@ -816,6 +817,7 @@ export const toolDefinitions: ToolDefinition[] = [
     path: (args) => `/v1/projects/${part(args.projectId)}/backlog`,
     query: (args) => ({
       q: stringValue(args.q),
+      group: stringValue(args.group),
       phase: listValue(args.phase),
       label: listValue(args.label),
       assignee: listValue(args.assignee),
