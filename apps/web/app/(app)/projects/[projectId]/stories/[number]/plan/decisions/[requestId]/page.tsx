@@ -11,7 +11,10 @@ export default async function PlanDecisionPage({
   params: Promise<{ projectId: string; number: string; requestId: string }>;
 }) {
   const { projectId, number: storyId, requestId } = await params;
-  const review = await api.reviewStoryPlanDecision(projectId, storyId, requestId);
+  const [review, workflow] = await Promise.all([
+    api.reviewStoryPlanDecision(projectId, storyId, requestId),
+    api.storyWorkflow(projectId, storyId),
+  ]);
   return (
     <div className="mx-auto flex min-w-0 max-w-4xl flex-col gap-5">
       <Link
@@ -21,7 +24,13 @@ export default async function PlanDecisionPage({
         ← current story plan
       </Link>
       {review.ok ? (
-        <PlanConfirmation key={requestId} initial={review.data} />
+        <PlanConfirmation
+          key={requestId}
+          initial={review.data}
+          executionScope={workflow.ok ? workflow.data.executionScope : undefined}
+          executionScopeError={workflow.ok ? undefined : workflow.message}
+          recoveryBlocked={workflow.ok && !!workflow.data.blockedReason}
+        />
       ) : (
         <ErrorNotice
           message={`Couldn't load this plan review — ${review.message}. Open the story to inspect the current plan or request a fresh review.`}

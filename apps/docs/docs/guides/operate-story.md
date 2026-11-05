@@ -143,6 +143,22 @@ UI default. A response without a recorded agent requires an explicit choice. Una
 remain visible and must be replaced before saving. The author and the executing agent can differ,
 so review the selection. A plan that omits a held agent shows a warning.
 
+**Scope and retained work** compares the plan with the current repository connections and
+queued agent versions. Missing or changed connections and agent configuration differences are
+shown before confirmation. Expand retained work to inspect each original turn ID, queue time
+and agent configuration hash. Multiple turns are collapsed with a mismatch count; a queue over
+50 turns is explicitly marked as partial. Approval can also release matching work beyond that
+first page.
+
+This is a dated observation for one plan revision, not an execution authorization. The native
+gate still checks current policy, exact scope, permissions, budget and capacity when work starts.
+**Reload review** refreshes both the requested decision and the scope; a failed read does not keep
+old scope claims visible and disables approval until it can be read again. If the workflow reports
+blocked recovery, approval also waits for a matching plan revision, repositories and retained
+agent configuration. Open the current plan to correct them; requesting changes remains available.
+`facility_get_story_workflow` exposes the same `executionScope` data
+without starting a model, waking compute or queuing work.
+
 The conversation and its reply controls follow the plan directly. Delivery, acceptance,
 consultation and environment details remain available further down the same story.
 

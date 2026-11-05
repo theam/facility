@@ -14,6 +14,7 @@ import { z } from "zod";
 import { authorizePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import { appendStoryEvidence } from "./evidence.js";
+import { matchesPlanAgent, matchesPlanRepositoryScope } from "./plan-scope.js";
 import { planState } from "./plan-state.js";
 import {
   type WorkflowScope,
@@ -156,12 +157,7 @@ export async function authorizePlanExecution(
       "Review and approve the current plan before this agent starts",
     );
   const selected = context.plan.agents.find((candidate) => candidate.name === agent.name);
-  if (
-    !selected ||
-    selected.manifestHash !== agent.hash ||
-    selected.engine !== agent.engine ||
-    selected.model !== agent.model
-  )
+  if (!matchesPlanAgent(selected, agent))
     throw new WorkflowGateError(
       "workflow_plan_agent_changed",
       "Review a plan containing this exact configured agent version",
@@ -177,21 +173,7 @@ export async function authorizePlanExecution(
     )
     .orderBy(projectRepositories.id)
     .for("share");
-  const primary = repositories.find((repository) => repository.role === "primary");
-  if (
-    !primary ||
-    selected.repositoryId !== primary.id ||
-    repositories.length !== context.plan.repositories.length ||
-    repositories.some(
-      (repository) =>
-        !context.plan?.repositories.some(
-          (approved) =>
-            approved.repositoryId === repository.id &&
-            approved.repository.toLowerCase() ===
-              `${repository.owner}/${repository.name}`.toLowerCase(),
-        ),
-    )
-  )
+  if (!matchesPlanRepositoryScope(context.plan.repositories, repositories, selected?.repositoryId))
     throw new WorkflowGateError(
       "workflow_plan_repository_scope_changed",
       "Approve the full current project repository scope before granting native project execution",

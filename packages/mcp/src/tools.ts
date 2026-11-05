@@ -313,7 +313,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story_workflow",
     permission: "projects:read",
     description:
-      "Read current plan approval, held native agents and exact delivery acceptance as separate states. Approval can release queued agents under project policy. Needs projects:read.",
+      "Read current plan approval, retained queued turn identities and agent versions, repository scope mismatches, and exact delivery acceptance as separate states. Scope checks are dated observations, not execution authorization. Approval can release queued agents under project policy. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) =>

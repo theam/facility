@@ -17,10 +17,11 @@ import {
   storyDeliveryAcceptanceRequests,
   storyDeliveryAcceptances,
   storyPlanDecisions,
+  storyPlanRepositoryRefs,
   turns,
   users,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService } from "../src/agents/catalog.js";
 import { buildApp, mintSessionCookie } from "../src/app.js";
@@ -248,6 +249,11 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
             file: ".agents/builder.md",
             source:
               "---\nname: builder\ndescription: Build a bounded change\nengine: codex\nmodel: fixture-model\nenabled: true\ntriggers:\n  - type: manual\n---\nBuild and test.\n",
+          },
+          {
+            file: ".agents/planner.md",
+            source:
+              "---\nname: planner\ndescription: Plan a bounded change\nengine: codex\nmodel: fixture-model\nenabled: true\ntriggers:\n  - type: manual\n---\nPlan and review scope.\n",
           },
         ],
       }),
@@ -504,6 +510,180 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       .where(eq(turns.id, turnId));
     await savePolicy();
   });
+  it("reports exact retained work and incomplete plan scope before approval without execution effects", async () => {
+    await savePolicy(policy({ planApprovalAgents: ["planner"] }));
+    const value = await delivery();
+    const planner = (await domain.catalog.sync(orgId, projectId)).find(
+      (agent) => agent.name === "planner",
+    );
+    if (!planner) throw Error("Missing planner");
+    const dependencyId = newId("repo");
+    const dependency = {
+      orgId,
+      projectId,
+      owner: projectId,
+      name: "api",
+      role: "related" as const,
+      defaultBranch: "main",
+    };
+    const turnId = newId("turn"),
+      conversationId = newId("sess");
+    await db.insert(projectRepositories).values({ id: dependencyId, ...dependency });
+    await db
+      .insert(storyConversations)
+      .values({ id: conversationId, orgId, projectId, storyId: value.id });
+    await db.insert(turns).values({
+      id: turnId,
+      orgId,
+      projectId,
+      storyId: value.id,
+      conversationId,
+      agentName: planner.name,
+      manifestHash: planner.hash,
+      manifest: planner,
+      engine: planner.engine,
+      model: planner.model,
+      triggerType: "manual",
+      createdBy: { type: "user", id: userId },
+    });
+    const queuedBefore = enqueue.mock.calls.length;
+    async function propose(revision: number, agents: string[], repositories: string[]) {
+      const result = await post(
+        `${path(value.id)}/plan`,
+        {
+          expected_revision: revision,
+          markdown: "Review the retained task",
+          repositories,
+          agents,
+          idempotency_key: randomUUID(),
+        },
+        headers(),
+      );
+      expect(result.statusCode, result.body).toBe(200);
+    }
+    async function read() {
+      const result = await app.inject({ url: `${path(value.id)}/workflow`, headers: headers() });
+      expect(result.statusCode, result.body).toBe(200);
+      return result.json();
+    }
+    try {
+      await propose(0, ["builder"], [`${projectId}/app`]);
+      expect((await read()).executionScope).toMatchObject({
+        planRevision: 1,
+        repositories: {
+          matches: false,
+          connectedCount: 2,
+          missing: [`${projectId}/api`],
+          removed: [],
+        },
+        queuedWork: [
+          {
+            turnId,
+            agentName: "planner",
+            manifestHash: planner.hash,
+            configuration: "current",
+            planAgent: "missing",
+          },
+        ],
+        hasMore: false,
+      });
+      await propose(1, ["planner"], [`${projectId}/app`]);
+      expect((await read()).executionScope).toMatchObject({
+        planRevision: 2,
+        repositories: { matches: false },
+        queuedWork: [{ turnId, planAgent: "current" }],
+      });
+      await propose(2, ["planner"], [`${projectId}/app`, `${projectId}/api`]);
+      const matching = await read();
+      expect(matching).toMatchObject({
+        plan: { status: "proposed" },
+        blockedReason: expect.stringContaining("approve"),
+        executionScope: {
+          planRevision: 3,
+          repositories: { matches: true, missing: [], removed: [] },
+          queuedWork: [{ turnId, planAgent: "current", configuration: "current" }],
+        },
+      });
+      await db
+        .update(agentManifests)
+        .set({ manifest: { ...planner, hash: "c".repeat(64) } })
+        .where(
+          and(
+            eq(agentManifests.orgId, orgId),
+            eq(agentManifests.projectId, projectId),
+            eq(agentManifests.name, "planner"),
+          ),
+        );
+      expect((await read()).executionScope.queuedWork[0]).toMatchObject({
+        turnId,
+        configuration: "changed",
+        planAgent: "current",
+      });
+      await db.update(turns).set({ manifest: {} }).where(eq(turns.id, turnId));
+      expect(await read()).toMatchObject({
+        blockedReason: expect.stringContaining("retained agent configuration is unavailable"),
+        executionScope: { queuedWork: [{ turnId, configuration: "unavailable" }] },
+      });
+      await db.update(turns).set({ manifest: planner }).where(eq(turns.id, turnId));
+      await db
+        .update(agentManifests)
+        .set({ manifest: planner })
+        .where(
+          and(
+            eq(agentManifests.orgId, orgId),
+            eq(agentManifests.projectId, projectId),
+            eq(agentManifests.name, "planner"),
+          ),
+        );
+      await db
+        .update(projectRepositories)
+        .set({ name: "renamed-api" })
+        .where(eq(projectRepositories.id, dependencyId));
+      expect((await read()).executionScope.repositories).toMatchObject({
+        matches: false,
+        missing: [`${projectId}/renamed-api`],
+        removed: [`${projectId}/api`],
+      });
+      const foreign = await app.inject({
+        url: `${path(value.id).replace(projectId, otherProjectId)}/workflow`,
+        headers: headers(),
+      });
+      expect([403, 404]).toContain(foreign.statusCode);
+      expect(foreign.body).not.toContain(planner.hash);
+      expect(enqueue.mock.calls.length).toBe(queuedBefore);
+      const [unchanged] = await db.select().from(turns).where(eq(turns.id, turnId));
+      expect(unchanged?.state).toBe("queued");
+      expect(
+        await db.select().from(budgetReservations).where(eq(budgetReservations.turnId, turnId)),
+      ).toHaveLength(0);
+    } finally {
+      await db
+        .update(agentManifests)
+        .set({ manifest: planner })
+        .where(
+          and(
+            eq(agentManifests.orgId, orgId),
+            eq(agentManifests.projectId, projectId),
+            eq(agentManifests.name, "planner"),
+          ),
+        );
+      await db
+        .update(turns)
+        .set({ state: "canceled", endedAt: new Date() })
+        .where(eq(turns.storyId, value.id));
+      await db
+        .delete(storyPlanRepositoryRefs)
+        .where(
+          and(
+            eq(storyPlanRepositoryRefs.storyId, value.id),
+            eq(storyPlanRepositoryRefs.repositoryId, dependencyId),
+          ),
+        );
+      await db.delete(projectRepositories).where(eq(projectRepositories.id, dependencyId));
+      await savePolicy();
+    }
+  });
+
   it("can hold admission with a single database connection without a nested pool checkout", async () => {
     await savePolicy(policy({ planApprovalAgents: ["builder"] }));
     const value = await delivery();

@@ -1,11 +1,18 @@
 "use client";
 
-import type { StoryAgent, StoryPlan, StoryPlanRepositories, StoryPlans } from "@facility/sdk";
+import type {
+  StoryAgent,
+  StoryPlan,
+  StoryPlanRepositories,
+  StoryPlans,
+  StoryWorkflowStatus,
+} from "@facility/sdk";
 import { Button, Eyebrow, Field, TextArea, TextInput } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { PlanContent } from "@/components/story/plan-content";
+import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { PLAN_PROPOSAL_EVENT, type PlanProposalSource } from "@/lib/story-plan-events";
 import { formatTime } from "@/lib/story-presentation";
@@ -37,6 +44,7 @@ export function StoryPlanPanel({
   defaultAgent,
   queuedAgents = [],
   blockedReason,
+  executionScope,
   catalogError,
   canWrite,
   userId,
@@ -48,6 +56,7 @@ export function StoryPlanPanel({
   defaultAgent: string | null;
   queuedAgents?: string[];
   blockedReason?: string | null;
+  executionScope?: StoryWorkflowStatus["executionScope"];
   catalogError?: string;
   canWrite: boolean;
   userId?: string;
@@ -423,6 +432,9 @@ export function StoryPlanPanel({
           This plan does not include queued work for {missingQueuedAgents.join(", ")}. Propose a
           revision with the intended agents before approving recovery.
         </p>
+      ) : null}
+      {current && !editing ? (
+        <PlanExecutionScope scope={executionScope} planRevision={current.state.revision} />
       ) : null}
       {pendingSource && canWrite ? (
         <div

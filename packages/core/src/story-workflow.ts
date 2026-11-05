@@ -146,6 +146,33 @@ export const StoryWorkflowStatusSchema = z.object({
   }),
   queuedAgents: z.array(z.string()).max(50),
   blockedReason: z.string().nullable(),
+  executionScope: z
+    .object({
+      observedAt: z.string(),
+      planRevision: Revision,
+      repositories: z.object({
+        matches: z.boolean(),
+        connectedCount: z.number().int().nonnegative(),
+        missing: z.array(z.string()),
+        removed: z.array(z.string()),
+      }),
+      queuedWork: z
+        .array(
+          z.object({
+            turnId: z.string(),
+            agentName: z.string(),
+            engine: z.string(),
+            model: z.string(),
+            manifestHash: z.string(),
+            createdAt: z.string(),
+            configuration: z.enum(["current", "changed", "unavailable"]),
+            planAgent: z.enum(["current", "missing", "changed"]),
+          }),
+        )
+        .max(50),
+      hasMore: z.boolean(),
+    })
+    .optional(),
   acceptance: StoryDeliveryAcceptanceSchema,
 });
 export type StoryWorkflowPolicy = z.infer<typeof StoryWorkflowPolicySchema>;

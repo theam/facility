@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import type { PlanDecisionReview, StoryAgent, StoryPlan, StoryPlans } from "@facility/sdk";
+import type {
+  PlanDecisionReview,
+  StoryAgent,
+  StoryPlan,
+  StoryPlans,
+  StoryWorkflowStatus,
+} from "@facility/sdk";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -614,6 +620,72 @@ describe("interactive confirmation UI", () => {
         (item) => item.textContent === "Approve plan r1",
       ),
     ).toBe(false);
+  });
+  it("refreshes scope with the review and clears old recovery claims if the scope read fails", async () => {
+    const value = review();
+    const scope: StoryWorkflowStatus["executionScope"] = {
+      observedAt: at,
+      planRevision: 1,
+      repositories: { matches: true, connectedCount: 1, missing: [], removed: [] },
+      queuedWork: [],
+      hasMore: false,
+    };
+    await act(async () => root.render(<PlanConfirmation initial={value} executionScope={scope} />));
+    expect(container.textContent).toContain("covers all 1 current repository");
+    fetch.mockImplementation(async (url: string) =>
+      url.endsWith("/workflow")
+        ? Response.json({ error: { message: "Scope temporarily unavailable" } }, { status: 503 })
+        : Response.json(value),
+    );
+    await click("Reload review");
+    expect(container.textContent).toContain("Execution scope unavailable");
+    expect(button("Approve plan r1").disabled).toBe(true);
+    expect(container.textContent).not.toContain("covers all 1 current repository");
+    fetch.mockImplementation(async (url: string) =>
+      url.endsWith("/workflow")
+        ? Response.json({
+            executionScope: {
+              ...scope,
+              repositories: {
+                matches: false,
+                connectedCount: 2,
+                missing: ["example/api"],
+                removed: [],
+              },
+            },
+          })
+        : Response.json(value),
+    );
+    await click("Reload review");
+    expect(container.textContent).not.toContain("Execution scope unavailable");
+    expect(container.textContent).toContain("Not covered: example/api");
+    expect(fetch.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
+  });
+  it("prevents an approval with mismatched recovery scope while preserving the request-changes route", async () => {
+    const value = review();
+    const scope: StoryWorkflowStatus["executionScope"] = {
+      observedAt: at,
+      planRevision: 1,
+      repositories: { matches: false, connectedCount: 2, missing: ["example/api"], removed: [] },
+      queuedWork: [],
+      hasMore: false,
+    };
+    await act(async () =>
+      root.render(
+        <PlanConfirmation key="approval" initial={value} executionScope={scope} recoveryBlocked />,
+      ),
+    );
+    expect(button("Approve plan r1").disabled).toBe(true);
+    expect(container.textContent).toContain("correct the scope or agent configuration");
+    await click("Approve plan r1");
+    expect(fetch).not.toHaveBeenCalled();
+    value.request.intent = "reject";
+    await act(async () =>
+      root.render(
+        <PlanConfirmation key="changes" initial={value} executionScope={scope} recoveryBlocked />,
+      ),
+    );
+    expect(button("Confirm changes to plan r1").disabled).toBe(false);
   });
 });
 

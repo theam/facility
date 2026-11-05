@@ -1,16 +1,30 @@
 "use client";
 
-import type { PlanDecisionReview, StoryPlans } from "@facility/sdk";
+import type { PlanDecisionReview, StoryPlans, StoryWorkflowStatus } from "@facility/sdk";
 import { Button, Eyebrow } from "@facility/ui";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { PlanContent } from "@/components/story/plan-content";
+import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { formatTime } from "@/lib/story-presentation";
 
-export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
+export function PlanConfirmation({
+  initial,
+  executionScope,
+  executionScopeError,
+  recoveryBlocked = false,
+}: {
+  initial: PlanDecisionReview;
+  executionScope?: StoryWorkflowStatus["executionScope"];
+  executionScopeError?: string;
+  recoveryBlocked?: boolean;
+}) {
   const [review, setReview] = useState(initial),
     [error, setError] = useState<string | null>(null);
+  const [scope, setScope] = useState(executionScope),
+    [scopeError, setScopeError] = useState(executionScopeError);
+  const [needsRecovery, setNeedsRecovery] = useState(recoveryBlocked);
   const [receipt, setReceipt] = useState(initial.decision),
     [busy, setBusy] = useState(false);
   const [expired, setExpired] = useState(() => Date.parse(initial.request.expiresAt) <= Date.now());
@@ -37,10 +51,19 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
     setBusy(true);
     setError(null);
     const n = ++sequence.current;
-    const result = await clientApi<PlanDecisionReview>("GET", path);
+    const [result, workflow] = await Promise.all([
+      clientApi<PlanDecisionReview>("GET", path),
+      clientApi<StoryWorkflowStatus>(
+        "GET",
+        `/v1/projects/${encodeURIComponent(review.projectId)}/workspace-stories/${encodeURIComponent(review.storyId)}/workflow`,
+      ),
+    ]);
     if (n !== sequence.current) return;
     busyRef.current = false;
     setBusy(false);
+    setScope(workflow.ok ? workflow.data.executionScope : undefined);
+    setScopeError(workflow.ok ? undefined : workflow.message);
+    if (workflow.ok) setNeedsRecovery(!!workflow.data.blockedReason);
     if (!result.ok) {
       setError(result.message);
       return;
@@ -52,6 +75,7 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
     if (
       busyRef.current ||
       !review.proof ||
+      approvalBlock ||
       review.request.status !== "pending" ||
       Date.parse(review.request.expiresAt) <= Date.now()
     )
@@ -80,6 +104,21 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
   }
   const pending = review.request.status === "pending" && !!review.proof && !expired && !receipt;
   const approval = review.request.intent === "approve";
+  const approvalBlock =
+    approval && !receipt
+      ? scopeError
+        ? "Reload the execution scope before approving. Its current effect could not be verified."
+        : needsRecovery && (!scope || scope.planRevision !== review.plan.revision)
+          ? "Reload the current plan and scope before approving recovery."
+          : needsRecovery &&
+              scope &&
+              (!scope.repositories.matches ||
+                scope.queuedWork.some(
+                  (turn) => turn.configuration !== "current" || turn.planAgent !== "current",
+                ))
+            ? "Open the current plan and correct the scope or agent configuration before approving recovery."
+            : null
+      : null;
   return (
     <section
       aria-label="Confirm plan decision"
@@ -100,6 +139,13 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
           does not accept the final delivery.
         </p>
       </header>
+      {scopeError ? (
+        <p role="alert" className="break-words text-sm text-(--human)">
+          Execution scope unavailable: {scopeError}. Reload to inspect retained work before relying
+          on recovery.
+        </p>
+      ) : null}
+      <PlanExecutionScope scope={scope} planRevision={review.plan.revision} />
       <PlanContent plan={review.plan} />
       <div className="flex flex-col gap-2 border-y border-(--line) py-4 text-sm">
         <p>
@@ -122,6 +168,11 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
       {error ? (
         <p role="alert" className="break-words text-sm text-(--bad)">
           {error}
+        </p>
+      ) : null}
+      {pending && approvalBlock ? (
+        <p role="alert" className="text-sm text-(--human)">
+          {approvalBlock}
         </p>
       ) : null}
       {receipt ? (
@@ -150,7 +201,7 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
           <Button
             variant="primary"
             className="h-auto min-h-10 max-w-full whitespace-normal py-2"
-            disabled={busy}
+            disabled={busy || !!approvalBlock}
             onClick={() => void confirm()}
           >
             {busy

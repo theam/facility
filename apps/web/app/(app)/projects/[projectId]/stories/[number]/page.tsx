@@ -201,6 +201,7 @@ export default async function StoryPage({
         defaultAgent={agents.ok ? agents.data.defaults.ui : null}
         queuedAgents={workflow.ok && workflow.data.blockedReason ? workflow.data.queuedAgents : []}
         blockedReason={workflow.ok ? workflow.data.blockedReason : undefined}
+        executionScope={workflow.ok ? workflow.data.executionScope : undefined}
         catalogError={agents.ok ? undefined : agents.message}
         canWrite={canWrite && story.deletedAt === null}
         userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}
