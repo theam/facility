@@ -133,6 +133,27 @@ async function audits(f: { turnId: string }) {
 }
 
 describe("usage certainty and audited final charges", () => {
+  it.each([
+    "\u0000receipt",
+    "receipt\u0000id",
+    "receipt\u0000",
+  ])("rejects NUL receipt references with 400 and no financial changes %#", async (reference) => {
+    const f = await fixture();
+    const before = await rows(f);
+    const response = await settle(f, { cost_cents: 1, reference });
+    expect(response.statusCode).toBe(400);
+    expect(await rows(f)).toEqual(before);
+    expect(await audits(f)).toHaveLength(0);
+  });
+  it("retains valid Unicode references and their trimmed replay identity", async () => {
+    const f = await fixture();
+    const reference = "收据-😀-１２３";
+    const first = await settle(f, { cost_cents: 1, reference: `  ${reference}  ` });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().settlementReference).toBe(reference);
+    expect((await settle(f, { cost_cents: 1, reference })).statusCode).toBe(200);
+    expect(await audits(f)).toHaveLength(1);
+  });
   it("rolls back the bill and hold release if its audit cannot be written", async () => {
     const f = await fixture();
     await db

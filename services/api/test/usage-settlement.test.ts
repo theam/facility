@@ -28,6 +28,7 @@ describe("manual charge validation", () => {
     "",
     "  ",
     "x".repeat(501),
+    "receipt\u0000id",
   ])("requires a bounded receipt reference", async (reference) => {
     const transaction = vi.fn();
     const costs = new CostBudgetService({ transaction } as unknown as FacilityDb);

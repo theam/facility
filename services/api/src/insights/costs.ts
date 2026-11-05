@@ -322,12 +322,13 @@ export class CostBudgetService {
       input.costCents < 0 ||
       input.costCents > 2_000_000_000 ||
       reference.length < 1 ||
-      reference.length > 500
+      reference.length > 500 ||
+      reference.includes("\u0000")
     )
       throw new ApiError(
         400,
         "invalid_settlement",
-        "Provide a finite final charge and a receipt reference (1–500 characters).",
+        "Provide a finite final charge and a receipt reference (1–500 characters, without NUL).",
       );
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;

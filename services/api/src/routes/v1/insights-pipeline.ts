@@ -206,7 +206,16 @@ export async function registerInsightsPipelineRoutes(
         body: z
           .object({
             cost_cents: z.number().min(0).max(2_000_000_000),
-            reference: z.string().trim().min(1).max(500),
+            reference: z
+              .string()
+              .trim()
+              .min(1)
+              .max(500)
+              .regex(
+                // biome-ignore lint/suspicious/noControlCharactersInRegex: Deliberately reject PostgreSQL's forbidden NUL character.
+                /^[^\u0000]*$/,
+                "Receipt reference must not contain NUL",
+              ),
           })
           .strict(),
         response: { 200: TurnUsage },
