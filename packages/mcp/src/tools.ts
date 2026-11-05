@@ -112,10 +112,42 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story",
     permission: "projects:read",
     description:
-      "Get a story's status, workspace, turns, branch, pull request, artifacts, attention, and ordered evidence timeline. Needs projects:read.",
+      "Get a story's status, workspace, turns, branch, pull request, artifacts, attention, latest recorded work activity and ordered evidence timeline. Maintenance health checks are excluded from the progress summary, not from the full run history. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}`,
+  },
+  {
+    name: "facility_get_story_activity",
+    permission: "projects:read",
+    description:
+      "Read stored activity for one story run, with bounded summaries and sequence cursors. Default and before pages are newest first; after pages are oldest first so polling cannot skip a burst. Pass next_cursor in the same direction while has_more. Use only one cursor. Supply eventSeq alone to inspect one full stored event instead of a page. Reads do not wake a workspace, call a model or start work. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      storyId,
+      turnId: z.string().min(1),
+      eventSeq: z.number().int().safe().min(0).optional(),
+      before: z.number().int().safe().min(0).optional(),
+      after: z.number().int().safe().min(0).optional(),
+      limit: z.number().int().min(1).max(50).default(10),
+    },
+    method: "GET",
+    path: (args) => {
+      if (args.eventSeq !== undefined && (args.before !== undefined || args.after !== undefined))
+        throw new Error("Choose one stored event or an activity page, not both");
+      const base = `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/turns/${part(args.turnId)}`;
+      return args.eventSeq === undefined
+        ? `${base}/activity`
+        : `${base}/events/${part(args.eventSeq)}`;
+    },
+    query: (args) =>
+      args.eventSeq === undefined
+        ? {
+            before: numberValue(args.before),
+            after: numberValue(args.after),
+            limit: Number(args.limit ?? 10),
+          }
+        : {},
   },
   {
     name: "facility_get_delivery",

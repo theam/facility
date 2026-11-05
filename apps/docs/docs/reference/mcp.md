@@ -47,6 +47,7 @@ The server exposes forty-eight task-oriented tools:
 | `facility_prepare_consultation_handoff` | Return editable implementation context from a completed result; does not queue work. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
+| `facility_get_story_activity` | Read one run’s recorded activity with stable forward or backward sequence cursors. |
 | `facility_get_conversation` | Read the shared ordered conversation, or an exact source message and earlier context with `messageId`. |
 | `facility_prepare_file_upload` | Reserve private story input storage and return a short-lived binary HTTP upload grant; does not run an agent. |
 | `facility_list_input_files` | Read private input metadata without waking compute. |
@@ -162,6 +163,26 @@ and `related` supplies earlier context for its runs. A source read cannot be
 combined with nonzero `after` (or the HTTP `before` cursor). Missing or foreign
 messages return an error and never fall back to recent responses. The operation
 requires `projects:read` and does not start work or wake compute.
+`facility_get_story_activity` takes `projectId`, `storyId`, `turnId`, `limit` (1–50),
+and optionally one sequence cursor. Default and `before` pages have `order: "desc"`.
+Use `after: 0` to start at the oldest readable event, or `after` with the newest
+consumed sequence to poll new activity. These pages have `order: "asc"`; follow
+`next_cursor` as `after` while `has_more` so a burst cannot be skipped. A mixed
+cursor is rejected. Empty pages do not advance the consumed sequence. This is
+one database-only read shared with the UI, scoped to the organization, project,
+story and turn. It starts no agent, inference or workspace operation.
+To inspect an original payload, set `eventSeq` without `before` or `after`.
+This reads one full stored event from the same source as **Load the full stored
+event** in the UI. Missing events and a turn from another story are errors.
+
+Story responses include `progress.observedAt` and `progress.latest` (null when no
+work event is recorded). The latest item carries its turn and the same bounded
+activity projection. Stream fragments, workspace health samples and successful
+credential renewals do not replace the latest work event; maintenance remains
+available in the run history. A recorded message or command is evidence of that
+event, not proof of a completed delivery or an explanation of current capacity.
+Older servers omit `progress`; clients must not treat that as no activity.
+
 `facility_get_environment` uses the same fields for ordered workspace events and returns
 `next_cursor` and `has_more`. Story and environment responses include typed attention, available
 next operations, active-compute status, retained-storage status, provider usage, and an explicit

@@ -339,6 +339,11 @@ export type RequestStoryConsultation = FacilityGeneratedBody<
   "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations"
 >;
 export type WorkspaceStoryBundle = {
+  /** Absent on older servers. Maintenance heartbeats do not establish work progress. */
+  progress?: {
+    observedAt: string;
+    latest: { turn: StoryTurnSummary; activity: StoryActivityItem } | null;
+  };
   /** Absent on older servers; an absent register never means a complete PR set. */
   delivery?: StoryDelivery;
   /** Absent on older servers; null until a complete exact delivery generation is observed. */
@@ -488,6 +493,8 @@ export type StoryActivityItem = {
 };
 export type StoryTurnActivityPage = {
   turn: StoryTurnSummary;
+  /** Incremental `after` pages are ascending; older servers omit this field. */
+  order?: "asc" | "desc";
   items: StoryActivityItem[];
   has_more: boolean;
   next_cursor: number | null;

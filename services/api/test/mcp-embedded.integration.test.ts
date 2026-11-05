@@ -11,6 +11,8 @@ import {
   storyMessages,
   storyPlanRevisions,
   storyPlanStates,
+  turnEvents,
+  turns,
 } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -140,7 +142,7 @@ describe("embedded MCP control plane", async () => {
 
   it("serves the reduced tool catalog from the API process", async () => {
     const tools = await client.listTools();
-    expect(tools.tools).toHaveLength(48);
+    expect(tools.tools).toHaveLength(49);
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_start_story");
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_list_skills");
     for (const name of [
@@ -152,6 +154,7 @@ describe("embedded MCP control plane", async () => {
       "facility_get_delivery_acceptance",
       "facility_request_delivery_acceptance",
       "facility_get_plan",
+      "facility_get_story_activity",
       "facility_propose_plan",
       "facility_request_plan_decision",
       "facility_get_consultation_options",
@@ -203,6 +206,89 @@ describe("embedded MCP control plane", async () => {
       state: { revision: 0, decisionRevision: 0, status: "none" },
     });
   });
+  it("reads a burst of run activity through authenticated MCP and rejects a mixed cursor", async () => {
+    const [original] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));
+    if (!original) throw Error("Missing story fixture");
+    const id = newId("story"),
+      conversationId = newId("sess"),
+      turnId = newId("turn");
+    const scope = { orgId: original.orgId, projectId, storyId: id };
+    await app.facilityDb.insert(stories).values({ ...original, id, externalId: id });
+    await app.facilityDb
+      .insert(storyConversations)
+      .values({ ...scope, id: conversationId, nextSeq: 1 });
+    await app.facilityDb.insert(turns).values({
+      ...scope,
+      id: turnId,
+      conversationId,
+      agentName: "reviewer",
+      manifestHash: "fixture",
+      manifest: {},
+      engine: "codex",
+      model: "fixture",
+      state: "running",
+      triggerType: "ui",
+      createdBy: original.createdBy,
+    });
+    await app.facilityDb.insert(turnEvents).values(
+      Array.from({ length: 13 }, (_, i) => ({
+        ...scope,
+        turnId,
+        seq: i + 1,
+        type: "engine.item.completed",
+        data: { item: { type: "agent_message", text: `Progress ${i + 1}` } },
+      })),
+    );
+    const seen: number[] = [];
+    let after = 0;
+    for (let n = 0; n < 4; n++) {
+      const result = await client.callTool({
+        name: "facility_get_story_activity",
+        arguments: { projectId, storyId: id, turnId, after, limit: 5 },
+      });
+      expect(result.isError).not.toBe(true);
+      const text = (result.content as Array<{ text?: string }>)[0]?.text;
+      const page = JSON.parse(text ?? "{}");
+      expect(page.order).toBe("asc");
+      seen.push(...page.items.map((item: { seq: number }) => item.seq));
+      if (!page.has_more) break;
+      after = page.next_cursor;
+    }
+    expect(seen).toEqual(Array.from({ length: 13 }, (_, i) => i + 1));
+    const raw = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId, storyId: id, turnId, eventSeq: 2 },
+    });
+    expect(raw.isError).not.toBe(true);
+    const rawText = (raw.content as Array<{ text?: string }>)[0]?.text;
+    expect(JSON.parse(rawText ?? "{}")).toMatchObject({
+      seq: 2,
+      data: { item: { text: "Progress 2" } },
+    });
+    const absent = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId, storyId: id, turnId, eventSeq: 999 },
+    });
+    expect(absent.isError).toBe(true);
+    const foreignEvent = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId, storyId, turnId, eventSeq: 2 },
+    });
+    expect(foreignEvent.isError).toBe(true);
+    const invalid = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId, storyId: id, turnId, after: 0, before: 5 },
+    });
+    expect(invalid.isError).toBe(true);
+    const wrongStory = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId, storyId, turnId, after: 0 },
+    });
+    expect(wrongStory.isError).toBe(true);
+    const [unchanged] = await app.facilityDb.select().from(turns).where(eq(turns.id, turnId));
+    expect(unchanged?.state).toBe("running");
+  });
+
   it("reads the exact source message through the authenticated MCP/API path", async () => {
     const [story] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));
     if (!story) throw Error("Missing story fixture");

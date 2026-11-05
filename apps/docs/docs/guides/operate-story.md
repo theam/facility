@@ -101,6 +101,23 @@ When the story needs attention:
 
 Canceling a turn does not roll back files or commits already written in the workspace.
 
+The header links to **Latest recorded activity**, with the responsible run and
+source time. Health checks alone do not establish progress. **Inspect this run**
+loads its activity even when its conversation is on an older page. An inspection
+stays on the chosen run if another run produces newer activity; choose the newer
+run explicitly to inspect it.
+
+Open **Run details** to read stored events and full original payloads on demand.
+While the panel is open and the tab is visible, it checks for new items every
+eight seconds. Updates are buffered: **Show new activity** reveals them without
+replacing already opened evidence. **Check now** reads at most five ten-item
+pages; if more remain, the next check continues from the last consumed sequence.
+Older history keeps its own cursor. Closing the panel or hiding the tab stops
+polling. Errors keep the last successful history visible with an explicit error;
+a server that cannot confirm forward paging does not claim to be up to date.
+Reading never wakes compute or starts work. Historical workflow holds and retry
+times describe the recorded event; inspect current workflow before deciding.
+
 ## Ask a read-only consultation
 
 In **Ask about this task**, choose **New consultation**, review the configured agent/model and

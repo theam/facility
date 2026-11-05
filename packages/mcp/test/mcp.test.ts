@@ -63,6 +63,54 @@ function textPayload(result: unknown) {
 }
 
 describe("@facility/mcp 0.12", () => {
+  test("reads incremental run activity through the shared endpoint and forwards cursor zero", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { order: "asc", items: [], has_more: false, next_cursor: null };
+      },
+    });
+    const result = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p/a", storyId: "s/b", turnId: "t/c", after: 0, limit: 7 },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(calls[0]).toMatchObject([
+      "GET",
+      "/v1/projects/p%2Fa/workspace-stories/s%2Fb/turns/t%2Fc/activity",
+      { query: { after: 0, limit: 7 } },
+    ]);
+    expect(JSON.parse(textPayload(result))).toMatchObject({ order: "asc", items: [] });
+    const invalid = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p", storyId: "s", turnId: "t", after: -1 },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(calls).toHaveLength(1);
+    const raw = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p/a", storyId: "s/b", turnId: "t/c", eventSeq: 4 },
+    });
+    expect(raw.isError).not.toBe(true);
+    expect(calls[1]).toMatchObject([
+      "GET",
+      "/v1/projects/p%2Fa/workspace-stories/s%2Fb/turns/t%2Fc/events/4",
+      { query: {} },
+    ]);
+    const mixed = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p", storyId: "s", turnId: "t", eventSeq: 4, after: 0 },
+    });
+    expect(mixed.isError).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(toolDefinitions.find((t) => t.name === "facility_get_story_activity")).toMatchObject({
+      permission: "projects:read",
+      method: "GET",
+    });
+    await client.close();
+    await server.close();
+  });
   test("prepares binary uploads without transporting file bytes in tools, then attaches completed IDs", async () => {
     const calls: unknown[][] = [];
     const { client, server } = await connect({
@@ -142,6 +190,7 @@ describe("@facility/mcp 0.12", () => {
       "facility_list_skills",
       "facility_list_stories",
       "facility_get_story",
+      "facility_get_story_activity",
       "facility_get_delivery",
       "facility_set_delivery",
       "facility_get_delivery_integration_policy",

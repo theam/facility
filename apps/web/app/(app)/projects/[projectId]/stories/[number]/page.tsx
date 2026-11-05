@@ -12,6 +12,7 @@ import { StoryConversation } from "@/components/story/story-conversation";
 import { StoryDeliveryPanel } from "@/components/story/story-delivery";
 import { StoryPlanPanel } from "@/components/story/story-plan";
 import { StoryPreviewConvergencePanel } from "@/components/story/story-preview-convergence";
+import { StoryProgress } from "@/components/story/story-progress";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { StoryWorkflowPanel } from "@/components/story/story-workflow";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
@@ -175,6 +176,18 @@ export default async function StoryPage({
             </div>
           ) : null}
         </dl>
+        {bundle.progress?.latest ? (
+          <p className="text-xs text-(--mut)">
+            Latest recorded activity: {bundle.progress.latest.turn.agentName} ·{" "}
+            {bundle.progress.latest.activity.title}.{" "}
+            <Link
+              href="#story-progress"
+              className="inline-flex min-h-11 items-center text-(--info) underline"
+            >
+              Inspect activity
+            </Link>
+          </p>
+        ) : null}
       </header>
 
       {openAttention.length > 0 ? (
@@ -298,6 +311,13 @@ export default async function StoryPage({
           />
         )}
       </section>
+
+      <StoryProgress
+        key={`${projectId}:${storyId}`}
+        projectId={projectId}
+        storyId={storyId}
+        progress={bundle.progress}
+      />
 
       {workflow.ok ? (
         <StoryWorkflowPanel

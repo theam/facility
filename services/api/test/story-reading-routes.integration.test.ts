@@ -17,7 +17,7 @@ import {
   turnEvents,
   turns,
 } from "@facility/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -611,6 +611,95 @@ describe("story reading routes", async () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it("reads new activity in ascending pages without losing a burst or confusing old cursors", async () => {
+    const url = `${base()}/turns/${turnIds[0]}/activity`;
+    const first = await app.inject({ url: `${url}?after=0&limit=2`, headers: viewer() });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ order: "asc", has_more: true, next_cursor: 2 });
+    expect(first.json().items.map((item: { seq: number }) => item.seq)).toEqual([1, 2]);
+    const burst = Array.from({ length: 31 }, (_, i) =>
+      turnEvent(
+        turnIds[0],
+        i + 7,
+        "engine.item.completed",
+        { item: { type: "agent_message", text: `New progress ${i}` } },
+        new Date("2026-09-10T11:00:00Z"),
+      ),
+    );
+    await db.insert(turnEvents).values(burst);
+    try {
+      const seqs: number[] = [1, 2];
+      let after = 2;
+      for (let page = 0; page < 10; page++) {
+        const response = await app.inject({
+          url: `${url}?after=${after}&limit=4`,
+          headers: viewer(),
+        });
+        expect(response.statusCode).toBe(200);
+        const data = response.json();
+        expect(data.order).toBe("asc");
+        seqs.push(...data.items.map((item: { seq: number }) => item.seq));
+        if (!data.has_more) break;
+        after = data.next_cursor;
+      }
+      expect(seqs).toEqual([1, 2, ...Array.from({ length: 34 }, (_, i) => i + 4)]);
+      const empty = await app.inject({ url: `${url}?after=37`, headers: viewer() });
+      expect(empty.json()).toMatchObject({
+        order: "asc",
+        items: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      for (const query of ["after=0&before=6", "after=-1", "after=1.5", "after=9007199254740992"]) {
+        expect(
+          (await app.inject({ url: `${url}?${query}`, headers: viewer() })).statusCode,
+          query,
+        ).toBe(400);
+      }
+      const old = await app.inject({ url: `${url}?before=5&limit=2`, headers: viewer() });
+      expect(old.json()).toMatchObject({ order: "desc", next_cursor: 2 });
+      expect(old.json().items.map((item: { seq: number }) => item.seq)).toEqual([4, 2]);
+    } finally {
+      await db
+        .delete(turnEvents)
+        .where(and(eq(turnEvents.turnId, turnIds[0] ?? ""), gt(turnEvents.seq, 6)));
+    }
+  });
+
+  it("keeps the latest work event visible through maintenance-only updates without loading raw history", async () => {
+    const maintenance = Array.from({ length: 30 }, (_, i) =>
+      turnEvent(
+        turnIds[3],
+        i + 1,
+        i % 2 ? "workspace.health" : "github.credentials.renewed",
+        { probe: "healthy" },
+        new Date("2026-09-10T12:00:00Z"),
+      ),
+    );
+    await db.insert(turnEvents).values(maintenance);
+    try {
+      const response = await app.inject({ url: `${base()}?evidence=none`, headers: viewer() });
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body).not.toHaveProperty("events");
+      expect(body.progress.latest).toMatchObject({
+        turn: { id: turnIds[2] },
+        activity: { seq: 2, title: "Run failed", text: "codex exited with status 1" },
+      });
+      expect(new Date(body.progress.observedAt).getTime()).not.toBeNaN();
+      const history = await app.inject({
+        url: `${base()}/turns/${turnIds[3]}/activity`,
+        headers: viewer(),
+      });
+      expect(history.json().items).toHaveLength(10);
+      expect(
+        history.json().items.some((item: { type: string }) => item.type === "workspace.health"),
+      ).toBe(true);
+    } finally {
+      await db.delete(turnEvents).where(eq(turnEvents.turnId, turnIds[3] ?? ""));
+    }
+  });
+
   it("pages the timeline by occurrence with agent events summarized", async () => {
     const first = await app.inject({
       method: "GET",
@@ -687,6 +776,7 @@ describe("story reading routes", async () => {
     const paths = [
       `${base()}/conversation?order=desc`,
       `${base()}/turns/${turnIds[0]}/activity`,
+      `${base()}/turns/${turnIds[0]}/activity?after=0`,
       `${base()}/turns/${turnIds[0]}/events/1`,
       `${base()}/timeline`,
       `${base()}?evidence=none`,

@@ -107,7 +107,8 @@ const StoryBundleQuery = z.object({
   evidence: z.enum(["recent", "none"]).default("recent"),
 });
 const ActivityQuery = z.object({
-  before: z.coerce.number().int().min(0).optional(),
+  before: z.coerce.number().int().safe().min(0).optional(),
+  after: z.coerce.number().int().safe().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 const TimelineQuery = z.object({
@@ -818,6 +819,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       );
       return {
         turn: page.turn,
+        order: page.order,
         items: page.items,
         has_more: page.hasMore,
         next_cursor: page.nextCursor,

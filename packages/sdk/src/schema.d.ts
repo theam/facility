@@ -14002,6 +14002,7 @@ export interface operations {
         parameters: {
             query?: {
                 before?: number;
+                after?: number;
                 limit?: number;
             };
             header?: never;

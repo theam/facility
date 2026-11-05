@@ -23,9 +23,9 @@ import {
   users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
-import { ACTIVITY_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
+import { ACTIVITY_NOISE_TYPES, PROGRESS_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
 import { readUsageJournal } from "../turns/usage-journal.js";
@@ -1342,6 +1342,7 @@ export class StoryWorkspaceService {
       recentEvents,
       recentEvidence,
       assignees,
+      progressRows,
     ] = await Promise.all([
       this.db
         .select()
@@ -1392,6 +1393,28 @@ export class StoryWorkspaceService {
             .limit(200)
         : Promise.resolve(undefined),
       this.assignees(orgId, projectId, [storyId]).then((rows) => rows.get(storyId) ?? []),
+      this.db
+        .select({ event: turnEvents, turn: turns })
+        .from(turnEvents)
+        .innerJoin(
+          turns,
+          and(
+            eq(turns.orgId, turnEvents.orgId),
+            eq(turns.projectId, turnEvents.projectId),
+            eq(turns.storyId, turnEvents.storyId),
+            eq(turns.id, turnEvents.turnId),
+          ),
+        )
+        .where(
+          and(
+            eq(turnEvents.orgId, orgId),
+            eq(turnEvents.projectId, projectId),
+            eq(turnEvents.storyId, storyId),
+            notInArray(turnEvents.type, [...PROGRESS_NOISE_TYPES]),
+          ),
+        )
+        .orderBy(desc(turnEvents.createdAt), desc(turnEvents.seq), desc(turnEvents.turnId))
+        .limit(1),
     ]);
     return {
       story,
@@ -1401,6 +1424,15 @@ export class StoryWorkspaceService {
       artifacts,
       attention,
       assignees,
+      progress: {
+        observedAt: new Date().toISOString(),
+        latest: progressRows[0]
+          ? {
+              turn: conversationTurn(progressRows[0].turn),
+              activity: presentTurnEvent(progressRows[0].event),
+            }
+          : null,
+      },
       events: recentEvents ? recentEvents.reverse() : undefined,
       timeline:
         recentEvents && recentEvidence
@@ -1556,8 +1588,10 @@ export class StoryWorkspaceService {
     projectId: string,
     storyId: string,
     turnId: string,
-    options: { before?: number; limit?: number } = {},
+    options: { before?: number; after?: number; limit?: number } = {},
   ) {
+    if (options.before !== undefined && options.after !== undefined)
+      throw new StoryServiceError("invalid_activity_cursor", "Use before or after, not both", 400);
     const turn = await scopedTurn(this.db, orgId, projectId, turnId);
     if (turn.storyId !== storyId)
       throw new StoryServiceError("turn_not_found", "turn not found", 404);
@@ -1573,14 +1607,16 @@ export class StoryWorkspaceService {
           eq(turnEvents.turnId, turnId),
           notInArray(turnEvents.type, [...ACTIVITY_NOISE_TYPES]),
           options.before === undefined ? undefined : lt(turnEvents.seq, options.before),
+          options.after === undefined ? undefined : gt(turnEvents.seq, options.after),
         ),
       )
-      .orderBy(desc(turnEvents.seq))
+      .orderBy(options.after === undefined ? desc(turnEvents.seq) : asc(turnEvents.seq))
       .limit(limit + 1);
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).map(presentTurnEvent);
     return {
       turn: conversationTurn(turn),
+      order: options.after === undefined ? ("desc" as const) : ("asc" as const),
       items,
       hasMore,
       nextCursor: hasMore ? (items.at(-1)?.seq ?? null) : null,
