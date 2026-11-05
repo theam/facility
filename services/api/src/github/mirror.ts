@@ -15,6 +15,7 @@ import {
   turnGitEvidence,
 } from "@facility/db";
 import { and, asc, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { storyRepositoryScope } from "../stories/branch.js";
 import { appendStoryEvidence } from "../stories/evidence.js";
 import { isGithubIssueStory } from "../stories/phase.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
@@ -840,7 +841,7 @@ export class GithubMirrorService {
               eq(turnGitEvidence.orgId, repository.orgId),
               eq(turnGitEvidence.projectId, repository.projectId),
               eq(turnGitEvidence.finalSha, input.headSha),
-              eq(stories.repositoryId, repository.id),
+              storyRepositoryScope(repository),
             ),
           )
           .orderBy(desc(turnGitEvidence.completedAt))
@@ -857,7 +858,7 @@ export class GithubMirrorService {
             and(
               eq(stories.orgId, repository.orgId),
               eq(stories.projectId, repository.projectId),
-              eq(stories.repositoryId, repository.id),
+              storyRepositoryScope(repository),
               eq(stories.pullRequestNumber, input.pullNumber),
             ),
           )
@@ -892,7 +893,7 @@ export class GithubMirrorService {
             and(
               eq(stories.orgId, repository.orgId),
               eq(stories.projectId, repository.projectId),
-              eq(stories.repositoryId, repository.id),
+              storyRepositoryScope(repository),
               eq(stories.branch, branch),
             ),
           )

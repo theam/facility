@@ -16,6 +16,7 @@ import {
   stories,
   storyAssignees,
   storyMessages,
+  turnGitEvidence,
   turns,
   workspaces,
 } from "@facility/db";
@@ -24,6 +25,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/catalog.js";
 import { buildApp } from "../src/app.js";
+import { GithubMirrorService } from "../src/github/mirror.js";
 import { StoryTitleService } from "../src/stories/titles.js";
 import { createStoryDomain } from "../src/story-domain.js";
 import type { AppConfig } from "../src/types.js";
@@ -490,6 +492,93 @@ describe("backlog and story creation routes", async () => {
       },
     });
     expect(unknownRepository.statusCode).toBe(404);
+  });
+
+  it("links the pull request a UI-started story's agent opens from its own branch", async () => {
+    const key = `ui-pr-${suffix}`;
+    const started = await app.inject({
+      method: "POST",
+      url: `/v1/projects/${projectId}/workspace-stories`,
+      headers: { cookie: ownerCookie, "idempotency-key": key, "x-facility-surface": "ui" },
+      payload: { message: "Document the workspace in the README.", idempotency_key: key },
+    });
+    expect(started.statusCode, started.body).toBe(202);
+    const story = started.json().story;
+    expect(story.provider).toBe("manual");
+
+    // The agent's turn ends on its story branch, then GitHub reports the PR it opened.
+    const branch = "facility/document-the-workspace-in-the-readme";
+    const headSha = "d".repeat(40);
+    await db.insert(turnGitEvidence).values({
+      turnId: started.json().queued.turn.id,
+      orgId: "org_local",
+      projectId,
+      storyId: story.id,
+      workspaceId: started.json().workspace.id,
+      engineSessionId: newId("esess"),
+      initialBranch: "main",
+      initialSha: "0".repeat(40),
+      finalBranch: branch,
+      finalSha: headSha,
+      completedAt: new Date(),
+    });
+    const mirror = new GithubMirrorService(
+      db,
+      async () => {
+        throw new Error("reconciliation is not used in this test");
+      },
+      domain.stories,
+    );
+    const pullRequestOpened = (name: string, number: number) =>
+      mirror.handleWebhook({
+        id: `delivery-${name}-${number}-${suffix}`,
+        orgId: "org_local",
+        eventType: "pull_request",
+        payload: {
+          action: "opened",
+          repository: { id: number, name, owner: { login: "acme" } },
+          pull_request: {
+            number,
+            title: "Document the workspace in the README",
+            state: "open",
+            draft: false,
+            html_url: `https://github.com/acme/${name}/pull/${number}`,
+            user: { login: "facility-bot" },
+            head: { ref: branch, sha: headSha },
+            base: { ref: "main" },
+            created_at: "2026-10-28T12:00:00Z",
+            updated_at: "2026-10-28T12:00:00Z",
+          },
+        },
+      });
+
+    // A related repository's PR on the same branch and commit is not this story's work.
+    const primary = (
+      await db.select().from(projectRepositories).where(eq(projectRepositories.id, repositoryId))
+    )[0];
+    if (!primary) throw new Error("expected primary repository");
+    await db.insert(projectRepositories).values({
+      id: newId("repo"),
+      orgId: "org_local",
+      projectId,
+      installationId: primary.installationId,
+      owner: "acme",
+      name: `docs-${suffix}`,
+      defaultBranch: "main",
+      role: "related",
+    });
+    await pullRequestOpened(`docs-${suffix}`, 77);
+    expect(
+      (await db.select().from(stories).where(eq(stories.id, story.id)))[0]?.pullRequestNumber,
+    ).toBeNull();
+
+    await pullRequestOpened(`app-${suffix}`, 502);
+    expect((await db.select().from(stories).where(eq(stories.id, story.id)))[0]).toMatchObject({
+      repositoryId: null,
+      branch,
+      pullRequestNumber: 502,
+      pullRequestUrl: `https://github.com/acme/app-${suffix}/pull/502`,
+    });
   });
 
   it("serves the backlog to readers only within their project scope", async () => {
