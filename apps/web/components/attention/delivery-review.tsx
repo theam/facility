@@ -5,7 +5,7 @@ import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
 type Delivery = NonNullable<ProjectAttentionStories["items"][number]["delivery"]>;
 type Pull = Delivery["pullRequests"][number];
 
-export function currentCheckLabel(pull: Pull) {
+export function currentCheckLabel(pull: Pick<Pull, "checks">) {
   if (pull.checks.state === "unobserved") return "Checks not observed";
   if (!pull.checks.current) return "Checks belong to another or unknown head";
   return {

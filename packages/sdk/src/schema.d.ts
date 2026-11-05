@@ -6716,10 +6716,11 @@ export interface operations {
     listProjectAttentionStories: {
         parameters: {
             query?: {
-                category?: "all" | "plans" | "notices" | "deliveries";
+                category?: "all" | "plans" | "notices" | "deliveries" | "pulls";
                 q?: string;
                 limit?: number;
                 offset?: number;
+                pullOffset?: number;
             };
             header?: never;
             path: {
@@ -6738,6 +6739,38 @@ export interface operations {
                     "application/json": {
                         /** Format: date-time */
                         generatedAt: string;
+                        otherPullRequests: {
+                            total: number;
+                            limit: number;
+                            offset: number;
+                            items: {
+                                repository: string;
+                                number: number;
+                                title: string | null;
+                                url: string | null;
+                                draft: boolean | null;
+                                headSha: string | null;
+                                stale: boolean;
+                                checks: {
+                                    /** @enum {string} */
+                                    state: "unobserved" | "pending" | "success" | "failure";
+                                    headSha: string | null;
+                                    current: boolean;
+                                    observedAt: string | null;
+                                };
+                                /** Format: date-time */
+                                observedAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                stories: {
+                                    id: string;
+                                    title: string;
+                                    status: string;
+                                    /** @enum {string} */
+                                    relation: "delivery" | "source";
+                                }[];
+                            }[];
+                        };
                         total: number;
                         counts: {
                             stories: number;

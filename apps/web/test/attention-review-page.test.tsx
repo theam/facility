@@ -23,6 +23,33 @@ const page: ProjectAttentionStories = {
   total: 12,
   limit: 10,
   offset: 0,
+  otherPullRequests: {
+    total: 11,
+    limit: 10,
+    offset: 0,
+    items: [
+      {
+        repository: "example/app",
+        number: 7,
+        title: "Review a historical association",
+        url: "https://github.com/example/app/pull/7",
+        draft: true,
+        headSha: "b".repeat(40),
+        stale: false,
+        checks: {
+          state: "success",
+          headSha: "a".repeat(40),
+          current: false,
+          observedAt: "2026-11-05T10:00:00Z",
+        },
+        observedAt: "2026-11-05T12:00:00Z",
+        updatedAt: "2026-11-05T10:00:00Z",
+        stories: [
+          { id: "archived", title: "Previous delivery", status: "archived", relation: "delivery" },
+        ],
+      },
+    ],
+  },
   counts: { stories: 12, plans: 5, notices: 25, deliveries: 0 },
   budget: { available: false, reason: "permission" },
   workflowPolicy: { available: true, error: null },
@@ -89,7 +116,7 @@ describe("whole-story review queue", () => {
   it("paginates and filters stories on the server, retaining filters in links", async () => {
     const root = await render({ q: "scope & risk", category: "plans", page: "2" });
     expect(mocks.queries).toEqual([
-      { category: "plans", q: "scope & risk", limit: 10, offset: 10 },
+      { category: "plans", q: "scope & risk", limit: 10, offset: 10, pullOffset: 0 },
     ]);
     const previous = [...root.querySelectorAll("a")].find(
       (link) => link.textContent === "Previous",
@@ -117,8 +144,35 @@ describe("whole-story review queue", () => {
     };
     const empty = await render();
     expect(empty.textContent).toContain("No pending plans, notices or deliveries");
-    expect(empty.textContent).toContain(
-      "Check the project overview for pull requests without a linked delivery",
+    expect(empty.textContent).toContain("Other open PRs have their own list below");
+  });
+  it("keeps other PR pages independent while exposing stale-head checks and historical associations", async () => {
+    const root = await render({ page: "2", pullPage: "2", q: "scope & risk" });
+    expect(mocks.queries[0]).toMatchObject({ offset: 10, pullOffset: 10, q: "scope & risk" });
+    expect(root.textContent).toContain("11 matching open PRs");
+    expect(root.textContent).toContain("Checks belong to another or unknown head");
+    expect(root.textContent).toContain("archived · delivery link");
+    expect(root.querySelector('a[href="/projects/project/stories/archived"]')).not.toBeNull();
+    const previous = [...root.querySelectorAll("a")].find(
+      (link) => link.textContent === "Previous PRs",
     );
+    expect(previous?.getAttribute("href")).toBe(
+      "/projects/project/attention/review?q=scope+%26+risk&page=2#other-pull-requests",
+    );
+    expect(
+      root.querySelector('a[href="https://github.com/example/app/pull/7"]')?.getAttribute("rel"),
+    ).toBe("noreferrer");
+    expect((await render({ category: "plans" })).querySelector("#other-pull-requests")).toBeNull();
+  });
+  it("distinguishes missing PR inventory from empty and out-of-range pages", async () => {
+    mocks.result = {
+      ok: true,
+      data: { ...page, otherPullRequests: { total: 11, limit: 10, offset: 100, items: [] } },
+    };
+    const beyond = await render({ pullPage: "11" });
+    expect(beyond.textContent).toContain("No pull requests on this page");
+    expect(beyond.textContent).toContain("First PR page");
+    mocks.result = { ok: true, data: { ...page, otherPullRequests: undefined as never } };
+    expect((await render()).textContent).toContain("inventory is unavailable");
   });
 });

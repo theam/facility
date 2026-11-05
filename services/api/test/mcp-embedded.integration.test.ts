@@ -1,13 +1,22 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { newId } from "@facility/core";
-import { migrate, seed, stories, storyPlanRevisions, storyPlanStates } from "@facility/db";
+import {
+  githubPullRequests,
+  migrate,
+  projectRepositories,
+  seed,
+  stories,
+  storyPlanRevisions,
+  storyPlanStates,
+} from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import { ProjectAttentionService } from "../src/insights/project-attention.js";
 import { storyPlanDigest } from "../src/stories/plan-state.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -259,10 +268,59 @@ describe("embedded MCP control plane", async () => {
     const groupedPage = JSON.parse(groupedText ?? "{}");
     expect(groupedPage.budget).toMatchObject({ available: true, state: "not_configured" });
     expect(groupedPage.counts.deliveries).toBe(0);
+    expect(groupedPage.otherPullRequests).toEqual({ total: 0, limit: 10, offset: 0, items: [] });
     expect(groupedPage.workflowPolicy).toEqual({ available: true, error: null });
     expect(
       groupedPage.items.find((item: { storyId: string }) => item.storyId === id)?.plan,
     ).toMatchObject({ revision: 1, digest, decisionBrief: { status: "available", brief } });
+  });
+  it("pages other open PRs through the same projection as HTTP without changing story pages", async () => {
+    const [original] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));
+    if (!original) throw Error("Missing story fixture");
+    const repositoryId = newId("repo");
+    const scope = { orgId: original.orgId, projectId };
+    await app.facilityDb.insert(projectRepositories).values({
+      id: repositoryId,
+      ...scope,
+      owner: "example",
+      name: `mcp-${repositoryId}`,
+      defaultBranch: "main",
+    });
+    await app.facilityDb.insert(githubPullRequests).values(
+      [1, 2, 3].map((number) => ({
+        id: newId("ghp"),
+        ...scope,
+        repositoryId,
+        number,
+        title: `Other change ${number}`,
+        state: "open",
+        headRef: "feature",
+        headSha: "a".repeat(40),
+        baseRef: "main",
+        htmlUrl: `https://github.com/example/app/pull/${number}`,
+        githubUpdatedAt: new Date(`2026-11-0${number}T10:00:00Z`),
+      })),
+    );
+    const result = await client.callTool({
+      name: "facility_list_attention_stories",
+      arguments: { projectId, category: "pulls", limit: 1, offset: 2, pullOffset: 1 },
+    });
+    expect(result.isError).not.toBe(true);
+    const text = (result.content as Array<{ type: string; text?: string }>).find(
+      (part) => part.type === "text",
+    )?.text;
+    const actual = JSON.parse(text ?? "{}");
+    const expected = await new ProjectAttentionService(app.facilityDb).listStories(
+      scope.orgId,
+      projectId,
+      { category: "pulls", limit: 1, offset: 2, pullOffset: 1 },
+    );
+    expect(actual.otherPullRequests).toEqual(
+      JSON.parse(JSON.stringify(expected.otherPullRequests)),
+    );
+    expect(actual.otherPullRequests.total).toBe(3);
+    expect(actual.otherPullRequests.items[0].number).toBe(2);
+    expect(actual.items).toEqual([]);
   });
   it("reads workflow policy and acceptance from the same authenticated domain as the UI", async () => {
     for (const name of ["facility_get_story_workflow", "facility_get_delivery_acceptance"]) {

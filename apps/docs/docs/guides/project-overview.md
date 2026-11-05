@@ -95,9 +95,10 @@ without a notice. An approved or rejected current plan is not pending; a newer
 proposal appears again. Several notices in one story remain separate actions.
 
 Counters describe the entire filtered set, not just the visible page. Search
-matches story titles and open notice text, then keeps all pending information
-for each matching story. Categories select stories with plans, notices or
-deliveries. Deleted stories are excluded. Delivery sets in done or archived
+matches story titles, open notice text, PR titles and repository references,
+then keeps all pending information for each matching story. Categories select
+stories with plans, notices or deliveries, or the other open PR inventory.
+Deleted stories are excluded. Delivery sets in done or archived
 stories remain on their history, outside this queue. No recipient, severity or
 deadline is inferred.
 
@@ -140,18 +141,39 @@ not as zero, and unconfirmed spending is not presented as a complete known cost.
 An invalid workflow policy directs the reader to project settings without
 inventing acceptance eligibility.
 
+### Other open pull requests
+
+The same snapshot includes every observed open PR outside the active delivery
+sets. Those PRs have their own count and pagination, without the overview's
+latest-item limit. PRs in active delivery cards are excluded from this list
+before filtering or pagination. A PR linked to a done, archived or deleted story
+still appears here if the mirror says it is open. Deleted story details are
+excluded. Existing source or delivery associations remain readable as context;
+a source association does not declare a complete delivery set.
+
+Drafts, unobserved checks, outdated observations and checks at an old head remain
+distinct. Each row shows its observed head and update/observation times. The list
+uses the recorded GitHub mirror, not a live provider refresh or a claim that all
+repository PRs have been synchronized. Search treats `%` and `_` literally.
+Story and PR pages retain each other's position. Changing filters starts both
+at the first page. On explicit refresh, a PR moves between the two populations
+if its story's delivery becomes active or historical.
+
 Opening the queue creates no confirmation request, model call, turn or workspace
 operation. Refresh explicitly after reading; the page does not reorder while
-reviewing a brief. The preview covers linked story deliveries. Use the project
-overview for pull requests without a linked delivery; an empty preview does not
-mean all project work is complete. The existing notice list retains resolved
-history. A failed or denied read is shown as an error, not an empty queue.
+reviewing a brief. An empty selection does not mean all project work is complete;
+open Stories to follow ongoing work. The existing notice list retains resolved
+history. A failed or denied read is shown as an error, not an empty queue. An
+older response without the other-PR inventory shows it as unavailable, not zero.
 
 `GET /v1/projects/{projectId}/attention/stories` and MCP
 `facility_list_attention_stories` share this projection and require
-`projects:read`. Parameters: `category` (`all`, `plans`, `notices`, `deliveries`),
-`q`, `limit` (default 10, maximum 25 stories) and `offset`. Counts, page and
-revision details come from one read-only database snapshot. Delivery metadata
+`projects:read`. Parameters: `category` (`all`, `plans`, `notices`, `deliveries`,
+`pulls`), `q`, `limit` (default 10, maximum 25 items per list), `offset` (stories)
+and `pullOffset` (other PRs, default 0). The existing top-level `total`, `items`
+and `counts` remain story counts and details. `otherPullRequests` has its own
+`total`, `limit`, `offset` and `items`. Both populations and revision details
+come from one read-only database snapshot. Delivery metadata
 is fetched in batches for complete counts; only the page's plan Markdown is
 loaded. The response includes the project budget only with `budgets:read`.
 Existing notice API and MCP contracts are unchanged.

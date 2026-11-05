@@ -62,7 +62,7 @@ The server exposes forty-eight task-oriented tools:
 | `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
 | `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
 | `facility_list_backlog` | Read the unified backlog with phases, activity, assignees, search, filters, and pagination. |
-| `facility_list_attention_stories` | Read plans, notices and linked delivery sets by story, with complete counts, exact revisions, observed acceptance and preview. Project budget requires budgets:read; read-only. |
+| `facility_list_attention_stories` | Read plans, notices and delivery sets by story, plus every other observed open PR with an independent `pullOffset`. Shared snapshot, complete filtered counts, exact revisions, observed acceptance and preview. Project budget requires budgets:read; read-only. |
 | `facility_list_attention` | Read what is waiting on a person, newest first, with the action each notice accepts; filter by status, kind, and text. |
 | `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
 

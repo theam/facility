@@ -8950,7 +8950,8 @@
                 "all",
                 "plans",
                 "notices",
-                "deliveries"
+                "deliveries",
+                "pulls"
               ]
             },
             "in": "query",
@@ -8990,6 +8991,17 @@
           },
           {
             "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "pullOffset",
+            "required": false
+          },
+          {
+            "schema": {
               "type": "string"
             },
             "in": "path",
@@ -9008,6 +9020,147 @@
                     "generatedAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "otherPullRequests": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "number"
+                        },
+                        "limit": {
+                          "type": "number"
+                        },
+                        "offset": {
+                          "type": "number"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "repository": {
+                                "type": "string"
+                              },
+                              "number": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "title": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "url": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "draft": {
+                                "nullable": true,
+                                "type": "boolean"
+                              },
+                              "headSha": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "stale": {
+                                "type": "boolean"
+                              },
+                              "checks": {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "unobserved",
+                                      "pending",
+                                      "success",
+                                      "failure"
+                                    ]
+                                  },
+                                  "headSha": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  },
+                                  "current": {
+                                    "type": "boolean"
+                                  },
+                                  "observedAt": {
+                                    "nullable": true,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "headSha",
+                                  "current",
+                                  "observedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "observedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "stories": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "status": {
+                                      "type": "string"
+                                    },
+                                    "relation": {
+                                      "type": "string",
+                                      "enum": [
+                                        "delivery",
+                                        "source"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "title",
+                                    "status",
+                                    "relation"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "repository",
+                              "number",
+                              "title",
+                              "url",
+                              "draft",
+                              "headSha",
+                              "stale",
+                              "checks",
+                              "observedAt",
+                              "updatedAt",
+                              "stories"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "limit",
+                        "offset",
+                        "items"
+                      ],
+                      "additionalProperties": false
                     },
                     "total": {
                       "type": "number"
@@ -9813,6 +9966,7 @@
                   },
                   "required": [
                     "generatedAt",
+                    "otherPullRequests",
                     "total",
                     "counts",
                     "workflowPolicy",

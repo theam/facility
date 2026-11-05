@@ -5,14 +5,17 @@ import {
   apiKeys,
   attentionItems,
   createDb,
+  githubPullRequests,
   migrate,
   orgs,
   projectBudgets,
+  projectRepositories,
   projects,
   roles,
   seed,
   stories,
   storyConversations,
+  storyDeliveryPullRequests,
   storyPlanDecisions,
   storyPlanRequests,
   storyPlanRevisions,
@@ -578,7 +581,14 @@ describe("project attention list", async () => {
       const response = await app.inject({ method: "GET", url: target, headers });
       expect(response.statusCode).toBe(code);
     }
-    for (const query of ["category=urgent", "limit=26", "offset=-1", "limit=0"]) {
+    for (const query of [
+      "category=urgent",
+      "limit=26",
+      "offset=-1",
+      "pullOffset=-1",
+      "pullOffset=1.5",
+      "limit=0",
+    ]) {
       expect(
         (
           await app.inject({
@@ -616,5 +626,170 @@ describe("project attention list", async () => {
     expect((await app.inject({ url, headers: { cookie: ownerCookie } })).json().budget.state).toBe(
       "disabled",
     );
+  });
+
+  it("covers every other open PR without hiding historical links or duplicating active deliveries", async () => {
+    const repositoryId = newId("repo");
+    const scope = { orgId, projectId };
+    await db.insert(projectRepositories).values({
+      id: repositoryId,
+      ...scope,
+      owner: "example",
+      name: `inventory-${suffix}`,
+      defaultBranch: "main",
+    });
+    const repository = `example/inventory-${suffix}`;
+    const head = "a".repeat(40);
+    await db.insert(githubPullRequests).values(
+      Array.from({ length: 27 }, (_, i) => ({
+        id: newId("ghp"),
+        ...scope,
+        repositoryId,
+        number: i + 1,
+        title: i === 0 ? "100% literal_review" : `Inventory change ${i + 1}`,
+        state: i < 25 ? "open" : i === 25 ? "closed" : "merged",
+        draft: i === 1,
+        headRef: "feature",
+        headSha: head,
+        baseRef: "main",
+        htmlUrl: `https://github.com/${repository}/pull/${i + 1}`,
+        syncedAt: now,
+        githubUpdatedAt: minutesAgo(100 - i),
+        ciState: i === 2 ? "success" : null,
+        ciHeadSha: i === 2 ? "b".repeat(40) : null,
+      })),
+    );
+    const linked = new Map<string, string>();
+    for (const [status, number] of [
+      ["working", 25],
+      ["done", 24],
+      ["archived", 23],
+      ["deleted", 22],
+      ["source", 21],
+    ] as const) {
+      const id = newId("story");
+      linked.set(status, id);
+      await story({ id, title: `Associated ${status}` });
+      await db
+        .update(stories)
+        .set({
+          status: status === "done" || status === "archived" ? status : "working",
+          ...(status === "deleted" ? { deletedAt: now } : {}),
+          ...(status === "source"
+            ? { provider: "github", repositoryId, externalId: `pull-request:${number}` }
+            : {}),
+        })
+        .where(eq(stories.id, id));
+      if (status !== "source")
+        await db.insert(storyDeliveryPullRequests).values({
+          ...scope,
+          storyId: id,
+          repositoryId,
+          pullNumber: number,
+          required: true,
+          isPrimary: true,
+        });
+    }
+    // Same PR numbers in another project and tenant may not leak into this inventory.
+    for (const [tenant, project] of [
+      [orgId, siblingProjectId],
+      [otherOrgId, otherProjectId],
+    ] as const) {
+      const repo = newId("repo");
+      await db.insert(projectRepositories).values({
+        id: repo,
+        orgId: tenant,
+        projectId: project,
+        owner: "example",
+        name: `outside-${project}`,
+        defaultBranch: "main",
+      });
+      await db.insert(githubPullRequests).values({
+        id: newId("ghp"),
+        orgId: tenant,
+        projectId: project,
+        repositoryId: repo,
+        number: 1,
+        title: "Outside secret PR",
+        state: "open",
+        headRef: "feature",
+        headSha: head,
+        baseRef: "main",
+        htmlUrl: "https://github.com/example/outside/pull/1",
+      });
+    }
+    const query = { category: "all" as const, limit: 10, offset: 0 };
+    const pages = await Promise.all(
+      [0, 10, 20].map((pullOffset) =>
+        service.listStories(orgId, projectId, { ...query, pullOffset }, now),
+      ),
+    );
+    const pulls = pages.flatMap((page) => page.otherPullRequests.items);
+    expect(pages.map((page) => page.otherPullRequests.total)).toEqual([24, 24, 24]);
+    expect(pulls.map((pull) => pull.number)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+    expect(new Set(pulls.map((pull) => `${pull.repository}#${pull.number}`)).size).toBe(24);
+    expect(pulls.every((pull) => pull.repository === repository)).toBe(true);
+    expect(pulls[2]?.checks).toMatchObject({
+      state: "success",
+      current: false,
+      headSha: "b".repeat(40),
+    });
+    expect(pulls[1]?.draft).toBe(true);
+    expect(pulls.find((pull) => pull.number === 24)?.stories).toMatchObject([
+      { id: linked.get("done"), status: "done", relation: "delivery" },
+    ]);
+    expect(pulls.find((pull) => pull.number === 23)?.stories).toMatchObject([
+      { id: linked.get("archived"), status: "archived" },
+    ]);
+    expect(pulls.find((pull) => pull.number === 22)?.stories).toEqual([]);
+    expect(pulls.find((pull) => pull.number === 21)?.stories).toMatchObject([
+      { id: linked.get("source"), relation: "source" },
+    ]);
+    const active = pages[0]?.items.find((item) => item.storyId === linked.get("working"));
+    expect(active?.delivery?.pullRequests.map((pull) => pull.number)).toEqual([25]);
+    for (const q of ["%", "_", "100% LITERAL_REVIEW"]) {
+      const found = await service.listStories(orgId, projectId, { ...query, q }, now);
+      expect(found.otherPullRequests.items.map((pull) => pull.number)).toEqual([1]);
+    }
+    const whole = await service.listStories(
+      orgId,
+      projectId,
+      { ...query, q: "Inventory change 25" },
+      now,
+    );
+    expect(whole.items.map((item) => item.storyId)).toEqual([linked.get("working")]);
+    expect(whole.otherPullRequests.total).toBe(0);
+    const onlyPulls = await service.listStories(
+      orgId,
+      projectId,
+      { ...query, category: "pulls", pullOffset: 20 },
+      now,
+    );
+    expect(onlyPulls.total).toBe(0);
+    expect(onlyPulls.otherPullRequests.items).toHaveLength(4);
+    const beyond = await service.listStories(orgId, projectId, { ...query, pullOffset: 1000 }, now);
+    expect(beyond.otherPullRequests).toMatchObject({ total: 24, items: [] });
+    expect(
+      (await service.listStories(otherOrgId, projectId, query, now)).otherPullRequests.total,
+    ).toBe(0);
+    const http = await app.inject({
+      url: `/v1/projects/${projectId}/attention/stories?category=pulls&pullOffset=20`,
+      headers: { authorization: `Bearer ${readerSecret}` },
+    });
+    expect(http.statusCode, http.body).toBe(200);
+    expect(
+      http.json().otherPullRequests.items.map((pull: { number: number }) => pull.number),
+    ).toEqual([21, 22, 23, 24]);
+    // Moving a story back to active moves its PR to its delivery card on refresh.
+    const completedStory = linked.get("done");
+    if (!completedStory) throw new Error("Missing completed story fixture");
+    await db.update(stories).set({ status: "working" }).where(eq(stories.id, completedStory));
+    const moved = await service.listStories(orgId, projectId, { ...query, limit: 25 }, now);
+    expect(moved.otherPullRequests.total).toBe(23);
+    expect(moved.otherPullRequests.items.some((pull) => pull.number === 24)).toBe(false);
+    expect(
+      moved.items.find((item) => item.storyId === linked.get("done"))?.delivery?.pullRequests[0]
+        ?.number,
+    ).toBe(24);
   });
 });

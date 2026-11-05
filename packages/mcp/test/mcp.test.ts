@@ -412,7 +412,14 @@ describe("@facility/mcp 0.12", () => {
     });
     const result = await client.callTool({
       name: "facility_list_attention_stories",
-      arguments: { projectId: "proj/one", category: "deliveries", q: "scope", limit: 2, offset: 4 },
+      arguments: {
+        projectId: "proj/one",
+        category: "pulls",
+        q: "scope",
+        limit: 2,
+        offset: 4,
+        pullOffset: 6,
+      },
     });
     expect(result.isError).not.toBe(true);
     expect(calls).toEqual([
@@ -420,7 +427,7 @@ describe("@facility/mcp 0.12", () => {
         "GET",
         "/v1/projects/proj%2Fone/attention/stories",
         {
-          query: { category: "deliveries", q: "scope", limit: 2, offset: 4 },
+          query: { category: "pulls", q: "scope", limit: 2, offset: 4, pullOffset: 6 },
           body: undefined,
           idempotencyKey: undefined,
         },

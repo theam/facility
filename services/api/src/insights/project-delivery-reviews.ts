@@ -61,7 +61,10 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
     db
       .select({
         id: stories.id,
+        title: stories.title,
         status: stories.status,
+        provider: stories.provider,
+        externalId: stories.externalId,
         repositoryId: stories.repositoryId,
         number: stories.pullRequestNumber,
         url: stories.pullRequestUrl,
@@ -111,6 +114,8 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
           ciUpdatedAt: githubPullRequests.ciUpdatedAt,
           repositoryId: githubPullRequests.repositoryId,
           number: githubPullRequests.number,
+          updatedAt: githubPullRequests.githubUpdatedAt,
+          recordedAt: githubPullRequests.updatedAt,
         },
         repository: {
           id: projectRepositories.id,
@@ -130,7 +135,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
       .where(
         and(
           within(githubPullRequests, scope),
-          sql`(
+          sql`(${githubPullRequests.state} = 'open' or
       exists (select 1 from story_delivery_pull_requests l where l.org_id = ${scope.orgId} and l.project_id = ${scope.projectId}
         and l.repository_id = ${githubPullRequests.repositoryId} and l.pull_number = ${githubPullRequests.number})
       or exists (select 1 from stories s where s.org_id = ${scope.orgId} and s.project_id = ${scope.projectId}
@@ -382,7 +387,96 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
     };
     results.set(story.id, review);
   }
-  return { stories: results, policyError };
+  // The complement is computed before search and pagination. A historical link
+  // must not hide an open PR whose story is no longer in the delivery queue.
+  const covered = new Set(
+    [...results.values()]
+      .filter(deliveryNeedsReview)
+      .flatMap((review) => review.pullRequests.map((pull) => `${pull.repository}#${pull.number}`)),
+  );
+  type StoryReference = {
+    id: string;
+    title: string;
+    status: string;
+    relation: "delivery" | "source";
+  };
+  const references = new Map<string, Map<string, StoryReference>>();
+  const storyById = new Map(storyRows.map((story) => [story.id, story]));
+  const reference = (
+    key: string,
+    story: (typeof storyRows)[number],
+    relation: StoryReference["relation"],
+  ) => {
+    const entries = references.get(key) ?? new Map<string, StoryReference>();
+    if (relation === "delivery" || !entries.has(story.id))
+      entries.set(story.id, { id: story.id, title: story.title, status: story.status, relation });
+    references.set(key, entries);
+  };
+  for (const { link } of links) {
+    const story = storyById.get(link.storyId);
+    if (story) reference(`${link.repositoryId}:${link.pullNumber}`, story, "delivery");
+  }
+  for (const story of storyRows) {
+    if (!story.repositoryId) continue;
+    if (story.number !== null)
+      reference(`${story.repositoryId}:${story.number}`, story, "delivery");
+    const source =
+      story.provider === "github" ? /^pull-request:(\d+)$/.exec(story.externalId) : null;
+    if (source) reference(`${story.repositoryId}:${Number(source[1])}`, story, "source");
+  }
+  const otherPullRequests = mirrors
+    .flatMap(({ pull, repository }) => {
+      const name = `${repository.owner}/${repository.name}`;
+      if (pull.state !== "open" || covered.has(`${name}#${pull.number}`)) return [];
+      const projected = deliveryPullProjection(
+        {
+          repositoryId: repository.id,
+          repository: name,
+          number: pull.number,
+          required: false,
+          primary: false,
+          origin: "registered",
+        },
+        pull,
+        [],
+        false,
+        now,
+      );
+      const relatedStories = [
+        ...(references.get(`${repository.id}:${pull.number}`)?.values() ?? []),
+      ].sort((a, b) => a.id.localeCompare(b.id));
+      return [
+        {
+          repository: name,
+          number: pull.number,
+          title: pull.title,
+          url: pull.htmlUrl,
+          draft: pull.draft,
+          headSha: projected.headSha,
+          stale: projected.stale,
+          checks: projected.checks,
+          observedAt: pull.syncedAt,
+          updatedAt: pull.updatedAt ?? pull.recordedAt,
+          stories: relatedStories,
+        },
+      ];
+    })
+    .sort(
+      (a, b) =>
+        a.updatedAt.getTime() - b.updatedAt.getTime() ||
+        a.repository.localeCompare(b.repository) ||
+        a.number - b.number,
+    );
+  return { stories: results, otherPullRequests, policyError };
+}
+
+export function deliveryNeedsReview(review: ProjectDeliveryReview) {
+  return (
+    !["done", "archived"].includes(review.storyStatus) &&
+    (review.pullRequests.some((pull) => pull.state === "open" || pull.state === "unobserved") ||
+      review.candidate.state !== "recorded" ||
+      (review.acceptance.required !== false && review.acceptance.status !== "current"))
+  );
 }
 
 export type ProjectDeliveryReview = {

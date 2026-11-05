@@ -69,10 +69,11 @@ export const ProjectAttentionResponse = z.object({
   items: z.array(AttentionNotice),
 });
 const AttentionStoriesQuery = z.object({
-  category: z.enum(["all", "plans", "notices", "deliveries"]).default("all"),
+  category: z.enum(["all", "plans", "notices", "deliveries", "pulls"]).default("all"),
   q: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(25).default(10),
   offset: z.coerce.number().int().min(0).default(0),
+  pullOffset: z.coerce.number().int().min(0).default(0),
 });
 const AttentionDelivery = z.object({
   candidate: StoryDeliverySchema.shape.candidate,
@@ -120,6 +121,34 @@ const AttentionDelivery = z.object({
 });
 export const ProjectAttentionStoriesResponse = z.object({
   generatedAt: DateValue,
+  otherPullRequests: z.object({
+    total: z.number(),
+    limit: z.number(),
+    offset: z.number(),
+    items: z.array(
+      DeliveryPullRequestSchema.pick({
+        repository: true,
+        number: true,
+        title: true,
+        url: true,
+        draft: true,
+        headSha: true,
+        stale: true,
+        checks: true,
+      }).extend({
+        observedAt: DateValue,
+        updatedAt: DateValue,
+        stories: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            status: z.string(),
+            relation: z.enum(["delivery", "source"]),
+          }),
+        ),
+      }),
+    ),
+  }),
   total: z.number(),
   counts: z.object({
     stories: z.number(),

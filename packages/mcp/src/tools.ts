@@ -822,17 +822,25 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_list_attention_stories",
     permission: "projects:read",
     description:
-      "Read pending plans, open notices and delivery sets grouped by story, oldest first. Counts cover whole matching stories. Plans carry exact revision/digest and the author brief; deliveries show their candidate, current-head checks, preview and observed acceptance. Acceptance eligibility does not grant authority or mean CI passed. Project budget is visible only with budgets:read. Read-only; no agent, wake or confirmation request. Pull requests without a story delivery link remain in the project overview. Needs projects:read.",
+      "Read pending plans, notices and delivery sets by story, plus all other observed open PRs. Whole stories and otherPullRequests have independent offsets in the same snapshot; counts cover each complete filtered population. Plans carry exact revision/digest and the author brief; deliveries show candidate, current-head checks, preview and observed acceptance. Eligibility does not grant authority or mean CI passed. Budget needs budgets:read. Read-only; no agent, wake or confirmation request. Needs projects:read.",
     inputSchema: {
       projectId,
-      category: z.enum(["all", "plans", "notices", "deliveries"]).default("all"),
+      category: z.enum(["all", "plans", "notices", "deliveries", "pulls"]).default("all"),
       q: z
         .string()
         .max(200)
         .optional()
-        .describe("Words in a story title or its open notices; returns the whole matching story."),
+        .describe(
+          "Text in story titles, open notices, PR titles or repository references; keeps the whole matching story. The pulls category selects only other open PRs.",
+        ),
       limit: z.number().int().min(1).max(25).default(10),
       offset: z.number().int().min(0).default(0),
+      pullOffset: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe("Independent offset for otherPullRequests; limit applies to each list."),
     },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/attention/stories`,
@@ -841,6 +849,7 @@ export const toolDefinitions: ToolDefinition[] = [
       q: stringValue(args.q),
       limit: Number(args.limit ?? 10),
       offset: Number(args.offset ?? 0),
+      pullOffset: Number(args.pullOffset ?? 0),
     }),
   },
   {

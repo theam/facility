@@ -2,7 +2,7 @@ import { readDecisionBrief } from "@facility/core";
 import { attentionItems, type FacilityDb, stories, storyPlanRevisions } from "@facility/db";
 import { and, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
 import { CostBudgetService } from "./costs.js";
-import { readProjectDeliveryReviews } from "./project-delivery-reviews.js";
+import { deliveryNeedsReview, readProjectDeliveryReviews } from "./project-delivery-reviews.js";
 import { attentionAction, type StoryStatus } from "./project-overview.js";
 
 // Every notice a project raised for a person: an agent waiting for a reply, a
@@ -25,10 +25,11 @@ export type AttentionQuery = {
 const DETAIL_EXCERPT = 1_000;
 
 export type AttentionStoriesQuery = {
-  category: "all" | "plans" | "notices" | "deliveries";
+  category: "all" | "plans" | "notices" | "deliveries" | "pulls";
   q?: string;
   limit: number;
   offset: number;
+  pullOffset?: number;
 };
 
 type AttentionStoryRow = {
@@ -67,24 +68,31 @@ export class ProjectAttentionService {
             : null,
         ]);
         const deliveries = new Map(
-          [...deliverySnapshot.stories].filter(
-            ([, review]) =>
-              !["done", "archived"].includes(review.storyStatus) &&
-              (review.pullRequests.some(
-                (pull) => pull.state === "open" || pull.state === "unobserved",
-              ) ||
-                review.candidate.state !== "recorded" ||
-                (review.acceptance.required !== false && review.acceptance.status !== "current")),
-          ),
+          [...deliverySnapshot.stories].filter(([, review]) => deliveryNeedsReview(review)),
         );
+        const pullSearch = query.q?.trim().toLowerCase() ?? "";
+        const otherPulls =
+          query.category === "all" || query.category === "pulls"
+            ? deliverySnapshot.otherPullRequests.filter((pull) =>
+                [
+                  pull.title,
+                  pull.repository,
+                  `#${pull.number}`,
+                  ...pull.stories.map((story) => story.title),
+                ].some((text) => text.toLowerCase().includes(pullSearch)),
+              )
+            : [];
         const deliveryRows = [...deliveries].map(([storyId, review]) => ({
           story_id: storyId,
           waiting_since: review.waitingSince.toISOString(),
+          search_text: review.pullRequests
+            .map((pull) => `${pull.repository} #${pull.number} ${pull.title ?? ""}`)
+            .join("\n"),
         }));
         const candidates = sql`
       with delivery_groups as (
         select * from jsonb_to_recordset(${JSON.stringify(deliveryRows)}::jsonb)
-          as r(story_id text, waiting_since timestamptz)
+          as r(story_id text, waiting_since timestamptz, search_text text)
       ), notice_groups as (
         select story_id, count(*)::int as notice_count, min(created_at) as waiting_since
         from attention_items
@@ -115,7 +123,7 @@ export class ProjectAttentionService {
             or (${query.category} = 'plans' and p.story_id is not null)
             or (${query.category} = 'notices' and n.story_id is not null)
             or (${query.category} = 'deliveries' and d.story_id is not null))
-          and (s.title ilike ${pattern} or exists (
+          and (s.title ilike ${pattern} or d.search_text ilike ${pattern} or exists (
             select 1 from attention_items a
             where a.org_id = s.org_id and a.project_id = s.project_id and a.story_id = s.id
               and a.status = 'open' and (a.title ilike ${pattern} or a.detail ilike ${pattern})
@@ -191,6 +199,12 @@ export class ProjectAttentionService {
           generatedAt: now,
           total: counts.stories,
           counts,
+          otherPullRequests: {
+            total: otherPulls.length,
+            limit: query.limit,
+            offset: query.pullOffset ?? 0,
+            items: otherPulls.slice(query.pullOffset ?? 0, (query.pullOffset ?? 0) + query.limit),
+          },
           workflowPolicy: {
             available: !deliverySnapshot.policyError,
             error: deliverySnapshot.policyError,
