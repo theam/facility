@@ -3,12 +3,19 @@
 import { cx } from "@facility/ui";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavIcon, type NavIconName } from "./nav-icons";
 
 export type NavProject = { id: string; slug: string; name?: string };
 
-type NavItem = { href: string; icon: NavIconName; label: string; badge?: number };
+type NavItem = {
+  href: string;
+  icon: NavIconName;
+  label: string;
+  badge?: number;
+  exact?: boolean;
+  aliases?: string[];
+};
 
 /** Org mode is the projects dashboard; everything else is the platform beneath it. */
 export function orgNav(): NavItem[] {
@@ -17,18 +24,30 @@ export function orgNav(): NavItem[] {
 
 /** Cross-project operator surfaces — secondary by design. */
 export function orgPlatformNav(): NavItem[] {
-  return [{ href: "/settings", icon: "settings", label: "Settings" }];
+  return [{ href: "/settings", icon: "settings", label: "Organization settings" }];
 }
 
 /** The project world: everything scoped to the project in focus. */
 export function projectNav(projectId: string, _inboxCount?: number): NavItem[] {
-  const base = `/projects/${projectId}`;
+  const base = `/projects/${encodeURIComponent(projectId)}`;
   return [
-    { href: base, icon: "overview", label: "Overview" },
+    {
+      href: base,
+      icon: "approvals",
+      label: "Attention",
+      exact: true,
+      aliases: [`${base}/attention`],
+    },
     { href: `${base}/stories`, icon: "stories", label: "Stories" },
+  ];
+}
+
+export function projectToolsNav(projectId: string): NavItem[] {
+  const base = `/projects/${encodeURIComponent(projectId)}`;
+  return [
+    { href: `${base}/activity`, icon: "activity", label: "Activity" },
     { href: `${base}/insights`, icon: "audit", label: "Insights" },
-    { href: `${base}/agents`, icon: "agents", label: "Agents" },
-    { href: `${base}/settings`, icon: "settings", label: "Settings" },
+    { href: `${base}/settings`, icon: "settings", label: "Settings", aliases: [`${base}/agents`] },
   ];
 }
 
@@ -38,19 +57,20 @@ function isActive(pathname: string, href: string, exact: boolean) {
 
 function NavLinks({
   items,
-  exactFirst = false,
+  label = "Primary",
   onNavigate,
 }: {
   items: NavItem[];
-  /** Project nav: the first item (overview) is the section root — match it exactly. */
-  exactFirst?: boolean;
+  label?: string;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
   return (
-    <nav className="flex flex-col" aria-label="Primary">
-      {items.map((item, i) => {
-        const active = isActive(pathname, item.href, exactFirst && i === 0);
+    <nav className="flex flex-col" aria-label={label}>
+      {items.map((item) => {
+        const active =
+          isActive(pathname, item.href, item.exact ?? false) ||
+          item.aliases?.some((path) => isActive(pathname, path, false));
         return (
           <Link
             key={item.href}
@@ -58,7 +78,7 @@ function NavLinks({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cx(
-              "group flex items-center gap-3 border-l-2 px-5 py-3.5 text-[13px] transition-colors lg:py-2",
+              "group flex min-h-11 items-center gap-3 border-l-2 px-5 py-3 text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-(--info)",
               active
                 ? "border-(--line-strong) font-medium text-(--ink)"
                 : "border-transparent text-(--mut) hover:text-(--ink)",
@@ -84,7 +104,7 @@ function NavLinks({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="px-5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-(--dim)">
+    <span className="px-5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-(--mut)">
       {children}
     </span>
   );
@@ -105,7 +125,11 @@ function NavSections({
         <NavLinks items={orgNav()} onNavigate={onNavigate} />
         <div className="flex flex-col gap-2">
           <SectionLabel>platform</SectionLabel>
-          <NavLinks items={orgPlatformNav()} onNavigate={onNavigate} />
+          <NavLinks
+            items={orgPlatformNav()}
+            label="Organization settings"
+            onNavigate={onNavigate}
+          />
         </div>
       </div>
     );
@@ -117,7 +141,7 @@ function NavSections({
       <Link
         href="/projects"
         onClick={onNavigate}
-        className="flex items-center gap-2 px-5 text-[12px] text-(--mut) transition-colors hover:text-(--ink)"
+        className="flex min-h-11 items-center gap-2 px-5 text-[12px] text-(--mut) transition-colors hover:text-(--ink)"
       >
         <span aria-hidden className="font-mono">
           ←
@@ -126,7 +150,15 @@ function NavSections({
       </Link>
       <div className="flex flex-col gap-2">
         <SectionLabel>{project.name ?? project.slug}</SectionLabel>
-        <NavLinks items={projectNav(project.id, inboxCount)} exactFirst onNavigate={onNavigate} />
+        <NavLinks items={projectNav(project.id, inboxCount)} onNavigate={onNavigate} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <SectionLabel>project tools</SectionLabel>
+        <NavLinks
+          items={projectToolsNav(project.id)}
+          label="Project tools"
+          onNavigate={onNavigate}
+        />
       </div>
     </div>
   );
@@ -163,24 +195,36 @@ export function Sidebar({ project, inboxCount }: { project?: NavProject; inboxCo
 export function MobileNav({ project, inboxCount }: { project?: NavProject; inboxCount?: number }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
 
-  // Close the drawer whenever the route changes. pathname is the trigger, not
-  // a value the body reads — that's exactly the dependency we want here.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname is the intended change-trigger.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: navigation closes the modal even when it is initiated outside its links.
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
-
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
+    const modal = dialog.current;
+    if (!modal) return;
+    if (open && !modal.open) modal.showModal();
+    else if (!open && modal.open) modal.close();
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) setOpen(false);
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    closeOnDesktop();
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = previousOverflow;
+      desktop.removeEventListener("change", closeOnDesktop);
     };
   }, [open]);
 
   return (
     <div className="lg:hidden">
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-(--line) bg-(--bg)/95 px-5 py-4 backdrop-blur">
+      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-(--line) bg-(--bg)/95 px-5 py-3 backdrop-blur">
         <div className="flex min-w-0 items-baseline gap-3">
           <Link href="/" className="font-mono text-[15px] font-semibold tracking-tight">
             facility<span className="text-(--accent)">.</span>
@@ -190,28 +234,61 @@ export function MobileNav({ project, inboxCount }: { project?: NavProject; inbox
           ) : null}
         </div>
         <button
+          ref={trigger}
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => setOpen(true)}
           aria-expanded={open}
-          aria-label={open ? "Close menu" : "Open menu"}
-          className="flex h-9 w-9 flex-col items-center justify-center gap-1.5"
+          aria-haspopup="dialog"
+          aria-label="Open menu"
+          className="flex h-11 w-11 shrink-0 flex-col items-center justify-center gap-1.5 focus-visible:outline-2 focus-visible:outline-(--info)"
         >
-          <span
-            className={cx(
-              "h-px w-5 bg-(--ink) transition-transform",
-              open && "translate-y-[3.5px] rotate-45",
-            )}
-          />
-          <span
-            className={cx(
-              "h-px w-5 bg-(--ink) transition-transform",
-              open && "-translate-y-[3.5px] -rotate-45",
-            )}
-          />
+          <span className="h-px w-5 bg-(--ink)" />
+          <span className="h-px w-5 bg-(--ink)" />
         </button>
       </div>
-      {open ? (
-        <div className="fixed inset-0 top-[57px] z-30 flex flex-col justify-between overflow-y-auto bg-(--bg) pb-8 pt-4">
+      <dialog
+        ref={dialog}
+        aria-label={project ? "Project navigation" : "Organization navigation"}
+        onCancel={(event) => {
+          event.preventDefault();
+          setOpen(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Tab") return;
+          const controls = Array.from(
+            event.currentTarget.querySelectorAll<HTMLElement>("a[href], button:not(:disabled)"),
+          ).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
+          const first = controls[0];
+          const last = controls.at(-1);
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }}
+        onClose={(event) => {
+          // A queued close event may arrive after the menu was opened again.
+          if (event.currentTarget.open) return;
+          setOpen(false);
+          if (trigger.current?.getBoundingClientRect().width) trigger.current.focus();
+        }}
+        className="fixed inset-0 m-0 h-dvh max-h-none w-full max-w-none flex-col border-0 bg-(--bg) p-0 text-(--ink) open:flex"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-(--line) px-5 py-3">
+          <p className="min-w-0 break-words text-sm">
+            {project?.name ?? project?.slug ?? "Facility"}
+          </p>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="min-h-11 shrink-0 px-3 text-sm underline focus-visible:outline-2 focus-visible:outline-(--info)"
+          >
+            Close menu
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col justify-between gap-6 overflow-y-auto py-5">
           <NavSections
             project={project}
             inboxCount={inboxCount}
@@ -219,7 +296,7 @@ export function MobileNav({ project, inboxCount }: { project?: NavProject; inbox
           />
           <FooterSignature />
         </div>
-      ) : null}
+      </dialog>
     </div>
   );
 }

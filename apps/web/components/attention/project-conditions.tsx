@@ -13,7 +13,15 @@ export function ProjectConditions({
   if (!budget || !data.workflowPolicy)
     return (
       <p className="text-xs text-(--mut)">
-        Project limits are unavailable in this response. Open the project overview to check them.
+        Project limits are unavailable in this response.{" "}
+        <Link href={`${base}/activity`} className="underline">
+          Open Activity
+        </Link>{" "}
+        for recorded spending or{" "}
+        <Link href={`${base}/settings`} className="underline">
+          Settings
+        </Link>{" "}
+        for the workflow policy.
       </p>
     );
   const blocked =
@@ -67,7 +75,7 @@ export function ProjectConditions({
           <h3 className="font-medium">Workflow policy needs repair</h3>
           <p className="text-(--mut)">{data.workflowPolicy.error}</p>
           <Link
-            href={`${base}/settings`}
+            href={`${base}/settings#workflow-policy`}
             className="inline-flex min-h-11 w-fit items-center text-(--info) underline underline-offset-4"
           >
             Open project settings

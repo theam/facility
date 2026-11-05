@@ -35,7 +35,7 @@ export default async function ProjectSettingsPage({
   return (
     <div className="flex max-w-3xl flex-col gap-10">
       <div className="flex flex-col gap-2">
-        <Eyebrow>settings</Eyebrow>
+        <Eyebrow>project settings</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
           {project.data.name}
         </h1>
@@ -43,6 +43,32 @@ export default async function ProjectSettingsPage({
           Repository behavior is configured in <code>.facility.yml</code>. Agent prompts, engines,
           models and triggers are configured together under <code>.agents/</code>.
         </p>
+        <nav aria-label="Project configuration" className="flex flex-wrap gap-3 text-sm">
+          <Link
+            href={`/projects/${encodeURIComponent(projectId)}/agents`}
+            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+          >
+            Agents and skills
+          </Link>
+          <Link
+            href="#workflow-policy"
+            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+          >
+            Workflow policy
+          </Link>
+          <Link
+            href="#repositories"
+            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+          >
+            Repositories
+          </Link>
+          <Link
+            href={`/projects/${encodeURIComponent(projectId)}/insights`}
+            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+          >
+            Budget and usage
+          </Link>
+        </nav>
       </div>
 
       {repos.ok && repos.data.find((repo) => repo.role === "primary") && (
@@ -64,21 +90,23 @@ export default async function ProjectSettingsPage({
         />
       )}
 
-      {workflow.ok ? (
-        <WorkflowPolicy
-          key={projectId}
-          projectId={projectId}
-          initial={workflow.data}
-          agents={agents.ok ? agents.data.agents : []}
-          catalogError={agents.ok ? undefined : agents.message}
-          canWrite={
-            can(me.ok ? me.data.permissions : [], "projects:write") &&
-            can(me.ok ? me.data.permissions : [], "repos:write")
-          }
-        />
-      ) : (
-        <ErrorNotice message={`Workflow policy unavailable: ${workflow.message}`} />
-      )}
+      <div id="workflow-policy" className="scroll-mt-6">
+        {workflow.ok ? (
+          <WorkflowPolicy
+            key={projectId}
+            projectId={projectId}
+            initial={workflow.data}
+            agents={agents.ok ? agents.data.agents : []}
+            catalogError={agents.ok ? undefined : agents.message}
+            canWrite={
+              can(me.ok ? me.data.permissions : [], "projects:write") &&
+              can(me.ok ? me.data.permissions : [], "repos:write")
+            }
+          />
+        ) : (
+          <ErrorNotice message={`Workflow policy unavailable: ${workflow.message}`} />
+        )}
+      </div>
 
       <WorkspaceVariables
         projectId={projectId}
@@ -93,7 +121,7 @@ export default async function ProjectSettingsPage({
         canWrite={can(me.ok ? me.data.permissions : [], "projects:write")}
       />
 
-      <section className="flex flex-col gap-4">
+      <section id="repositories" className="flex scroll-mt-6 flex-col gap-4">
         <Eyebrow>repositories</Eyebrow>
         {!repos.ok ? (
           <ErrorNotice message={`Repositories could not be loaded: ${repos.message}`} />

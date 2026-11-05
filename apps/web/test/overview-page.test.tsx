@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import ProjectOverviewPage from "../app/(app)/projects/[projectId]/page";
+import ProjectOverviewPage from "../app/(app)/projects/[projectId]/activity/page";
 import type { ProjectOverview } from "../lib/api";
 
 const mocks = vi.hoisted(() => ({
@@ -232,34 +232,17 @@ function section(root: HTMLElement, label: string) {
   return element;
 }
 
-describe("project overview page", () => {
-  it("shows executing agents, attention with actions, review, results, backlog and spend", async () => {
+describe("project activity page", () => {
+  it("keeps executing agents, results, backlog and spend with decisions linked from Attention", async () => {
     mocks.overview = { ok: true, data: populated() };
     mocks.permissions = ["*"];
     const { root, text } = await render();
     expect(text).toContain("1 agent running · 1 queued");
-    expect(text).toContain(
-      "3 items need your attention · 2 pull requests waiting for review · 1 story ready to start",
-    );
+    expect(root.querySelector('a[href="/projects/project"]')?.textContent).toBe("Open Attention");
+    expect(root.querySelector('[aria-label="Needs your attention"]')).toBeNull();
+    expect(root.querySelector('[aria-label="Waiting for review"]')).toBeNull();
 
-    const attention = section(root, "Needs your attention");
-    expect(attention.textContent).toContain("Needs your attention · 3");
-    expect(attention.textContent).toContain("Agent waiting for a reply");
-    expect(attention.textContent).toContain("Which database should the migration target?");
-    expect(
-      attention.querySelector('a[href="/projects/project/stories/story-waiting#story-composer"]'),
-    ).not.toBeNull();
-    expect(attention.textContent).toContain("Checks failed on pull request #42");
-    expect(attention.querySelector('a[href="https://github.com/acme/app/pull/42"]')).not.toBeNull();
-    expect(attention.textContent).toContain("Monthly budget warning");
-    expect(attention.querySelector("button")?.textContent).toContain("dismiss");
-    expect(attention.textContent).not.toContain("Reply below");
-    expect(attention.querySelector('a[href="/projects/project/attention"]')?.textContent).toBe(
-      "View all 3 →",
-    );
-    expect(attention.textContent).not.toContain("Showing the latest");
-
-    const running = section(root, "Running now");
+    const running = section(root, "Execution");
     expect(running.textContent).toContain("builder");
     expect(running.textContent).toContain("running for 10 min");
     expect(running.textContent).toContain("from GitHub");
@@ -269,12 +252,6 @@ describe("project overview page", () => {
       running.querySelector('a[href="/projects/project/stories/story-running"]'),
     ).not.toBeNull();
     expect(running.textContent).toContain("cancel turn");
-
-    const review = section(root, "Waiting for review");
-    expect(review.textContent).toContain("Checks failed");
-    expect(review.textContent).toContain("Ready for review");
-    expect(review.textContent).toContain("no Facility story");
-    expect(review.querySelector('a[href="/projects/project/stories/story-review"]')).not.toBeNull();
 
     const recent = section(root, "Recent results");
     expect(recent.textContent).toContain("builder failed");
@@ -304,43 +281,14 @@ describe("project overview page", () => {
     expect(text).not.toContain("agent model");
   });
 
-  it("shows only the latest notices, compactly, and links to all of them", async () => {
+  it("does not interpret absence of executing agents as a human blocker", async () => {
     const data = populated();
-    data.attention = {
-      openCount: 23,
-      items: Array.from({ length: 20 }, (_, index) => ({
-        id: `attn-${index}`,
-        storyId: `story-${index}`,
-        storyTitle: `Failed story ${index}`,
-        storyStatus: "attention" as const,
-        turnId: `turn-${index}`,
-        kind: "turn_error",
-        title: "builder failed",
-        detail: `Error: request timed out after ${index} retries`,
-        createdAt: minutesAgo(30 + index),
-        action: "retry" as const,
-      })),
-    };
-    data.spend = {
-      ...data.spend,
-      budget: { ...data.spend.budget, state: "ok" } as ProjectOverview["spend"]["budget"],
-    };
+    data.activity = { running: [], queued: [] };
     mocks.overview = { ok: true, data };
-    mocks.permissions = ["*"];
-    const { root, text } = await render();
-    const attention = section(root, "Needs your attention");
-    // 23 stored notices plus the pull request whose checks failed.
-    expect(attention.textContent).toContain("Needs your attention · 24");
-    expect(text).toContain("24 items need your attention");
-    expect(attention.querySelectorAll("article")).toHaveLength(5);
-    expect(attention.textContent).toContain("Failed story 0");
-    expect(attention.textContent).not.toContain("Failed story 5");
-    expect(attention.textContent).not.toContain("Technical details");
-    expect(attention.textContent).toContain("Showing the latest 5 of 24.");
-    const links = [...attention.querySelectorAll('a[href="/projects/project/attention"]')].map(
-      (link) => link.textContent,
-    );
-    expect(links).toEqual(["View all 24 →", "Read all 24 →"]);
+    const { text } = await render();
+    expect(text).toContain("Open stories remain");
+    expect(text).not.toContain("waiting for a person");
+    expect(text).not.toContain("Nothing is waiting on you");
   });
 
   it("hides write actions for read-only members and spend for roles without cost access", async () => {
@@ -401,16 +349,10 @@ describe("project overview page", () => {
     };
     mocks.overview = { ok: true, data };
     mocks.permissions = ["*"];
-    const { text, root } = await render();
+    const { text } = await render();
     expect(text).toContain("No agent running");
-    expect(text).toContain("Nothing is waiting on you right now.");
-    expect(text).toContain("Nothing is waiting on you. Resolved and dismissed notices");
-    expect(
-      root.querySelector('a[href="/projects/project/attention?status=resolved"]')?.textContent,
-    ).toBe("Resolved notices →");
     expect(text).toContain("No agent is running.");
     expect(text).not.toContain("waiting for a person");
-    expect(text).toContain("No open pull requests are linked to this project.");
     expect(text).toContain("No agent run has finished yet.");
     expect(text).toContain("No story is waiting to start.");
     expect(text).toContain("$0.00");
@@ -423,7 +365,7 @@ describe("project overview page", () => {
     mocks.overview = { ok: false, status: 500, offline: false, message: "boom" };
     const { text, root } = await render();
     expect(text).toContain("Example project");
-    expect(text).toContain("Couldn't load the overview — boom");
-    expect(root.querySelector('[aria-label="Running now"]')).toBeNull();
+    expect(text).toContain("Couldn't load activity — boom");
+    expect(root.querySelector('[aria-label="Execution"]')).toBeNull();
   });
 });

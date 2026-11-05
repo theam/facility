@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AttentionReviewPage from "../app/(app)/projects/[projectId]/attention/review/page";
+import SavedReviewPage from "../app/(app)/projects/[projectId]/attention/review/page";
+import AttentionReviewPage from "../app/(app)/projects/[projectId]/page";
 import type { AttentionStoriesQuery, ProjectAttentionStories } from "../lib/api";
 
 const mocks = vi.hoisted(() => ({
@@ -95,7 +96,44 @@ beforeEach(() => {
   mocks.result = { ok: true, data: structuredClone(page) };
   mocks.queries = [];
 });
-describe("whole-story review queue", () => {
+describe("project Attention entry", () => {
+  it("retains saved review URLs while every filter and related route leads to the project entry", async () => {
+    const root = await render();
+    expect(root.querySelector("form")?.getAttribute("action")).toBe("/projects/project");
+    expect(root.querySelector('a[href="/projects/project/activity"]')?.textContent).toBe(
+      "Activity",
+    );
+    expect(root.querySelector('a[href="/projects/project/attention"]')?.textContent).toBe(
+      "All notices",
+    );
+    expect(
+      root.querySelector('a[href="/projects/project/attention?status=resolved"]')?.textContent,
+    ).toBe("Resolved notices");
+    expect(root.querySelector('a[href="/projects/project/stories"]')?.textContent).toBe(
+      "All stories",
+    );
+    const saved = renderToStaticMarkup(
+      await SavedReviewPage({
+        params: Promise.resolve({ projectId: "project" }),
+        searchParams: Promise.resolve({ category: "plans", page: "2" }),
+      }),
+    );
+    expect(saved).toContain("/projects/project?category=plans");
+    expect(saved).not.toContain("Attention · preview");
+  });
+  it("shows a pending plan even when no notice exists", async () => {
+    const data = structuredClone(page);
+    const first = data.items[0];
+    if (!first) throw Error("Missing story fixture");
+    data.items = [{ ...first, noticeCount: 0, noticeKinds: [] }];
+    data.total = 1;
+    data.counts = { stories: 1, plans: 1, notices: 0, deliveries: 0 };
+    mocks.result = { ok: true, data };
+    const root = await render();
+    expect(root.textContent).toContain("1 story · 1 pending plan · 0 open notices");
+    expect(root.textContent).toContain("Review plan r3");
+    expect(root.textContent).not.toMatch(/Nothing is waiting|No pending plans/);
+  });
   it("uses shared totals and preserves independent plan and notice navigation", async () => {
     const root = await render();
     expect(root.textContent).toContain("12 stories · 5 pending plans · 25 open notices");
@@ -126,7 +164,7 @@ describe("whole-story review queue", () => {
       (link) => link.textContent === "Previous",
     );
     expect(previous?.getAttribute("href")).toBe(
-      "/projects/project/attention/review?q=scope+%26+risk&category=plans",
+      "/projects/project?q=scope+%26+risk&category=plans",
     );
     expect(root.textContent).toContain("in matching stories");
   });
@@ -161,7 +199,7 @@ describe("whole-story review queue", () => {
       (link) => link.textContent === "Previous PRs",
     );
     expect(previous?.getAttribute("href")).toBe(
-      "/projects/project/attention/review?q=scope+%26+risk&page=2#other-pull-requests",
+      "/projects/project?q=scope+%26+risk&page=2#other-pull-requests",
     );
     expect(
       root.querySelector('a[href="https://github.com/example/app/pull/7"]')?.getAttribute("rel"),
