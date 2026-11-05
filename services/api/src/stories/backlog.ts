@@ -14,6 +14,7 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { type BacklogRepositories, readBacklogRepositories } from "./backlog-repositories.js";
 import {
   type BacklogTracking,
   observeBacklogWaits,
@@ -202,6 +203,7 @@ export class ProjectBacklogService {
       await this.items(orgId, projectId, now),
       now,
     );
+    const repositoryReferences = await readBacklogRepositories(this.db, orgId, projectId, items);
 
     const phases = expandPhases(query.phase);
     const labels = new Set((query.label ?? []).map((label) => label.toLowerCase()));
@@ -216,8 +218,9 @@ export class ProjectBacklogService {
       labels.size === 0 || item.labels.some((label) => labels.has(label.toLowerCase()));
     const matchesRepository = (item: BacklogItem) =>
       repositories.size === 0 ||
-      (item.issue !== null && repositories.has(item.issue.repositoryId)) ||
-      (item.pullRequest !== null && repositories.has(item.pullRequest.repository));
+      (repositoryReferences.get(item.key) ?? []).some(
+        (repository) => repositories.has(repository.id) || repositories.has(repository.name),
+      );
     const matchesAssignees = (item: BacklogItem) =>
       assigneeFilter.length === 0 || assigneeFilter.some((filter) => filter(item));
 
@@ -254,7 +257,7 @@ export class ProjectBacklogService {
       counts,
       groupCounts,
       items: page,
-      facets: facets(items),
+      facets: facets(items, repositoryReferences),
     };
   }
 
@@ -912,7 +915,10 @@ function sorter(sort: NonNullable<BacklogQuery["sort"]>) {
     left.key.localeCompare(right.key);
 }
 
-function facets(items: BacklogItem[]): BacklogResult["facets"] {
+function facets(
+  items: BacklogItem[],
+  repositoryReferences: BacklogRepositories,
+): BacklogResult["facets"] {
   const labels = new Map<string, { name: string; count: number }>();
   const assignees = new Map<string, BacklogPerson & { count: number }>();
   const repositories = new Map<string, { id: string; name: string; count: number }>();
@@ -937,14 +943,13 @@ function facets(items: BacklogItem[]): BacklogResult["facets"] {
       }
       assignees.set(person.key, entry);
     }
-    if (item.issue) {
-      const entry = repositories.get(item.issue.repositoryId) ?? {
-        id: item.issue.repositoryId,
-        name: item.issue.repository,
+    for (const repository of repositoryReferences.get(item.key) ?? []) {
+      const entry = repositories.get(repository.id) ?? {
+        ...repository,
         count: 0,
       };
       entry.count += 1;
-      repositories.set(item.issue.repositoryId, entry);
+      repositories.set(repository.id, entry);
     }
   }
   const byCount = <T extends { count: number }>(left: T, right: T) => right.count - left.count;

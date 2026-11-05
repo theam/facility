@@ -20,6 +20,11 @@ merge readiness.
 Search accepts a ticket number (`#42`) or words; labels, assignees (including "assigned to me" and
 "unassigned"), repository, and sort combine, and every combination is a shareable URL. Listing the
 backlog never starts an agent or wakes a machine. `facility_list_backlog` returns the same view.
+Repository filters use the project's canonical repository IDs (or current `owner/name`). They
+include a row's source repository and every registered delivery PR repository, including optional
+PRs and manual stories without an issue. A row counts once per repository even when several PRs
+share it. Filter options count open records across the full backlog; matching totals and work-group
+counts apply the selected filters before pagination. A repository outside this project matches nothing.
 Group counts cover all records matching the search and phase filters before the group filter
 and pagination; they are not counts of this page. The lifecycle phase counts ignore the group,
 and choosing a phase clears it. `sort=activity` orders by work group; the existing `priority`,

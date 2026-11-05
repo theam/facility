@@ -8,6 +8,7 @@ import {
   seed,
   stories,
   storyConversations,
+  storyDeliveryPullRequests,
   storyMessages,
   storyPlanRevisions,
   storyPlanStates,
@@ -21,6 +22,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { ProjectAttentionService } from "../src/insights/project-attention.js";
+import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { storyPlanDigest } from "../src/stories/plan-state.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -484,6 +486,41 @@ describe("embedded MCP control plane", async () => {
     expect(actual.otherPullRequests.total).toBe(3);
     expect(actual.otherPullRequests.items[0].number).toBe(2);
     expect(actual.items).toEqual([]);
+
+    const manual = newId("story");
+    await app.facilityDb.insert(stories).values({ ...original, id: manual, externalId: manual });
+    await app.facilityDb.insert(storyDeliveryPullRequests).values([
+      { ...scope, storyId: manual, repositoryId, pullNumber: 1, required: true, isPrimary: true },
+      { ...scope, storyId: manual, repositoryId, pullNumber: 2, required: false },
+    ]);
+    for (const repository of [[repositoryId], [`example/mcp-${repositoryId}`], ["foreign-repo"]]) {
+      const query = { repository, limit: 2, sort: "activity" as const };
+      const response = await client.callTool({
+        name: "facility_list_backlog",
+        arguments: { projectId, ...query },
+      });
+      expect(response.isError).not.toBe(true);
+      const payload = (response.content as Array<{ type: string; text?: string }>).find(
+        (part) => part.type === "text",
+      )?.text;
+      const actualBacklog = JSON.parse(payload ?? "{}");
+      const expectedBacklog = await new ProjectBacklogService(app.facilityDb).list(
+        scope.orgId,
+        projectId,
+        query,
+      );
+      expect(actualBacklog.items.map((item: { key: string }) => item.key)).toEqual(
+        expectedBacklog.items.map((item) => item.key),
+      );
+      expect(actualBacklog.counts).toEqual(expectedBacklog.counts);
+      expect(actualBacklog.groupCounts).toEqual(expectedBacklog.groupCounts);
+      expect(actualBacklog.facets.repositories).toContainEqual({
+        id: repositoryId,
+        name: `example/mcp-${repositoryId}`,
+        count: 4,
+      });
+      expect(actualBacklog.total).toBe(repository[0] === "foreign-repo" ? 0 : 4);
+    }
   });
   it("reads workflow policy and acceptance from the same authenticated domain as the UI", async () => {
     for (const name of ["facility_get_story_workflow", "facility_get_delivery_acceptance"]) {

@@ -74,13 +74,26 @@ describe("@facility/mcp 0.12", () => {
     try {
       const response = await client.callTool({
         name: "facility_list_backlog",
-        arguments: { projectId: "p/a", group: "waiting", sort: "activity", offset: 50 },
+        arguments: {
+          projectId: "p/a",
+          group: "waiting",
+          sort: "activity",
+          offset: 50,
+          repository: ["repo-id", "example/app"],
+        },
       });
       expect(response.isError).not.toBe(true);
       expect(calls[0]).toMatchObject([
         "GET",
         "/v1/projects/p%2Fa/backlog",
-        { query: { group: "waiting", sort: "activity", offset: 50 } },
+        {
+          query: {
+            group: "waiting",
+            sort: "activity",
+            offset: 50,
+            repository: "repo-id,example/app",
+          },
+        },
       ]);
       expect(JSON.parse(textPayload(response))).toMatchObject({
         total: 63,

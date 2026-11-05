@@ -808,7 +808,12 @@ export const toolDefinitions: ToolDefinition[] = [
         .array(z.string().min(1).max(200))
         .optional()
         .describe("unassigned, me, user:<id>, or github:<login>."),
-      repository: z.array(z.string().min(1).max(200)).optional(),
+      repository: z
+        .array(z.string().min(1).max(200))
+        .optional()
+        .describe(
+          "Canonical project repository IDs or current owner/name; matches source and registered delivery PRs, including optional PRs and manual stories.",
+        ),
       sort: z.enum(["priority", "updated", "created", "activity"]).default("priority"),
       limit: z.number().int().min(1).max(100).default(50),
       offset: z.number().int().min(0).default(0),
