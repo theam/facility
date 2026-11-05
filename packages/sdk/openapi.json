@@ -28659,6 +28659,17 @@
         "parameters": [
           {
             "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"
+            },
+            "in": "query",
+            "name": "messageId",
+            "required": false
+          },
+          {
+            "schema": {
               "default": "asc",
               "type": "string",
               "enum": [

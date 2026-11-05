@@ -6,6 +6,7 @@ import { ErrorNotice, Offline } from "@/components/offline";
 import { DecisionBrief } from "@/components/story/decision-brief";
 import { type AttentionStoriesQuery, api } from "@/lib/api";
 import { attentionKindLabel, relativeTime, storyHref } from "@/lib/overview-presentation";
+import { storyReviewHref } from "@/lib/story-review-navigation";
 
 export const metadata = { title: "next review" };
 
@@ -179,11 +180,18 @@ export default async function AttentionReviewPage({
                           </div>
                           {item.plan || !item.delivery ? (
                             <Link
-                              href={`${target}${item.plan ? "#story-plan" : "#story-attention"}`}
+                              href={
+                                item.plan
+                                  ? storyReviewHref(projectId, item.storyId, {
+                                      revision: item.plan.revision,
+                                      digest: item.plan.digest,
+                                    })
+                                  : `${target}#story-attention`
+                              }
                               className={control}
                             >
                               {item.plan
-                                ? "Open current plan"
+                                ? `Review plan r${item.plan.revision}`
                                 : item.delivery
                                   ? "Open delivery"
                                   : "Open notices"}
@@ -220,8 +228,9 @@ export default async function AttentionReviewPage({
                               </p>
                             )}
                             <p className="text-xs text-(--mut)">
-                              Observed revision r{item.plan.revision}. Opening the story reads its
-                              current plan; confirm the revision before deciding.
+                              Opens this exact revision r{item.plan.revision}. If a newer plan
+                              exists, the linked revision stays visible until you choose the current
+                              one.
                             </p>
                           </div>
                         ) : null}

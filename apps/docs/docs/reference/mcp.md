@@ -47,7 +47,7 @@ The server exposes forty-eight task-oriented tools:
 | `facility_prepare_consultation_handoff` | Return editable implementation context from a completed result; does not queue work. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
-| `facility_get_conversation` | Read the shared ordered conversation. |
+| `facility_get_conversation` | Read the shared ordered conversation, or an exact source message and earlier context with `messageId`. |
 | `facility_prepare_file_upload` | Reserve private story input storage and return a short-lived binary HTTP upload grant; does not run an agent. |
 | `facility_list_input_files` | Read private input metadata without waking compute. |
 | `facility_remove_input_file` | Delete an input file and release its reservation; optionally resume compute explicitly. |
@@ -155,6 +155,13 @@ Deletion is deliberately separate and permanent:
 ```
 
 `facility_get_conversation` uses `after` and `limit` as a stable message-sequence cursor.
+Supply `messageId` to read an exact message and earlier context, newest first,
+with the same resolved author and run metadata used by the UI. The response
+includes `focus: { messageId, seq }`; `messages` is the bounded contiguous window
+and `related` supplies earlier context for its runs. A source read cannot be
+combined with nonzero `after` (or the HTTP `before` cursor). Missing or foreign
+messages return an error and never fall back to recent responses. The operation
+requires `projects:read` and does not start work or wake compute.
 `facility_get_environment` uses the same fields for ordered workspace events and returns
 `next_cursor` and `has_more`. Story and environment responses include typed attention, available
 next operations, active-compute status, retained-storage status, provider usage, and an explicit

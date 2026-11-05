@@ -17,6 +17,7 @@ import {
   turnEvents,
   turns,
 } from "@facility/db";
+import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -502,6 +503,68 @@ describe("story reading routes", async () => {
     });
     expect(ascending.json()).toMatchObject({ has_more: true, next_cursor: 2 });
     expect(ascending.json().messages.map((m: { seq: number }) => m.seq)).toEqual([1, 2]);
+  });
+
+  it("finds the exact old source message with its author and earlier context without replaying work", async () => {
+    const [target] = await db
+      .select()
+      .from(storyMessages)
+      .where(and(eq(storyMessages.storyId, storyId), eq(storyMessages.seq, 4)));
+    if (!target) throw Error("Missing source fixture");
+    const url = `${base()}/conversation?messageId=${target.id}&limit=1`;
+    const response = await app.inject({ url, headers: viewer() });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      focus: { messageId: target.id, seq: 4 },
+      has_more: true,
+      next_cursor: 4,
+    });
+    expect(response.json().messages.map((m: { seq: number }) => m.seq)).toEqual([4]);
+    expect(response.json().messages[0].author).toMatchObject({ kind: "agent", name: "architect" });
+    expect(response.json().related.map((m: { seq: number }) => m.seq)).toEqual([3]);
+    expect(
+      (await db.select().from(turns).where(eq(turns.storyId, storyId)))
+        .map((turn) => turn.id)
+        .sort(),
+    ).toEqual([...turnIds].sort());
+    for (const query of [
+      `messageId=${target.id}&after=2`,
+      `messageId=${target.id}&before=5`,
+      `messageId=`,
+      `messageId=bad%20id`,
+    ])
+      expect(
+        (await app.inject({ url: `${base()}/conversation?${query}`, headers: viewer() }))
+          .statusCode,
+      ).toBe(400);
+    expect(
+      (await app.inject({ url: `${base()}/conversation?messageId=missing`, headers: viewer() }))
+        .statusCode,
+    ).toBe(404);
+    for (const headers of [
+      { authorization: `Bearer ${otherProjectSecret}` },
+      { authorization: `Bearer ${otherOrgSecret}` },
+      { authorization: `Bearer ${noReadSecret}` },
+    ])
+      expect([403, 404]).toContain((await app.inject({ url, headers })).statusCode);
+    expect((await app.inject({ url })).statusCode).toBe(401);
+    const foreignStory = newId("story");
+    await db.insert(stories).values({
+      id: foreignStory,
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: foreignStory,
+      title: "Other story",
+      status: "ready",
+      createdBy: { type: "user", id: "user_local_admin" },
+    });
+    const foreign = await app.inject({
+      url: `/v1/projects/${projectId}/workspace-stories/${foreignStory}/conversation?messageId=${target.id}`,
+      headers: viewer(),
+    });
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body).not.toContain(target.body);
   });
 
   it("pages run activity newest first, skipping noise and bounding large payloads", async () => {

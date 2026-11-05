@@ -7,6 +7,8 @@ import {
   projectRepositories,
   seed,
   stories,
+  storyConversations,
+  storyMessages,
   storyPlanRevisions,
   storyPlanStates,
 } from "@facility/db";
@@ -200,6 +202,49 @@ describe("embedded MCP control plane", async () => {
       decision: null,
       state: { revision: 0, decisionRevision: 0, status: "none" },
     });
+  });
+  it("reads the exact source message through the authenticated MCP/API path", async () => {
+    const [story] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));
+    if (!story) throw Error("Missing story fixture");
+    const conversationId = newId("sess");
+    const messageId = newId("msg");
+    const scope = { orgId: story.orgId, projectId, storyId };
+    await app.facilityDb
+      .insert(storyConversations)
+      .values({ ...scope, id: conversationId, nextSeq: 3 });
+    await app.facilityDb.insert(storyMessages).values([
+      {
+        ...scope,
+        id: messageId,
+        conversationId,
+        seq: 1,
+        role: "agent",
+        body: "Original source scope",
+        actor: { type: "system", id: "synthetic-source" },
+      },
+      {
+        ...scope,
+        id: newId("msg"),
+        conversationId,
+        seq: 2,
+        role: "agent",
+        body: "Newer unrelated response",
+        actor: { type: "system", id: "synthetic-source" },
+      },
+    ]);
+    const result = await client.callTool({
+      name: "facility_get_conversation",
+      arguments: { projectId, storyId, messageId, limit: 1 },
+    });
+    expect(result.isError).not.toBe(true);
+    const text = (result.content as Array<{ type: string; text?: string }>).find(
+      (part) => part.type === "text",
+    )?.text;
+    const page = JSON.parse(text ?? "{}");
+    expect(page.focus).toEqual({ messageId, seq: 1 });
+    expect(page.messages).toHaveLength(1);
+    expect(page.messages[0]).toMatchObject({ id: messageId, body: "Original source scope" });
+    expect(text).not.toContain("Newer unrelated response");
   });
   it("reads the identical saved author brief through current and exact-revision MCP requests", async () => {
     const [original] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));

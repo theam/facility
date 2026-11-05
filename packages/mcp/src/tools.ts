@@ -595,17 +595,22 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_conversation",
     permission: "projects:read",
     description:
-      "Read ordered messages from a story's persistent conversation. Needs projects:read.",
+      "Read ordered messages from a story's persistent conversation. With messageId, read that exact message and earlier context, newest-first, with resolved authors and run metadata. Cannot combine messageId with a nonzero after cursor. A missing or foreign message is an error, never a fallback to recent messages. Needs projects:read.",
     inputSchema: {
       projectId,
       storyId,
       after: z.number().int().min(0).default(0),
+      messageId: z.string().min(1).max(200).optional(),
       limit: z.number().int().min(1).max(200).default(50),
     },
     method: "GET",
     path: (args) =>
       `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/conversation`,
-    query: (args) => ({ after: Number(args.after ?? 0), limit: Number(args.limit ?? 50) }),
+    query: (args) => ({
+      after: Number(args.after ?? 0),
+      limit: Number(args.limit ?? 50),
+      ...(args.messageId ? { messageId: stringValue(args.messageId) } : {}),
+    }),
   },
   {
     name: "facility_prepare_file_upload",

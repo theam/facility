@@ -1,7 +1,9 @@
 "use client";
 
 import { Button, StatusDot } from "@facility/ui";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { Markdown } from "@/components/markdown";
 import { ExpandableMarkdown } from "@/components/story/expandable-markdown";
 import { LoadMore, type LoadState } from "@/components/story/load-more";
 import { AgentLine, Person } from "@/components/story/participant";
@@ -41,6 +43,7 @@ export function StoryConversation({
   waitingTurnIds,
   canExecute,
   canProposePlan = false,
+  latestHref,
 }: {
   projectId: string;
   storyId: string;
@@ -48,6 +51,7 @@ export function StoryConversation({
   waitingTurnIds: string[];
   canExecute: boolean;
   canProposePlan?: boolean;
+  latestHref?: string;
 }) {
   const [shown, setShown] = useState<StoryMessage[]>(() =>
     mergeMessages(initial.messages, initial.related),
@@ -62,6 +66,15 @@ export function StoryConversation({
   const container = useRef<HTMLDivElement>(null);
   const shownRef = useRef(shown);
   shownRef.current = shown;
+  const focusedId = initial.focus?.messageId;
+  useEffect(() => {
+    if (!focusedId) return;
+    const target = document.getElementById(`message-${focusedId}`);
+    if (target && container.current?.contains(target)) {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView?.({ block: "start" });
+    }
+  }, [focusedId]);
 
   // A refreshed first page updates exchanges already on screen in place. Exchanges
   // the reader has not seen yet are held while they are reading further down.
@@ -108,6 +121,25 @@ export function StoryConversation({
 
   return (
     <div ref={container} className="flex flex-col gap-4">
+      {focusedId ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 border border-(--info) p-4 text-sm"
+        >
+          <p>
+            Showing the linked message and earlier context. This is not the latest conversation.
+          </p>
+          <Link
+            href={
+              latestHref ??
+              `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}#conversation`
+            }
+            className="inline-flex min-h-11 items-center text-(--info) underline"
+          >
+            Open latest conversation
+          </Link>
+        </div>
+      ) : null}
       {pendingCount > 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border border-(--accent)/60 bg-(--bg-subtle) px-4 py-3">
           <p role="status" className="text-[13px]">
@@ -141,6 +173,7 @@ export function StoryConversation({
                 waitingForReply={exchange.turn ? waitingTurnIds.includes(exchange.turn.id) : false}
                 canExecute={canExecute}
                 canProposePlan={canProposePlan}
+                focusedId={focusedId}
               />
             </li>
           ))}
@@ -168,6 +201,7 @@ function ExchangeCard({
   waitingForReply,
   canExecute,
   canProposePlan,
+  focusedId,
 }: {
   exchange: Exchange;
   projectId: string;
@@ -175,6 +209,7 @@ function ExchangeCard({
   waitingForReply: boolean;
   canExecute: boolean;
   canProposePlan: boolean;
+  focusedId?: string;
 }) {
   const { turn, request, response } = exchange;
   const status = runStatus(turn ?? null, { waitingForReply });
@@ -187,11 +222,22 @@ function ExchangeCard({
         request ? ` on ${formatTime(request.createdAt)}` : ""
       } · ${status.label}`}
     >
-      {request ? <RequestBlock message={request} agentName={agentName} /> : null}
+      {request ? (
+        <RequestBlock message={request} agentName={agentName} focused={request.id === focusedId} />
+      ) : null}
       {exchange.extra.map((message) => (
-        <RequestBlock key={message.id} message={message} agentName={agentName} />
+        <RequestBlock
+          key={message.id}
+          message={message}
+          agentName={agentName}
+          focused={message.id === focusedId}
+        />
       ))}
-      <div className="flex flex-col gap-3 border-t border-dashed border-(--line) p-4 sm:p-5">
+      <div
+        id={response ? `message-${response.id}` : undefined}
+        tabIndex={-1}
+        className="flex min-w-0 scroll-mt-20 flex-col gap-3 border-t border-dashed border-(--line) p-4 sm:p-5"
+      >
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <AgentLine
             name={agentName}
@@ -221,7 +267,7 @@ function ExchangeCard({
           </div>
         </div>
         {response ? (
-          <ResponseBody message={response} />
+          <ResponseBody message={response} focused={response.id === focusedId} />
         ) : (
           <p className="text-[13px] leading-relaxed text-(--mut)">{status.detail}</p>
         )}
@@ -283,10 +329,22 @@ function ExchangeCard({
   );
 }
 
-function RequestBlock({ message, agentName }: { message: StoryMessage; agentName: string }) {
+function RequestBlock({
+  message,
+  agentName,
+  focused,
+}: {
+  message: StoryMessage;
+  agentName: string;
+  focused?: boolean;
+}) {
   const presentation = presentMessage(message);
   return (
-    <div className="flex flex-col gap-3 p-4 sm:p-5">
+    <div
+      id={`message-${message.id}`}
+      tabIndex={-1}
+      className="flex min-w-0 scroll-mt-20 flex-col gap-3 p-4 sm:p-5"
+    >
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <Person author={message.author} />
@@ -303,7 +361,11 @@ function RequestBlock({ message, agentName }: { message: StoryMessage; agentName
         <h3 className="text-[14px] font-semibold">{presentation.title}</h3>
       ) : null}
       <div className="max-w-prose text-[15px] leading-7">
-        <ExpandableMarkdown source={presentation.body} label="request" />
+        {focused ? (
+          <Markdown source={message.body} />
+        ) : (
+          <ExpandableMarkdown source={presentation.body} label="request" />
+        )}
         {message.attachments?.length ? (
           <ul className="mt-2 text-[12px] text-(--mut)">
             {message.attachments.map((file) => (
@@ -325,7 +387,7 @@ function RequestBlock({ message, agentName }: { message: StoryMessage; agentName
           View on GitHub ↗
         </a>
       ) : null}
-      {presentation.technical ? (
+      {presentation.technical && !focused ? (
         <details className="text-xs text-(--dim)">
           <summary className="cursor-pointer">Original event · technical details</summary>
           <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words">
@@ -337,7 +399,7 @@ function RequestBlock({ message, agentName }: { message: StoryMessage; agentName
   );
 }
 
-function ResponseBody({ message }: { message: StoryMessage }) {
+function ResponseBody({ message, focused }: { message: StoryMessage; focused?: boolean }) {
   const combined = message.content.kind === "combined_transcript";
   return (
     <div className="flex flex-col gap-3">
@@ -349,7 +411,11 @@ function ResponseBody({ message }: { message: StoryMessage }) {
         </p>
       ) : null}
       <div className="max-w-prose text-[15px] leading-7">
-        <ExpandableMarkdown source={message.body} label={combined ? "transcript" : "response"} />
+        {focused ? (
+          <Markdown source={message.body} />
+        ) : (
+          <ExpandableMarkdown source={message.body} label={combined ? "transcript" : "response"} />
+        )}
       </div>
     </div>
   );

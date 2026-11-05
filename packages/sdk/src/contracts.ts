@@ -452,6 +452,8 @@ export type StoryMessage = {
   content: StoryMessageContent;
 };
 export type StoryConversationPage = {
+  /** Exact linked message; its page is newest-first from this boundary. */
+  focus?: { messageId: string; seq: number } | null;
   /** The contiguous page in the requested order. */
   messages: StoryMessage[];
   /**

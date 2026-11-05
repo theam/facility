@@ -101,8 +101,12 @@ describe("whole-story review queue", () => {
     expect(root.textContent).toContain("12 stories · 5 pending plans · 25 open notices");
     expect(root.querySelectorAll('ol[aria-label="Pending stories"] > li')).toHaveLength(2);
     expect(
-      root.querySelector('a[href="/projects/project/stories/plan-story#story-plan"]')?.textContent,
-    ).toBe("Open current plan");
+      Array.from(root.querySelectorAll("a"))
+        .find((link) => link.textContent === "Review plan r3")
+        ?.getAttribute("href"),
+    ).toBe(
+      `/projects/project/stories/plan-story?planRevision=3&planDigest=${"a".repeat(64)}#story-plan`,
+    );
     expect(
       root.querySelector('a[href="/projects/project/stories/plan-story#story-attention"]'),
     ).not.toBeNull();
@@ -110,7 +114,7 @@ describe("whole-story review queue", () => {
       root.querySelector('a[href="/projects/project/stories/question-story#story-attention"]'),
     ).not.toBeNull();
     expect(root.textContent).toContain("No structured brief was supplied");
-    expect(root.textContent).toContain("Observed revision r3");
+    expect(root.textContent).toContain("Opens this exact revision r3");
     expect(root.textContent).not.toMatch(/Approve|Urgent|For me|All clear/);
   });
   it("paginates and filters stories on the server, retaining filters in links", async () => {

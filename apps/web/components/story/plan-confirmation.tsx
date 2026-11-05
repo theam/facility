@@ -191,11 +191,18 @@ export function PlanConfirmation({
             Plan r{review.plan.revision} and original scope
           </summary>
           <div className="mt-4">
-            <PlanContent plan={review.plan} originalOnly />
+            <PlanContent
+              plan={review.plan}
+              originalOnly
+              location={{ projectId: review.projectId, storyId: review.storyId }}
+            />
           </div>
         </details>
       ) : (
-        <PlanContent plan={review.plan} />
+        <PlanContent
+          plan={review.plan}
+          location={{ projectId: review.projectId, storyId: review.storyId }}
+        />
       )}
       {!receipt ? <PlanExecutionScope scope={scope} planRevision={review.plan.revision} /> : null}
       <div className="flex flex-col gap-2 border-y border-(--line) py-4 text-sm">

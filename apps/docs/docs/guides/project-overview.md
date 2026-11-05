@@ -104,9 +104,12 @@ deadline is inferred.
 
 Expand the saved author's plan brief for the recommendation, alternatives, risk
 and sources. These are the author's statements, not independently verified facts.
-**Open current plan** reads the current story: compare its revision with the
-observed revision before deciding. The exact original and existing confirmation
-flow remain on the story. Each notice keeps its own action there.
+**Review plan rN** opens that exact saved revision and digest. A newer plan does
+not replace the linked content on refresh. Historical or unverifiable revisions
+remain read-only; choose **Open current plan** explicitly before deciding the
+newer scope. **Open original message and author** reads the source message even
+when it is outside the recent conversation, preserving the selected plan. The
+existing confirmation flow remains on the story. Each notice keeps its own action there.
 
 ### Review the complete delivery
 

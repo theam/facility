@@ -306,6 +306,33 @@ describe("@facility/mcp 0.12", () => {
     await client.close();
     await server.close();
   });
+  test("passes an exact source message reference to the shared conversation reader", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { messages: [], focus: { messageId: "msg-original", seq: 4 } };
+      },
+    });
+    const result = await client.callTool({
+      name: "facility_get_conversation",
+      arguments: { projectId: "project", storyId: "story", messageId: "msg-original", limit: 10 },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(calls).toEqual([
+      [
+        "GET",
+        "/v1/projects/project/workspace-stories/story/conversation",
+        {
+          query: { messageId: "msg-original", after: 0, limit: 10 },
+          body: undefined,
+          idempotencyKey: undefined,
+        },
+      ],
+    ]);
+    await client.close();
+    await server.close();
+  });
 
   test("maps delivery policy, notices, integration evidence and completion with stable retries", async () => {
     const calls: unknown[][] = [];

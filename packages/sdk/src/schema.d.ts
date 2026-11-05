@@ -14298,6 +14298,7 @@ export interface operations {
     getWorkspaceStoryConversation: {
         parameters: {
             query?: {
+                messageId?: string;
                 order?: "asc" | "desc";
                 before?: number;
                 after?: number;

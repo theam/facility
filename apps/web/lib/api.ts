@@ -209,13 +209,28 @@ export const api = {
       "GET",
       `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/plan/decisions/${encodeURIComponent(requestId)}`,
     ),
-  workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>
+  storyPlanRevision: (projectId: string, storyId: string, revision: number) =>
+    apiFetch(
+      "GET",
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/plan/revisions/${revision}`,
+    ),
+  workspaceStoryConversation: (
+    projectId: string,
+    storyId: string,
+    before?: number,
+    messageId?: string,
+  ) =>
     typed<StoryConversationPage>(
       apiFetch(
         "GET",
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/conversation`,
         {
-          query: { limit: STORY_PAGE_SIZE, order: "desc", ...(before ? { before } : {}) },
+          query: {
+            limit: STORY_PAGE_SIZE,
+            order: "desc",
+            ...(before ? { before } : {}),
+            ...(messageId ? { messageId } : {}),
+          },
         },
       ),
     ),

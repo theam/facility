@@ -26,6 +26,7 @@ import {
   safeExternalUrl,
   storyActivity,
 } from "@/lib/story-presentation";
+import { readStoryReviewLink, storyReviewHref } from "@/lib/story-review-navigation";
 
 export async function generateMetadata({ params }: { params: Promise<{ number: string }> }) {
   const { number } = await params;
@@ -40,19 +41,32 @@ export async function generateMetadata({ params }: { params: Promise<{ number: s
  */
 export default async function StoryPage({
   params,
+  searchParams = Promise.resolve({}),
 }: {
   params: Promise<{ projectId: string; number: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { projectId, number: storyId } = await params;
-  const [detail, conversation, environment, agents, me, consultations, workflow] =
+  const { selection, messageId, messageError } = readStoryReviewLink(await searchParams);
+  const [detail, conversation, environment, agents, me, consultations, workflow, linkedPlan] =
     await Promise.all([
       api.workspaceStory(projectId, storyId),
-      api.workspaceStoryConversation(projectId, storyId),
+      messageError
+        ? Promise.resolve({
+            ok: false as const,
+            status: 400,
+            offline: false,
+            message: messageError,
+          })
+        : api.workspaceStoryConversation(projectId, storyId, undefined, messageId),
       api.workspaceStoryEnvironment(projectId, storyId),
       api.storyAgents(projectId),
       api.me(),
       api.workspaceStoryConsultations(projectId, storyId),
       api.storyWorkflow(projectId, storyId),
+      selection?.revision
+        ? api.storyPlanRevision(projectId, storyId, selection.revision)
+        : Promise.resolve(null),
     ]);
 
   if (!detail.ok) {
@@ -62,6 +76,23 @@ export default async function StoryPage({
   }
 
   const bundle = detail.data;
+  if (selection && linkedPlan) {
+    if (!linkedPlan.ok) selection.error = `Couldn't load the linked plan — ${linkedPlan.message}`;
+    else if (
+      linkedPlan.data.revision !== selection.revision ||
+      (selection.digest && linkedPlan.data.digest !== selection.digest)
+    )
+      selection.error =
+        "The saved plan does not match this link's revision and digest. Open the current plan explicitly to continue.";
+    else selection.plan = linkedPlan.data;
+  }
+  const focusError =
+    messageId &&
+    conversation.ok &&
+    (conversation.data.focus?.messageId !== messageId ||
+      !conversation.data.messages.some((message) => message.id === messageId))
+      ? "The requested source message was not returned. The latest conversation has not been substituted."
+      : null;
   const story = bundle.story;
   const activity = storyActivity(bundle);
   const openAttention = bundle.attention.filter((item) => item.status === "open");
@@ -198,6 +229,8 @@ export default async function StoryPage({
         projectId={projectId}
         storyId={story.id}
         initial={bundle.plans}
+        selection={selection}
+        latestPlanHref={storyReviewHref(projectId, storyId, undefined, messageId)}
         agents={agentRows}
         defaultAgent={agents.ok ? agents.data.defaults.ui : null}
         queuedAgents={workflow.ok && workflow.data.blockedReason ? workflow.data.queuedAgents : []}
@@ -237,16 +270,31 @@ export default async function StoryPage({
         {canExecute && !agents.ok ? (
           <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
         ) : null}
-        {!conversation.ok ? (
-          <ErrorNotice message={`Couldn't load conversation — ${conversation.message}`} />
+        {!conversation.ok || focusError ? (
+          <div className="flex flex-col gap-3">
+            <ErrorNotice
+              message={
+                focusError ??
+                `Couldn't load conversation — ${!conversation.ok ? conversation.message : ""}`
+              }
+            />
+            <Link
+              href={storyReviewHref(projectId, storyId, selection, undefined, "conversation")}
+              className="inline-flex min-h-11 items-center text-(--info) underline"
+            >
+              Open latest conversation
+            </Link>
+          </div>
         ) : (
           <StoryConversation
+            key={messageId ?? "latest"}
             projectId={projectId}
             storyId={story.id}
             initial={conversation.data}
+            latestHref={storyReviewHref(projectId, storyId, selection, undefined, "conversation")}
             waitingTurnIds={waitingTurnIds}
             canExecute={canExecute && story.deletedAt === null}
-            canProposePlan={canWrite && story.deletedAt === null}
+            canProposePlan={!selection && canWrite && story.deletedAt === null}
           />
         )}
       </section>

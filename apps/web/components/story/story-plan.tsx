@@ -17,6 +17,11 @@ import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { PLAN_PROPOSAL_EVENT, type PlanProposalSource } from "@/lib/story-plan-events";
 import { formatTime } from "@/lib/story-presentation";
+import {
+  type PlanSelection,
+  selectionMatchesPlan,
+  storyReviewHref,
+} from "@/lib/story-review-navigation";
 
 type Repositories = StoryPlanRepositories;
 function newer(previous: StoryPlans | undefined, next: StoryPlans) {
@@ -41,6 +46,8 @@ export function StoryPlanPanel({
   projectId,
   storyId,
   initial,
+  selection,
+  latestPlanHref,
   agents,
   defaultAgent,
   queuedAgents = [],
@@ -53,6 +60,8 @@ export function StoryPlanPanel({
   projectId: string;
   storyId: string;
   initial?: StoryPlans;
+  selection?: PlanSelection;
+  latestPlanHref?: string;
   agents: StoryAgent[];
   defaultAgent: string | null;
   queuedAgents?: string[];
@@ -99,6 +108,10 @@ export function StoryPlanPanel({
   });
   const path = `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/plan`;
   const storyPath = `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`;
+  const selectionCurrent =
+    !selection ||
+    (current?.state.revision === selection.revision &&
+      selectionMatchesPlan(selection, current?.plan));
   useEffect(() => {
     if (initial) setCurrent((old) => newer(old, initial));
   }, [initial]);
@@ -135,6 +148,7 @@ export function StoryPlanPanel({
       const value = (event as CustomEvent<PlanProposalSource>).detail;
       if (
         canWrite &&
+        !selection &&
         value?.projectId === projectId &&
         value.storyId === storyId &&
         typeof value.markdown === "string"
@@ -143,7 +157,7 @@ export function StoryPlanPanel({
     }
     window.addEventListener(PLAN_PROPOSAL_EVENT, receive);
     return () => window.removeEventListener(PLAN_PROPOSAL_EVENT, receive);
-  }, [projectId, storyId, canWrite]);
+  }, [projectId, storyId, canWrite, selection]);
   useEffect(() => {
     if (pendingSource) sourceNotice.current?.focus();
   }, [pendingSource]);
@@ -281,6 +295,12 @@ export function StoryPlanPanel({
   }
   async function mutate(action: "proposal" | "approve" | "reject") {
     if (busyRef.current) return;
+    if (!selectionCurrent || (selection && action === "proposal")) {
+      setError(
+        "Open the current plan explicitly before changing or deciding a different revision.",
+      );
+      return;
+    }
     const body =
       action === "proposal"
         ? {
@@ -382,6 +402,38 @@ export function StoryPlanPanel({
   const missingQueuedAgents = [...new Set(queuedAgents)].filter(
     (name) => !current?.plan?.agents.some((agent) => agent.name === name),
   );
+  if (selection && !selectionCurrent)
+    return (
+      <section
+        id="story-plan"
+        aria-label="Story plan"
+        className="flex min-w-0 scroll-mt-6 flex-col gap-4 border border-(--line) p-4 sm:p-5"
+      >
+        <h2 className="text-lg font-semibold">
+          {selection.revision ? `Linked plan r${selection.revision}` : "Linked plan unavailable"}
+        </h2>
+        <p role={selection.error ? "alert" : "status"} className="text-sm text-(--mut)">
+          {selection.error ??
+            (current?.plan
+              ? `The current plan is r${current.plan.revision}. This linked revision stays open for comparison; no decision will be requested for a different plan.`
+              : "The current plan could not be verified. This linked revision stays open for reading.")}
+        </p>
+        <Link
+          className="inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
+          href={latestPlanHref ?? `${storyPath}#story-plan`}
+        >
+          Open current plan{current?.plan ? ` r${current.plan.revision}` : ""}
+        </Link>
+        {blockedReason ? (
+          <p className="border-l-2 border-(--human) pl-3 text-sm">
+            Current workflow: {blockedReason}
+          </p>
+        ) : null}
+        {selection.plan && !selection.error ? (
+          <PlanContent plan={selection.plan} location={{ projectId, storyId }} />
+        ) : null}
+      </section>
+    );
   return (
     <section
       id="story-plan"
@@ -399,13 +451,25 @@ export function StoryPlanPanel({
           <Button size="sm" disabled={busy} onClick={() => void load()}>
             {busy ? "Loading…" : "Reload plan"}
           </Button>
-          {canWrite && current && !editing ? (
+          {selection ? (
+            <Link
+              href={latestPlanHref ?? `${storyPath}#story-plan`}
+              className="inline-flex min-h-11 items-center text-sm text-(--info) underline"
+            >
+              Open current plan to edit
+            </Link>
+          ) : canWrite && current && !editing ? (
             <Button size="sm" disabled={busy} onClick={() => startEdit()}>
               {current.plan ? "Propose revision" : "Propose plan"}
             </Button>
           ) : null}
         </div>
       </div>
+      {selection ? (
+        <p className="text-xs text-(--mut)">
+          Linked revision r{selection.revision}. Reading or refreshing keeps this revision selected.
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="break-words text-sm text-(--bad)">
           {error}
@@ -440,7 +504,7 @@ export function StoryPlanPanel({
           planRevision={current.state.revision}
         />
       ) : null}
-      {pendingSource && canWrite ? (
+      {pendingSource && canWrite && !selection ? (
         <div
           ref={sourceNotice}
           tabIndex={-1}
@@ -483,8 +547,8 @@ export function StoryPlanPanel({
               storyPath={`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`}
             />
           ) : null}
-          <PlanContent plan={current.plan} />
-          {!editing && (current.state.status !== "approved" || blockedReason) ? (
+          <PlanContent plan={selection?.plan ?? current.plan} location={{ projectId, storyId }} />
+          {(!editing || selection) && (current.state.status !== "approved" || blockedReason) ? (
             <PlanExecutionScope
               scope={workflow?.executionScope}
               planRevision={current.state.revision}
@@ -511,7 +575,7 @@ export function StoryPlanPanel({
           No plan has been proposed. Write one or use an agent response from the conversation.
         </p>
       )}
-      {editing && canWrite ? (
+      {editing && canWrite && !selection ? (
         <form
           className="flex flex-col gap-4 border-t border-(--line) pt-4"
           onSubmit={(event) => {
@@ -716,7 +780,7 @@ export function StoryPlanPanel({
           </div>
         </form>
       ) : null}
-      {canWrite && current?.plan && !editing ? (
+      {canWrite && current?.plan && (!editing || selection) ? (
         <div className="flex flex-col gap-3 border-t border-(--line) pt-4">
           <p className="text-[12px] text-(--dim)">
             Review and confirm the exact plan on the next page. Approval may release matching queued
@@ -811,7 +875,16 @@ export function StoryPlanPanel({
             {historical ? (
               <div className="flex min-w-0 flex-col gap-3 border border-(--line) p-3">
                 <p className="font-medium">Historical plan · r{historical.revision}</p>
-                <PlanContent plan={historical} />
+                <Link
+                  href={storyReviewHref(projectId, storyId, {
+                    revision: historical.revision,
+                    digest: historical.digest,
+                  })}
+                  className="inline-flex min-h-11 items-center text-(--info) underline"
+                >
+                  Open linked revision r{historical.revision}
+                </Link>
+                <PlanContent plan={historical} location={{ projectId, storyId }} />
                 <Button size="sm" onClick={() => setHistorical(null)}>
                   Close historical plan
                 </Button>

@@ -89,6 +89,13 @@ const ListStoriesQuery = z.object({
   status: z.enum(["ready", "working", "attention", "review", "done", "archived"]).optional(),
 });
 const ConversationQuery = z.object({
+  messageId: z
+    .string()
+    .min(1)
+    .max(200)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control characters in source message identifiers
+    .regex(/^[^\s\x00-\x1f\x7f]+$/)
+    .optional(),
   order: z.enum(["asc", "desc"]).default("asc"),
   before: z.coerce.number().int().min(1).optional(),
   after: z.coerce.number().int().min(0).default(0),
@@ -899,6 +906,7 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
       return {
         messages: page.messages,
         related: page.related,
+        focus: page.focus,
         has_more: page.hasMore,
         next_cursor: page.nextCursor,
       };

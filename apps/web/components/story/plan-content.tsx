@@ -1,14 +1,18 @@
 import type { StoryPlan } from "@facility/sdk";
+import Link from "next/link";
 import { Markdown } from "@/components/markdown";
 import { DecisionBrief } from "@/components/story/decision-brief";
 import { formatTime } from "@/lib/story-presentation";
+import { storyReviewHref } from "@/lib/story-review-navigation";
 
 export function PlanContent({
   plan,
   originalOnly = false,
+  location,
 }: {
   plan: StoryPlan;
   originalOnly?: boolean;
+  location?: { projectId: string; storyId: string };
 }) {
   const brief =
     !originalOnly && plan.decisionBrief?.status === "available" ? plan.decisionBrief.brief : null;
@@ -78,9 +82,23 @@ export function PlanContent({
         </div>
       </dl>
       {plan.source ? (
-        <p className="text-[12px] text-(--dim)">
-          Proposed from the exact {plan.source.role} message text in this story.
-        </p>
+        <div className="flex flex-col gap-2 text-[12px] text-(--mut)">
+          <p>Proposed from the exact {plan.source.role} message text in this story.</p>
+          {location ? (
+            <Link
+              className="inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
+              href={storyReviewHref(
+                location.projectId,
+                location.storyId,
+                { revision: plan.revision, digest: plan.digest },
+                plan.source.messageId,
+                `message-${plan.source.messageId}`,
+              )}
+            >
+              Open original message and author
+            </Link>
+          ) : null}
+        </div>
       ) : null}
       <details className="min-w-0 text-[11px] text-(--dim)">
         <summary className="cursor-pointer">Revision evidence</summary>

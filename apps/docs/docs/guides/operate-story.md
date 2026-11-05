@@ -136,6 +136,17 @@ Source references are author claims; opening this page does not verify them or i
 Missing or malformed briefs leave the complete plan visible. Choosing a format or considering an
 option submits nothing; approval still applies to the full revision and repository/agent scope.
 
+Links from Attention and plan history retain the exact revision and digest, even
+after a newer proposal arrives. A linked plan can request a decision only while
+it still matches the current revision; otherwise open the current plan explicitly.
+A missing revision or digest mismatch shows an error, without substituting another
+plan. **Open original message and author** keeps that revision selected and opens
+the complete source message with its recorded author and earlier context. This
+is a historical conversation window; **Open latest conversation** returns to recent
+messages without changing the selected plan. Missing, foreign or unavailable
+messages show an error rather than unrelated recent responses. These reads do
+not start an agent or wake the workspace.
+
 The story's **plan and decisions** panel shows the proposed text, repositories and configured
 agents. Choose **Propose plan** or **Propose revision**, or **Propose as plan** on an agent response.
 Using a response asks before replacing an open draft. Editing its text removes source-message

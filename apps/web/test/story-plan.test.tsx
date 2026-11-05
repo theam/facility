@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanConfirmation } from "../components/story/plan-confirmation";
 import { StoryPlanPanel } from "../components/story/story-plan";
 import { PLAN_PROPOSAL_EVENT } from "../lib/story-plan-events";
+import type { PlanSelection } from "../lib/story-review-navigation";
 import { workflowFixture } from "./fixtures/workflow";
 
 const navigation = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
@@ -142,7 +143,12 @@ async function render(
   initial: StoryPlans | undefined = snapshot(),
   canWrite = true,
   catalog = agents,
-  defaults: { defaultAgent?: string; queuedAgents?: string[]; blockedReason?: string } = {},
+  defaults: {
+    defaultAgent?: string;
+    queuedAgents?: string[];
+    blockedReason?: string;
+    selection?: PlanSelection;
+  } = {},
 ) {
   await act(async () =>
     root.render(
@@ -150,6 +156,7 @@ async function render(
         projectId="project-a"
         storyId="story-a"
         initial={initial}
+        selection={defaults.selection}
         agents={catalog}
         defaultAgent={defaults.defaultAgent ?? "planner"}
         queuedAgents={defaults.queuedAgents}
@@ -202,6 +209,73 @@ async function proposeSource(markdown: string, storyId = "story-a", agentName?: 
 }
 
 describe("revision-bound plan UI", () => {
+  it("preserves an existing draft while reading a linked current plan", async () => {
+    const current = snapshot(3);
+    await render(current);
+    await click("Propose revision");
+    await type("Unsent plan changes");
+    await render(current, true, agents, {
+      selection: { revision: 3, digest: current.plan?.digest, plan: current.plan ?? undefined },
+    });
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.textContent).toContain("Review approval");
+    expect(container.textContent).not.toContain("Save plan proposal");
+    await render(current);
+    expect(textarea().value).toBe("Unsent plan changes");
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+  it("keeps the linked original visible after live refresh advances the current plan", async () => {
+    const original = plan(1);
+    original.markdown = "Original linked scope";
+    original.source = { messageId: "msg-source", turnId: "turn-author", role: "agent" };
+    const selection = { revision: 1, digest: original.digest, plan: original };
+    await render({ ...snapshot(1), plan: original }, true, agents, { selection });
+    expect(button("Review approval")).toBeDefined();
+    expect(container.querySelector('a[href*="messageId=msg-source"]')?.textContent).toBe(
+      "Open original message and author",
+    );
+    const newer = snapshot(2);
+    if (newer.plan) newer.plan.markdown = "New unreviewed scope";
+    await render(newer, true, agents, { selection });
+    expect(container.textContent).toContain("Original linked scope");
+    expect(container.textContent).not.toContain("New unreviewed scope");
+    expect(container.textContent).toContain("The current plan is r2");
+    expect(container.textContent).not.toContain("Review approval");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+  it("does not replace a missing or mismatched linked revision with the current one", async () => {
+    await render(snapshot(2), true, agents, {
+      selection: { revision: 1, error: "Linked plan not found" },
+    });
+    expect(container.textContent).toContain("Linked plan not found");
+    expect(container.textContent).not.toContain("Implement and verify the change");
+    expect(container.textContent).not.toContain("Review approval");
+    await render(snapshot(2), true, agents, {
+      selection: { revision: 2, digest: "e".repeat(64), plan: plan(2) },
+    });
+    expect(container.textContent).not.toContain("Review approval");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("requests only the exact linked current revision with the existing decision boundary", async () => {
+    fetch.mockResolvedValue(Response.json({ request: { id: "exact-request" } }));
+    const selected = plan(3);
+    await render({ ...snapshot(3), plan: selected }, true, agents, {
+      selection: { revision: 3, digest: selected.digest, plan: selected },
+    });
+    await click("Review approval");
+    expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      expected_revision: 3,
+      expected_decision_revision: 0,
+      intent: "approve",
+    });
+    expect(navigation.push).toHaveBeenCalledWith(
+      "/projects/project-a/stories/story-a/plan/decisions/exact-request",
+    );
+  });
   it("starts a source proposal with its author and all connected repositories, not the UI default", async () => {
     fetch.mockResolvedValueOnce(
       Response.json({

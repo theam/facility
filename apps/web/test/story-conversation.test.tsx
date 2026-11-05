@@ -91,6 +91,37 @@ function exchangeTexts() {
 }
 
 describe("story conversation paging", () => {
+  it("opens a linked long original in full with its author and preserves focus on refresh", async () => {
+    const { request, response } = exchange(1, "turn-source");
+    response.body = `${"Original details. ".repeat(150)}Final source fact.`;
+    response.author.name = "reviewer";
+    if (response.turn) response.turn.agentName = "reviewer";
+    const linked = {
+      ...page([response], [request]),
+      focus: { messageId: response.id, seq: response.seq },
+    };
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const props = {
+      projectId: "project",
+      storyId: "story",
+      waitingTurnIds: [],
+      canExecute: false,
+      initial: linked,
+      latestHref: "/projects/project/stories/story?planRevision=1#conversation",
+    };
+    await act(async () => root.render(<StoryConversation {...props} />));
+    expect(container.textContent).toContain("Final source fact.");
+    expect(container.textContent).toContain("reviewer");
+    expect(document.activeElement?.id).toBe(`message-${response.id}`);
+    const link = container.querySelector('a[href*="planRevision=1"]') as HTMLAnchorElement;
+    link.focus();
+    await act(async () =>
+      root.render(<StoryConversation {...props} initial={structuredClone(linked)} />),
+    );
+    expect(document.activeElement).toBe(link);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("carries the recorded response agent into a plan draft without starting work", async () => {
     const { request, response } = exchange(1, "turn-a");
     if (!request.turn || !response.turn) throw new Error("Missing fixture turn");

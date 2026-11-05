@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { StoryWorkflowStatus } from "@facility/sdk";
+import type { StoryPlan, StoryWorkflowStatus } from "@facility/sdk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import StoryPage from "../app/(app)/projects/[projectId]/stories/[number]/page";
@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   } as StoryConversationPage,
   permissions: [] as string[],
   calls: [] as string[],
+  linkedPlan: null as StoryPlan | null,
+  requestedMessage: undefined as string | undefined,
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh() {} }),
@@ -39,8 +41,22 @@ vi.mock("../lib/api", async () => {
     ...actual,
     api: {
       workspaceStory: async () => record("story", { ok: true, data: mocks.bundle }),
-      workspaceStoryConversation: async () =>
-        record("conversation", { ok: true, data: mocks.conversation }),
+      workspaceStoryConversation: async (
+        _project: string,
+        _story: string,
+        _before?: number,
+        messageId?: string,
+      ) => {
+        mocks.requestedMessage = messageId;
+        return record("conversation", { ok: true, data: mocks.conversation });
+      },
+      storyPlanRevision: async (_project: string, _story: string, revision: number) =>
+        record(
+          `plan:${revision}`,
+          mocks.linkedPlan
+            ? { ok: true, data: mocks.linkedPlan }
+            : { ok: false, status: 404, message: "Plan not found" },
+        ),
       workspaceStoryEnvironment: async () =>
         record("environment", { ok: true, data: mocks.environment }),
       workspaceStoryConsultations: async () =>
@@ -269,9 +285,12 @@ function setUp(permissions: string[] = []) {
   };
 }
 
-async function render() {
+async function render(search: Record<string, string | string[]> = {}) {
   const html = renderToStaticMarkup(
-    await StoryPage({ params: Promise.resolve({ projectId: "project", number: "story" }) }),
+    await StoryPage({
+      params: Promise.resolve({ projectId: "project", number: "story" }),
+      searchParams: Promise.resolve(search),
+    }),
   );
   const root = document.createElement("div");
   root.innerHTML = html;
@@ -279,6 +298,31 @@ async function render() {
 }
 
 describe("story overview integration", () => {
+  it("loads only the requested plan revision and rejects mismatched or missing source reads", async () => {
+    setUp(["projects:write"]);
+    mocks.linkedPlan = {
+      revision: 2,
+      digest: "b".repeat(64),
+      markdown: "Exact older scope",
+      repositories: [],
+      agents: [],
+      proposedBy: { type: "user", id: "user", name: "Person" },
+      proposedAt: at,
+      source: null,
+    };
+    const selected = await render({ planRevision: "2", planDigest: "b".repeat(64) });
+    expect(mocks.calls).toContain("plan:2");
+    expect(selected.root.textContent).toContain("Exact older scope");
+    const mismatched = await render({ planRevision: "2", planDigest: "a".repeat(64) });
+    expect(mismatched.root.textContent).toContain("does not match this link");
+    expect(mismatched.root.textContent).not.toContain("Exact older scope");
+    const absent = await render({ messageId: "msg-not-in-response" });
+    expect(mocks.requestedMessage).toBe("msg-not-in-response");
+    expect(absent.root.textContent).toContain("requested source message was not returned");
+    expect(absent.root.querySelector('ol[aria-label="Conversation, newest first"]')).toBeNull();
+    mocks.linkedPlan = null;
+    expect((await render({ planRevision: "3" })).root.textContent).toContain("Plan not found");
+  });
   it("shows actionable delivery notices without recasting them as agent errors", async () => {
     setUp(["*"]);
     mocks.bundle.attention = [

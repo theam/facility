@@ -1421,8 +1421,46 @@ export class StoryWorkspaceService {
     orgId: string,
     projectId: string,
     storyId: string,
-    options: { after?: number; before?: number; order?: "asc" | "desc"; limit?: number } = {},
+    options: {
+      after?: number;
+      before?: number;
+      order?: "asc" | "desc";
+      limit?: number;
+      messageId?: string;
+    } = {},
   ) {
+    let focus: { messageId: string; seq: number } | null = null;
+    if (options.messageId !== undefined) {
+      if (options.before !== undefined || (options.after ?? 0) !== 0)
+        throw new StoryServiceError(
+          "invalid_cursor",
+          "Choose a source message or a pagination cursor, not both",
+          400,
+        );
+      await scopedStory(this.db, orgId, projectId, storyId);
+      const [target] = await this.db
+        .select({ id: storyMessages.id, seq: storyMessages.seq })
+        .from(storyMessages)
+        .where(
+          and(
+            eq(storyMessages.orgId, orgId),
+            eq(storyMessages.projectId, projectId),
+            eq(storyMessages.storyId, storyId),
+            eq(storyMessages.id, options.messageId),
+          ),
+        )
+        .limit(1);
+      if (!target)
+        throw new StoryServiceError(
+          "message_not_found",
+          "The source message is not available in this story",
+          404,
+        );
+      focus = { messageId: target.id, seq: target.seq };
+      // The linked message is the newest boundary, with earlier context and the
+      // existing per-run enrichment. Never substitute the latest conversation.
+      options = { ...options, order: "desc", after: 0, before: target.seq + 1 };
+    }
     const limit = Math.min(200, Math.max(1, options.limit ?? 50));
     const rows = await this.conversation(orgId, projectId, storyId, {
       ...options,
@@ -1503,6 +1541,7 @@ export class StoryWorkspaceService {
     return {
       messages,
       related: related.map(enrich),
+      focus,
       hasMore,
       nextCursor: hasMore && edge ? edge.seq : null,
     };
