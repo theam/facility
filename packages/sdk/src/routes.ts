@@ -70,6 +70,7 @@ export const FACILITY_V1_ROUTES = [
   "POST /v1/keys",
   "POST /v1/members",
   "POST /v1/projects",
+  "POST /v1/projects/:projectId/costs/:turnId/settlement",
   "POST /v1/projects/:projectId/github/sync",
   "POST /v1/projects/:projectId/kickstart",
   "POST /v1/projects/:projectId/repos",

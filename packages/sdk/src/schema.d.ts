@@ -441,6 +441,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectId}/costs/{turnId}/settlement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create settlement
+         * @description Record a final provider charge for a terminal turn. Requires both budgets:write and costs:read.
+         */
+        post: operations["settleTurnUsage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectId}/budget": {
         parameters: {
             query?: never;
@@ -5555,6 +5575,7 @@ export interface operations {
     getProjectCosts: {
         parameters: {
             query?: {
+                unpriced_only?: "true" | "false";
                 from?: unknown;
                 to?: unknown;
                 limit?: number;
@@ -5602,14 +5623,145 @@ export interface operations {
                             cacheWriteTokens: number;
                             costCents: number | null;
                             priced: boolean;
+                            usageComplete: boolean;
+                            settlementReference: string | null;
                             /** @enum {string} */
-                            source: "provider" | "price_book" | "unpriced";
+                            source: "provider" | "price_book" | "unpriced" | "manual";
                             durationMs: number;
                             /** @enum {string} */
                             status: "succeeded" | "failed";
                             /** Format: date-time */
                             createdAt: string;
                         }[];
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    settleTurnUsage: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Replays the first response for the same principal, route, key, and body. */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                projectId: string;
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    cost_cents: number;
+                    reference: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: string;
+                        orgId: string;
+                        projectId: string;
+                        storyId: string;
+                        turnId: string;
+                        agentName: string;
+                        engine: string;
+                        model: string;
+                        inputTokens: number;
+                        outputTokens: number;
+                        cacheReadTokens: number;
+                        cacheWriteTokens: number;
+                        costCents: number | null;
+                        priced: boolean;
+                        usageComplete: boolean;
+                        settlementReference: string | null;
+                        /** @enum {string} */
+                        source: "provider" | "price_book" | "unpriced" | "manual";
+                        durationMs: number;
+                        /** @enum {string} */
+                        status: "succeeded" | "failed";
+                        /** Format: date-time */
+                        createdAt: string;
                     };
                 };
             };

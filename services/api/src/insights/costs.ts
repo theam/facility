@@ -5,6 +5,7 @@ export { BudgetPolicyError } from "./budget-policy.js";
 
 import { costCents, newId, normalizeModel, reservationCents } from "@facility/core";
 import {
+  auditEvents,
   budgetReservations,
   type FacilityDb,
   modelCalls,
@@ -14,6 +15,7 @@ import {
   turnUsage,
 } from "@facility/db";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { ApiError } from "../errors.js";
 import type { AgentTurnUsage } from "../turns/engines.js";
 
 export type BudgetState = {
@@ -226,6 +228,7 @@ export class CostBudgetService {
         cacheWriteTokens: usage.cacheWriteTokens,
         costCents: cost,
         priced: input.complete !== false && cost !== null,
+        usageComplete: Boolean(input.usage) && input.complete !== false,
         source:
           input.complete === false
             ? "unpriced"
@@ -251,6 +254,7 @@ export class CostBudgetService {
               eq(turnUsage.projectId, input.projectId),
               eq(turnUsage.storyId, input.storyId),
               eq(turnUsage.priced, false),
+              ...(values.usageComplete ? [] : [eq(turnUsage.usageComplete, false)]),
             ),
           })
         : insert.onConflictDoNothing({ target: turnUsage.turnId });
@@ -302,7 +306,117 @@ export class CostBudgetService {
     return { budget, windowStart, windowEnd, spentCents, remainingCents, percentUsed, state };
   }
 
-  async usage(orgId: string, projectId: string, from: Date, to: Date, limit = 100) {
+  /** A provider's final receipt confirms money, without inventing missing tokens. */
+  async settleUsage(input: {
+    orgId: string;
+    projectId: string;
+    turnId: string;
+    costCents: number;
+    reference: string;
+    actor: { type: "user" | "key"; id: string };
+    requestId?: string;
+  }) {
+    const reference = input.reference.trim();
+    if (
+      !Number.isFinite(input.costCents) ||
+      input.costCents < 0 ||
+      input.costCents > 2_000_000_000 ||
+      reference.length < 1 ||
+      reference.length > 500
+    )
+      throw new ApiError(
+        400,
+        "invalid_settlement",
+        "Provide a finite final charge and a receipt reference (1–500 characters).",
+      );
+    return this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockBudget(tx, input.orgId, input.projectId);
+      const row = (
+        await tx
+          .select()
+          .from(turnUsage)
+          .where(
+            and(
+              eq(turnUsage.orgId, input.orgId),
+              eq(turnUsage.projectId, input.projectId),
+              eq(turnUsage.turnId, input.turnId),
+            ),
+          )
+          .for("update")
+      )[0];
+      if (!row) throw new ApiError(404, "usage_not_found", "Usage not found.");
+      if (row.priced) {
+        if (
+          row.source === "manual" &&
+          row.costCents === input.costCents &&
+          row.settlementReference === reference
+        )
+          return row;
+        throw new ApiError(409, "usage_already_priced", "Confirmed charges cannot be overwritten.");
+      }
+      const turn = (
+        await tx
+          .select({ state: turns.state })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.storyId, row.storyId),
+              eq(turns.id, input.turnId),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!turn || !["failed", "canceled", "succeeded"].includes(turn.state))
+        throw new ApiError(
+          409,
+          "usage_turn_active",
+          "Wait until the turn is terminal before settling its final charge.",
+        );
+      const settled = (
+        await tx
+          .update(turnUsage)
+          .set({
+            costCents: input.costCents,
+            priced: true,
+            source: "manual",
+            settlementReference: reference,
+            createdAt: new Date(),
+          })
+          .where(eq(turnUsage.id, row.id))
+          .returning()
+      )[0];
+      await releaseOpenTurnReservation(tx, input);
+      await tx.insert(auditEvents).values({
+        id: newId("evt"),
+        orgId: input.orgId,
+        projectId: input.projectId,
+        actor: input.actor,
+        action: "usage.settled",
+        target: { type: "turn", id: input.turnId },
+        payload: {
+          usageId: row.id,
+          previousCostCents: row.costCents,
+          costCents: input.costCents,
+          reference,
+          usageComplete: row.usageComplete,
+        },
+        requestId: input.requestId,
+      });
+      return settled;
+    });
+  }
+
+  async usage(
+    orgId: string,
+    projectId: string,
+    from: Date,
+    to: Date,
+    limit = 100,
+    unpricedOnly = false,
+  ) {
     const [rows, totals] = await Promise.all([
       this.db
         .select()
@@ -311,6 +425,7 @@ export class CostBudgetService {
           and(
             eq(turnUsage.orgId, orgId),
             eq(turnUsage.projectId, projectId),
+            ...(unpricedOnly ? [eq(turnUsage.priced, false)] : []),
             gte(turnUsage.createdAt, from),
             lt(turnUsage.createdAt, to),
           ),
@@ -332,6 +447,7 @@ export class CostBudgetService {
           and(
             eq(turnUsage.orgId, orgId),
             eq(turnUsage.projectId, projectId),
+            ...(unpricedOnly ? [eq(turnUsage.priced, false)] : []),
             gte(turnUsage.createdAt, from),
             lt(turnUsage.createdAt, to),
           ),

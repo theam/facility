@@ -6369,6 +6369,19 @@
         "operationId": "getProjectCosts",
         "parameters": [
           {
+            "schema": {
+              "default": "false",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "in": "query",
+            "name": "unpriced_only",
+            "required": false
+          },
+          {
             "schema": {},
             "in": "query",
             "name": "from",
@@ -6500,12 +6513,20 @@
                           "priced": {
                             "type": "boolean"
                           },
+                          "usageComplete": {
+                            "type": "boolean"
+                          },
+                          "settlementReference": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "source": {
                             "type": "string",
                             "enum": [
                               "provider",
                               "price_book",
-                              "unpriced"
+                              "unpriced",
+                              "manual"
                             ]
                           },
                           "durationMs": {
@@ -6538,6 +6559,8 @@
                           "cacheWriteTokens",
                           "costCents",
                           "priced",
+                          "usageComplete",
+                          "settlementReference",
                           "source",
                           "durationMs",
                           "status",
@@ -6652,6 +6675,271 @@
           }
         ],
         "x-facility-permission": "costs:read"
+      }
+    },
+    "/v1/projects/{projectId}/costs/{turnId}/settlement": {
+      "post": {
+        "operationId": "settleTurnUsage",
+        "description": "Record a final provider charge for a terminal turn. Requires both budgets:write and costs:read.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cost_cents": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2000000000
+                  },
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "cost_cents",
+                  "reference"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "turnId",
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Replays the first response for the same principal, route, key, and body.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "orgId": {
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "type": "string"
+                    },
+                    "storyId": {
+                      "type": "string"
+                    },
+                    "turnId": {
+                      "type": "string"
+                    },
+                    "agentName": {
+                      "type": "string"
+                    },
+                    "engine": {
+                      "type": "string"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "inputTokens": {
+                      "type": "number"
+                    },
+                    "outputTokens": {
+                      "type": "number"
+                    },
+                    "cacheReadTokens": {
+                      "type": "number"
+                    },
+                    "cacheWriteTokens": {
+                      "type": "number"
+                    },
+                    "costCents": {
+                      "nullable": true,
+                      "type": "number"
+                    },
+                    "priced": {
+                      "type": "boolean"
+                    },
+                    "usageComplete": {
+                      "type": "boolean"
+                    },
+                    "settlementReference": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "provider",
+                        "price_book",
+                        "unpriced",
+                        "manual"
+                      ]
+                    },
+                    "durationMs": {
+                      "type": "number"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "succeeded",
+                        "failed"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "orgId",
+                    "projectId",
+                    "storyId",
+                    "turnId",
+                    "agentName",
+                    "engine",
+                    "model",
+                    "inputTokens",
+                    "outputTokens",
+                    "cacheReadTokens",
+                    "cacheWriteTokens",
+                    "costCents",
+                    "priced",
+                    "usageComplete",
+                    "settlementReference",
+                    "source",
+                    "durationMs",
+                    "status",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated principal lacks the required permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource was not found or is outside the principal scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The request rate limit was exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An unexpected server error occurred.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required service is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create settlement",
+        "tags": [
+          "Projects"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-facility-permission": "budgets:write"
       }
     },
     "/v1/projects/{projectId}/budget": {

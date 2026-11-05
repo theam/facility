@@ -86,8 +86,12 @@ usage and request identity, without prompts or credentials. It currently covers 
 read-only consultation is a separate feature.
 
 When no final journal can be recovered, inspect the provider bill and retained session files;
-the true charge may exceed the recorded lower bound. There is currently no manual billing
-reconciliation endpoint. An authorized budget administrator can explicitly disable enforcement
+the true charge may exceed the recorded lower bound. Native-turn charges can be reconciled
+through the [audited settlement API](reference/api.md#reconciling-retained-turn-charges)
+using a final provider receipt. Complete token counts on a model with no price are
+also unpriced and keep enforcement paused until its charge is confirmed. Title and
+consultation ledger bills do not have a manual settlement endpoint.
+An authorized budget administrator can explicitly disable enforcement
 to continue, accepting that spend remains incomplete. Deleting the workspace loses evidence
 and does not clear the accounting block.
 

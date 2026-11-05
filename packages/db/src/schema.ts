@@ -1510,6 +1510,8 @@ export const turnUsage = pgTable(
     cacheWriteTokens: bigint("cache_write_tokens", { mode: "number" }).notNull().default(0),
     costCents: numeric("cost_cents", { mode: "number" }),
     priced: boolean("priced").notNull(),
+    usageComplete: boolean("usage_complete").notNull().default(false),
+    settlementReference: text("settlement_reference"),
     source: text("source").notNull(),
     durationMs: integer("duration_ms").notNull().default(0),
     status: text("status").notNull(),
@@ -1524,7 +1526,11 @@ export const turnUsage = pgTable(
     ),
     check(
       "turn_usage_source_check",
-      sql`${table.source} in ('provider', 'price_book', 'unpriced')`,
+      sql`${table.source} in ('provider', 'price_book', 'unpriced', 'manual')`,
+    ),
+    check(
+      "turn_usage_manual_receipt_check",
+      sql`(${table.source} = 'manual' and ${table.priced} and ${table.costCents} is not null and ${table.costCents} >= 0 and ${table.costCents} <= 2000000000 and ${table.settlementReference} is not null and length(btrim(${table.settlementReference})) between 1 and 500) or (${table.source} <> 'manual' and ${table.settlementReference} is null)`,
     ),
     check("turn_usage_status_check", sql`${table.status} in ('succeeded', 'failed')`),
     check(
