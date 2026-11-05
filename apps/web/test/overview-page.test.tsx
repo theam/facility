@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import ProjectOverviewPage from "../app/(app)/projects/[projectId]/page";
 import type { ProjectOverview } from "../lib/api";
+import { parseStoriesSearch } from "../lib/backlog-presentation";
 
 const mocks = vi.hoisted(() => ({
   overview: { ok: true, data: {} as ProjectOverview } as
@@ -269,6 +270,10 @@ describe("project overview page", () => {
       running.querySelector('a[href="/projects/project/stories/story-running"]'),
     ).not.toBeNull();
     expect(running.textContent).toContain("cancel turn");
+    const working = running.querySelector('a[href^="/projects/project/stories?"]');
+    expect(working?.textContent).toBe("Working stories →");
+    const workingSearch = new URL(working?.getAttribute("href") ?? "", "http://web").searchParams;
+    expect(parseStoriesSearch(Object.fromEntries(workingSearch)).phase).toEqual(["in_progress"]);
 
     const review = section(root, "Waiting for review");
     expect(review.textContent).toContain("Checks failed");

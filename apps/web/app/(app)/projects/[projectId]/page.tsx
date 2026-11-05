@@ -163,7 +163,7 @@ export default async function ProjectOverviewPage({
               title="Running now"
               count={overview.activity.running.length + overview.activity.queued.length}
               aside={
-                <Link href={`${base}/stories?status=working`} className={linkClass}>
+                <Link href={`${base}/stories?phase=in_progress`} className={linkClass}>
                   Working stories →
                 </Link>
               }
