@@ -21,6 +21,19 @@ const actionLabels: Record<StoryCompletion["nextAction"], string> = {
   completed: "Delivery completed",
 };
 
+type RequestKey = { signature: string; key: string };
+
+/**
+ * One idempotency key per exact request: retrying it reuses the key, while a
+ * changed request (another result, summary or candidate) gets a new one. The
+ * API rejects a key reused with a different body, even after a failed attempt.
+ */
+function requestKey(ref: { current: RequestKey | null }, request: object) {
+  const signature = JSON.stringify(request);
+  if (ref.current?.signature !== signature) ref.current = { signature, key: crypto.randomUUID() };
+  return ref.current.key;
+}
+
 export function StoryCompletionPanel({
   projectId,
   storyId,
@@ -47,8 +60,8 @@ export function StoryCompletionPanel({
   const [inAppNotices, setInAppNotices] = useState(initial?.notices.in_app ?? true);
   const [summary, setSummary] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
-  const integrationKey = useRef<string | null>(null);
-  const completionKey = useRef<string | null>(null);
+  const integrationKey = useRef<RequestKey | null>(null);
+  const completionKey = useRef<RequestKey | null>(null);
   useEffect(() => {
     setCurrent(initial);
     setPolicyMode(initial?.integration.policy.mode ?? "none");
@@ -92,16 +105,18 @@ export function StoryCompletionPanel({
 
   async function recordIntegration(state: "succeeded" | "failed") {
     if (!candidate || !current) return;
-    integrationKey.current ??= crypto.randomUUID();
-    setPending(`integration:${state}`);
-    setError(null);
-    const result = await clientApi<StoryCompletion>("POST", `${story}/integration-result`, {
+    const request = {
       candidate_revision: candidate,
       event_id: current.integration.eventId,
       state,
       summary: summary.trim(),
       evidence_url: evidenceUrl.trim() || null,
-      idempotency_key: integrationKey.current,
+    };
+    setPending(`integration:${state}`);
+    setError(null);
+    const result = await clientApi<StoryCompletion>("POST", `${story}/integration-result`, {
+      ...request,
+      idempotency_key: requestKey(integrationKey, request),
     });
     setPending("");
     if (!result.ok) {
@@ -115,13 +130,12 @@ export function StoryCompletionPanel({
 
   async function requestCompletion() {
     if (!candidate) return;
-    completionKey.current ??= crypto.randomUUID();
+    const request = { candidate_revision: candidate, confirm: true };
     setPending("completion");
     setError(null);
     const result = await clientApi<StoryCompletion>("POST", `${story}/complete`, {
-      candidate_revision: candidate,
-      confirm: true,
-      idempotency_key: completionKey.current,
+      ...request,
+      idempotency_key: requestKey(completionKey, request),
     });
     setPending("");
     if (!result.ok) {
