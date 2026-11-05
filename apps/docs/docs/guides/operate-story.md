@@ -132,6 +132,20 @@ agents. Choose **Propose plan** or **Propose revision**, or **Propose as plan** 
 Using a response asks before replacing an open draft. Editing its text removes source-message
 attribution. Select scope by readable names and save the proposal; no agent is started.
 
+A new proposal initially selects all connected repositories when the complete set fits the
+50-repository plan limit. A larger set is left unselected with an explanation, so a truncated
+page cannot look like the full scope. Failed repository reads can be retried without losing
+the draft. Revising an existing plan preserves its selected scope.
+
+For a new plan, agents held by a workflow gate take precedence. Otherwise, a proposal from an
+agent response starts with that response's recorded agent; a handwritten plan uses the project's
+UI default. A response without a recorded agent requires an explicit choice. Unavailable agents
+remain visible and must be replaced before saving. The author and the executing agent can differ,
+so review the selection. A plan that omits a held agent shows a warning.
+
+The conversation and its reply controls follow the plan directly. Delivery, acceptance,
+consultation and environment details remain available further down the same story.
+
 Choose **Review approval** or **Request changes** (with a reason). The next page shows the exact
 revision, text and scope before the explicit confirmation button. An approval applies to that
 revision only. A newer proposal retains the old receipt as history and awaits its own decision.

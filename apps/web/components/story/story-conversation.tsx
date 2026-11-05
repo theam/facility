@@ -235,6 +235,7 @@ function ExchangeCard({
                   storyId,
                   messageId: response.id,
                   markdown: response.body,
+                  agentName: turn?.agentName,
                 })
               }
             >

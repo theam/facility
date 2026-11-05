@@ -376,4 +376,23 @@ describe("story overview integration", () => {
     expect(root.querySelector("#story-composer")).toBeNull();
     expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("send a task");
   });
+
+  it("keeps the plan and conversation together before delivery and environment controls", async () => {
+    setUp(["workspaces:execute", "projects:write"]);
+    const { root } = await render();
+    const plan = root.querySelector("#story-plan");
+    const conversation = root.querySelector("#conversation");
+    if (!conversation) throw new Error("Missing conversation");
+    expect(plan?.nextElementSibling).toBe(conversation);
+    expect(conversation?.querySelector('[aria-label="Story actions"]')).not.toBeNull();
+    expect(
+      conversation.compareDocumentPosition(
+        root.querySelector('[aria-label="Workflow status"]') as Node,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      conversation.compareDocumentPosition(root.querySelector("#workspace") as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

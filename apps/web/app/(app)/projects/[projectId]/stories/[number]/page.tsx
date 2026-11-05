@@ -144,28 +144,6 @@ export default async function StoryPage({
             </div>
           ) : null}
         </dl>
-        <StoryActions
-          key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
-          projectId={projectId}
-          draftOwnerId={
-            me.ok && me.data.principal?.type === "user"
-              ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
-              : undefined
-          }
-          story={story}
-          workspace={bundle.workspace}
-          agents={agentRows}
-          canExecute={canExecute}
-          canPreview={canExecute || can(permissions, "previews:read")}
-          canWrite={canWrite}
-          computeState={currentEnvironment?.inspection.state}
-          activeTurn={activeTurn}
-          waitingAgent={waitingAgent}
-          artifacts={bundle.artifacts}
-        />
-        {canExecute && !agents.ok ? (
-          <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
-        ) : null}
       </header>
 
       {openAttention.length > 0 ? (
@@ -210,6 +188,10 @@ export default async function StoryPage({
         </section>
       ) : null}
 
+      {!workflow.ok ? (
+        <ErrorNotice message={`Workflow status unavailable: ${workflow.message}`} />
+      ) : null}
+
       <StoryPlanPanel
         key={`plan:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
         projectId={projectId}
@@ -217,10 +199,55 @@ export default async function StoryPage({
         initial={bundle.plans}
         agents={agentRows}
         defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+        queuedAgents={workflow.ok && workflow.data.blockedReason ? workflow.data.queuedAgents : []}
+        blockedReason={workflow.ok ? workflow.data.blockedReason : undefined}
         catalogError={agents.ok ? undefined : agents.message}
         canWrite={canWrite && story.deletedAt === null}
         userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}
       />
+
+      <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-4">
+          <Eyebrow>conversation</Eyebrow>
+          <span className="text-[11px] text-(--dim)">
+            Newest first · each request with the run and response it produced
+          </span>
+        </div>
+        <StoryActions
+          key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+          projectId={projectId}
+          draftOwnerId={
+            me.ok && me.data.principal?.type === "user"
+              ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+              : undefined
+          }
+          story={story}
+          workspace={bundle.workspace}
+          agents={agentRows}
+          canExecute={canExecute}
+          canPreview={canExecute || can(permissions, "previews:read")}
+          canWrite={canWrite}
+          computeState={currentEnvironment?.inspection.state}
+          activeTurn={activeTurn}
+          waitingAgent={waitingAgent}
+          artifacts={bundle.artifacts}
+        />
+        {canExecute && !agents.ok ? (
+          <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
+        ) : null}
+        {!conversation.ok ? (
+          <ErrorNotice message={`Couldn't load conversation — ${conversation.message}`} />
+        ) : (
+          <StoryConversation
+            projectId={projectId}
+            storyId={story.id}
+            initial={conversation.data}
+            waitingTurnIds={waitingTurnIds}
+            canExecute={canExecute && story.deletedAt === null}
+            canProposePlan={canWrite && story.deletedAt === null}
+          />
+        )}
+      </section>
 
       {workflow.ok ? (
         <StoryWorkflowPanel
@@ -228,9 +255,7 @@ export default async function StoryPage({
           canWrite={canWrite && story.deletedAt === null}
           candidateReady={bundle.delivery?.candidate.state === "recorded"}
         />
-      ) : (
-        <ErrorNotice message={`Workflow status unavailable: ${workflow.message}`} />
-      )}
+      ) : null}
 
       <StoryDeliveryPanel
         key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
@@ -273,27 +298,6 @@ export default async function StoryPage({
             : undefined
         }
       />
-
-      <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <Eyebrow>conversation</Eyebrow>
-          <span className="text-[11px] text-(--dim)">
-            Newest first · each request with the run and response it produced
-          </span>
-        </div>
-        {!conversation.ok ? (
-          <ErrorNotice message={`Couldn't load conversation — ${conversation.message}`} />
-        ) : (
-          <StoryConversation
-            projectId={projectId}
-            storyId={story.id}
-            initial={conversation.data}
-            waitingTurnIds={waitingTurnIds}
-            canExecute={canExecute && story.deletedAt === null}
-            canProposePlan={canWrite && story.deletedAt === null}
-          />
-        )}
-      </section>
 
       <section
         id="workspace"

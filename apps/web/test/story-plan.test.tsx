@@ -135,6 +135,7 @@ async function render(
   initial: StoryPlans | undefined = snapshot(),
   canWrite = true,
   catalog = agents,
+  defaults: { defaultAgent?: string; queuedAgents?: string[]; blockedReason?: string } = {},
 ) {
   await act(async () =>
     root.render(
@@ -143,7 +144,9 @@ async function render(
         storyId="story-a"
         initial={initial}
         agents={catalog}
-        defaultAgent="planner"
+        defaultAgent={defaults.defaultAgent ?? "planner"}
+        queuedAgents={defaults.queuedAgents}
+        blockedReason={defaults.blockedReason}
         canWrite={canWrite}
         userId="person-a"
       />,
@@ -181,17 +184,134 @@ function writes() {
 function body(index = 0) {
   return JSON.parse(writes()[index]?.[1]?.body ?? "{}");
 }
-async function proposeSource(markdown: string, storyId = "story-a") {
+async function proposeSource(markdown: string, storyId = "story-a", agentName?: string) {
   await act(async () => {
     window.dispatchEvent(
       new CustomEvent(PLAN_PROPOSAL_EVENT, {
-        detail: { projectId: "project-a", storyId, messageId: "msg-a", markdown },
+        detail: { projectId: "project-a", storyId, messageId: "msg-a", markdown, agentName },
       }),
     );
   });
 }
 
 describe("revision-bound plan UI", () => {
+  it("starts a source proposal with its author and all connected repositories, not the UI default", async () => {
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: [
+          { repository: "example/app", primary: true },
+          { repository: "example/api", primary: false },
+        ],
+        hasMore: false,
+        nextOffset: null,
+      }),
+    );
+    await render(snapshot(0), true, agents, { defaultAgent: "builder" });
+    await proposeSource("Plan from the planner", "story-a", "planner");
+    await click("Use this message");
+    expect(writes()).toHaveLength(0);
+    fetch.mockResolvedValueOnce(Response.json(snapshot()));
+    await click("Save plan proposal");
+    expect(body()).toMatchObject({
+      agents: ["planner"],
+      repositories: ["example/app", "example/api"],
+      source_message_id: "msg-a",
+    });
+  });
+
+  it("uses the held work's agents for a new recovery proposal and warns about an incompatible plan", async () => {
+    await render(snapshot(0), true, agents, {
+      defaultAgent: "builder",
+      queuedAgents: ["planner", "planner"],
+      blockedReason: "A current approval is required.",
+    });
+    await click("Propose plan");
+    await type("Resume the held task");
+    fetch.mockResolvedValueOnce(Response.json(snapshot()));
+    await click("Save plan proposal");
+    expect(body().agents).toEqual(["planner"]);
+    expect(container.textContent).toContain("Review the plan to resume existing work");
+    expect(container.textContent).toContain("A current approval is required.");
+    expect(container.textContent).toContain("Waiting agents: planner");
+    await render(snapshot(), true, agents, { queuedAgents: ["builder"] });
+    expect(container.textContent).toContain("This plan does not include queued work for builder");
+  });
+
+  it("requires a deliberate agent choice when a source has no recorded agent or an unavailable one", async () => {
+    await render(snapshot(0));
+    await proposeSource("Source without a recorded turn");
+    await click("Use this message");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    await proposeSource("Former reviewer", "story-a", "removed-reviewer");
+    await click("Use this message");
+    expect(container.textContent).toContain("removed-reviewer · unavailable");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("preserves the chosen scope on revision, search, and subsequent list reads", async () => {
+    await render(snapshot());
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: [
+          { repository: "example/app", primary: true },
+          { repository: "example/api", primary: false },
+        ],
+        hasMore: false,
+        nextOffset: null,
+      }),
+    );
+    await click("Propose revision");
+    await click("Find repositories");
+    fetch.mockResolvedValueOnce(Response.json(snapshot(2)));
+    await click("Save plan proposal");
+    expect(body().repositories).toEqual(["example/app"]);
+    expect(body().agents).toEqual(["planner"]);
+  });
+
+  it("retries the initial repository read before selecting the full scope", async () => {
+    fetch.mockResolvedValueOnce(
+      Response.json({ error: { message: "Repository read unavailable" } }, { status: 503 }),
+    );
+    await render(snapshot(0));
+    await click("Propose plan");
+    await type("Recover the task");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: [
+          { repository: "example/app", primary: true },
+          { repository: "example/api", primary: false },
+        ],
+        hasMore: false,
+        nextOffset: null,
+      }),
+    );
+    await click("Retry repository list");
+    fetch.mockResolvedValueOnce(Response.json(snapshot()));
+    await click("Save plan proposal");
+    expect(body().repositories).toEqual(["example/app", "example/api"]);
+  });
+
+  it("does not silently select a truncated repository scope", async () => {
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: Array.from({ length: 50 }, (_, index) => ({
+          repository: `example/repo-${index}`,
+          primary: index === 0,
+        })),
+        hasMore: true,
+        nextOffset: 50,
+      }),
+    );
+    await render(snapshot(0));
+    await click("Propose plan");
+    await type("Scope requires review");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    expect(container.textContent).toContain("No partial scope was selected automatically");
+    expect(writes()).toHaveLength(0);
+  });
+
   it("shows readable scope and receipt state without initiating requests or offering viewer mutations", async () => {
     await render(confirmed(), false);
     expect(container.textContent).toContain("Approved for this revision");

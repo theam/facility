@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RunActivity } from "../components/story/run-activity";
 import { StoryConversation } from "../components/story/story-conversation";
 import type { StoryConversationPage, StoryMessage, StoryTurnSummary } from "../lib/api";
+import { PLAN_PROPOSAL_EVENT } from "../lib/story-plan-events";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
@@ -90,6 +91,40 @@ function exchangeTexts() {
 }
 
 describe("story conversation paging", () => {
+  it("carries the recorded response agent into a plan draft without starting work", async () => {
+    const { request, response } = exchange(1, "turn-a");
+    if (!request.turn || !response.turn) throw new Error("Missing fixture turn");
+    request.turn.agentName = "architect";
+    response.turn.agentName = "architect";
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const received = vi.fn();
+    window.addEventListener(PLAN_PROPOSAL_EVENT, received);
+    try {
+      await act(async () =>
+        root.render(
+          <StoryConversation
+            projectId="project"
+            storyId="story"
+            initial={page([response, request])}
+            waitingTurnIds={[]}
+            canExecute
+            canProposePlan
+          />,
+        ),
+      );
+      await act(async () => button("Propose as plan").click());
+      expect(received).toHaveBeenCalledOnce();
+      expect((received.mock.calls[0]?.[0] as CustomEvent).detail).toMatchObject({
+        agentName: "architect",
+        messageId: response.id,
+        markdown: response.body,
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(PLAN_PROPOSAL_EVENT, received);
+    }
+  });
   it("loads older pages on request, merges related context, and stops at the beginning", async () => {
     const third = exchange(5, "turn-c");
     const second = exchange(3, "turn-b");

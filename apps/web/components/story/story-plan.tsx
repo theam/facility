@@ -35,6 +35,8 @@ export function StoryPlanPanel({
   initial,
   agents,
   defaultAgent,
+  queuedAgents = [],
+  blockedReason,
   catalogError,
   canWrite,
   userId,
@@ -44,6 +46,8 @@ export function StoryPlanPanel({
   initial?: StoryPlans;
   agents: StoryAgent[];
   defaultAgent: string | null;
+  queuedAgents?: string[];
+  blockedReason?: string | null;
   catalogError?: string;
   canWrite: boolean;
   userId?: string;
@@ -77,6 +81,8 @@ export function StoryPlanPanel({
   const textarea = useRef<HTMLTextAreaElement>(null),
     sourceNotice = useRef<HTMLDivElement>(null);
   const draftMarkdown = useRef("");
+  const initializeRepositoryScope = useRef(false);
+  const [scopeNotice, setScopeNotice] = useState<string | null>(null);
   const observedHeads = useRef({
     revision: initial?.state.revision ?? 0,
     decisionRevision: initial?.state.decisionRevision ?? 0,
@@ -142,14 +148,14 @@ export function StoryPlanPanel({
     [],
   );
 
-  async function loadRepositories(offset = 0, term = "", choosePrimary = false) {
+  async function loadRepositories(offset = 0, term = "") {
     const n = ++optionsSequence.current;
     if (offset === 0) searchTerm.current = term;
     setLoadingOptions(true);
     setOptionsError(null);
     const result = await clientApi<Repositories>(
       "GET",
-      `${path}/repositories?${new URLSearchParams({ q: searchTerm.current, limit: "25", offset: String(offset) })}`,
+      `${path}/repositories?${new URLSearchParams({ q: searchTerm.current, limit: "50", offset: String(offset) })}`,
     );
     if (n !== optionsSequence.current) return;
     setLoadingOptions(false);
@@ -168,12 +174,15 @@ export function StoryPlanPanel({
             ]
           : result.data.items,
     }));
-    if (choosePrimary)
-      setRepositories((selected) =>
-        selected.length
-          ? selected
-          : result.data.items.filter((repo) => repo.primary).map((repo) => repo.repository),
+    if (initializeRepositoryScope.current && offset === 0 && term === "") {
+      initializeRepositoryScope.current = false;
+      setRepositories(result.data.hasMore ? [] : result.data.items.map((repo) => repo.repository));
+      setScopeNotice(
+        result.data.hasMore
+          ? "This project has more than 50 connected repositories. No partial scope was selected automatically. Review the required scope; a plan can include up to 50 repositories."
+          : "All connected project repositories are selected for this new plan. Review the scope before saving; removing repositories can leave queued work blocked.",
       );
+    }
   }
   function startEdit(value = current, from?: PlanProposalSource) {
     if (busyRef.current) return;
@@ -186,15 +195,28 @@ export function StoryPlanPanel({
     setMarkdown(draftMarkdown.current);
     setRepositories(value?.plan?.repositories.map((repo) => repo.repository) ?? []);
     setSelectedAgents(
-      value?.plan?.agents.map((agent) => agent.name) ?? (defaultAgent ? [defaultAgent] : []),
+      value?.plan?.agents.map((agent) => agent.name) ??
+        (queuedAgents.length
+          ? [...new Set(queuedAgents)]
+          : from
+            ? from.agentName
+              ? [from.agentName]
+              : []
+            : defaultAgent
+              ? [defaultAgent]
+              : []),
     );
+    initializeRepositoryScope.current = !value?.plan;
+    setScopeNotice(null);
+    setOptions(null);
+    setQuery("");
     setSource(from?.messageId ?? value?.plan?.source?.messageId);
     setError(null);
     setNotice(null);
     setEditing(true);
     setPendingSource(null);
     retry.current = null;
-    void loadRepositories(0, "", !value?.plan);
+    void loadRepositories();
   }
   async function load(kind: "current" | "history" | "decisions" = "current") {
     if (busyRef.current) return;
@@ -347,6 +369,9 @@ export function StoryPlanPanel({
     (item) => item.decisionRevision,
   );
   const staleDraft = editing && current && current.state.revision !== baseRevision;
+  const missingQueuedAgents = [...new Set(queuedAgents)].filter(
+    (name) => !current?.plan?.agents.some((agent) => agent.name === name),
+  );
   return (
     <section
       id="story-plan"
@@ -379,6 +404,24 @@ export function StoryPlanPanel({
       {notice ? (
         <p role="status" className="text-sm text-(--mut)">
           {notice}
+        </p>
+      ) : null}
+      {blockedReason ? (
+        <div role="status" className="flex flex-col gap-2 border-l-2 border-(--human) pl-3 text-sm">
+          <p className="font-medium">Review the plan to resume existing work</p>
+          <p className="break-words text-(--mut)">{blockedReason}</p>
+          {queuedAgents.length ? (
+            <p className="break-words text-(--mut)">
+              Waiting agents: {[...new Set(queuedAgents)].join(", ")}. Review their scope before
+              approving. A matching approval may release the existing queued turns.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {current?.plan && missingQueuedAgents.length ? (
+        <p role="alert" className="text-sm text-(--bad)">
+          This plan does not include queued work for {missingQueuedAgents.join(", ")}. Propose a
+          revision with the intended agents before approving recovery.
         </p>
       ) : null}
       {pendingSource && canWrite ? (
@@ -493,6 +536,11 @@ export function StoryPlanPanel({
           </Field>
           <fieldset className="flex min-w-0 flex-col gap-2">
             <legend className="mb-2 text-[12px] font-medium">Repositories</legend>
+            {scopeNotice ? (
+              <p role="status" className="text-xs text-(--mut)">
+                {scopeNotice}
+              </p>
+            ) : null}
             <div className="flex min-w-0 flex-wrap gap-2">
               <TextInput
                 aria-label="Find plan repositories"
@@ -531,13 +579,14 @@ export function StoryPlanPanel({
                   disabled={
                     busy || (!repositories.includes(repo.repository) && repositories.length >= 50)
                   }
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    initializeRepositoryScope.current = false;
                     setRepositories((selected) =>
                       event.target.checked
                         ? [...selected, repo.repository]
                         : selected.filter((name) => name !== repo.repository),
-                    )
-                  }
+                    );
+                  }}
                 />
                 <span className="min-w-0 break-words">
                   {repo.repository}
@@ -562,6 +611,13 @@ export function StoryPlanPanel({
           </fieldset>
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-2 text-[12px] font-medium">Agents</legend>
+            <p className="text-xs text-(--mut)">
+              Choose the agents allowed to execute this plan. The author and the executing agent can
+              differ.
+              {queuedAgents.length
+                ? ` Existing queued work: ${[...new Set(queuedAgents)].join(", ")}. A matching approval may resume those turns.`
+                : ""}
+            </p>
             {enabledAgents.map((agent) => (
               <label key={agent.name} className="flex items-start gap-2 text-[13px]">
                 <input
@@ -613,10 +669,12 @@ export function StoryPlanPanel({
               size="sm"
               disabled={
                 busy ||
+                loadingOptions ||
                 !!staleDraft ||
                 !markdown.trim() ||
                 !repositories.length ||
                 !selectedAgents.length ||
+                selectedAgents.length > 20 ||
                 !!invalidAgents.length ||
                 !!catalogError
               }
@@ -632,8 +690,8 @@ export function StoryPlanPanel({
       {canWrite && current?.plan && !editing ? (
         <div className="flex flex-col gap-3 border-t border-(--line) pt-4">
           <p className="text-[12px] text-(--dim)">
-            Review and confirm the exact plan on the next page. Confirmation does not start agents
-            or accept delivery.
+            Review and confirm the exact plan on the next page. Approval may release matching queued
+            turns under project policy. It does not accept the final delivery.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
