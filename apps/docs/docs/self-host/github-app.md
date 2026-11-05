@@ -50,8 +50,11 @@ required reviews, current required checks, and explicit GitHub bypass settings.
 
 ## Event subscriptions
 
-Subscribe to Issues, Issue comment, Pull request, Pull request review, Workflow run, and Check suite
-events. Set the webhook URL to `/webhooks/github` and configure `GITHUB_APP_WEBHOOK_SECRET`.
+Subscribe to Issues, Issue comment, Pull request, Pull request review, Push, Create, Delete,
+Workflow run, Check suite, and Check run events. Agent triggers use the first group and the CI
+events; Push, Create, Delete, and Check run keep the delivery mirror and story branches current
+between reconciliations. The [webhook reference](../reference/webhooks.md#app-subscriptions) lists
+the same set. Set the webhook URL to `/webhooks/github` and configure `GITHUB_APP_WEBHOOK_SECRET`.
 
 GitHub trigger names in `.agents/` do not subscribe the App automatically. Update the App settings
 when a repository adds a supported trigger category, then send a test or redelivered event.
