@@ -400,7 +400,7 @@ export class CodexEventParser extends EngineEventParser {
     const type = stringValue(value.type) ?? "unknown";
     this.events.push({ engine: "codex", type, data: value });
     if (type === "thread.started") this.sessionId ??= stringValue(value.thread_id);
-    if (type === "turn.completed") this.usage = usageValue(value.usage) ?? this.usage;
+    if (type === "turn.completed") this.usage = codexUsageValue(value.usage) ?? this.usage;
     if (type === "item.completed") {
       const item = objectValue(value.item);
       if (item?.type === "agent_message" && typeof item.text === "string" && item.text.trim()) {
@@ -477,6 +477,18 @@ function usageValue(value: unknown, reportedCostUsd?: unknown): AgentTurnUsage |
     cacheWriteTokens: cacheWriteTokens ?? 0,
     reportedCostCents: costUsd === undefined ? undefined : costUsd * 100,
   };
+}
+
+/**
+ * Codex reports OpenAI usage, where `input_tokens` already includes `cached_input_tokens`.
+ * The price book adds input and cache-read buckets, so keep only uncached input in `inputTokens`.
+ * Counters that cannot be split are not usage: the turn stays unpriced instead of guessed.
+ */
+function codexUsageValue(value: unknown): AgentTurnUsage | undefined {
+  const usage = usageValue(value);
+  if (!usage || objectValue(value)?.cached_input_tokens === undefined) return usage;
+  const inputTokens = usage.inputTokens - usage.cacheReadTokens;
+  return inputTokens < 0 ? undefined : { ...usage, inputTokens };
 }
 
 function nonNegativeInteger(value: unknown) {

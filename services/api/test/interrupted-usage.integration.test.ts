@@ -166,6 +166,33 @@ describe("dead worker accounting", () => {
       code: "budget_exceeded",
     });
   });
+  it("charges Codex cached prompt tokens once, at the cache-read rate", async () => {
+    const input = await seed();
+    // OpenAI usage: the 90k cached tokens are part of the 100k input tokens.
+    await runtime.exec(input.workspace, {
+      command: process.execPath,
+      args: [
+        "-e",
+        ENGINE_USAGE_PROCESS,
+        process.execPath,
+        "-e",
+        `console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:100000,cached_input_tokens:90000,output_tokens:1000}}))`,
+      ],
+      env: { FACILITY_TURN_ID: input.turnId, FACILITY_ENGINE: input.engine },
+    });
+    expect(await service.recoverInterruptedTurn(input)).toBe(true);
+    expect(await db.select().from(turnUsage).where(eq(turnUsage.turnId, input.turnId))).toEqual([
+      expect.objectContaining({
+        inputTokens: 10_000,
+        cacheReadTokens: 90_000,
+        outputTokens: 1_000,
+        // gpt-5.5: 10k x $10/M + 90k x $1/M + 1k x $30/M. Adding cache on top of input booked 112.
+        costCents: 22,
+        priced: true,
+      }),
+    ]);
+    expect((await costs.budgetState(orgId, input.projectId)).spentCents).toBe(22);
+  });
   it("books a partial lower bound but blocks new calls even after raising the budget", async () => {
     const input = await seed();
     await journal(input, evidence(input, false));
