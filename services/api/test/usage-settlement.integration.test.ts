@@ -3,6 +3,7 @@ import { generateApiKey, newId, seal } from "@facility/core";
 import {
   apiKeys,
   auditEvents,
+  budgetReservations,
   createDb,
   migrate,
   orgs,
@@ -132,6 +133,82 @@ async function audits(f: { turnId: string }) {
 }
 
 describe("usage certainty and audited final charges", () => {
+  it("rolls back the bill and hold release if its audit cannot be written", async () => {
+    const f = await fixture();
+    await db
+      .update(projectBudgets)
+      .set({ enabled: true })
+      .where(eq(projectBudgets.projectId, f.projectId));
+    const hold = {
+      id: newId("evt"),
+      orgId: f.orgId,
+      projectId: f.projectId,
+      storyId: f.storyId,
+      turnId: f.turnId,
+      purpose: "turn",
+      state: "open",
+      model: f.model,
+      reservedCents: 10,
+    };
+    await db.insert(budgetReservations).values(hold);
+    const name = `receipt_audit_${randomUUID().replaceAll("-", "")}`;
+    // Every interpolated identifier/value below is a locally generated test ID.
+    expect(name).toMatch(/^[a-z0-9_]+$/);
+    expect(f.projectId).toMatch(/^proj_[a-z0-9]+$/);
+    await client.unsafe(
+      `CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic receipt audit failure'; END $$`,
+    );
+    try {
+      await client.unsafe(
+        `CREATE TRIGGER ${name} BEFORE INSERT ON audit_events FOR EACH ROW WHEN (NEW.action = 'usage.settled' AND NEW.project_id = '${f.projectId}') EXECUTE FUNCTION ${name}()`,
+      );
+      try {
+        expect((await settle(f)).statusCode).toBe(500);
+        expect((await rows(f))[0]).toMatchObject({
+          priced: false,
+          costCents: null,
+          settlementReference: null,
+        });
+        expect(
+          await db.select().from(budgetReservations).where(eq(budgetReservations.id, hold.id)),
+        ).toHaveLength(1);
+        expect(await audits(f)).toHaveLength(0);
+        await expect(
+          costs.assertTurnAllowed(f.orgId, f.projectId, "gpt-5.5"),
+        ).rejects.toMatchObject({ code: "budget_usage_unconfirmed" });
+      } finally {
+        await client.unsafe(`DROP TRIGGER ${name} ON audit_events`);
+      }
+    } finally {
+      await client.unsafe(`DROP FUNCTION ${name}()`);
+    }
+    expect((await settle(f)).statusCode).toBe(200);
+    expect(await audits(f)).toHaveLength(1);
+    expect(
+      await db.select().from(budgetReservations).where(eq(budgetReservations.id, hold.id)),
+    ).toHaveLength(0);
+  });
+  it("keeps other unknown bills blocked and enforces the cap after the last settlement", async () => {
+    const f = await fixture();
+    const secondId = newId("turn");
+    const original = (await db.select().from(turns).where(eq(turns.id, f.turnId)))[0];
+    if (!original) throw new Error("fixture turn missing");
+    await db.insert(turns).values({ ...original, id: secondId });
+    await costs.record({ ...f, turnId: secondId });
+    await db
+      .update(projectBudgets)
+      .set({ enabled: true, monthlyLimitCents: 1 })
+      .where(eq(projectBudgets.projectId, f.projectId));
+    expect((await settle(f)).statusCode).toBe(200);
+    await expect(costs.assertTurnAllowed(f.orgId, f.projectId, "gpt-5.5")).rejects.toMatchObject({
+      code: "budget_usage_unconfirmed",
+    });
+    expect((await settle({ ...f, turnId: secondId })).statusCode).toBe(200);
+    await expect(costs.assertTurnAllowed(f.orgId, f.projectId, "gpt-5.5")).rejects.toMatchObject({
+      code: "budget_exceeded",
+    });
+    expect((await costs.budgetState(f.orgId, f.projectId)).spentCents).toBe(25);
+  });
   it("checks revoked read permission before replaying a stored receipt", async () => {
     const f = await fixture();
     const roleId = newId("role");

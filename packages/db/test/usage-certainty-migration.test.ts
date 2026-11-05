@@ -34,7 +34,17 @@ it("backfills known completeness conservatively without repricing old bills and 
       await db`insert into turns(id,org_id,project_id,story_id,conversation_id,agent_name,manifest_hash,manifest,engine,model,state,trigger_type,created_by) values(${id},'o','p','s','c','builder','h','{}','codex','custom',${status},'manual','{}')`;
       await db`insert into turn_usage(id,org_id,project_id,story_id,turn_id,agent_name,engine,model,priced,cost_cents,source,status) values(${id},'o','p','s',${id},'builder','codex','custom',${priced},${priced ? 1 : null},${priced ? "provider" : "unpriced"},${status})`;
     }
+    const oldBills =
+      await db`select id,cost_cents,priced,source,status,created_at from turn_usage order by id`;
+    const oldLedger =
+      await db`select name,checksum,applied_at from _facility_migrations order by name`;
     await applyMigrations(db, { migrationsDir: source, log: () => {} });
+    expect(
+      await db`select id,cost_cents,priced,source,status,created_at from turn_usage order by id`,
+    ).toEqual(oldBills);
+    expect(
+      await db`select name,checksum,applied_at from _facility_migrations where name <> '0020_usage_certainty.sql' order by name`,
+    ).toEqual(oldLedger);
     expect(
       await db`select id,usage_complete,priced,cost_cents,settlement_reference from turn_usage order by id`,
     ).toEqual([
