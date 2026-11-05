@@ -103,7 +103,13 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
   app.post(
     "/v1/projects",
     {
-      config: { permission: "projects:write", auditAction: "project.created", idempotent: true },
+      config: {
+        permission: "projects:write",
+        auditAction: "project.created",
+        idempotent: true,
+        // A project-scoped key is pinned to its project; creating another one is org administration.
+        orgAdmin: true,
+      },
       schema: {
         body: z.object({
           name: z.string().min(1).max(160),
