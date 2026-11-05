@@ -179,6 +179,11 @@ Use `facility_get_plan` with `projectId` and `storyId` to read `state.revision` 
 `state.decisionRevision`. Optional `beforeRevision`, `beforeDecisionRevision` and `limit`
 page history; `revision` reads one immutable earlier plan. Reads use the database only.
 
+Complete plans also expose the optional `decisionBrief` projection described in
+[author decision briefs](decision-brief.md). Its summary, recommendation, options, risk and
+sources come from that exact plan's Markdown. They are author statements, not verified evidence
+or authority. Missing or malformed briefs preserve the original plan; reads never generate one.
+
 `facility_propose_plan` accepts `expectedRevision`, exact `markdown` (at most 100,000 characters),
 `repositories` (connected `owner/name` values), `agents` (configured names), optional
 `sourceMessageId` and `idempotencyKey`. The server records the authenticated proposer and resolves

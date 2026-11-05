@@ -127,6 +127,15 @@ and does not confirm a plan or accept delivery.
 
 ## Agree on a versioned plan
 
+When the author includes a [decision brief](../reference/decision-brief.md), review its summary,
+recommended option, consequences, decisive risk and missing evidence first. **Summary**,
+**Comparison** and **Diagram** present the same saved statements. Open a source beside a claim or
+expand **Original plan** to inspect the full text, including the exact source message text when
+the plan was attributed to one. The proposer and selected execution agents are shown separately.
+Source references are author claims; opening this page does not verify them or invoke a model.
+Missing or malformed briefs leave the complete plan visible. Choosing a format or considering an
+option submits nothing; approval still applies to the full revision and repository/agent scope.
+
 The story's **plan and decisions** panel shows the proposed text, repositories and configured
 agents. Choose **Propose plan** or **Propose revision**, or **Propose as plan** on an agent response.
 Using a response asks before replacing an open draft. Editing its text removes source-message

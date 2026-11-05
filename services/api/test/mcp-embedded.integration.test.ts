@@ -1,11 +1,14 @@
+import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { newId } from "@facility/core";
-import { migrate, seed, stories } from "@facility/db";
+import { migrate, seed, stories, storyPlanRevisions, storyPlanStates } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
+import { storyPlanDigest } from "../src/stories/plan-state.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
@@ -188,6 +191,63 @@ describe("embedded MCP control plane", async () => {
       decision: null,
       state: { revision: 0, decisionRevision: 0, status: "none" },
     });
+  });
+  it("reads the identical saved author brief through current and exact-revision MCP requests", async () => {
+    const [original] = await app.facilityDb.select().from(stories).where(eq(stories.id, storyId));
+    if (!original) throw Error("Missing story fixture");
+    const id = newId("story");
+    await app.facilityDb.insert(stories).values({ ...original, id, externalId: id });
+    const brief = JSON.parse(
+      readFileSync(
+        new URL("../../../packages/core/test/fixtures/decision-brief.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const markdown = `# Plan\n\n\`\`\`facility-decision\n${JSON.stringify(brief)}\n\`\`\``;
+    const scope = { orgId: original.orgId, projectId, storyId: id };
+    const input = {
+      markdown,
+      repositories: [{ repositoryId: "repo-fixture", repository: "example/app" }],
+      agents: [
+        {
+          name: "planner",
+          manifestHash: "a".repeat(64),
+          engine: "codex" as const,
+          model: "fixture",
+          repositoryId: "repo-fixture",
+          catalogCommitSha: "b".repeat(40),
+          observedAt: "2026-11-05T10:00:00Z",
+        },
+      ],
+      sourceMessageId: null,
+    };
+    const digest = storyPlanDigest(scope, input);
+    await app.facilityDb.insert(storyPlanRevisions).values({
+      ...scope,
+      ...input,
+      revision: 1,
+      digest,
+      proposedBy: { type: "service", id: "fixture-service", name: "Synthetic fixture" },
+      source: null,
+    });
+    await app.facilityDb.insert(storyPlanStates).values({ ...scope, revision: 1 });
+    for (const revision of [undefined, 1]) {
+      const result = await client.callTool({
+        name: "facility_get_plan",
+        arguments: { projectId, storyId: id, ...(revision ? { revision } : {}) },
+      });
+      expect(result.isError).not.toBe(true);
+      const text = (result.content as Array<{ type: string; text?: string }>).find(
+        (part) => part.type === "text",
+      )?.text;
+      const payload = JSON.parse(text ?? "{}");
+      expect(revision ? payload : payload.plan).toMatchObject({
+        revision: 1,
+        digest,
+        markdown,
+        decisionBrief: { status: "available", brief },
+      });
+    }
   });
   it("reads workflow policy and acceptance from the same authenticated domain as the UI", async () => {
     for (const name of ["facility_get_story_workflow", "facility_get_delivery_acceptance"]) {

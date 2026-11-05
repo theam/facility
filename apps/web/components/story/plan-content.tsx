@@ -1,8 +1,22 @@
 import type { StoryPlan } from "@facility/sdk";
 import { Markdown } from "@/components/markdown";
+import { DecisionBrief } from "@/components/story/decision-brief";
 import { formatTime } from "@/lib/story-presentation";
 
-export function PlanContent({ plan }: { plan: StoryPlan }) {
+export function PlanContent({
+  plan,
+  originalOnly = false,
+}: {
+  plan: StoryPlan;
+  originalOnly?: boolean;
+}) {
+  const brief =
+    !originalOnly && plan.decisionBrief?.status === "available" ? plan.decisionBrief.brief : null;
+  const original = (
+    <div className="min-w-0 break-words text-[14px] leading-relaxed [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
+      <Markdown source={plan.markdown} />
+    </div>
+  );
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <p className="text-[12px] text-(--mut)">
@@ -11,9 +25,29 @@ export function PlanContent({ plan }: { plan: StoryPlan }) {
           (plan.proposedBy.type === "service" ? "a service" : "a project member")}{" "}
         · {formatTime(plan.proposedAt)}
       </p>
-      <div className="min-w-0 break-words text-[14px] leading-relaxed [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
-        <Markdown source={plan.markdown} />
-      </div>
+      {brief ? (
+        <>
+          <DecisionBrief key={plan.digest} brief={brief} revision={plan.revision} />
+          <details className="min-w-0 border-t border-(--line) pt-3">
+            <summary className="cursor-pointer py-2 text-sm font-medium">
+              Original plan r{plan.revision}
+              {plan.source ? " · exact source message text" : ""}
+            </summary>
+            <div className="mt-3">{original}</div>
+          </details>
+        </>
+      ) : (
+        <>
+          {!originalOnly ? (
+            <p className="text-xs text-(--mut)">
+              {plan.decisionBrief?.status === "invalid"
+                ? "The structured brief could not be read. Review the complete original plan below."
+                : "No structured brief was supplied. Review the complete plan below."}
+            </p>
+          ) : null}
+          {original}
+        </>
+      )}
       <dl className="grid min-w-0 gap-4 border-t border-(--line) pt-4 text-[12px] sm:grid-cols-2">
         <div className="min-w-0">
           <dt className="mb-1 text-(--dim)">Repositories in this plan</dt>
@@ -28,7 +62,7 @@ export function PlanContent({ plan }: { plan: StoryPlan }) {
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="mb-1 text-(--dim)">Agents in this plan</dt>
+          <dt className="mb-1 text-(--dim)">Agents selected for execution</dt>
           <dd>
             <ul>
               {plan.agents.map((agent) => (
@@ -65,6 +99,15 @@ export function PlanContent({ plan }: { plan: StoryPlan }) {
               </dd>
             </div>
           ))}
+          {plan.source ? (
+            <div>
+              <dt>Exact source message ({plan.source.role})</dt>
+              <dd className="font-mono">
+                {plan.source.messageId}
+                {plan.source.turnId ? ` · turn ${plan.source.turnId}` : ""}
+              </dd>
+            </div>
+          ) : null}
         </dl>
       </details>
     </div>

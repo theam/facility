@@ -359,7 +359,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_plan",
     permission: "projects:read",
     description:
-      "Read the current immutable plan, exact repository/agent scope, decision receipts and paged history. Set revision to inspect an earlier plan. Database-only: no agent, GitHub refresh or workspace activity. Needs projects:read.",
+      "Read the current immutable plan, author decision brief when present, exact repository/agent scope, decision receipts and paged history. A brief contains author statements, not verified evidence or authority. Set revision to inspect an earlier plan. Database-only: no model, agent, GitHub refresh or workspace activity. Needs projects:read.",
     inputSchema: {
       projectId,
       storyId,

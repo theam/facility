@@ -434,7 +434,7 @@ export function StoryPlanPanel({
           revision with the intended agents before approving recovery.
         </p>
       ) : null}
-      {current && !editing && (current.state.status !== "approved" || blockedReason) ? (
+      {current && !current.plan && !editing ? (
         <PlanExecutionScope
           scope={workflow?.executionScope}
           planRevision={current.state.revision}
@@ -484,6 +484,12 @@ export function StoryPlanPanel({
             />
           ) : null}
           <PlanContent plan={current.plan} />
+          {!editing && (current.state.status !== "approved" || blockedReason) ? (
+            <PlanExecutionScope
+              scope={workflow?.executionScope}
+              planRevision={current.state.revision}
+            />
+          ) : null}
           {current.decision ? (
             <p className="break-words text-[12px] text-(--mut)">
               {current.decision.planRevision !== current.state.revision

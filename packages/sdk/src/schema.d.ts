@@ -7276,6 +7276,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -7529,6 +7583,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -7756,6 +7864,60 @@ export interface operations {
                         revision: number;
                         digest: string;
                         markdown: string;
+                        decisionBrief?: {
+                            /** @enum {string} */
+                            status: "available";
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                        } | {
+                            /** @enum {string} */
+                            status: "absent";
+                        } | {
+                            /** @enum {string} */
+                            status: "invalid";
+                            /** @enum {string} */
+                            reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                        };
                         repositories: {
                             repositoryId: string;
                             repository: string;
@@ -8046,6 +8208,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -8222,6 +8438,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;

@@ -185,19 +185,19 @@ export function PlanConfirmation({
           on recovery.
         </p>
       ) : null}
-      {!receipt ? <PlanExecutionScope scope={scope} planRevision={review.plan.revision} /> : null}
       {receipt ? (
         <details className="min-w-0">
           <summary className="cursor-pointer text-sm">
             Plan r{review.plan.revision} and original scope
           </summary>
           <div className="mt-4">
-            <PlanContent plan={review.plan} />
+            <PlanContent plan={review.plan} originalOnly />
           </div>
         </details>
       ) : (
         <PlanContent plan={review.plan} />
       )}
+      {!receipt ? <PlanExecutionScope scope={scope} planRevision={review.plan.revision} /> : null}
       <div className="flex flex-col gap-2 border-y border-(--line) py-4 text-sm">
         <p>
           <strong>Requested decision:</strong> {approval ? "Approve" : "Request changes to"} plan r

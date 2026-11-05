@@ -10591,6 +10591,306 @@
                         "markdown": {
                           "type": "string"
                         },
+                        "decisionBrief": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available"
+                                  ]
+                                },
+                                "brief": {
+                                  "type": "object",
+                                  "properties": {
+                                    "schemaVersion": {
+                                      "type": "number",
+                                      "enum": [
+                                        1
+                                      ]
+                                    },
+                                    "summary": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "whyNow": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "options": {
+                                      "minItems": 2,
+                                      "maxItems": 4,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "consequence": {
+                                            "type": "object",
+                                            "properties": {
+                                              "text": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 600
+                                              },
+                                              "evidenceIds": {
+                                                "maxItems": 8,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "text",
+                                              "evidenceIds"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "consequence"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "recommendation": {
+                                      "nullable": true,
+                                      "type": "object",
+                                      "properties": {
+                                        "optionId": {
+                                          "type": "string",
+                                          "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                        },
+                                        "reason": {
+                                          "type": "object",
+                                          "properties": {
+                                            "text": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 600
+                                            },
+                                            "evidenceIds": {
+                                              "maxItems": 8,
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "text",
+                                            "evidenceIds"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "optionId",
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "decisiveRisk": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "unknowns": {
+                                      "maxItems": 5,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 600
+                                          },
+                                          "evidenceIds": {
+                                            "maxItems": 8,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "text",
+                                          "evidenceIds"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "evidence": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "reference": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 160
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "reference",
+                                          "url"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "summary",
+                                    "whyNow",
+                                    "options",
+                                    "recommendation",
+                                    "decisiveRisk",
+                                    "unknowns",
+                                    "evidence"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "brief"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "absent"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invalid"
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "duplicate",
+                                    "malformed",
+                                    "unsupported_version",
+                                    "invalid_fields",
+                                    "too_large"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "repositories": {
                           "maxItems": 50,
                           "type": "array",
@@ -11451,6 +11751,306 @@
                         "markdown": {
                           "type": "string"
                         },
+                        "decisionBrief": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available"
+                                  ]
+                                },
+                                "brief": {
+                                  "type": "object",
+                                  "properties": {
+                                    "schemaVersion": {
+                                      "type": "number",
+                                      "enum": [
+                                        1
+                                      ]
+                                    },
+                                    "summary": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "whyNow": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "options": {
+                                      "minItems": 2,
+                                      "maxItems": 4,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "consequence": {
+                                            "type": "object",
+                                            "properties": {
+                                              "text": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 600
+                                              },
+                                              "evidenceIds": {
+                                                "maxItems": 8,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "text",
+                                              "evidenceIds"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "consequence"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "recommendation": {
+                                      "nullable": true,
+                                      "type": "object",
+                                      "properties": {
+                                        "optionId": {
+                                          "type": "string",
+                                          "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                        },
+                                        "reason": {
+                                          "type": "object",
+                                          "properties": {
+                                            "text": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 600
+                                            },
+                                            "evidenceIds": {
+                                              "maxItems": 8,
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "text",
+                                            "evidenceIds"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "optionId",
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "decisiveRisk": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "unknowns": {
+                                      "maxItems": 5,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 600
+                                          },
+                                          "evidenceIds": {
+                                            "maxItems": 8,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "text",
+                                          "evidenceIds"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "evidence": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "reference": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 160
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "reference",
+                                          "url"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "summary",
+                                    "whyNow",
+                                    "options",
+                                    "recommendation",
+                                    "decisiveRisk",
+                                    "unknowns",
+                                    "evidence"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "brief"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "absent"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invalid"
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "duplicate",
+                                    "malformed",
+                                    "unsupported_version",
+                                    "invalid_fields",
+                                    "too_large"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "repositories": {
                           "maxItems": 50,
                           "type": "array",
@@ -12199,6 +12799,306 @@
                     "markdown": {
                       "type": "string"
                     },
+                    "decisionBrief": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "available"
+                              ]
+                            },
+                            "brief": {
+                              "type": "object",
+                              "properties": {
+                                "schemaVersion": {
+                                  "type": "number",
+                                  "enum": [
+                                    1
+                                  ]
+                                },
+                                "summary": {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 600
+                                    },
+                                    "evidenceIds": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "text",
+                                    "evidenceIds"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "whyNow": {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 600
+                                    },
+                                    "evidenceIds": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "text",
+                                    "evidenceIds"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "options": {
+                                  "minItems": 2,
+                                  "maxItems": 4,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                      },
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 100
+                                      },
+                                      "consequence": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 600
+                                          },
+                                          "evidenceIds": {
+                                            "maxItems": 8,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "text",
+                                          "evidenceIds"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "consequence"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "recommendation": {
+                                  "nullable": true,
+                                  "type": "object",
+                                  "properties": {
+                                    "optionId": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                    },
+                                    "reason": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "optionId",
+                                    "reason"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "decisiveRisk": {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 600
+                                    },
+                                    "evidenceIds": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "text",
+                                    "evidenceIds"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "unknowns": {
+                                  "maxItems": 5,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "text": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 600
+                                      },
+                                      "evidenceIds": {
+                                        "maxItems": 8,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "text",
+                                      "evidenceIds"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "evidence": {
+                                  "maxItems": 8,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                      },
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      },
+                                      "reference": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "maxLength": 2000,
+                                        "format": "uri"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "reference",
+                                      "url"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "summary",
+                                "whyNow",
+                                "options",
+                                "recommendation",
+                                "decisiveRisk",
+                                "unknowns",
+                                "evidence"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "brief"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "absent"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "status"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "invalid"
+                              ]
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "duplicate",
+                                "malformed",
+                                "unsupported_version",
+                                "invalid_fields",
+                                "too_large"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "status",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
                     "repositories": {
                       "maxItems": 50,
                       "type": "array",
@@ -12900,6 +13800,306 @@
                         "markdown": {
                           "type": "string"
                         },
+                        "decisionBrief": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available"
+                                  ]
+                                },
+                                "brief": {
+                                  "type": "object",
+                                  "properties": {
+                                    "schemaVersion": {
+                                      "type": "number",
+                                      "enum": [
+                                        1
+                                      ]
+                                    },
+                                    "summary": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "whyNow": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "options": {
+                                      "minItems": 2,
+                                      "maxItems": 4,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "consequence": {
+                                            "type": "object",
+                                            "properties": {
+                                              "text": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 600
+                                              },
+                                              "evidenceIds": {
+                                                "maxItems": 8,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "text",
+                                              "evidenceIds"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "consequence"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "recommendation": {
+                                      "nullable": true,
+                                      "type": "object",
+                                      "properties": {
+                                        "optionId": {
+                                          "type": "string",
+                                          "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                        },
+                                        "reason": {
+                                          "type": "object",
+                                          "properties": {
+                                            "text": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 600
+                                            },
+                                            "evidenceIds": {
+                                              "maxItems": 8,
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "text",
+                                            "evidenceIds"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "optionId",
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "decisiveRisk": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "unknowns": {
+                                      "maxItems": 5,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 600
+                                          },
+                                          "evidenceIds": {
+                                            "maxItems": 8,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "text",
+                                          "evidenceIds"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "evidence": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "reference": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 160
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "reference",
+                                          "url"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "summary",
+                                    "whyNow",
+                                    "options",
+                                    "recommendation",
+                                    "decisiveRisk",
+                                    "unknowns",
+                                    "evidence"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "brief"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "absent"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invalid"
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "duplicate",
+                                    "malformed",
+                                    "unsupported_version",
+                                    "invalid_fields",
+                                    "too_large"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "repositories": {
                           "maxItems": 50,
                           "type": "array",
@@ -13390,6 +14590,306 @@
                         },
                         "markdown": {
                           "type": "string"
+                        },
+                        "decisionBrief": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "available"
+                                  ]
+                                },
+                                "brief": {
+                                  "type": "object",
+                                  "properties": {
+                                    "schemaVersion": {
+                                      "type": "number",
+                                      "enum": [
+                                        1
+                                      ]
+                                    },
+                                    "summary": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "whyNow": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "options": {
+                                      "minItems": 2,
+                                      "maxItems": 4,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "consequence": {
+                                            "type": "object",
+                                            "properties": {
+                                              "text": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 600
+                                              },
+                                              "evidenceIds": {
+                                                "maxItems": 8,
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                                }
+                                              }
+                                            },
+                                            "required": [
+                                              "text",
+                                              "evidenceIds"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "consequence"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "recommendation": {
+                                      "nullable": true,
+                                      "type": "object",
+                                      "properties": {
+                                        "optionId": {
+                                          "type": "string",
+                                          "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                        },
+                                        "reason": {
+                                          "type": "object",
+                                          "properties": {
+                                            "text": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 600
+                                            },
+                                            "evidenceIds": {
+                                              "maxItems": 8,
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "text",
+                                            "evidenceIds"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "optionId",
+                                        "reason"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "decisiveRisk": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600
+                                        },
+                                        "evidenceIds": {
+                                          "maxItems": 8,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "evidenceIds"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "unknowns": {
+                                      "maxItems": 5,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "text": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 600
+                                          },
+                                          "evidenceIds": {
+                                            "maxItems": 8,
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "text",
+                                          "evidenceIds"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "evidence": {
+                                      "maxItems": 8,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "reference": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 160
+                                          },
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "label",
+                                          "reference",
+                                          "url"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "summary",
+                                    "whyNow",
+                                    "options",
+                                    "recommendation",
+                                    "decisiveRisk",
+                                    "unknowns",
+                                    "evidence"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "brief"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "absent"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "invalid"
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "duplicate",
+                                    "malformed",
+                                    "unsupported_version",
+                                    "invalid_fields",
+                                    "too_large"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "reason"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
                         },
                         "repositories": {
                           "maxItems": 50,

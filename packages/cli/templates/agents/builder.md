@@ -44,6 +44,10 @@ capability. Use it only for configured project repositories and the current stor
 Return a concise summary of behavior changed, primary evidence, checks and their results, pull
 request link, and genuine remaining risks. Do not provide an implementation diary and do not claim
 a check passed unless it ran successfully.
+If a human decision is needed, include a `facility-decision` brief with the complete proposed
+plan, following the [author brief contract](https://github.com/theam/facility/blob/main/apps/docs/docs/reference/decision-brief.md).
+State alternatives, consequences, your recommendation, decisive risk and missing evidence with
+exact source references. The brief does not authorize a changed scope or replace required review.
 </output_contract>
 
 <completion_criteria>

@@ -6,6 +6,7 @@ import type {
   StoryPlan,
   StoryPlans,
 } from "@facility/core";
+import { readDecisionBrief } from "@facility/core";
 import type {
   storyPlanDecisions,
   storyPlanRequests,
@@ -76,7 +77,11 @@ export function planState(
 }
 
 export function planProjection(row: PlanRow): StoryPlan {
-  return { ...planMetadataProjection(row), markdown: row.markdown };
+  return {
+    ...planMetadataProjection(row),
+    markdown: row.markdown,
+    decisionBrief: readDecisionBrief(row.markdown),
+  };
 }
 
 export function planMetadataProjection(row: Omit<PlanRow, "markdown">) {
