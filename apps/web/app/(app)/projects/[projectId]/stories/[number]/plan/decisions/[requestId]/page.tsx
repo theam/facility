@@ -27,9 +27,8 @@ export default async function PlanDecisionPage({
         <PlanConfirmation
           key={requestId}
           initial={review.data}
-          executionScope={workflow.ok ? workflow.data.executionScope : undefined}
-          executionScopeError={workflow.ok ? undefined : workflow.message}
-          recoveryBlocked={workflow.ok && !!workflow.data.blockedReason}
+          initialWorkflow={workflow.ok ? workflow.data : undefined}
+          initialWorkflowError={workflow.ok ? undefined : workflow.message}
         />
       ) : (
         <ErrorNotice

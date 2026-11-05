@@ -14883,6 +14883,114 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "execution": {
+                      "type": "object",
+                      "properties": {
+                        "observedAt": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "decisionRevision": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 2147483646
+                            },
+                            "planRevision": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 2147483646
+                            },
+                            "planDigest": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "decisionRevision",
+                            "planRevision",
+                            "planDigest"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "turns": {
+                          "maxItems": 10,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "turnId": {
+                                "type": "string"
+                              },
+                              "agentName": {
+                                "type": "string"
+                              },
+                              "engine": {
+                                "type": "string"
+                              },
+                              "model": {
+                                "type": "string"
+                              },
+                              "manifestHash": {
+                                "type": "string"
+                              },
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "queued",
+                                  "running",
+                                  "succeeded",
+                                  "failed",
+                                  "canceled"
+                                ]
+                              },
+                              "authorizedAt": {
+                                "type": "string"
+                              },
+                              "startedAt": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "endedAt": {
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "turnId",
+                              "agentName",
+                              "engine",
+                              "model",
+                              "manifestHash",
+                              "state",
+                              "authorizedAt",
+                              "startedAt",
+                              "endedAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "hasMore": {
+                          "type": "boolean"
+                        },
+                        "unavailable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "observedAt",
+                        "decision",
+                        "turns",
+                        "hasMore",
+                        "unavailable"
+                      ],
+                      "additionalProperties": false
+                    },
                     "executionScope": {
                       "type": "object",
                       "properties": {

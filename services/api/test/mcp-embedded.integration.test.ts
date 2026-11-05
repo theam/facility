@@ -205,6 +205,13 @@ describe("embedded MCP control plane", async () => {
           acceptance: { required: false, status: "missing" },
           blockedReason: null,
           queuedAgents: [],
+          execution: {
+            observedAt: expect.any(String),
+            decision: null,
+            turns: [],
+            hasMore: false,
+            unavailable: false,
+          },
           executionScope: {
             observedAt: expect.any(String),
             planRevision: 0,

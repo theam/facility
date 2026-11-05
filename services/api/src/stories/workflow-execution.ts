@@ -66,7 +66,7 @@ export async function readWorkflowPlan(db: FacilityDb, scope: WorkflowScope) {
     : [];
   return { state: planState(row, decision), plan, decision };
 }
-const Authorization = z
+export const PlanExecutionAuthorizationSchema = z
   .object({
     schemaVersion: z.literal(1),
     policyRevision: z.number().int(),
@@ -80,7 +80,7 @@ const Authorization = z
     repositoryIds: z.array(z.string()),
   })
   .strict();
-export type PlanExecutionAuthorization = z.infer<typeof Authorization>;
+export type PlanExecutionAuthorization = z.infer<typeof PlanExecutionAuthorizationSchema>;
 const ExecutionActor = z.object({
   type: z.enum(["user", "service", "system"]),
   id: z.string().min(1).max(200),
@@ -256,7 +256,7 @@ export async function planExecutionStillAuthorized(
     )
     .limit(1);
   try {
-    const expected = receipt ? Authorization.parse(receipt.data) : null;
+    const expected = receipt ? PlanExecutionAuthorizationSchema.parse(receipt.data) : null;
     const actual = await authorizePlanExecution(
       db,
       scope,

@@ -1,9 +1,16 @@
 import { AgentManifestSchema } from "@facility/agents";
 import type { StoryWorkflowStatus } from "@facility/core";
-import { agentManifests, type FacilityDb, projectRepositories, turns } from "@facility/db";
-import { and, asc, eq, inArray, like } from "drizzle-orm";
+import {
+  agentManifests,
+  type FacilityDb,
+  projectRepositories,
+  storyEvidenceEvents,
+  turns,
+} from "@facility/db";
+import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { ApiError } from "../errors.js";
 import { readDeliveryAcceptance } from "./delivery-acceptance.js";
+import { observePlanExecution } from "./plan-execution-observation.js";
 import {
   matchesPlanAgent,
   matchesPlanRepositoryScope,
@@ -79,6 +86,52 @@ export async function readStoryWorkflow(
           break;
         }
       }
+      const decision = plan.decision?.intent === "approve" ? plan.decision : null;
+      const executionRows = decision
+        ? await tx
+            .select({
+              evidence: storyEvidenceEvents,
+              turn: {
+                orgId: turns.orgId,
+                projectId: turns.projectId,
+                storyId: turns.storyId,
+                id: turns.id,
+                agentName: turns.agentName,
+                engine: turns.engine,
+                model: turns.model,
+                manifestHash: turns.manifestHash,
+                state: turns.state,
+                startedAt: turns.startedAt,
+                endedAt: turns.endedAt,
+              },
+            })
+            .from(storyEvidenceEvents)
+            .leftJoin(
+              turns,
+              and(
+                eq(turns.orgId, storyEvidenceEvents.orgId),
+                eq(turns.projectId, storyEvidenceEvents.projectId),
+                eq(turns.storyId, storyEvidenceEvents.storyId),
+                eq(turns.id, storyEvidenceEvents.turnId),
+              ),
+            )
+            .where(
+              and(
+                eq(storyEvidenceEvents.orgId, scope.orgId),
+                eq(storyEvidenceEvents.projectId, scope.projectId),
+                eq(storyEvidenceEvents.storyId, scope.storyId),
+                eq(storyEvidenceEvents.source, "facility"),
+                eq(storyEvidenceEvents.type, "workflow.execution_authorized"),
+                sql`${storyEvidenceEvents.data}->>'decisionId' = ${decision.id}`,
+              ),
+            )
+            .orderBy(desc(storyEvidenceEvents.occurredAt), desc(storyEvidenceEvents.id))
+            .limit(11)
+        : [];
+      const executionPage = executionRows
+        .slice(0, 10)
+        .map((row) => (decision ? observePlanExecution(row.evidence, row.turn, decision) : null));
+      const observedAt = new Date().toISOString();
       return {
         schemaVersion: 1,
         ...scope,
@@ -87,8 +140,22 @@ export async function readStoryWorkflow(
         queuedAgents: queued.map((turn) => turn.agentName),
         blockedReason,
         acceptance,
+        execution: {
+          observedAt,
+          decision: decision
+            ? {
+                id: decision.id,
+                decisionRevision: decision.decisionRevision,
+                planRevision: decision.planRevision,
+                planDigest: decision.planDigest,
+              }
+            : null,
+          turns: executionPage.filter((turn) => turn !== null),
+          unavailable: executionPage.some((turn) => turn === null),
+          hasMore: executionRows.length > executionPage.length,
+        },
         executionScope: {
-          observedAt: new Date().toISOString(),
+          observedAt,
           planRevision: plan.state.revision,
           repositories: {
             matches:

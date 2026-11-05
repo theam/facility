@@ -8837,6 +8837,29 @@ export interface operations {
                         };
                         queuedAgents: string[];
                         blockedReason: string | null;
+                        execution?: {
+                            observedAt: string;
+                            decision: {
+                                id: string;
+                                decisionRevision: number;
+                                planRevision: number;
+                                planDigest: string;
+                            } | null;
+                            turns: {
+                                turnId: string;
+                                agentName: string;
+                                engine: string;
+                                model: string;
+                                manifestHash: string;
+                                /** @enum {string} */
+                                state: "queued" | "running" | "succeeded" | "failed" | "canceled";
+                                authorizedAt: string;
+                                startedAt: string | null;
+                                endedAt: string | null;
+                            }[];
+                            hasMore: boolean;
+                            unavailable: boolean;
+                        };
                         executionScope?: {
                             observedAt: string;
                             planRevision: number;

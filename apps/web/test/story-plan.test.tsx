@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanConfirmation } from "../components/story/plan-confirmation";
 import { StoryPlanPanel } from "../components/story/story-plan";
 import { PLAN_PROPOSAL_EVENT } from "../lib/story-plan-events";
+import { workflowFixture } from "./fixtures/workflow";
 
 const navigation = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
@@ -630,7 +631,14 @@ describe("interactive confirmation UI", () => {
       queuedWork: [],
       hasMore: false,
     };
-    await act(async () => root.render(<PlanConfirmation initial={value} executionScope={scope} />));
+    await act(async () =>
+      root.render(
+        <PlanConfirmation
+          initial={value}
+          initialWorkflow={{ ...workflowFixture(), executionScope: scope }}
+        />,
+      ),
+    );
     expect(container.textContent).toContain("covers all 1 current repository");
     fetch.mockImplementation(async (url: string) =>
       url.endsWith("/workflow")
@@ -672,7 +680,15 @@ describe("interactive confirmation UI", () => {
     };
     await act(async () =>
       root.render(
-        <PlanConfirmation key="approval" initial={value} executionScope={scope} recoveryBlocked />,
+        <PlanConfirmation
+          key="approval"
+          initial={value}
+          initialWorkflow={{
+            ...workflowFixture(),
+            executionScope: scope,
+            blockedReason: "Review the plan before recovery",
+          }}
+        />,
       ),
     );
     expect(button("Approve plan r1").disabled).toBe(true);
@@ -682,10 +698,41 @@ describe("interactive confirmation UI", () => {
     value.request.intent = "reject";
     await act(async () =>
       root.render(
-        <PlanConfirmation key="changes" initial={value} executionScope={scope} recoveryBlocked />,
+        <PlanConfirmation
+          key="changes"
+          initial={value}
+          initialWorkflow={{
+            ...workflowFixture(),
+            executionScope: scope,
+            blockedReason: "Review the plan before recovery",
+          }}
+        />,
       ),
     );
     expect(button("Confirm changes to plan r1").disabled).toBe(false);
+  });
+  it("retains an approval receipt when observing execution fails and retries only the read", async () => {
+    fetch.mockImplementation(async (_url: string, options: RequestInit) =>
+      options.method === "POST"
+        ? Response.json(confirmed())
+        : Response.json(
+            { error: { message: "Temporary execution read failure" } },
+            { status: 503 },
+          ),
+    );
+    await renderReview();
+    await click("Approve plan r1");
+    expect(container.textContent).toContain("Approval recorded for plan r1 by Ada");
+    expect(container.textContent).toContain("Approval remains recorded");
+    expect(container.querySelector('a[href$="#conversation"]')).not.toBeNull();
+    const original = [...container.querySelectorAll("details")].find(
+      (item) => item.querySelector("summary")?.textContent === "Plan r1 and original scope",
+    );
+    expect(original?.open).toBe(false);
+    fetch.mockImplementation(async () => Response.json(workflowFixture()));
+    await click("Check execution again");
+    expect(container.textContent).toContain("Preparing or running");
+    expect(fetch.mock.calls.filter(([, options]) => options.method === "POST")).toHaveLength(1);
   });
 });
 

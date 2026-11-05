@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { PlanContent } from "@/components/story/plan-content";
+import { PlanExecutionOutcome } from "@/components/story/plan-execution-outcome";
 import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { PLAN_PROPOSAL_EVENT, type PlanProposalSource } from "@/lib/story-plan-events";
@@ -44,7 +45,7 @@ export function StoryPlanPanel({
   defaultAgent,
   queuedAgents = [],
   blockedReason,
-  executionScope,
+  workflow,
   catalogError,
   canWrite,
   userId,
@@ -56,7 +57,7 @@ export function StoryPlanPanel({
   defaultAgent: string | null;
   queuedAgents?: string[];
   blockedReason?: string | null;
-  executionScope?: StoryWorkflowStatus["executionScope"];
+  workflow?: StoryWorkflowStatus;
   catalogError?: string;
   canWrite: boolean;
   userId?: string;
@@ -433,8 +434,11 @@ export function StoryPlanPanel({
           revision with the intended agents before approving recovery.
         </p>
       ) : null}
-      {current && !editing ? (
-        <PlanExecutionScope scope={executionScope} planRevision={current.state.revision} />
+      {current && !editing && (current.state.status !== "approved" || blockedReason) ? (
+        <PlanExecutionScope
+          scope={workflow?.executionScope}
+          planRevision={current.state.revision}
+        />
       ) : null}
       {pendingSource && canWrite ? (
         <div
@@ -472,6 +476,13 @@ export function StoryPlanPanel({
                 ? "Changes requested for this revision"
                 : "Awaiting a decision on this revision"}
           </p>
+          {current.state.status === "approved" && current.decision ? (
+            <PlanExecutionOutcome
+              decision={current.decision}
+              workflow={workflow}
+              storyPath={`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`}
+            />
+          ) : null}
           <PlanContent plan={current.plan} />
           {current.decision ? (
             <p className="break-words text-[12px] text-(--mut)">

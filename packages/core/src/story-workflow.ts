@@ -133,6 +133,17 @@ export const DeliveryAcceptanceReviewSchema = z.object({
   proof: z.string().nullable(),
   receipt: DeliveryAcceptanceReceiptSchema.nullable(),
 });
+export const PlanExecutionObservationSchema = z.object({
+  turnId: z.string(),
+  agentName: z.string(),
+  engine: z.string(),
+  model: z.string(),
+  manifestHash: z.string(),
+  state: z.enum(["queued", "running", "succeeded", "failed", "canceled"]),
+  authorizedAt: z.string(),
+  startedAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+});
 export const StoryWorkflowStatusSchema = z.object({
   schemaVersion: z.literal(1),
   orgId: z.string(),
@@ -146,6 +157,22 @@ export const StoryWorkflowStatusSchema = z.object({
   }),
   queuedAgents: z.array(z.string()).max(50),
   blockedReason: z.string().nullable(),
+  execution: z
+    .object({
+      observedAt: z.string(),
+      decision: z
+        .object({
+          id: z.string(),
+          decisionRevision: Revision,
+          planRevision: Revision,
+          planDigest: z.string(),
+        })
+        .nullable(),
+      turns: z.array(PlanExecutionObservationSchema).max(10),
+      hasMore: z.boolean(),
+      unavailable: z.boolean(),
+    })
+    .optional(),
   executionScope: z
     .object({
       observedAt: z.string(),
@@ -182,3 +209,4 @@ export type StoryDeliveryAcceptance = z.infer<typeof StoryDeliveryAcceptanceSche
 export type DeliveryAcceptanceReceipt = z.infer<typeof DeliveryAcceptanceReceiptSchema>;
 export type DeliveryAcceptanceRequest = z.infer<typeof DeliveryAcceptanceRequestSchema>;
 export type StoryWorkflowStatus = z.infer<typeof StoryWorkflowStatusSchema>;
+export type PlanExecutionObservation = z.infer<typeof PlanExecutionObservationSchema>;

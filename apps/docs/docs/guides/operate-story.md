@@ -146,9 +146,8 @@ so review the selection. A plan that omits a held agent shows a warning.
 **Scope and retained work** compares the plan with the current repository connections and
 queued agent versions. Missing or changed connections and agent configuration differences are
 shown before confirmation. Expand retained work to inspect each original turn ID, queue time
-and agent configuration hash. Multiple turns are collapsed with a mismatch count; a queue over
-50 turns is explicitly marked as partial. Approval can also release matching work beyond that
-first page.
+and agent configuration hash. Each story currently has one active native turn at a time, even
+when several agents are configured for the project. Bounded reads explicitly mark partial data.
 
 This is a dated observation for one plan revision, not an execution authorization. The native
 gate still checks current policy, exact scope, permissions, budget and capacity when work starts.
@@ -167,6 +166,23 @@ revision, text and scope before the explicit confirmation button. An approval ap
 revision only. A newer proposal retains the old receipt as history and awaits its own decision.
 Concurrent edits and decisions require a fresh review; failed saves preserve the draft and reuse
 the same retry key. Open **Plan and decision history** to inspect earlier revisions and receipts.
+
+After confirmation, the receipt and **After approval** appear first. The approved plan and its
+original scope remain one expansion away. **Continue in the conversation** returns to the shared
+story without submitting another request.
+
+**After approval** distinguishes queued work, a remaining workflow hold and observed execution.
+Only a recorded native admission links a turn to an exact decision. The turn's current state,
+start/end times and agent version remain inspectable. A running turn can still be preparing its
+environment; a successful turn does not accept delivery. When the review inspected a queued turn
+before confirmation, the page identifies that same turn by ID in the execution result.
+
+The standalone confirmation checks every eight seconds while relevant work is queued or running
+and the page is visible. It stops after terminal state, a newer decision or an error. A failed
+read preserves the approval receipt and clears the old execution claim; **Check execution again**
+retries only the read. A newer plan or decision marks the receipt as historical. Missing or
+unverifiable execution evidence stays unknown, not successful and not proof that no work ran.
+The `execution` field of `facility_get_story_workflow` exposes the same bounded, dated observation.
 
 Decision requests from MCP return the same interactive review link. Open it with an authorized
 Facility browser session before its 15-minute expiry. A service key or OAuth token alone does not

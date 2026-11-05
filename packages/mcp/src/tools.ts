@@ -313,7 +313,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story_workflow",
     permission: "projects:read",
     description:
-      "Read current plan approval, retained queued turn identities and agent versions, repository scope mismatches, and exact delivery acceptance as separate states. Scope checks are dated observations, not execution authorization. Approval can release queued agents under project policy. Needs projects:read.",
+      "Read plan approval, retained turn scope, execution recorded under the exact decision, and delivery acceptance as separate states. execution reports observed turn states linked by admission evidence, never inferred from approval alone; older decisions stay historical. Scope checks are dated observations, not execution authorization. Reading starts no work. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) =>

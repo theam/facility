@@ -16,6 +16,7 @@ import {
   storyConversations,
   storyDeliveryAcceptanceRequests,
   storyDeliveryAcceptances,
+  storyEvidenceEvents,
   storyPlanDecisions,
   storyPlanRepositoryRefs,
   turns,
@@ -809,6 +810,21 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       { cookie: otherCookie },
     );
     expect(confirmed.statusCode, confirmed.body).toBe(200);
+    const approval = confirmed.json().decision;
+    async function observed() {
+      const result = await app.inject({ url: `${path(value.id)}/workflow`, headers: headers() });
+      expect(result.statusCode, result.body).toBe(200);
+      return result.json();
+    }
+    expect(await observed()).toMatchObject({
+      plan: { status: "approved" },
+      execution: {
+        decision: { id: approval.id, decisionRevision: 1, planRevision: 1 },
+        turns: [],
+        unavailable: false,
+      },
+      executionScope: { queuedWork: [{ turnId }] },
+    });
     const authorization = await authorizePlanExecution(db, scope, builder, {
       type: "user",
       id: userId,
@@ -824,11 +840,46 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     expect(released?.retryAfter).toBeNull();
     const [running] = await db
       .update(turns)
-      .set({ state: "running" })
+      .set({ state: "running", startedAt: new Date() })
       .where(eq(turns.id, turnId))
       .returning();
     if (!running) throw Error("Missing running fixture");
     await recordPlanExecution(db, scope, turnId, authorization);
+    await recordPlanExecution(db, scope, turnId, authorization);
+    const queuedCalls = enqueue.mock.calls.length;
+    const runningObservation = await observed();
+    expect(runningObservation.execution).toMatchObject({
+      decision: { id: approval.id },
+      turns: [{ turnId, state: "running", startedAt: expect.any(String) }],
+      hasMore: false,
+      unavailable: false,
+    });
+    expect(runningObservation.execution.turns).toHaveLength(1);
+    expect(runningObservation.executionScope.queuedWork).toEqual([]);
+    expect(enqueue.mock.calls.length).toBe(queuedCalls);
+    await db
+      .update(storyEvidenceEvents)
+      .set({ data: { decisionId: approval.id } })
+      .where(
+        and(
+          eq(storyEvidenceEvents.orgId, orgId),
+          eq(storyEvidenceEvents.projectId, projectId),
+          eq(storyEvidenceEvents.storyId, value.id),
+          eq(storyEvidenceEvents.externalKey, `workflow:execution:${turnId}`),
+        ),
+      );
+    expect((await observed()).execution).toMatchObject({ turns: [], unavailable: true });
+    await db
+      .update(storyEvidenceEvents)
+      .set({ data: authorization })
+      .where(
+        and(
+          eq(storyEvidenceEvents.orgId, orgId),
+          eq(storyEvidenceEvents.projectId, projectId),
+          eq(storyEvidenceEvents.storyId, value.id),
+          eq(storyEvidenceEvents.externalKey, `workflow:execution:${turnId}`),
+        ),
+      );
     expect(await planExecutionStillAuthorized(db, scope, running)).toBe(true);
     const weakening = await reviewPolicy(policy());
     const deniedPolicy = await post(`${policyPath}/confirm`, {
@@ -888,11 +939,18 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       headers(),
     );
     expect(changed.statusCode, changed.body).toBe(200);
+    expect(await observed()).toMatchObject({
+      plan: { revision: 2, status: "proposed" },
+      execution: { decision: { id: approval.id, planRevision: 1 } },
+    });
     expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
     await db
       .update(turns)
       .set({ state: "canceled", endedAt: new Date() })
       .where(eq(turns.id, turnId));
+    expect((await observed()).execution.turns).toMatchObject([
+      { turnId, state: "canceled", endedAt: expect.any(String) },
+    ]);
     await savePolicy();
   });
   it("holds successors after a failure until a later interactive decision", async () => {
