@@ -84,3 +84,38 @@ carries `total` for the filtered set, `counts` of open and resolved notices matc
 and kind filters, and `facets.kinds` for the chosen status and search. Each open notice names the
 action it accepts (`reply`, `retry`, or `dismiss`); resolved notices carry `resolution` and
 `resolvedAt` instead. It requires `projects:read`. MCP clients use `facility_list_attention`.
+
+
+## Review plans and notices by story (preview)
+
+From Attention, choose **Review plans and notices by story**. The preview at
+`/projects/{projectId}/attention/review` groups open notices and pending formal
+plans by story, oldest pending item first. A plan can appear without a notice.
+An approved or rejected current plan is not pending; a newer proposal appears
+again. Several notices in one story remain separate actions.
+
+The counters describe the entire filtered set, not just the visible page. Search
+matches story titles and open notice text, then keeps all open notices and the
+pending plan of each matching story. The category selector narrows the set to
+stories with plans or with notices. No recipient, urgency or deadline is inferred.
+
+Expand the saved author's brief for the recommendation, alternatives, risk and
+sources. These are the author's statements, not independently verified facts.
+**Open current plan** reads the current story: compare its revision with the
+observed revision before deciding. The exact original and existing confirmation
+flow remain on the story. Each notice keeps its own action there. Opening the
+queue creates no confirmation request, model call, turn or workspace operation.
+Refresh explicitly after reading; the page does not reorder while reviewing a brief.
+
+This preview covers plans and notices. Use the project overview for delivery
+reviews, check status and budget; an empty preview does not mean all project
+work is complete. The existing notice list retains filters and resolved history.
+A failed or denied read is shown as an error, not an empty queue.
+
+`GET /v1/projects/{projectId}/attention/stories` and MCP
+`facility_list_attention_stories` share this read-only projection and require
+`projects:read`. Parameters: `category` (`all`, `plans`, `notices`), `q`, `limit`
+(default 10, maximum 25 stories) and `offset`. Counts, page and revision details
+come from one database snapshot. Each plan carries its revision, digest and saved
+brief; `facility_get_plan` can read that exact revision. The response contains
+no cost or budget data. Existing notice API and MCP contracts are unchanged.

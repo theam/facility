@@ -60,6 +60,12 @@ export default async function ProjectAttentionPage({
         <Link href={base} className="w-fit text-[12px] text-(--mut) hover:text-(--ink)">
           ← Overview
         </Link>
+        <Link
+          href={`${base}/attention/review`}
+          className="inline-flex min-h-11 w-fit items-center text-sm text-(--info) underline underline-offset-4"
+        >
+          Review plans and notices by story →
+        </Link>
         <Eyebrow>attention</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
           Needs your attention

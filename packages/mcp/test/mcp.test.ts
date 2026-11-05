@@ -178,6 +178,7 @@ describe("@facility/mcp 0.12", () => {
       "facility_get_observability",
       "facility_list_backlog",
       "facility_list_attention",
+      "facility_list_attention_stories",
       "facility_sync_github",
       "facility_open_preview",
       "facility_suspend_story",
@@ -397,6 +398,44 @@ describe("@facility/mcp 0.12", () => {
         },
       ],
     ]);
+    await client.close();
+    await server.close();
+  });
+
+  test("reads whole-story attention pages without invoking writes", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { total: 0, items: [] };
+      },
+    });
+    const result = await client.callTool({
+      name: "facility_list_attention_stories",
+      arguments: { projectId: "proj/one", category: "plans", q: "scope", limit: 2, offset: 4 },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(calls).toEqual([
+      [
+        "GET",
+        "/v1/projects/proj%2Fone/attention/stories",
+        {
+          query: { category: "plans", q: "scope", limit: 2, offset: 4 },
+          body: undefined,
+          idempotencyKey: undefined,
+        },
+      ],
+    ]);
+    const invalid = await client.callTool({
+      name: "facility_list_attention_stories",
+      arguments: { projectId: "proj/one", limit: 26 },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(calls).toHaveLength(1);
+    const catalog = await client.listTools();
+    expect(
+      catalog.tools.find((tool) => tool.name === "facility_list_attention_stories")?.annotations,
+    ).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     await client.close();
     await server.close();
   });

@@ -62,6 +62,7 @@ The server exposes forty-seven task-oriented tools:
 | `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
 | `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
 | `facility_list_backlog` | Read the unified backlog with phases, activity, assignees, search, filters, and pagination. |
+| `facility_list_attention_stories` | Read pending plans and open notices grouped by story, oldest first, with complete filtered counts and exact plan references; read-only. |
 | `facility_list_attention` | Read what is waiting on a person, newest first, with the action each notice accepts; filter by status, kind, and text. |
 | `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
 

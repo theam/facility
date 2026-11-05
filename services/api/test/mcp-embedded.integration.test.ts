@@ -129,7 +129,7 @@ describe("embedded MCP control plane", async () => {
 
   it("serves the reduced tool catalog from the API process", async () => {
     const tools = await client.listTools();
-    expect(tools.tools).toHaveLength(47);
+    expect(tools.tools).toHaveLength(48);
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_start_story");
     expect(tools.tools.map((tool) => tool.name)).toContain("facility_list_skills");
     for (const name of [
@@ -248,6 +248,18 @@ describe("embedded MCP control plane", async () => {
         decisionBrief: { status: "available", brief },
       });
     }
+    const grouped = await client.callTool({
+      name: "facility_list_attention_stories",
+      arguments: { projectId, category: "plans" },
+    });
+    expect(grouped.isError).not.toBe(true);
+    const groupedText = (grouped.content as Array<{ type: string; text?: string }>).find(
+      (part) => part.type === "text",
+    )?.text;
+    const groupedPage = JSON.parse(groupedText ?? "{}");
+    expect(
+      groupedPage.items.find((item: { storyId: string }) => item.storyId === id)?.plan,
+    ).toMatchObject({ revision: 1, digest, decisionBrief: { status: "available", brief } });
   });
   it("reads workflow policy and acceptance from the same authenticated domain as the UI", async () => {
     for (const name of ["facility_get_story_workflow", "facility_get_delivery_acceptance"]) {

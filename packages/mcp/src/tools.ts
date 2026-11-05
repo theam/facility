@@ -819,6 +819,31 @@ export const toolDefinitions: ToolDefinition[] = [
     }),
   },
   {
+    name: "facility_list_attention_stories",
+    permission: "projects:read",
+    description:
+      "Read pending plans and open agent notices grouped by story, oldest first. Pages and filtered counts cover whole stories; each proposed plan includes its exact revision, digest and saved author brief. An approved or rejected current plan is not pending. Grouping does not combine decisions or grant authority. Read-only; does not run agents, wake workspaces or request confirmation. This is not the delivery-review, CI or budget inventory; use the overview and delivery reads for those. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      category: z.enum(["all", "plans", "notices"]).default("all"),
+      q: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("Words in a story title or its open notices; returns the whole matching story."),
+      limit: z.number().int().min(1).max(25).default(10),
+      offset: z.number().int().min(0).default(0),
+    },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/attention/stories`,
+    query: (args) => ({
+      category: stringValue(args.category),
+      q: stringValue(args.q),
+      limit: Number(args.limit ?? 10),
+      offset: Number(args.offset ?? 0),
+    }),
+  },
+  {
     name: "facility_sync_github",
     permission: "github:write",
     description:

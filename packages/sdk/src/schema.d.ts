@@ -544,6 +544,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectId}/attention/stories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get stories */
+        get: operations["listProjectAttentionStories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectId}/overview": {
         parameters: {
             query?: never;
@@ -6619,6 +6636,189 @@ export interface operations {
                                 count: number;
                             }[];
                         };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listProjectAttentionStories: {
+        parameters: {
+            query?: {
+                category?: "all" | "plans" | "notices";
+                q?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        generatedAt: string;
+                        total: number;
+                        counts: {
+                            stories: number;
+                            plans: number;
+                            notices: number;
+                        };
+                        limit: number;
+                        offset: number;
+                        items: {
+                            storyId: string;
+                            storyTitle: string;
+                            /** @enum {string} */
+                            storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                            /** Format: date-time */
+                            waitingSince: string;
+                            noticeCount: number;
+                            noticeKinds: {
+                                kind: string;
+                                count: number;
+                            }[];
+                            plan: {
+                                revision: number;
+                                digest: string;
+                                /** Format: date-time */
+                                proposedAt: string;
+                                decisionBrief: {
+                                    /** @enum {string} */
+                                    status: "available";
+                                    brief: {
+                                        /** @enum {number} */
+                                        schemaVersion: 1;
+                                        summary: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        whyNow: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        options: {
+                                            id: string;
+                                            label: string;
+                                            consequence: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        }[];
+                                        recommendation: {
+                                            optionId: string;
+                                            reason: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        } | null;
+                                        decisiveRisk: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        unknowns: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        }[];
+                                        evidence: {
+                                            id: string;
+                                            label: string;
+                                            reference: string;
+                                            /** Format: uri */
+                                            url: string;
+                                        }[];
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    status: "absent";
+                                } | {
+                                    /** @enum {string} */
+                                    status: "invalid";
+                                    /** @enum {string} */
+                                    reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                                };
+                            } | null;
+                        }[];
                     };
                 };
             };

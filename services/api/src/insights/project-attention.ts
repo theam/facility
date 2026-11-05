@@ -1,4 +1,5 @@
-import { attentionItems, type FacilityDb, stories } from "@facility/db";
+import { readDecisionBrief } from "@facility/core";
+import { attentionItems, type FacilityDb, stories, storyPlanRevisions } from "@facility/db";
 import { and, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
 import { attentionAction, type StoryStatus } from "./project-overview.js";
 
@@ -21,8 +22,161 @@ export type AttentionQuery = {
 // Details are error excerpts or agent questions; the full text stays on the story.
 const DETAIL_EXCERPT = 1_000;
 
+export type AttentionStoriesQuery = {
+  category: "all" | "plans" | "notices";
+  q?: string;
+  limit: number;
+  offset: number;
+};
+
+type AttentionStoryRow = {
+  storyId: string;
+  storyTitle: string;
+  storyStatus: StoryStatus;
+  waitingSince: string;
+  noticeCount: number;
+  planRevision: number | null;
+};
+
 export class ProjectAttentionService {
   constructor(private readonly db: FacilityDb) {}
+
+  /** Pages contain whole stories, not a grouping of a truncated notice page.
+   * Counts and revision details share a read-only snapshot. This projection
+   * does not classify urgency or decide who may approve a particular plan.
+   */
+  async listStories(
+    orgId: string,
+    projectId: string,
+    query: AttentionStoriesQuery,
+    now = new Date(),
+  ) {
+    const pattern = `%${(query.q?.trim() ?? "").replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const candidates = sql`
+      with notice_groups as (
+        select story_id, count(*)::int as notice_count, min(created_at) as waiting_since
+        from attention_items
+        where org_id = ${orgId} and project_id = ${projectId} and status = 'open'
+        group by story_id
+      ), pending_plans as (
+        select p.story_id, p.revision, p.proposed_at
+        from story_plan_states s
+        join story_plan_revisions p on p.org_id = s.org_id and p.project_id = s.project_id
+          and p.story_id = s.story_id and p.revision = s.revision
+        left join story_plan_decisions d on d.org_id = s.org_id and d.project_id = s.project_id
+          and d.story_id = s.story_id and d.decision_revision = s.decision_revision
+        where s.org_id = ${orgId} and s.project_id = ${projectId}
+          and (d.plan_revision is null or d.plan_revision <> s.revision)
+      ), candidates as (
+        select s.id as "storyId", s.title as "storyTitle", s.status as "storyStatus",
+          least(n.waiting_since, p.proposed_at) as "waitingSince",
+          coalesce(n.notice_count, 0)::int as "noticeCount", p.revision as "planRevision"
+        from stories s
+        left join notice_groups n on n.story_id = s.id
+        left join pending_plans p on p.story_id = s.id
+        where s.org_id = ${orgId} and s.project_id = ${projectId}
+          and (n.story_id is not null or p.story_id is not null)
+          and (${query.category} = 'all'
+            or (${query.category} = 'plans' and p.story_id is not null)
+            or (${query.category} = 'notices' and n.story_id is not null))
+          and (s.title ilike ${pattern} or exists (
+            select 1 from attention_items a
+            where a.org_id = s.org_id and a.project_id = s.project_id and a.story_id = s.id
+              and a.status = 'open' and (a.title ilike ${pattern} or a.detail ilike ${pattern})
+          ))
+      )`;
+    return this.db.transaction(
+      async (tx) => {
+        const [counts] = await tx.execute<{ stories: number; plans: number; notices: number }>(sql`
+        ${candidates}
+        select count(*)::int as stories, count("planRevision")::int as plans,
+          coalesce(sum("noticeCount"), 0)::int as notices from candidates
+      `);
+        if (!counts) throw new Error("Attention story count was not returned");
+        const rows = await tx.execute<AttentionStoryRow>(sql`
+        ${candidates} select * from candidates
+        order by "waitingSince" asc, "storyId" asc limit ${query.limit} offset ${query.offset}
+      `);
+        const ids = rows.map((row) => row.storyId);
+        // Only this page's original plans are read and parsed; counts never load
+        // Markdown. The persisted current revision was selected above.
+        const planFilters = rows.flatMap((row) =>
+          row.planRevision === null
+            ? []
+            : [
+                and(
+                  eq(storyPlanRevisions.storyId, row.storyId),
+                  eq(storyPlanRevisions.revision, row.planRevision),
+                ),
+              ],
+        );
+        const plans = planFilters.length
+          ? await tx
+              .select({
+                storyId: storyPlanRevisions.storyId,
+                revision: storyPlanRevisions.revision,
+                digest: storyPlanRevisions.digest,
+                proposedAt: storyPlanRevisions.proposedAt,
+                markdown: storyPlanRevisions.markdown,
+              })
+              .from(storyPlanRevisions)
+              .where(
+                and(
+                  eq(storyPlanRevisions.orgId, orgId),
+                  eq(storyPlanRevisions.projectId, projectId),
+                  or(...planFilters),
+                ),
+              )
+          : [];
+        const kinds = ids.length
+          ? await tx
+              .select({
+                storyId: attentionItems.storyId,
+                kind: attentionItems.kind,
+                count: sql<number>`count(*)::int`,
+              })
+              .from(attentionItems)
+              .where(
+                and(
+                  eq(attentionItems.orgId, orgId),
+                  eq(attentionItems.projectId, projectId),
+                  eq(attentionItems.status, "open"),
+                  inArray(attentionItems.storyId, ids),
+                ),
+              )
+              .groupBy(attentionItems.storyId, attentionItems.kind)
+              .orderBy(attentionItems.kind)
+          : [];
+        return {
+          generatedAt: now,
+          total: counts.stories,
+          counts,
+          limit: query.limit,
+          offset: query.offset,
+          items: rows.map((row) => {
+            const plan = plans.find((plan) => plan.storyId === row.storyId);
+            const { planRevision: _revision, ...story } = row;
+            return {
+              ...story,
+              waitingSince: new Date(story.waitingSince),
+              noticeKinds: kinds
+                .filter((kind) => kind.storyId === row.storyId)
+                .map(({ kind, count }) => ({ kind, count })),
+              plan: plan
+                ? {
+                    revision: plan.revision,
+                    digest: plan.digest,
+                    proposedAt: plan.proposedAt,
+                    decisionBrief: readDecisionBrief(plan.markdown),
+                  }
+                : null,
+            };
+          }),
+        };
+      },
+      { isolationLevel: "repeatable read", accessMode: "read only" },
+    );
+  }
 
   async list(orgId: string, projectId: string, query: AttentionQuery, now = new Date()) {
     const scope = and(eq(attentionItems.orgId, orgId), eq(attentionItems.projectId, projectId));

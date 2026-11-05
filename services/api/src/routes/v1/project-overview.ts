@@ -1,4 +1,4 @@
-import { can } from "@facility/core";
+import { can, DecisionBriefProjectionSchema } from "@facility/core";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ATTENTION_STATUSES, ProjectAttentionService } from "../../insights/project-attention.js";
@@ -61,6 +61,34 @@ export const ProjectAttentionResponse = z.object({
   counts: z.object({ open: z.number(), resolved: z.number() }),
   facets: z.object({ kinds: z.array(z.object({ kind: z.string(), count: z.number() })) }),
   items: z.array(AttentionNotice),
+});
+const AttentionStoriesQuery = z.object({
+  category: z.enum(["all", "plans", "notices"]).default("all"),
+  q: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(25).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export const ProjectAttentionStoriesResponse = z.object({
+  generatedAt: DateValue,
+  total: z.number(),
+  counts: z.object({ stories: z.number(), plans: z.number(), notices: z.number() }),
+  limit: z.number(),
+  offset: z.number(),
+  items: z.array(
+    StoryReference.extend({
+      waitingSince: DateValue,
+      noticeCount: z.number(),
+      noticeKinds: z.array(z.object({ kind: z.string(), count: z.number() })),
+      plan: z
+        .object({
+          revision: z.number(),
+          digest: z.string(),
+          proposedAt: DateValue,
+          decisionBrief: DecisionBriefProjectionSchema,
+        })
+        .nullable(),
+    }),
+  ),
 });
 const ReviewItem = z.object({
   source: z.enum(["mirror", "story"]),
@@ -173,6 +201,29 @@ export const ProjectOverviewResponse = z.object({
 export async function registerProjectOverviewRoutes(app: FastifyInstance, context: V1RouteContext) {
   const service = new ProjectOverviewService(context.db, app.storyDomain.costs);
   const attention = new ProjectAttentionService(context.db);
+
+  app.get(
+    "/v1/projects/:projectId/attention/stories",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: ProjectParams,
+        querystring: AttentionStoriesQuery,
+        response: { 200: ProjectAttentionStoriesResponse },
+        operationId: "listProjectAttentionStories",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      const { projectId } = request.params as z.infer<typeof ProjectParams>;
+      reply.header("cache-control", "no-store");
+      return attention.listStories(
+        actor.orgId,
+        projectId,
+        request.query as z.infer<typeof AttentionStoriesQuery>,
+      );
+    },
+  );
 
   app.get(
     "/v1/projects/:projectId/overview",

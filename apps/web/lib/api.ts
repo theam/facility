@@ -1,5 +1,6 @@
 import type {
   AttentionQuery,
+  AttentionStoriesQuery,
   BacklogQuery,
   ConnectProjectRepoRequest,
   CreateProjectRequest,
@@ -28,6 +29,7 @@ export type {
   ApiKey,
   AttentionNotice,
   AttentionQuery,
+  AttentionStoriesQuery,
   BacklogItem,
   BacklogPerson,
   BacklogPhase,
@@ -47,6 +49,7 @@ export type {
   OverviewReviewItem,
   Project,
   ProjectAttention,
+  ProjectAttentionStories,
   ProjectBacklog,
   ProjectBudget,
   ProjectObservability,
@@ -255,6 +258,8 @@ export const api = {
     }),
   projectOverview: (projectId: string) =>
     apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/overview`),
+  projectAttentionStories: (projectId: string, query: AttentionStoriesQuery = {}) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/attention/stories`, { query }),
   projectAttention: (projectId: string, query: AttentionQuery = {}) =>
     apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/attention`, { query }),
   members: () => apiFetch("GET", "/v1/members"),

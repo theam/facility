@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { generateApiKey, newId } from "@facility/core";
 import {
   apiKeys,
@@ -11,8 +12,13 @@ import {
   seed,
   stories,
   storyConversations,
+  storyPlanDecisions,
+  storyPlanRequests,
+  storyPlanRevisions,
+  storyPlanStates,
   turns,
 } from "@facility/db";
+import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -78,6 +84,79 @@ describe("project attention list", async () => {
     runtime: newId("attn"),
     dismissed: newId("attn"),
   };
+  const planStory = newId("story");
+  const approvedStory = newId("story");
+  const rejectedStory = newId("story");
+  const revisedStory = newId("story");
+  const brief = JSON.parse(
+    readFileSync(
+      new URL("../../../packages/core/test/fixtures/decision-brief.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+  async function plan(storyId: string, revision = 1, scope = { orgId, projectId }) {
+    await db.insert(storyPlanRevisions).values({
+      ...scope,
+      storyId,
+      revision,
+      digest: String(revision).repeat(64),
+      markdown: `# Plan\n\n\`\`\`facility-decision\n${JSON.stringify(brief)}\n\`\`\``,
+      repositories: [{ repositoryId: "repo-fixture", repository: "example/app" }],
+      agents: [
+        {
+          name: "planner",
+          manifestHash: "a".repeat(64),
+          engine: "codex",
+          model: "fixture",
+          repositoryId: "repo-fixture",
+          catalogCommitSha: "b".repeat(40),
+          observedAt: now.toISOString(),
+        },
+      ],
+      proposedBy: { type: "service", id: "fixture", name: null },
+      proposedAt: minutesAgo(90 - revision),
+    });
+    if (revision === 1) await db.insert(storyPlanStates).values({ ...scope, storyId, revision });
+    else
+      await db
+        .update(storyPlanStates)
+        .set({ revision })
+        .where(eq(storyPlanStates.storyId, storyId));
+  }
+
+  async function decide(storyId: string, intent: "approve" | "reject") {
+    const requestId = newId("dreq");
+    const target = {
+      orgId,
+      projectId,
+      storyId,
+      planRevision: 1,
+      planDigest: "1".repeat(64),
+      intent,
+      reason: intent === "reject" ? "Reduce scope" : null,
+    };
+    await db.insert(storyPlanRequests).values({
+      ...target,
+      id: requestId,
+      decisionRevision: 0,
+      requestedBy: { type: "user", id: "user_test", name: null },
+      requestedAt: minutesAgo(50),
+      expiresAt: now,
+    });
+    await db.insert(storyPlanDecisions).values({
+      ...target,
+      id: newId("dec"),
+      requestId,
+      decisionRevision: 1,
+      confirmedBy: { type: "user", id: "user_test", name: null },
+    });
+    await db
+      .update(storyPlanStates)
+      .set({ decisionRevision: 1 })
+      .where(eq(storyPlanStates.storyId, storyId));
+  }
+
   const longDetail = "x".repeat(3_000);
 
   async function story(input: { id: string; orgId?: string; projectId?: string; title: string }) {
@@ -234,6 +313,23 @@ describe("project attention list", async () => {
         createdAt: minutesAgo(1),
       },
     ]);
+
+    for (const [id, title] of [
+      [planStory, "Plan without a notice"],
+      [approvedStory, "Approved plan"],
+      [rejectedStory, "Rejected plan"],
+      [revisedStory, "Revised plan"],
+    ] as const) {
+      await story({ id, title });
+      await plan(id);
+    }
+    await decide(approvedStory, "approve");
+    await decide(rejectedStory, "reject");
+    await decide(revisedStory, "approve");
+    await plan(revisedStory, 2);
+    await plan(ids.billingStory);
+    await plan(siblingStory, 1, { orgId, projectId: siblingProjectId });
+    await plan(otherStory, 1, { orgId: otherOrgId, projectId: otherProjectId });
 
     readerSecret = await key("attention reader", ["projects:read"], projectId);
     noReadSecret = await key("attention cost viewer", ["costs:read"], projectId);
@@ -394,6 +490,102 @@ describe("project attention list", async () => {
         headers: { cookie: ownerCookie },
       });
       expect(malformed.statusCode, query).toBe(400);
+    }
+  });
+  it("pages whole stories with pending plans even when no notice exists", async () => {
+    const query = { category: "all" as const, limit: 1, offset: 0 };
+    const first = await service.listStories(orgId, projectId, query, now);
+    expect(first.counts).toEqual({ stories: 4, plans: 3, notices: 3 });
+    expect(first.total).toBe(4);
+    const pages = await Promise.all(
+      [0, 1, 2, 3].map((offset) =>
+        service.listStories(orgId, projectId, { ...query, offset }, now),
+      ),
+    );
+    const items = pages.flatMap((page) => page.items);
+    expect(new Set(items.map((item) => item.storyId)).size).toBe(4);
+    expect(items.at(-1)?.storyId).toBe(ids.checkoutStory);
+    const billing = items.find((item) => item.storyId === ids.billingStory);
+    if (!billing) throw new Error("Billing story missing");
+    expect(billing.noticeCount).toBe(2);
+    expect(billing.noticeKinds).toEqual([
+      { kind: "runtime_error", count: 1 },
+      { kind: "turn_error", count: 1 },
+    ]);
+    expect(billing.plan).toMatchObject({
+      revision: 1,
+      digest: "1".repeat(64),
+      decisionBrief: { status: "available", brief },
+    });
+    expect(items.find((item) => item.storyId === planStory)?.noticeCount).toBe(0);
+    expect(items.find((item) => item.storyId === revisedStory)?.plan?.revision).toBe(2);
+    expect(items.map((item) => item.storyId)).not.toContain(approvedStory);
+    expect(items.map((item) => item.storyId)).not.toContain(rejectedStory);
+    const beyond = await service.listStories(orgId, projectId, { ...query, offset: 100 }, now);
+    expect(beyond.items).toEqual([]);
+    expect(beyond.counts).toEqual(first.counts);
+  });
+
+  it("filters matching stories without discarding their other notices or plan", async () => {
+    const query = { category: "all" as const, limit: 10, offset: 0 };
+    const found = await service.listStories(orgId, projectId, { ...query, q: "%" }, now);
+    expect(found.counts).toEqual({ stories: 1, plans: 1, notices: 2 });
+    expect(found.items[0]?.noticeKinds).toHaveLength(2);
+    expect((await service.listStories(orgId, projectId, { ...query, q: "_" }, now)).total).toBe(0);
+    expect(
+      (await service.listStories(orgId, projectId, { ...query, category: "plans" }, now)).counts,
+    ).toEqual({ stories: 3, plans: 3, notices: 2 });
+    expect(
+      (await service.listStories(orgId, projectId, { ...query, category: "notices" }, now)).counts,
+    ).toEqual({ stories: 2, plans: 1, notices: 3 });
+    expect((await service.listStories(otherOrgId, projectId, query, now)).counts).toEqual({
+      stories: 0,
+      plans: 0,
+      notices: 0,
+    });
+    const other = await service.listStories(otherOrgId, otherProjectId, query, now);
+    expect(other.counts).toEqual({ stories: 1, plans: 1, notices: 1 });
+  });
+
+  it("serves grouped reads with the same permission boundary and no cost data", async () => {
+    const url = `/v1/projects/${projectId}/attention/stories`;
+    const reader = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${readerSecret}` },
+    });
+    expect(reader.statusCode, reader.body).toBe(200);
+    expect(reader.headers["cache-control"]).toBe("no-store");
+    const expected = await service.listStories(orgId, projectId, {
+      category: "all",
+      limit: 10,
+      offset: 0,
+    });
+    expect(reader.json().items).toEqual(JSON.parse(JSON.stringify(expected.items)));
+    expect(reader.json()).not.toHaveProperty("spend");
+    for (const [target, headers, code] of [
+      [url, {}, 401],
+      [url, { authorization: `Bearer ${noReadSecret}` }, 403],
+      [
+        `/v1/projects/${siblingProjectId}/attention/stories`,
+        { authorization: `Bearer ${readerSecret}` },
+        404,
+      ],
+      [`/v1/projects/${otherProjectId}/attention/stories`, { cookie: ownerCookie }, 404],
+    ] as const) {
+      const response = await app.inject({ method: "GET", url: target, headers });
+      expect(response.statusCode).toBe(code);
+    }
+    for (const query of ["category=urgent", "limit=26", "offset=-1", "limit=0"]) {
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: `${url}?${query}`,
+            headers: { cookie: ownerCookie },
+          })
+        ).statusCode,
+      ).toBe(400);
     }
   });
 });

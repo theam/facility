@@ -1,0 +1,261 @@
+import Link from "next/link";
+import { ErrorNotice, Offline } from "@/components/offline";
+import { DecisionBrief } from "@/components/story/decision-brief";
+import { type AttentionStoriesQuery, api } from "@/lib/api";
+import { attentionKindLabel, relativeTime, storyHref } from "@/lib/overview-presentation";
+
+export const metadata = { title: "next review" };
+
+/** Pilot of the shared story queue. Keep the existing overview until delivery,
+ * checks and project-wide blockers also have a complete shared projection. */
+export default async function AttentionReviewPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ projectId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [{ projectId }, raw] = await Promise.all([params, searchParams]);
+  const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
+  const q = first(raw.q)?.trim().slice(0, 200) ?? "";
+  const category = first(raw.category);
+  const query: AttentionStoriesQuery = {
+    category: category === "plans" || category === "notices" ? category : "all",
+    q: q || undefined,
+    limit: 10,
+    offset: 0,
+  };
+  const requestedPage = Number(first(raw.page));
+  const pageNumber =
+    Number.isSafeInteger(requestedPage) && requestedPage > 0 && requestedPage <= 1000000
+      ? requestedPage
+      : 1;
+  const offset = (pageNumber - 1) * 10;
+  query.offset = offset;
+  const result = await api.projectAttentionStories(projectId, query);
+  if (!result.ok && result.offline) return <Offline />;
+  const base = `/projects/${encodeURIComponent(projectId)}`;
+  const href = (page: number) => {
+    const search = new URLSearchParams();
+    if (q) search.set("q", q);
+    if (query.category !== "all") search.set("category", query.category ?? "all");
+    if (page > 1) search.set("page", String(page));
+    return `${base}/attention/review${search.size ? `?${search}` : ""}`;
+  };
+  const now = new Date();
+  const control =
+    "inline-flex min-h-11 items-center border border-(--line) px-3 text-sm text-(--ink) hover:bg-(--card)";
+
+  return (
+    <div className="flex min-w-0 flex-col gap-6">
+      <header className="flex flex-col gap-3">
+        <p className="text-xs text-(--mut)">Attention · preview</p>
+        <h1 className="text-3xl font-semibold tracking-tight">Next review</h1>
+        <p className="max-w-2xl text-sm text-(--mut)">
+          Pending plans and open notices, grouped by story. Each decision keeps its own review and
+          confirmation.
+        </p>
+        <nav aria-label="Related project views" className="flex flex-wrap gap-3">
+          <Link href={base} className={control}>
+            Project overview, checks and budget
+          </Link>
+          <Link href={`${base}/attention?status=resolved`} className={control}>
+            Resolved notices
+          </Link>
+          <Link href={`${base}/stories`} className={control}>
+            All stories
+          </Link>
+        </nav>
+      </header>
+      <form
+        method="get"
+        action={`${base}/attention/review`}
+        aria-label="Find pending stories"
+        className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
+      >
+        <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm" htmlFor="review-search">
+          Story or notice text
+          <input
+            id="review-search"
+            type="search"
+            name="q"
+            defaultValue={q}
+            className="min-h-11 min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
+          />
+        </label>
+        <label className="flex flex-col gap-2 text-sm" htmlFor="review-category">
+          Show
+          <select
+            id="review-category"
+            name="category"
+            defaultValue={query.category}
+            className="min-h-11 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
+          >
+            <option value="all">Plans and notices</option>
+            <option value="plans">Stories with pending plans</option>
+            <option value="notices">Stories with open notices</option>
+          </select>
+        </label>
+        <button type="submit" className={control}>
+          Apply
+        </button>
+        {q || query.category !== "all" ? (
+          <Link href={`${base}/attention/review`} className={control}>
+            Clear filters
+          </Link>
+        ) : null}
+      </form>
+      {!result.ok ? (
+        <ErrorNotice message={`Couldn't load pending stories — ${result.message}`} />
+      ) : (
+        <>
+          <p className="text-sm text-(--mut)" role="status">
+            {result.data.counts.stories} stories · {result.data.counts.plans} pending plans ·{" "}
+            {result.data.counts.notices} open notices
+            {q || query.category !== "all" ? " in matching stories" : ""}.
+          </p>
+          <p className="text-xs text-(--mut)">
+            Oldest pending item first. Updated {relativeTime(result.data.generatedAt, now)}.{" "}
+            <a
+              href={href(pageNumber)}
+              className="inline-flex min-h-11 items-center underline underline-offset-4"
+            >
+              Refresh this view
+            </a>
+          </p>
+          {result.data.items.length === 0 ? (
+            <section className="border border-(--line) p-5">
+              <h2 className="font-semibold">
+                {result.data.total > 0
+                  ? "No stories on this page"
+                  : q || query.category !== "all"
+                    ? "No matching pending stories"
+                    : "No pending plans or notices"}
+              </h2>
+              <p className="mt-2 text-sm text-(--mut)">
+                Check the project overview for delivery reviews, checks and budget, or open Stories
+                to follow ongoing work.
+              </p>
+            </section>
+          ) : (
+            <ol aria-label="Pending stories" className="flex flex-col gap-4">
+              {result.data.items.map((item) => {
+                const target = storyHref(projectId, item.storyId);
+                const brief = item.plan?.decisionBrief;
+                return (
+                  <li
+                    key={item.storyId}
+                    className="min-w-0 border border-(--line) bg-(--bg-subtle) p-5 sm:p-6"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h2 className="break-words text-lg font-semibold">
+                          <Link href={target}>{item.storyTitle}</Link>
+                        </h2>
+                        <p className="mt-1 text-xs text-(--mut)">
+                          Story: {item.storyStatus} · Pending since{" "}
+                          {relativeTime(item.waitingSince, now)}
+                        </p>
+                      </div>
+                      <Link
+                        href={`${target}${item.plan ? "#story-plan" : "#story-attention"}`}
+                        className={control}
+                      >
+                        {item.plan ? "Open current plan" : "Open notices"}
+                      </Link>
+                    </div>
+                    {item.plan ? (
+                      <div className="mt-4 flex flex-col gap-3">
+                        <p className="text-sm font-medium">
+                          Plan r{item.plan.revision} awaits review
+                        </p>
+                        {brief?.status === "available" ? (
+                          <>
+                            <p className="break-words text-sm">{brief.brief.summary.text}</p>
+                            <details>
+                              <summary className="min-h-11 cursor-pointer py-3 text-sm text-(--info)">
+                                Author’s recommendation, alternatives and sources
+                              </summary>
+                              <div className="border-t border-(--line) pt-4">
+                                <DecisionBrief
+                                  key={item.plan.digest}
+                                  brief={brief.brief}
+                                  revision={item.plan.revision}
+                                />
+                              </div>
+                            </details>
+                          </>
+                        ) : (
+                          <p className="text-sm text-(--mut)">
+                            {brief?.status === "invalid"
+                              ? "The author’s brief could not be read."
+                              : "No structured brief was supplied."}{" "}
+                            Open the plan to read the original.
+                          </p>
+                        )}
+                        <p className="text-xs text-(--mut)">
+                          Observed revision r{item.plan.revision}. Opening the story reads its
+                          current plan; confirm the revision before deciding.
+                        </p>
+                      </div>
+                    ) : null}
+                    {item.noticeCount > 0 ? (
+                      <div className="mt-4 border-t border-(--line) pt-3 text-sm">
+                        <p>
+                          {item.noticeCount} open {item.noticeCount === 1 ? "notice" : "notices"}
+                        </p>
+                        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-(--mut)">
+                          {item.noticeKinds.map(({ kind, count }) => (
+                            <li key={kind}>
+                              {attentionKindLabel(kind)} · {count}
+                            </li>
+                          ))}
+                        </ul>
+                        {item.plan ? (
+                          <Link
+                            href={`${target}#story-attention`}
+                            className="mt-2 inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
+                          >
+                            Open notices
+                          </Link>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          <nav
+            aria-label="Pending story pages"
+            className="flex flex-wrap items-center justify-between gap-3 text-sm"
+          >
+            <p>
+              {result.data.items.length
+                ? `${offset + 1}–${offset + result.data.items.length}`
+                : "0"}{" "}
+              of {result.data.total} stories
+            </p>
+            <div className="flex gap-3">
+              {pageNumber > 1 ? (
+                <Link href={href(pageNumber - 1)} className={control}>
+                  Previous
+                </Link>
+              ) : null}
+              {offset + result.data.items.length < result.data.total ? (
+                <Link href={href(pageNumber + 1)} className={control}>
+                  Next
+                </Link>
+              ) : null}
+              {pageNumber > 1 && result.data.items.length === 0 ? (
+                <Link href={href(1)} className={control}>
+                  First page
+                </Link>
+              ) : null}
+            </div>
+          </nav>
+        </>
+      )}
+    </div>
+  );
+}

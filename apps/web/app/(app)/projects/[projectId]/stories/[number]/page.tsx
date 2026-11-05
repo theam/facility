@@ -149,6 +149,7 @@ export default async function StoryPage({
       {openAttention.length > 0 ? (
         <section
           className="border border-(--bad)/50 bg-(--bg-subtle) p-5"
+          id="story-attention"
           aria-label="Needs your attention"
         >
           <h2 className="mb-4 font-semibold">Needs your attention · {openAttention.length}</h2>

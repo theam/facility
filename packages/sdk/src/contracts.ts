@@ -572,3 +572,13 @@ export type DeliveryAcceptanceReview = FacilityGeneratedResponse<
   "get",
   "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery-acceptance/{requestId}"
 >;
+
+/** Pending plans and open notices grouped into whole-story pages. */
+export type ProjectAttentionStories = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/attention/stories"
+>;
+export type AttentionStoriesQuery = FacilityGeneratedQuery<
+  "GET",
+  "/v1/projects/{projectId}/attention/stories"
+>;
