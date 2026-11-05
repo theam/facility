@@ -1,6 +1,11 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx";
 
+/** Content that remains available to assistive technology without affecting layout. */
+export function VisuallyHidden({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cx("sr-only", className)} {...props} />;
+}
+
 /** Calm sans section label. Mono stays reserved for technical tokens. */
 export function Eyebrow({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
   return <p className={cx("eyebrow", className)} {...props} />;

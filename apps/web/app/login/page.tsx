@@ -1,13 +1,17 @@
-import { ButtonLink } from "@facility/ui";
+import { ButtonLink, VisuallyHidden } from "@facility/ui";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { title: "Sign in" };
 
 export default function LoginPage() {
   const localDevelopment = process.env.NODE_ENV !== "production";
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-10 px-6">
+    <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-10 px-6">
       <div className="flex flex-col gap-3">
-        <span className="font-mono text-[22px] font-semibold tracking-tight">
+        <h1 className="font-mono text-[22px] font-semibold tracking-tight">
           facility<span className="text-(--accent)">.</span>
-        </span>
+          <VisuallyHidden> sign in</VisuallyHidden>
+        </h1>
         <p className="text-sm leading-relaxed text-(--mut)">
           One persistent workspace and shared agent conversation for every story.
         </p>
@@ -29,6 +33,6 @@ export default function LoginPage() {
           The Agile Monkeys
         </a>
       </p>
-    </div>
+    </main>
   );
 }
