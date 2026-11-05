@@ -200,10 +200,10 @@ describe("agent manifests", () => {
         .map(async (file) => ({
           file,
           source: (await readFile(join(templateDirectory, file), "utf8"))
-            .replaceAll("{{PLAN_MODEL}}", "claude-opus-4-8")
-            .replaceAll("{{REVIEW_MODEL}}", "claude-sonnet-4-6")
-            .replaceAll("{{CODEX_BUILD_MODEL}}", "gpt-5.6-sol")
-            .replaceAll("{{CODEX_PLAN_MODEL}}", "gpt-5.6-sol"),
+            .replaceAll("{{PLAN_MODEL}}", JSON.stringify("claude-opus-4-8"))
+            .replaceAll("{{REVIEW_MODEL}}", JSON.stringify("claude-sonnet-4-6"))
+            .replaceAll("{{CODEX_BUILD_MODEL}}", JSON.stringify("gpt-5.6-sol"))
+            .replaceAll("{{CODEX_PLAN_MODEL}}", JSON.stringify("gpt-5.6-sol")),
         })),
     );
     const catalog = parseAgentCatalog(sources);
@@ -227,5 +227,19 @@ describe("agent manifests", () => {
       expect(agent.prompt).toMatch(/untrusted data/i);
       expect(agent.prompt).not.toMatch(/receipt|HITL|budget ceiling|permission profile:/i);
     }
+  });
+
+  it("treats a quoted hostile model id as data rather than YAML structure", async () => {
+    const model = "gpt-5.6-sol\nenabled: false";
+    const source = (
+      await readFile(
+        join(fileURLToPath(new URL(".", import.meta.url)), "../../cli/templates/agents/builder.md"),
+        "utf8",
+      )
+    ).replaceAll("{{CODEX_BUILD_MODEL}}", JSON.stringify(model));
+    const parsed = parseAgentManifest(source, "builder.md");
+    expect(parsed.model).toBe(model);
+    expect(parsed.enabled).toBe(true);
+    expect(parsed.engine).toBe("codex");
   });
 });
