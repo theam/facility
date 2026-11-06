@@ -265,7 +265,50 @@ Missing or malformed usage, a lost response, or an expired started attempt remai
 an expired unstarted attempt is unbilled. Valid measured zero is preserved as zero.
 Final receipts must belong to the same attempt and cannot erase previously observed usage.
 The API-call ledger and title publication commit atomically; retries of a settled attempt cannot
-publish or charge it twice. There is no public manual-settlement endpoint.
+publish or charge it twice. Title and consultation API-call receipts do not have a public manual-settlement endpoint.
+
+### Reconciling retained turn charges
+
+Turn usage exposes `usageComplete` independently of `priced`. A successful call on an
+unlisted model can have complete token counts but no known monetary charge. It still
+blocks an enabled budget, including when the budget is enabled later. It is not a
+zero-cost call or necessarily an interrupted turn. Historical confirmed rows and
+successful usage linked to a succeeded turn are backfilled as complete; other
+legacy evidence remains conservatively incomplete. Late partial reports cannot
+replace a complete unpriced measurement.
+
+`GET /v1/projects/:projectId/costs?unpriced_only=true` lists unresolved native-turn
+records across history by default (`from`/`to` can narrow it). Results remain bounded
+by `limit` (maximum 500). Settle a batch and query again to find remaining records.
+`usageComplete: true` with `priced: false` indicates missing pricing; `false` indicates
+incomplete or unverified usage. Budget uncertainty can also come from API-call ledger
+records or reservations, so an empty native-turn list does not establish a known bill.
+
+For a terminal native turn, an administrator with **both** `budgets:write` and
+`costs:read` can submit the final provider charge:
+
+```http
+POST /v1/projects/:projectId/costs/:turnId/settlement
+Idempotency-Key: receipt-reconciliation-1
+Content-Type: application/json
+
+{"cost_cents": 12.5, "reference": "provider-final-receipt-123"}
+```
+
+The reference is a bounded receipt identifier, not a place for API keys or full
+invoice contents. This is an explicit financial attestation: submit the final
+charge, not an estimate. Zero is valid only when the provider confirms zero.
+The receipt and `usage.settled` audit event commit atomically, and the charge counts
+in the month it is settled. A matching replay is a no-op even with a new idempotency
+key; a different receipt/amount or an already confirmed automatic bill returns 409.
+New inference, token fabrication and rewriting confirmed charges are not allowed.
+Partial token evidence remains partial even when its final bill is known. Only the
+last unresolved charge clearing removes the block; exhausted limits still apply.
+
+Apply the additive `0020_usage_certainty.sql` migration and upgrade API and worker
+together before using manual receipts. Older API schemas do not recognize the
+new `manual` source. Historical settlement auditing includes the previous lower
+bound, final charge, administrator identity and receipt reference.
 Recovered usage is counted when it is settled, as with live-worker accounting; reconciliation does not double-charge
 already settled rows. The periodic worker retries available journals without waking compute.
 Updating the catalog does not reprice persisted turns or change agent defaults.

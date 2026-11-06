@@ -3,12 +3,14 @@ import { auditEvents, projectBudgets } from "@facility/db";
 import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { requirePermissions } from "../../auth/required-permissions.js";
 import { InsightsService } from "../../insights/overview.js";
 import { AnyObject, DateValue, principal, type V1RouteContext } from "./shared.js";
 
 const ProjectParams = z.object({ projectId: z.string() });
 const DaysQuery = z.object({ days: z.coerce.number().int().min(1).max(365).default(30) });
 const CostsQuery = z.object({
+  unpriced_only: z.enum(["true", "false"]).default("false"),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
@@ -56,7 +58,9 @@ const TurnUsage = z.object({
   cacheWriteTokens: z.number(),
   costCents: z.number().nullable(),
   priced: z.boolean(),
-  source: z.enum(["provider", "price_book", "unpriced"]),
+  usageComplete: z.boolean(),
+  settlementReference: z.string().nullable(),
+  source: z.enum(["provider", "price_book", "unpriced", "manual"]),
   durationMs: z.number(),
   status: z.enum(["succeeded", "failed"]),
   createdAt: DateValue,
@@ -172,8 +176,65 @@ export async function registerInsightsPipelineRoutes(
       const { projectId } = request.params as z.infer<typeof ProjectParams>;
       const query = request.query as z.infer<typeof CostsQuery>;
       const to = query.to ?? new Date();
-      const from = query.from ?? new Date(to.getTime() - 30 * 24 * 60 * 60 * 1_000);
-      return app.storyDomain.costs.usage(actor.orgId, projectId, from, to, query.limit);
+      const from =
+        query.from ??
+        (query.unpriced_only === "true"
+          ? new Date(0)
+          : new Date(to.getTime() - 30 * 24 * 60 * 60 * 1_000));
+      return app.storyDomain.costs.usage(
+        actor.orgId,
+        projectId,
+        from,
+        to,
+        query.limit,
+        query.unpriced_only === "true",
+      );
+    },
+  );
+
+  app.post(
+    "/v1/projects/:projectId/costs/:turnId/settlement",
+    {
+      config: { permission: "budgets:write", idempotent: true },
+      // Permission arrays in route config are OR. This second check must run
+      // before idempotency replay can return a stored financial receipt.
+      preValidation: async (request) => requirePermissions(principal(request), ["costs:read"]),
+      schema: {
+        description:
+          "Record a final provider charge for a terminal turn. Requires both budgets:write and costs:read.",
+        params: ProjectParams.extend({ turnId: z.string() }),
+        body: z
+          .object({
+            cost_cents: z.number().min(0).max(2_000_000_000),
+            reference: z
+              .string()
+              .trim()
+              .min(1)
+              .max(500)
+              .regex(
+                // biome-ignore lint/suspicious/noControlCharactersInRegex: Deliberately reject PostgreSQL's forbidden NUL character.
+                /^[^\u0000]*$/,
+                "Receipt reference must not contain NUL",
+              ),
+          })
+          .strict(),
+        response: { 200: TurnUsage },
+        operationId: "settleTurnUsage",
+      },
+    },
+    async (request) => {
+      const actor = principal(request);
+      const { projectId, turnId } = request.params as { projectId: string; turnId: string };
+      const body = request.body as { cost_cents: number; reference: string };
+      return app.storyDomain.costs.settleUsage({
+        orgId: actor.orgId,
+        projectId,
+        turnId,
+        costCents: body.cost_cents,
+        reference: body.reference,
+        actor: { type: actor.type, id: actor.id },
+        requestId: request.id,
+      });
     },
   );
 
