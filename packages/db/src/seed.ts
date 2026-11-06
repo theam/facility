@@ -1,8 +1,12 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BUNDLED_ROLES } from "@facility/core";
 import { config as loadDotenv } from "dotenv";
 import postgres from "postgres";
 
-loadDotenv({ quiet: true });
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(here, "../../..");
+loadDotenv({ path: join(repoRoot, ".env"), quiet: true });
 
 export type SeedOptions = {
   includeDemoData?: boolean;
