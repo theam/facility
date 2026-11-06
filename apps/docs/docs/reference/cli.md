@@ -58,7 +58,8 @@ force: these files are project-owned configuration, not disposable generated out
 
 ## `facility doctor`
 
-Doctor checks the local seven-file kickstart contract and exits non-zero when it finds a problem.
+Doctor checks `.facility.yml` and every agent manifest in `.agents/*.md`, whether it came from
+`init` or was written by your team, and exits non-zero when it finds a problem.
 Use `--dir=<path>` to inspect another checkout and `--json` for machine-readable results:
 
 ```bash
