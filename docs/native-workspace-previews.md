@@ -65,8 +65,9 @@ workspace, application data or existing preview-site configuration is deleted.
    continuously reauthorized; reconnects repeat authorization.
 
 The per-resource `/authorize` route has its own bounded 6,000 requests/minute/IP
-budget, independent of the general production API limit of 200/minute/IP. This
-initial ceiling allows asset-heavy page loads and concurrent testers behind the
+budget, independent of the general production API limit of 200 requests/minute.
+Signed-in sessions are counted separately; everyone else still shares a per-IP
+bucket. The preview ceiling allows asset-heavy page loads and concurrent testers behind the
 same gateway egress. It also bounds invalid requests; all accepted requests still
 need valid gateway and browser credentials and fresh permission checks. It does
 not trust forwarded client IPs or caller-chosen session IDs as rate-limit keys.

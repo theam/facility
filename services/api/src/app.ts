@@ -39,6 +39,7 @@ import {
   type OpenApiRouteRecord,
 } from "./openapi-contract.js";
 import { assertPreviewOriginSurface } from "./origin-isolation.js";
+import { rateLimitKey } from "./rate-limit-key.js";
 import { safeRequestLog } from "./request-log.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGithubRoutes } from "./routes/github.js";
@@ -174,9 +175,20 @@ export async function buildApp(
     credentials: true,
   });
   // Local and CI runs use a generous ceiling; production keeps 200 requests/minute.
+  // A verified session is its own bucket so every signed-in browser behind the
+  // web task does not share that task's address. Forwarded client addresses
+  // are not consulted.
   await app.register(rateLimit, {
     max: deps.rateLimitMax ?? (config.facilityInsecureDev ? 100_000 : 200),
     timeWindow: "1 minute",
+    keyGenerator: (request) =>
+      rateLimitKey(
+        {
+          ip: request.ip,
+          cookieHeader: request.headers.cookie,
+        },
+        config.secretMasterKey,
+      ),
   });
   await app.register(swagger, {
     openapi: {
