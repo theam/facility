@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  AGENT_ENGINES,
   AgentManifestError,
   loadAgentCatalog,
   parseAgentCatalog,
@@ -227,5 +228,28 @@ describe("agent manifests", () => {
       expect(agent.prompt).toMatch(/untrusted data/i);
       expect(agent.prompt).not.toMatch(/receipt|HITL|budget ceiling|permission profile:/i);
     }
+  });
+});
+
+describe("agent engine catalog", () => {
+  it("derives the manifest engine enum from the single source of truth", () => {
+    for (const engine of AGENT_ENGINES) {
+      expect(
+        parseAgentManifest(manifest().replace("engine: codex", `engine: ${engine}`), "builder.md")
+          .engine,
+      ).toBe(engine);
+    }
+  });
+
+  it("rejects an engine outside the supported catalog", () => {
+    const unsupported = manifest().replace("engine: codex", "engine: gemini_cli");
+    expect(() => parseAgentManifest(unsupported, "builder.md")).toThrow(AgentManifestError);
+    // The failure must name the engine field so a new provider lands as a catalog
+    // change rather than a silently accepted manifest.
+    expect(() => parseAgentManifest(unsupported, "builder.md")).toThrow(/engine/);
+  });
+
+  it("keeps claude_code and codex registered so existing projects stay valid", () => {
+    expect([...AGENT_ENGINES]).toEqual(expect.arrayContaining(["claude_code", "codex"]));
   });
 });
