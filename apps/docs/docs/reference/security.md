@@ -37,10 +37,12 @@ Facility still enforces:
 - secret redaction from persisted command events and API responses; and
 - explicit confirmation and idempotency for durable workspace deletion.
 
-Authorization uses organization membership, roles, and route permissions. Project-scoped API keys
-are pinned to one project and cannot enumerate others. Organization administration rejects scoped
-keys. Audit events record successful privileged mutations with actor, target, project, and request
-id.
+Authorization uses organization membership, roles, and route permissions. A human role is
+organization-wide: its permissions apply to every project in the organization, and a project
+boundary does not contain a person. Project-scoped API keys are pinned to one project and cannot
+enumerate others, so a scoped key is the only mechanism that contains a principal to one project.
+Organization administration rejects scoped keys. Audit events record successful privileged
+mutations with actor, target, project, and request id.
 
 GitHub webhook signatures are verified over the raw body before JSON parsing. The installation id
 must map to one active organization, and delivery ids are deduplicated within that installation.
