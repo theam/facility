@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import postgres from "postgres";
 
 export async function bootstrapInstance(flags, options = {}) {
   if (flags.help) {
@@ -28,7 +27,11 @@ export async function bootstrapInstance(flags, options = {}) {
     return failure(flags, "--github-account-type must be organization or user");
   const targetType = input.githubAccountType === "user" ? "User" : "Organization";
 
-  const sql = (options.postgres ?? postgres)(databaseUrl, { max: 1 });
+  // Imported here rather than at module scope: `facility init` and `doctor` are
+  // documented as runnable straight from a checkout, where dependencies are not
+  // installed, and `instance bootstrap` is the only command that needs a driver.
+  const driver = options.postgres ?? (await import("postgres")).default;
+  const sql = driver(databaseUrl, { max: 1 });
   try {
     const result = await sql.begin(async (tx) => {
       await tx`SELECT pg_advisory_xact_lock(hashtext('facility-instance-bootstrap'))`;
