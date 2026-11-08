@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { newId } from "@facility/core";
 import {
   createDb,
@@ -317,6 +318,13 @@ describe("workspace preview HTTP and WebSocket proxy", () => {
     backend = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      if (request.url === "/repro") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(
+          '<!doctype html><html><head><title>repro</title></head><body><script>fetch("/cgi-bin/items");</script></body></html>',
+        );
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
@@ -408,6 +416,60 @@ describe("workspace preview HTTP and WebSocket proxy", () => {
       body: JSON.stringify({ works: true }),
       gatewayHeaderVisible: false,
     });
+  });
+
+  it("routes root-relative script requests back through the preview session", async () => {
+    // Regression for #507: fetch("/cgi-bin/items") resolved to the preview origin root and 404ed.
+    const previewCookie = `${previewCookieName(sessionId)}=${cookieToken}`;
+    const pageUrl = `${appOrigin}/workspace-preview/${sessionId}/repro`;
+    const page = await fetch(pageUrl, { headers: { cookie: previewCookie } });
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const shim = /<head><script>([\s\S]*?)<\/script><title>/.exec(html)?.[1];
+    expect(shim).toBeDefined();
+
+    // Run the injected shim against stub browser APIs that record the URLs scripts request.
+    const requested: string[] = [];
+    class Recorder {
+      constructor(url: string) {
+        requested.push(String(url));
+      }
+    }
+    class FakeXhr {
+      open(_method: string, url: string) {
+        requested.push(url);
+      }
+    }
+    const window: Record<string, unknown> = {
+      fetch: (input: string) => requested.push(String(input)),
+      XMLHttpRequest: FakeXhr,
+      WebSocket: Recorder,
+      EventSource: Recorder,
+    };
+    const context = { window, location: new URL(pageUrl), XMLHttpRequest: FakeXhr, URL };
+    runInNewContext(shim ?? "", context);
+    const patchedFetch = window.fetch as (input: string) => unknown;
+    patchedFetch("/cgi-bin/items");
+    patchedFetch(`/workspace-preview/${sessionId}/already-scoped`);
+    patchedFetch("relative/items");
+    patchedFetch("https://api.example.test/items");
+    new (window.XMLHttpRequest as typeof FakeXhr)().open("GET", "/xhr?q=1");
+    new (window.EventSource as typeof Recorder)("/events");
+    new (window.WebSocket as typeof Recorder)(`ws://${new URL(appOrigin).host}/socket`);
+    expect(requested).toEqual([
+      `${appOrigin}/workspace-preview/${sessionId}/cgi-bin/items`,
+      `/workspace-preview/${sessionId}/already-scoped`,
+      "relative/items",
+      "https://api.example.test/items",
+      `${appOrigin}/workspace-preview/${sessionId}/xhr?q=1`,
+      `${appOrigin}/workspace-preview/${sessionId}/events`,
+      `ws://${new URL(appOrigin).host}/workspace-preview/${sessionId}/socket`,
+    ]);
+
+    // The rewritten URL reaches the service through the authenticated proxy.
+    const escaped = await fetch(requested[0] ?? "", { headers: { cookie: previewCookie } });
+    expect(escaped.status).toBe(200);
+    await expect(escaped.json()).resolves.toMatchObject({ method: "GET", url: "/cgi-bin/items" });
   });
 
   it("proxies WebSocket upgrades through the same session and gateway boundary", async () => {
