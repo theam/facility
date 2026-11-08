@@ -61,6 +61,18 @@ describe("durable per-turn usage", () => {
     const raw = await run("codex", [{ type: "turn.completed", usage: native }], lost);
     expect(parseUsageJournal(raw, "turn_test", "codex")).toEqual({ complete: true, usage });
   });
+  it("journals Codex cached prompt tokens outside the full-price input bucket", async () => {
+    const openAi = { input_tokens: 100, cached_input_tokens: 90, output_tokens: 20 };
+    const raw = await run("codex", [{ type: "turn.completed", usage: openAi }]);
+    expect(parseUsageJournal(raw, "turn_test", "codex")).toEqual({
+      complete: true,
+      usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 90, cacheWriteTokens: 0 },
+    });
+    const inconsistent = await run("codex", [
+      { type: "turn.completed", usage: { ...openAi, cached_input_tokens: 101 } },
+    ]);
+    expect(parseUsageJournal(inconsistent, "turn_test", "codex")).toEqual({ complete: false });
+  });
   it("deduplicates Claude message counters and keeps partial usage unconfirmed", async () => {
     const message = {
       type: "assistant",

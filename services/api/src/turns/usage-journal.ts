@@ -23,9 +23,11 @@ const keys = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteToken
 const integer = n => Number.isSafeInteger(n) && n >= 0;
 function counters(value) {
   if (!value || typeof value !== 'object') return;
-  const values = [value.input_tokens, value.output_tokens,
-    value.cache_read_input_tokens ?? value.cached_input_tokens ?? 0,
-    value.cache_creation_input_tokens ?? 0];
+  const cached = value.cache_read_input_tokens ?? value.cached_input_tokens ?? 0;
+  // Codex reports OpenAI usage: input_tokens already includes cached_input_tokens.
+  const inclusive = engine === 'codex' && value.cached_input_tokens !== undefined && integer(cached);
+  const input = inclusive ? value.input_tokens - cached : value.input_tokens;
+  const values = [input, value.output_tokens, cached, value.cache_creation_input_tokens ?? 0];
   if (!values.every(integer)) return;
   return Object.fromEntries(keys.map((key, i) => [key, values[i]]));
 }
