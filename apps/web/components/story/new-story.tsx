@@ -45,49 +45,46 @@ export function NewStory({
   const [agent, setAgent] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  // One key per request attempt: retrying after a failure reuses it, so the
-  // server sees one story even if the button is pressed twice.
-  const attemptKey = useRef<string | null>(null);
+  // One key per request: retrying the same request after a failure reuses it,
+  // so the server sees one story even if the button is pressed twice. Editing
+  // the request, its action or its linked issue makes it a different request,
+  // which the server would reject if it reused the earlier attempt's key.
+  const attempt = useRef<{ signature: string; key: string } | null>(null);
   const defaultChoice = agents.find((choice) => choice.isDefault) ?? null;
   const canSubmit = message.trim().length > 0 && !pending && (defaultChoice || agent);
-
-  function updateMessage(value: string) {
-    if (!attemptKey.current || message.trim().length === 0) {
-      attemptKey.current = `ui-start-${crypto.randomUUID()}`;
-    }
-    setMessage(value);
-  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSubmit) return;
-    const key = attemptKey.current ?? `ui-start-${crypto.randomUUID()}`;
-    attemptKey.current = key;
+    const request = {
+      ...(linked
+        ? {
+            provider: "github",
+            external_id: `issue:${linked.number}`,
+            repository_id: linked.repositoryId,
+            title: linked.title,
+          }
+        : { provider: "manual" }),
+      ...(agent ? { agent } : {}),
+      message,
+    };
+    const signature = JSON.stringify(request);
+    if (attempt.current?.signature !== signature) {
+      attempt.current = { signature, key: `ui-start-${crypto.randomUUID()}` };
+    }
     setPending(true);
     setError("");
     const result = await clientApi<WorkspaceStoryBundle>(
       "POST",
       `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories`,
-      {
-        ...(linked
-          ? {
-              provider: "github",
-              external_id: `issue:${linked.number}`,
-              repository_id: linked.repositoryId,
-              title: linked.title,
-            }
-          : { provider: "manual" }),
-        ...(agent ? { agent } : {}),
-        message,
-        idempotency_key: key,
-      },
+      { ...request, idempotency_key: attempt.current.key },
     );
     if (!result.ok) {
       setPending(false);
       setError(result.message);
       return;
     }
-    attemptKey.current = null;
+    attempt.current = null;
     router.push(
       `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(result.data.story.id)}`,
     );
@@ -133,7 +130,7 @@ export function NewStory({
           required
           maxLength={200_000}
           value={message}
-          onChange={(event) => updateMessage(event.target.value)}
+          onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.currentTarget.form?.requestSubmit();
