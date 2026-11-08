@@ -159,6 +159,22 @@ describe("agent manifests", () => {
     expect(() => parseAgentManifest(source, "builder.md")).toThrow(AgentManifestError);
   });
 
+  it("rejects schedule triggers that share a name", () => {
+    const schedules = (secondName: string) =>
+      manifest().replace(
+        "  - type: manual",
+        `  - type: schedule\n    name: nightly\n    cron: "0 2 * * *"\n  - type: schedule\n    name: ${secondName}\n    cron: "0 9 * * 6"`,
+      );
+    expect(
+      parseAgentManifest(schedules("weekend"), "builder.md")
+        .triggers.slice(0, 2)
+        .map(triggerIdentity),
+    ).toEqual(["schedule:nightly", "schedule:weekend"]);
+    expect(() => parseAgentManifest(schedules("nightly"), "builder.md")).toThrow(
+      /triggers\.1\.name: duplicate schedule trigger name nightly/,
+    );
+  });
+
   it("rejects a filename that disagrees with the manifest identity", () => {
     expect(() => parseAgentManifest(manifest(), "architect.md")).toThrow(
       /filename must be builder\.md/,

@@ -138,8 +138,9 @@ to the matching pull request only when their head SHA is current.
   timezone: Europe/Madrid
 ```
 
-`name` is the stable schedule identity. `cron` must parse as a cron expression and may contain up to
-128 characters. `timezone` must be accepted as an IANA timezone and defaults to `UTC`.
+`name` is the stable schedule identity and must be unique among the agent's schedule triggers.
+`cron` must parse as a cron expression and may contain up to 128 characters. `timezone` must be
+accepted as an IANA timezone and defaults to `UTC`.
 
 The worker scans schedules every minute. Concurrent workers claim one activation, and repeated
 runs continue one stable story for that project, agent, and schedule trigger. Disabling the agent
