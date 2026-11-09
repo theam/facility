@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoryActions } from "../components/story/story-actions";
 import type { StoryAgent, WorkspaceStory } from "../lib/api";
 import { storyDraftKey, writeStoryDraft } from "../lib/story-draft";
+import { readStoryUpload, type StoryUploadAttempt, writeStoryUpload } from "../lib/story-upload";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("../components/story/story-conversation", () => ({
@@ -114,6 +115,83 @@ async function submit() {
 }
 
 describe("story composer continuity", () => {
+  it("restores an unfinished upload, blocks sending while hidden, and sends only after exact availability", async () => {
+    const key = storyDraftKey("person-a", "project-a", "story-a");
+    const original: StoryUploadAttempt = {
+      idempotencyKey: `ui-file-${crypto.randomUUID()}`,
+      name: "fixture.txt",
+      size: 7,
+      sha256: "a".repeat(64),
+      mediaType: "text/plain",
+      resume: false,
+      fileId: "infile_0123456789abcdef",
+    };
+    writeStoryDraft(key, { agent: "designer", message: "Read the original file" });
+    writeStoryUpload(key, original);
+    fetch.mockImplementation(async (_url, init) =>
+      Response.json(
+        init?.method === "GET"
+          ? {
+              items: [{ ...original, id: original.fileId, state: "available", errorCode: null }],
+              limits: { fileBytes: 26214400, messageFiles: 5 },
+            }
+          : { queued: { queued: false } },
+      ),
+    );
+    await render();
+    await click("send a task");
+    expect(container.textContent).toContain("Resolve this attempt before sending");
+    expect(button("send to agent").disabled).toBe(true);
+    await click("hide files");
+    await submit();
+    expect(button("review unfinished upload")).toBeDefined();
+    expect(fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    await click("close");
+    await click("send a task");
+    expect(readStoryUpload(key)).toEqual(original);
+    await click("review unfinished upload");
+    await click("Check upload status");
+    expect(readStoryUpload(key)).toBeUndefined();
+    expect(button("send to agent").disabled).toBe(false);
+    expect(fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    await submit();
+    const writes = fetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.[0]).toBe("/api/v1/projects/project-a/workspace-stories/story-a/messages");
+    expect(JSON.parse(String(writes[0]?.[1]?.body)).attachment_ids).toEqual([original.fileId]);
+  });
+
+  it("keeps upload recovery scoped to its owner and story and discards it only explicitly", async () => {
+    const key = storyDraftKey("person-a", "project-a", "story-a");
+    const original: StoryUploadAttempt = {
+      idempotencyKey: `ui-file-${crypto.randomUUID()}`,
+      name: "fixture.txt",
+      size: 7,
+      sha256: "a".repeat(64),
+      mediaType: "text/plain",
+      resume: false,
+    };
+    writeStoryUpload(key, original);
+    fetch.mockResolvedValue(
+      Response.json({ items: [], limits: { fileBytes: 26214400, messageFiles: 5 } }),
+    );
+    await render("other-person");
+    await click("send a task");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("Original upload");
+    await render("person-a", "other-story");
+    await click("send a task");
+    expect(fetch).not.toHaveBeenCalled();
+    await render();
+    await click("send a task");
+    expect(container.textContent).toContain("Original upload: fixture.txt");
+    await click("close");
+    expect(readStoryUpload(key)).toEqual(original);
+    await click("send a task");
+    await click("discard draft");
+    expect(readStoryUpload(key)).toBeUndefined();
+    expect(fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+  });
   it("can hide selected files without dropping their references or loading them on page read", async () => {
     const id = "infile_0123456789abcdef";
     writeStoryDraft(storyDraftKey("person-a", "project-a", "story-a"), {

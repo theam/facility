@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +38,7 @@ describe("story input files UI", () => {
           storyId="s"
           selected={[]}
           onChange={() => {}}
+          onAttempt={() => {}}
           onBusy={() => {}}
           disabled={false}
         />,
@@ -56,7 +57,7 @@ describe("story input files UI", () => {
       id,
       name: "fixture.json",
       size: 13,
-      sha256: "a".repeat(64),
+      sha256: createHash("sha256").update('{"fixture":1}').digest("hex"),
       state: "available",
       errorCode: null,
     };
@@ -68,7 +69,7 @@ describe("story input files UI", () => {
         return Response.json({
           file: { ...fileInfo, state: "prepared" },
           upload: {
-            path: "/v1/synthetic-content",
+            path: `/v1/projects/p/workspace-stories/s/input-files/${id}/content`,
             headers: {
               "content-type": "application/octet-stream",
               "x-facility-file-token": "synthetic",
@@ -92,6 +93,7 @@ describe("story input files UI", () => {
           storyId="s"
           selected={[]}
           onChange={onChange}
+          onAttempt={() => {}}
           onBusy={onBusy}
           disabled={false}
         />,
@@ -132,6 +134,7 @@ describe("story input files UI", () => {
           storyId="s"
           selected={[]}
           onChange={() => {}}
+          onAttempt={() => {}}
           onBusy={() => {}}
           disabled={false}
         />,

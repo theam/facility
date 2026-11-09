@@ -16,6 +16,29 @@ a plan, import knowledge, or authorize external operations.
 3. Wait for **available**, select up to five files, write your instructions and
    send the message to the intended agent.
 
+The picker distinguishes checking the local file, preparing its reservation and
+transferring bytes. Resuming sleeping compute can happen during transfer; preparing
+metadata and checking status do not resume it. The original resume choice stays
+bound to an unfinished attempt.
+
+If a response is lost, Facility keeps that upload's identity. **Recover original
+attempt** replays only its preparation with the same metadata and key; **Check upload
+status** reads the exact recorded file. An observed available file is selected
+without repeating its binary transfer. If it is still prepared, choose the original
+file to continue; its name, size and content hash must match. A consumed or failed
+grant is not replayed. An unavailable observation remains unresolved.
+
+An unfinished attempt blocks sending the message, including while the file panel is
+hidden. Resolve it or explicitly choose **Continue without this file**. That choice
+and **discard draft** leave stored files and reservations intact; deletion remains
+separate. Failed or expired reservations still count toward storage limits.
+
+For an identified user, the original upload intent is kept in this tab for up to
+24 hours, isolated by person, project and story. It contains metadata and the retry
+identity, never file bytes or the transfer credential. Closing or navigating back
+can restore the attempt; reselect the original local file if bytes are needed.
+When browser storage is unavailable, keep the page open to retain the intent.
+
 The agent receives file names, hashes and local paths, not the entire contents
 in its prompt. It can read them with its native tools. Available means Facility
 verified the stored bytes; a message reference or successful turn is not proof

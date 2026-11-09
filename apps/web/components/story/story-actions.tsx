@@ -19,6 +19,7 @@ import {
   writeStoryDraft,
 } from "@/lib/story-draft";
 import { safeExternalUrl } from "@/lib/story-presentation";
+import { readStoryUpload, type StoryUploadAttempt, writeStoryUpload } from "@/lib/story-upload";
 import { StoryInputFiles } from "./story-input-files";
 
 type Turn = WorkspaceStoryBundle["turns"][number];
@@ -235,6 +236,8 @@ export function StoryComposer({
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadAttempt, setUploadAttempt] = useState<StoryUploadAttempt>();
+  const [uploadSaved, setUploadSaved] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -257,6 +260,10 @@ export function StoryComposer({
   useEffect(() => {
     const previous = readStoryDraft(storageKey);
     if (previous) setDraft(previous);
+    const upload = readStoryUpload(storageKey);
+    setUploadAttempt(upload);
+    setUploadSaved(Boolean(upload));
+    if (upload) setFilesOpen(true);
     setLoaded(true);
   }, [storageKey]);
 
@@ -289,7 +296,8 @@ export function StoryComposer({
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending.current || uploadBusy || !agent || !message.trim()) return;
+    if (sending.current || !loaded || uploadBusy || uploadAttempt || !agent || !message.trim())
+      return;
     sending.current = true;
     setPending(true);
     setError("");
@@ -319,6 +327,12 @@ export function StoryComposer({
     setNotice(sent);
     router.refresh();
     onDone?.(sent);
+  }
+
+  function updateUploadAttempt(attempt?: StoryUploadAttempt) {
+    // Persist before preparing storage so a lost response can replay the same intent.
+    setUploadSaved(writeStoryUpload(storageKey, attempt));
+    setUploadAttempt(attempt);
   }
 
   return (
@@ -352,21 +366,31 @@ export function StoryComposer({
       >
         {filesOpen
           ? "hide files"
-          : draft.attachmentIds?.length
-            ? `files (${draft.attachmentIds.length})`
-            : "attach files"}
+          : uploadAttempt
+            ? "review unfinished upload"
+            : draft.attachmentIds?.length
+              ? `files (${draft.attachmentIds.length})`
+              : "attach files"}
       </Button>
       {filesOpen ? (
         <StoryInputFiles
           projectId={projectId}
           storyId={storyId}
           selected={draft.attachmentIds ?? []}
+          attempt={uploadAttempt}
+          attemptSaved={uploadSaved}
+          onAttempt={updateUploadAttempt}
           onChange={(attachmentIds) =>
             setDraft((current) => ({ ...current, attachmentIds, idempotencyKey: undefined }))
           }
           onBusy={setUploadBusy}
           disabled={pending}
         />
+      ) : null}
+      {uploadAttempt && !filesOpen ? (
+        <p role="status" className="text-[12px] text-(--human)">
+          Resolve the upload of {uploadAttempt.name} or continue without it before sending.
+        </p>
       ) : null}
       <p className="text-[12px] text-(--dim)">
         {saved
@@ -395,9 +419,12 @@ export function StoryComposer({
           <Button
             type="button"
             size="sm"
-            disabled={pending || uploadBusy || (!message && !draft.attachmentIds?.length)}
+            disabled={
+              pending || uploadBusy || (!message && !draft.attachmentIds?.length && !uploadAttempt)
+            }
             onClick={() => {
               setDraft({ agent: draft.agent, message: "" });
+              updateUploadAttempt();
               setError("");
               setNotice("Draft discarded.");
               form.current?.querySelector("textarea")?.focus();
@@ -414,7 +441,14 @@ export function StoryComposer({
             type="submit"
             variant="primary"
             tone="agent"
-            disabled={pending || uploadBusy || !agent || !message.trim()}
+            disabled={
+              pending ||
+              !loaded ||
+              uploadBusy ||
+              Boolean(uploadAttempt) ||
+              !agent ||
+              !message.trim()
+            }
           >
             {pending ? "queueing…" : "send to agent"}
           </Button>
