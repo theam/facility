@@ -34,6 +34,7 @@ and `vX.Y.Z` with yours; the tag is the Facility version your instance runs:
 {
   "name": "example-tools",
   "owner": { "name": "Example Org" },
+  "description": "Example Org plugins for Claude Code and Claude Cowork.",
   "plugins": [
     {
       "name": "facility",
