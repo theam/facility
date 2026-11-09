@@ -175,4 +175,171 @@ describe("GitHub mirror reconciliation", async () => {
     const mirror = new GithubMirrorService(db, async () => ({ request, rest: {} as never }));
     await expect(mirror.syncProject(orgId, projectId)).rejects.toMatchObject({ status: 500 });
   });
+
+  function mirrorFor(
+    pull: { number: number; title: string; sha: string; ref: string; updatedAt: string },
+    statusError: unknown,
+    checkRuns: Record<string, unknown>[],
+  ) {
+    const request = async (route: string) => {
+      if (route.endsWith("/branches") || route.endsWith("/issues")) return { data: [] };
+      if (route.endsWith("/pulls")) {
+        return {
+          data: [
+            {
+              number: pull.number,
+              title: pull.title,
+              state: "open",
+              html_url: `https://github.com/acme/app/pull/${pull.number}`,
+              head: { ref: pull.ref, sha: pull.sha },
+              base: { ref: "main" },
+              updated_at: pull.updatedAt,
+            },
+          ],
+        };
+      }
+      if (route.endsWith("/status")) throw statusError;
+      if (route.endsWith("/check-runs")) return { data: { check_runs: checkRuns } };
+      throw new Error(`unexpected GitHub route ${route}`);
+    };
+    return new GithubMirrorService(db, async () => ({ request, rest: {} as never }));
+  }
+
+  async function savedPull(number: number) {
+    const [pull] = await db
+      .select()
+      .from(githubPullRequests)
+      .where(
+        and(
+          eq(githubPullRequests.repositoryId, repositoryId),
+          eq(githubPullRequests.number, number),
+        ),
+      );
+    return pull;
+  }
+
+  it("does not record success when commit statuses are unreadable", async () => {
+    const sha = "d".repeat(40);
+    const mirror = mirrorFor(
+      {
+        number: 43,
+        title: "Unreadable statuses",
+        sha,
+        ref: "facility/unreadable-success",
+        updatedAt: "2026-09-04T12:00:00Z",
+      },
+      { status: 403 },
+      [
+        {
+          id: 4301,
+          name: "verify",
+          status: "completed",
+          conclusion: "success",
+          head_sha: sha,
+        },
+      ],
+    );
+
+    await expect(mirror.syncProject(orgId, projectId)).resolves.toMatchObject({
+      pullRequests: 1,
+      checks: 1,
+    });
+    const pull = await savedPull(43);
+    expect(pull?.ciState).toBeNull();
+    expect(pull?.ciHeadSha).toBe(sha);
+  });
+
+  it("still reports a failing check run when commit statuses are unreadable", async () => {
+    const sha = "e".repeat(40);
+    const mirror = mirrorFor(
+      {
+        number: 44,
+        title: "Unreadable statuses with a failure",
+        sha,
+        ref: "facility/unreadable-failure",
+        updatedAt: "2026-09-04T13:00:00Z",
+      },
+      { status: 403 },
+      [
+        {
+          id: 4401,
+          name: "verify",
+          status: "completed",
+          conclusion: "failure",
+          head_sha: sha,
+        },
+      ],
+    );
+
+    await expect(mirror.syncProject(orgId, projectId)).resolves.toMatchObject({
+      pullRequests: 1,
+      checks: 1,
+    });
+    const pull = await savedPull(44);
+    expect(pull?.ciState).toBe("failure");
+    expect(pull?.ciFailureNames).toEqual(["verify"]);
+  });
+
+  it("aborts when the statuses 403 is a rate limit", async () => {
+    const sha = "f".repeat(40);
+    const mirror = mirrorFor(
+      {
+        number: 45,
+        title: "Rate limited statuses",
+        sha,
+        ref: "facility/rate-limit",
+        updatedAt: "2026-09-04T14:00:00Z",
+      },
+      {
+        status: 403,
+        response: {
+          headers: {
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
+          },
+        },
+      },
+      [
+        {
+          id: 4501,
+          name: "verify",
+          status: "completed",
+          conclusion: "success",
+          head_sha: sha,
+        },
+      ],
+    );
+
+    await expect(mirror.syncProject(orgId, projectId)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("records pending when an in-progress check run has unreadable statuses", async () => {
+    const sha = "1".repeat(40);
+    const mirror = mirrorFor(
+      {
+        number: 46,
+        title: "Unreadable statuses with a running check",
+        sha,
+        ref: "facility/unreadable-pending",
+        updatedAt: "2026-09-04T15:00:00Z",
+      },
+      { status: 403 },
+      [
+        {
+          id: 4601,
+          name: "verify",
+          status: "in_progress",
+          head_sha: sha,
+        },
+      ],
+    );
+
+    await expect(mirror.syncProject(orgId, projectId)).resolves.toMatchObject({
+      pullRequests: 1,
+      checks: 1,
+    });
+    const pull = await savedPull(46);
+    expect(pull?.ciState).toBe("pending");
+    expect(pull?.ciHeadSha).toBe(sha);
+  });
 });

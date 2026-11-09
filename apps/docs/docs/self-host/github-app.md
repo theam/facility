@@ -37,6 +37,9 @@ The complete repository permission set is:
 | Secret scanning alerts | Read-only |
 | Metadata | Read-only |
 
+Commit statuses read is optional. Without it, reconciliation still completes and check run
+failures are reported, and the mirror does not report success for that head.
+
 Organization membership read access may be required for organization-restricted identity and
 repository discovery. If browser sign-in needs private email discovery, configure the corresponding
 OAuth scope on the identity application; it is not a repository permission in the table.
