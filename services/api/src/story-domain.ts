@@ -223,7 +223,11 @@ export function createStoryDomain(input: {
 }
 
 function workspaceRuntime(config: AppConfig, db: FacilityDb): WorkspaceRuntime {
-  if (config.workspaceDriver === "docker") return new DockerWorkspaceRuntime();
+  if (config.workspaceDriver === "docker") {
+    return new DockerWorkspaceRuntime(undefined, {
+      previewProxyLabel: config.dockerPreviewProxyLabel,
+    });
+  }
   if (config.workspaceDriver === "vercel") {
     const credentials =
       config.vercelToken && config.vercelTeamId && config.vercelProjectId

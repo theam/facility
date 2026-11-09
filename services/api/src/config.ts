@@ -48,6 +48,13 @@ const EnvSchema = z
     ),
     FACILITY_WORKSPACE_IMAGE: z.string().default("facility-runner:dev"),
     FACILITY_WORKSPACE_DRIVER: z.enum(["docker", "vercel"]).default("docker"),
+    FACILITY_DOCKER_PREVIEW_PROXY_LABEL: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z
+        .string()
+        .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*=[^\s=]+$/, "must be a Docker label key=value")
+        .optional(),
+    ),
     FACILITY_INPUT_PROJECT_MAX_BYTES: z.coerce
       .number()
       .int()
@@ -306,6 +313,7 @@ export function readConfig(env = process.env): AppConfig {
     }),
     workspaceImage: parsed.FACILITY_WORKSPACE_IMAGE,
     workspaceDriver: parsed.FACILITY_WORKSPACE_DRIVER,
+    dockerPreviewProxyLabel: parsed.FACILITY_DOCKER_PREVIEW_PROXY_LABEL,
     authIdentityProvider: parsed.AUTH_IDENTITY_PROVIDER,
     authCallbackUrl: parsed.AUTH_CALLBACK_URL ?? `${webUrl.replace(/\/$/, "")}/api/auth/callback`,
     githubOauthClientId: parsed.GITHUB_OAUTH_CLIENT_ID,

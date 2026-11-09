@@ -35,6 +35,8 @@ export type AppConfig = {
   previewSites?: import("./workspaces/preview-sites.js").PreviewSite[];
   workspaceImage: string;
   workspaceDriver: "docker" | "vercel";
+  /** Docker label of the containers that proxy previews when the control plane is containerized. */
+  dockerPreviewProxyLabel?: string;
   authIdentityProvider?: "github" | "oidc";
   authCallbackUrl?: string;
   githubOauthClientId?: string;
