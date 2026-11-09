@@ -65,6 +65,19 @@ export function storyFocus(
         "The current proposal is waiting for a decision. Approval and execution are separate results.",
     };
   const completion = bundle.completion;
+  if (workflow?.reviewCycle)
+    return {
+      section: "workflow",
+      title:
+        workflow.reviewCycle.phase === "decision_required"
+          ? "Review needs your decision"
+          : workflow.reviewCycle.phase === "human_review"
+            ? "Review the candidate and findings"
+            : "Follow the delivery review",
+      detail:
+        workflow.reviewCycle.reason ??
+        "The recorded review keeps its candidate, findings and limits. Acceptance remains a separate human decision.",
+    };
   if (completion && !["declare_delivery", "review", "merge"].includes(completion.nextAction))
     return {
       section: "completion",

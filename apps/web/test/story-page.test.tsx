@@ -9,6 +9,7 @@ import type {
   StoryMessage,
   WorkspaceStoryBundle,
 } from "../lib/api";
+import { reviewCycleFixture } from "./fixtures/review-cycle";
 import { snapshot as completionSnapshot } from "./fixtures/story-completion";
 import { snapshot as deliverySnapshot } from "./fixtures/story-delivery";
 
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   linkedPlan: null as StoryPlan | null,
   requestedMessage: undefined as string | undefined,
   workflowError: false,
+  reviewCycle: undefined as StoryWorkflowStatus["reviewCycle"],
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh() {} }),
@@ -91,6 +93,7 @@ vi.mock("../lib/api", async () => {
                 plan: { revision: 0, decisionRevision: 0, status: "none" },
                 queuedAgents: [],
                 blockedReason: null,
+                reviewCycle: mocks.reviewCycle,
                 acceptance: {
                   schemaVersion: 1,
                   orgId: "org",
@@ -138,6 +141,7 @@ function message(seq: number, overrides: Partial<StoryMessage>): StoryMessage {
 function setUp(permissions: string[] = []) {
   mocks.calls.length = 0;
   mocks.workflowError = false;
+  mocks.reviewCycle = undefined;
   mocks.permissions = permissions;
   mocks.bundle = {
     story: {
@@ -309,6 +313,21 @@ async function render(search: Record<string, string | string[]> = {}) {
 }
 
 describe("story overview integration", () => {
+  it.each([
+    "correction",
+    "human_review",
+    "decision_required",
+  ] as const)("leads with the recorded review in %s while keeping conversation adjacent", async (phase) => {
+    setUp(["*"]);
+    mocks.reviewCycle = reviewCycleFixture();
+    mocks.reviewCycle.phase = phase;
+    const { root } = await render();
+    const workflow = root.querySelector('details[data-story-section="workflow"]');
+    expect(workflow?.hasAttribute("open")).toBe(true);
+    expect(root.querySelector('[aria-label="Recorded delivery review"]')).not.toBeNull();
+    expect(root.querySelector('a[href="#conversation"]')).not.toBeNull();
+    expect(root.querySelector("#conversation")).not.toBeNull();
+  });
   it("loads only the requested plan revision and rejects mismatched or missing source reads", async () => {
     setUp(["projects:write"]);
     mocks.linkedPlan = {

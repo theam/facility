@@ -20,12 +20,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import reviewCycleFixture from "../../../packages/core/test/fixtures/review-cycle.json";
 import { buildApp } from "../src/app.js";
 import { ProjectAttentionService } from "../src/insights/project-attention.js";
 import { ProjectBacklogService } from "../src/stories/backlog.js";
 import { readStoryDelivery } from "../src/stories/delivery.js";
 import { storyPlanDigest } from "../src/stories/plan-state.js";
+import * as workflowStatus from "../src/stories/workflow-status.js";
 import type { AppConfig } from "../src/types.js";
 
 const databaseUrl =
@@ -70,6 +72,7 @@ describe("embedded MCP control plane", async () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let client: Client;
   let projectId: string;
+  let ownerSecret: string;
   const storyId = newId("story");
 
   beforeAll(async () => {
@@ -109,6 +112,7 @@ describe("embedded MCP control plane", async () => {
       payload: { name: "embedded MCP acceptance", roleId: owner.id },
     });
     const secret = issued.json().secret as string;
+    ownerSecret = secret;
     const createdProject = await app.inject({
       method: "POST",
       url: "/v1/projects",
@@ -693,6 +697,40 @@ describe("embedded MCP control plane", async () => {
             hasMore: false,
           },
         });
+    }
+  });
+
+  it("preserves the optional recorded review evidence across authenticated HTTP and MCP", async () => {
+    const base = await workflowStatus.readStoryWorkflow(app.facilityDb, {
+      orgId: "org_local",
+      projectId,
+      storyId,
+    });
+    const projection = { ...base, reviewCycle: structuredClone(reviewCycleFixture) };
+    const spy = vi
+      .spyOn(workflowStatus, "readStoryWorkflow")
+      .mockResolvedValue(
+        projection as Awaited<ReturnType<typeof workflowStatus.readStoryWorkflow>>,
+      );
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/projects/${projectId}/workspace-stories/${storyId}/workflow`,
+        headers: { authorization: `Bearer ${ownerSecret}` },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().reviewCycle).toEqual(reviewCycleFixture);
+      const result = await client.callTool({
+        name: "facility_get_story_workflow",
+        arguments: { projectId, storyId },
+      });
+      expect(result.isError).not.toBe(true);
+      const text = (result.content as Array<{ type: string; text?: string }>).find(
+        (part) => part.type === "text",
+      )?.text;
+      expect(JSON.parse(text ?? "{}")).toEqual(response.json());
+    } finally {
+      spy.mockRestore();
     }
   });
 });

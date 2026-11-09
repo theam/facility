@@ -18898,6 +18898,781 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "reviewCycle": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "phase": {
+                          "type": "string",
+                          "enum": [
+                            "waiting_for_evidence",
+                            "review",
+                            "correction",
+                            "human_review",
+                            "decision_required"
+                          ]
+                        },
+                        "builderAgent": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
+                        "reviewerAgent": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
+                        "reviewsStarted": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 2
+                        },
+                        "correctionsStarted": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "deadline": {
+                          "type": "string"
+                        },
+                        "maxCostCents": {
+                          "type": "number"
+                        },
+                        "costCents": {
+                          "nullable": true,
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "reason": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "activeTurnId": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "candidate": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            "deliveryRevision": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            },
+                            "scopeRevision": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "pullRequests": {
+                              "minItems": 1,
+                              "maxItems": 50,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "repository": {
+                                    "type": "string",
+                                    "maxLength": 200,
+                                    "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                  },
+                                  "number": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "exclusiveMinimum": true,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "headSha": {
+                                    "type": "string",
+                                    "pattern": "^[a-f0-9]{40}$"
+                                  },
+                                  "baseSha": {
+                                    "type": "string",
+                                    "pattern": "^[a-f0-9]{40}$"
+                                  },
+                                  "repositoryId": {
+                                    "type": "string"
+                                  },
+                                  "primary": {
+                                    "type": "boolean"
+                                  },
+                                  "headRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 500
+                                  },
+                                  "baseRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 500
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "format": "uri"
+                                  },
+                                  "changedFiles": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "checks": {
+                                    "type": "object",
+                                    "properties": {
+                                      "headSha": {
+                                        "nullable": true,
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{40}$"
+                                      },
+                                      "state": {
+                                        "type": "string",
+                                        "enum": [
+                                          "pending",
+                                          "success",
+                                          "failure",
+                                          "unobserved"
+                                        ]
+                                      },
+                                      "observedAt": {
+                                        "nullable": true,
+                                        "type": "string"
+                                      },
+                                      "runs": {
+                                        "maxItems": 100,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "id": {
+                                              "type": "string"
+                                            },
+                                            "name": {
+                                              "type": "string"
+                                            },
+                                            "status": {
+                                              "type": "string"
+                                            },
+                                            "conclusion": {
+                                              "nullable": true,
+                                              "type": "string"
+                                            },
+                                            "observedAt": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "id",
+                                            "name",
+                                            "status",
+                                            "conclusion",
+                                            "observedAt"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "headSha",
+                                      "state",
+                                      "observedAt",
+                                      "runs"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "repository",
+                                  "number",
+                                  "headSha",
+                                  "baseSha",
+                                  "repositoryId",
+                                  "primary",
+                                  "headRef",
+                                  "baseRef",
+                                  "url",
+                                  "changedFiles",
+                                  "checks"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "preview": {
+                              "nullable": true,
+                              "type": "object",
+                              "properties": {
+                                "generation": {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$"
+                                },
+                                "observedAt": {
+                                  "type": "string"
+                                },
+                                "sources": {
+                                  "maxItems": 50,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "repository": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                      },
+                                      "headSha": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{40}$"
+                                      },
+                                      "submodules": {
+                                        "maxItems": 100,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "repository": {
+                                              "type": "string",
+                                              "maxLength": 200,
+                                              "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                            },
+                                            "path": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 500
+                                            },
+                                            "pinnedSha": {
+                                              "type": "string",
+                                              "pattern": "^[a-f0-9]{40}$"
+                                            },
+                                            "headSha": {
+                                              "type": "string",
+                                              "pattern": "^[a-f0-9]{40}$"
+                                            }
+                                          },
+                                          "required": [
+                                            "repository",
+                                            "path",
+                                            "pinnedSha",
+                                            "headSha"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "repository",
+                                      "headSha",
+                                      "submodules"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "generation",
+                                "observedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "deliveryRevision",
+                            "scopeRevision",
+                            "pullRequests",
+                            "preview"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "reviews": {
+                          "maxItems": 2,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "turnId": {
+                                "type": "string"
+                              },
+                              "reviewerManifestHash": {
+                                "type": "string"
+                              },
+                              "policyRevision": {
+                                "type": "number"
+                              },
+                              "planRevision": {
+                                "type": "number"
+                              },
+                              "candidate": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "pattern": "^[a-f0-9]{64}$"
+                                  },
+                                  "deliveryRevision": {
+                                    "type": "string",
+                                    "pattern": "^[a-f0-9]{64}$"
+                                  },
+                                  "scopeRevision": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "pullRequests": {
+                                    "minItems": 1,
+                                    "maxItems": 50,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "repository": {
+                                          "type": "string",
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                        },
+                                        "number": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "exclusiveMinimum": true,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "headSha": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{40}$"
+                                        },
+                                        "baseSha": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{40}$"
+                                        },
+                                        "repositoryId": {
+                                          "type": "string"
+                                        },
+                                        "primary": {
+                                          "type": "boolean"
+                                        },
+                                        "headRef": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 500
+                                        },
+                                        "baseRef": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 500
+                                        },
+                                        "url": {
+                                          "type": "string",
+                                          "format": "uri"
+                                        },
+                                        "changedFiles": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "checks": {
+                                          "type": "object",
+                                          "properties": {
+                                            "headSha": {
+                                              "nullable": true,
+                                              "type": "string",
+                                              "pattern": "^[a-f0-9]{40}$"
+                                            },
+                                            "state": {
+                                              "type": "string",
+                                              "enum": [
+                                                "pending",
+                                                "success",
+                                                "failure",
+                                                "unobserved"
+                                              ]
+                                            },
+                                            "observedAt": {
+                                              "nullable": true,
+                                              "type": "string"
+                                            },
+                                            "runs": {
+                                              "maxItems": 100,
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "name": {
+                                                    "type": "string"
+                                                  },
+                                                  "status": {
+                                                    "type": "string"
+                                                  },
+                                                  "conclusion": {
+                                                    "nullable": true,
+                                                    "type": "string"
+                                                  },
+                                                  "observedAt": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "id",
+                                                  "name",
+                                                  "status",
+                                                  "conclusion",
+                                                  "observedAt"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "headSha",
+                                            "state",
+                                            "observedAt",
+                                            "runs"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "repository",
+                                        "number",
+                                        "headSha",
+                                        "baseSha",
+                                        "repositoryId",
+                                        "primary",
+                                        "headRef",
+                                        "baseRef",
+                                        "url",
+                                        "changedFiles",
+                                        "checks"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "preview": {
+                                    "nullable": true,
+                                    "type": "object",
+                                    "properties": {
+                                      "generation": {
+                                        "type": "string",
+                                        "pattern": "^[a-f0-9]{64}$"
+                                      },
+                                      "observedAt": {
+                                        "type": "string"
+                                      },
+                                      "sources": {
+                                        "maxItems": 50,
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "repository": {
+                                              "type": "string",
+                                              "maxLength": 200,
+                                              "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                            },
+                                            "headSha": {
+                                              "type": "string",
+                                              "pattern": "^[a-f0-9]{40}$"
+                                            },
+                                            "submodules": {
+                                              "maxItems": 100,
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "repository": {
+                                                    "type": "string",
+                                                    "maxLength": 200,
+                                                    "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                                  },
+                                                  "path": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 500
+                                                  },
+                                                  "pinnedSha": {
+                                                    "type": "string",
+                                                    "pattern": "^[a-f0-9]{40}$"
+                                                  },
+                                                  "headSha": {
+                                                    "type": "string",
+                                                    "pattern": "^[a-f0-9]{40}$"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "repository",
+                                                  "path",
+                                                  "pinnedSha",
+                                                  "headSha"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "repository",
+                                            "headSha",
+                                            "submodules"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "generation",
+                                      "observedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "deliveryRevision",
+                                  "scopeRevision",
+                                  "pullRequests",
+                                  "preview"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "result": {
+                                "type": "object",
+                                "properties": {
+                                  "candidateId": {
+                                    "type": "string",
+                                    "pattern": "^[a-f0-9]{64}$"
+                                  },
+                                  "reviewedPulls": {
+                                    "minItems": 1,
+                                    "maxItems": 50,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "repository": {
+                                          "type": "string",
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                        },
+                                        "number": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "exclusiveMinimum": true,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "headSha": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{40}$"
+                                        },
+                                        "baseSha": {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{40}$"
+                                        }
+                                      },
+                                      "required": [
+                                        "repository",
+                                        "number",
+                                        "headSha",
+                                        "baseSha"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "acceptance": {
+                                    "minItems": 1,
+                                    "maxItems": 30,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 100
+                                        },
+                                        "criterion": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        },
+                                        "state": {
+                                          "type": "string",
+                                          "enum": [
+                                            "verified",
+                                            "violated",
+                                            "unverified"
+                                          ]
+                                        },
+                                        "evidence": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "criterion",
+                                        "state",
+                                        "evidence"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "findings": {
+                                    "maxItems": 30,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "repository": {
+                                          "type": "string",
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                        },
+                                        "number": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "exclusiveMinimum": true,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 100
+                                        },
+                                        "priority": {
+                                          "type": "string",
+                                          "enum": [
+                                            "P0",
+                                            "P1",
+                                            "P2",
+                                            "P3"
+                                          ]
+                                        },
+                                        "category": {
+                                          "type": "string",
+                                          "enum": [
+                                            "acceptance",
+                                            "correctness",
+                                            "security",
+                                            "data",
+                                            "suggestion"
+                                          ]
+                                        },
+                                        "requirement": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 500
+                                        },
+                                        "line": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "exclusiveMinimum": true,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "evidence": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        },
+                                        "impact": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        },
+                                        "fix": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        },
+                                        "disposition": {
+                                          "type": "string",
+                                          "enum": [
+                                            "open",
+                                            "resolved"
+                                          ]
+                                        },
+                                        "correction": {
+                                          "type": "string",
+                                          "enum": [
+                                            "within_plan",
+                                            "requires_decision"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "repository",
+                                        "number",
+                                        "id",
+                                        "priority",
+                                        "category",
+                                        "requirement",
+                                        "path",
+                                        "line",
+                                        "evidence",
+                                        "impact",
+                                        "fix",
+                                        "disposition",
+                                        "correction"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "missingEvidence": {
+                                    "maxItems": 15,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 1000
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "candidateId",
+                                  "reviewedPulls",
+                                  "acceptance",
+                                  "findings",
+                                  "missingEvidence"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "turnId",
+                              "reviewerManifestHash",
+                              "policyRevision",
+                              "planRevision",
+                              "candidate",
+                              "result"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "phase",
+                        "builderAgent",
+                        "reviewerAgent",
+                        "reviewsStarted",
+                        "correctionsStarted",
+                        "deadline",
+                        "maxCostCents",
+                        "costCents",
+                        "reason",
+                        "activeTurnId",
+                        "candidate",
+                        "reviews"
+                      ],
+                      "additionalProperties": false
+                    },
                     "execution": {
                       "type": "object",
                       "properties": {

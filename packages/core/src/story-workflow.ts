@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PlanActorSchema } from "./story-plans.js";
+import { ReviewCycleStatusSchema } from "./story-review-cycle.js";
 
 const Revision = z.number().int().min(0).max(2_147_483_646);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -157,6 +158,7 @@ export const StoryWorkflowStatusSchema = z.object({
   }),
   queuedAgents: z.array(z.string()).max(50),
   blockedReason: z.string().nullable(),
+  reviewCycle: ReviewCycleStatusSchema.optional(),
   execution: z
     .object({
       observedAt: z.string(),
