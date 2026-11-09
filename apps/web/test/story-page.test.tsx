@@ -9,6 +9,8 @@ import type {
   StoryMessage,
   WorkspaceStoryBundle,
 } from "../lib/api";
+import { snapshot as completionSnapshot } from "./fixtures/story-completion";
+import { snapshot as deliverySnapshot } from "./fixtures/story-delivery";
 
 const mocks = vi.hoisted(() => ({
   bundle: {} as WorkspaceStoryBundle,
@@ -23,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   linkedPlan: null as StoryPlan | null,
   requestedMessage: undefined as string | undefined,
+  workflowError: false,
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh() {} }),
@@ -62,36 +65,43 @@ vi.mock("../lib/api", async () => {
       workspaceStoryConsultations: async () =>
         record("consultations", { ok: true, data: { items: [], total: 0, limit: 10, offset: 0 } }),
       storyWorkflow: async () =>
-        record("workflow", {
-          ok: true,
-          data: {
-            schemaVersion: 1,
-            orgId: "org",
-            projectId: "project",
-            storyId: "story",
-            policy: {
-              revision: 0,
-              policy: {
-                planApprovalAgents: [],
-                holdAfterFailure: false,
-                requireDeliveryAcceptance: false,
-                requirePreviewForAcceptance: false,
-              },
-            },
-            plan: { revision: 0, decisionRevision: 0, status: "none" },
-            queuedAgents: [],
-            blockedReason: null,
-            acceptance: {
-              schemaVersion: 1,
-              orgId: "org",
-              projectId: "project",
-              storyId: "story",
-              required: false,
-              status: "missing",
-              receipt: null,
-            },
-          } satisfies StoryWorkflowStatus,
-        }),
+        mocks.workflowError
+          ? record("workflow", {
+              ok: false,
+              status: 503,
+              offline: false,
+              message: "Workflow read failed",
+            })
+          : record("workflow", {
+              ok: true,
+              data: {
+                schemaVersion: 1,
+                orgId: "org",
+                projectId: "project",
+                storyId: "story",
+                policy: {
+                  revision: 0,
+                  policy: {
+                    planApprovalAgents: [],
+                    holdAfterFailure: false,
+                    requireDeliveryAcceptance: false,
+                    requirePreviewForAcceptance: false,
+                  },
+                },
+                plan: { revision: 0, decisionRevision: 0, status: "none" },
+                queuedAgents: [],
+                blockedReason: null,
+                acceptance: {
+                  schemaVersion: 1,
+                  orgId: "org",
+                  projectId: "project",
+                  storyId: "story",
+                  required: false,
+                  status: "missing",
+                  receipt: null,
+                },
+              } satisfies StoryWorkflowStatus,
+            }),
       workspaceStoryActivity: async () => record("activity", unexpected),
       workspaceStoryTimeline: async () => record("timeline", unexpected),
       workspaceStoryTurnEvent: async () => record("event", unexpected),
@@ -127,6 +137,7 @@ function message(seq: number, overrides: Partial<StoryMessage>): StoryMessage {
 
 function setUp(permissions: string[] = []) {
   mocks.calls.length = 0;
+  mocks.workflowError = false;
   mocks.permissions = permissions;
   mocks.bundle = {
     story: {
@@ -427,7 +438,11 @@ describe("story overview integration", () => {
     const plan = root.querySelector("#story-plan");
     const conversation = root.querySelector("#conversation");
     if (!conversation) throw new Error("Missing conversation");
-    expect(plan?.nextElementSibling).toBe(conversation);
+    expect(
+      plan
+        ?.closest("details[data-story-section]")
+        ?.nextElementSibling?.querySelector("#conversation"),
+    ).toBe(conversation);
     expect(conversation?.querySelector('[aria-label="Story actions"]')).not.toBeNull();
     expect(
       conversation.compareDocumentPosition(
@@ -438,5 +453,47 @@ describe("story overview integration", () => {
       conversation.compareDocumentPosition(root.querySelector("#workspace") as Node) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+  it("puts the delivery before conversation and folds future controls without changing permissions", async () => {
+    setUp(["projects:read"]);
+    mocks.bundle.delivery = deliverySnapshot();
+    const { root } = await render();
+    const lead = root.querySelector("[data-story-sections] > details");
+    expect(lead?.getAttribute("data-story-section")).toBe("delivery");
+    expect(lead?.hasAttribute("open")).toBe(true);
+    expect(lead?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
+    for (const key of ["plan", "workflow", "completion", "environment"])
+      expect(root.querySelector(`details[data-story-section="${key}"]`)?.hasAttribute("open")).toBe(
+        false,
+      );
+    expect(root.textContent).not.toContain("Edit PR set");
+    expect(root.textContent).not.toContain("Request delivery acceptance");
+  });
+
+  it("brings post-merge source and retention into focus without offering completion for an unlinked story", async () => {
+    setUp(["projects:write", "github:write"]);
+    mocks.bundle.delivery = deliverySnapshot();
+    mocks.bundle.completion = completionSnapshot();
+    mocks.bundle.completion.source = { kind: "other", state: "unavailable", url: null };
+    const { root } = await render();
+    const lead = root.querySelector("[data-story-sections] > details");
+    expect(lead?.getAttribute("data-story-section")).toBe("completion");
+    expect(lead?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
+    expect(lead?.textContent).toContain("No source issue linked");
+    expect(root.textContent).not.toContain("Complete source issue");
+    expect(root.textContent).toContain("storage retained");
+  });
+
+  it("keeps completion unavailable and workflow failures explicit on an archived legacy snapshot", async () => {
+    setUp(["projects:read"]);
+    mocks.bundle.story.status = "archived";
+    mocks.bundle.story.archivedAt = at;
+    mocks.workflowError = true;
+    const { root } = await render();
+    const lead = root.querySelector("[data-story-sections] > details");
+    expect(lead?.getAttribute("data-story-section")).toBe("completion");
+    expect(lead?.textContent).toContain("Completion and retention details are unavailable");
+    expect(root.textContent).toContain("Workflow read failed");
+    expect(root.textContent).not.toContain("Delivery completed");
   });
 });

@@ -5,21 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { StoryCompletion } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
-import { formatTime } from "@/lib/story-presentation";
-
-const actionLabels: Record<StoryCompletion["nextAction"], string> = {
-  declare_delivery: "Declare the complete delivery set",
-  review: "Review the current delivery",
-  merge: "Merge the remaining required pull requests",
-  configure_integration: "Configure post-merge integration",
-  record_integration: "Record the post-merge integration result",
-  wait_integration: "Wait for post-merge integration",
-  inspect_integration_failure: "Inspect the integration failure",
-  request_completion: "Request source completion",
-  wait_completion: "Wait for source completion",
-  retry_completion: "Retry source completion",
-  completed: "Delivery completed",
-};
+import { completionStepTitle } from "@/lib/story-focus";
+import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
 
 export function StoryCompletionPanel({
   projectId,
@@ -42,18 +29,34 @@ export function StoryCompletionPanel({
   const [current, setCurrent] = useState(initial);
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [policyMode, setPolicyMode] = useState(initial?.integration.policy.mode ?? "none");
-  const [repository, setRepository] = useState(initial?.integration.policy.repository ?? "");
+  const [policy, setPolicy] = useState({
+    mode: initial?.integration.policy.mode ?? "none",
+    repository: initial?.integration.policy.repository ?? "",
+  });
+  const { mode: policyMode, repository } = policy;
   const [inAppNotices, setInAppNotices] = useState(initial?.notices.in_app ?? true);
   const [summary, setSummary] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const integrationKey = useRef<string | null>(null);
   const completionKey = useRef<string | null>(null);
+  const previousInitial = useRef(initial);
   useEffect(() => {
+    const previous = previousInitial.current;
+    previousInitial.current = initial;
     setCurrent(initial);
-    setPolicyMode(initial?.integration.policy.mode ?? "none");
-    setRepository(initial?.integration.policy.repository ?? "");
-    setInAppNotices(initial?.notices.in_app ?? true);
+    // Live observations update untouched forms, but cannot replace an unsaved edit.
+    setPolicy((draft) =>
+      draft.mode === (previous?.integration.policy.mode ?? "none") &&
+      draft.repository === (previous?.integration.policy.repository ?? "")
+        ? {
+            mode: initial?.integration.policy.mode ?? "none",
+            repository: initial?.integration.policy.repository ?? "",
+          }
+        : draft,
+    );
+    setInAppNotices((draft) =>
+      draft === (previous?.notices.in_app ?? true) ? (initial?.notices.in_app ?? true) : draft,
+    );
   }, [initial]);
   if (!current) return null;
 
@@ -140,14 +143,21 @@ export function StoryCompletionPanel({
       (current.integration.policy.mode === "repository_dispatch" &&
         current.integration.state === "dispatched"));
   const mayComplete =
-    canComplete && ["request_completion", "retry_completion"].includes(current.nextAction);
+    canComplete &&
+    current.source.kind === "github_issue" &&
+    current.source.state !== "unavailable" &&
+    ["request_completion", "retry_completion"].includes(current.nextAction);
 
   return (
-    <section aria-label="Delivery completion" className="min-w-0 border border-(--line) p-5 lg:p-6">
+    <section
+      id="story-completion"
+      aria-label="Delivery completion"
+      className="min-w-0 border border-(--line) p-5 lg:p-6"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Eyebrow>delivery completion</Eyebrow>
-          <h2 className="mt-2 text-lg font-semibold">{actionLabels[current.nextAction]}</h2>
+          <h2 className="mt-2 text-lg font-semibold">{completionStepTitle(current)}</h2>
         </div>
         {mayComplete ? (
           <Button size="sm" disabled={Boolean(pending)} onClick={() => void requestCompletion()}>
@@ -160,6 +170,45 @@ export function StoryCompletionPanel({
         Review, pull-request merges, integration, source completion, compute suspension and retained
         storage are recorded separately.
       </p>
+
+      <section
+        aria-label="Completion source"
+        className="mt-4 border-l-2 border-(--human) pl-3 text-sm"
+      >
+        {current.source.kind === "other" ? (
+          <p>
+            No source GitHub issue is linked to this story. Closing another issue or merging these
+            PRs does not complete this source. The source-completion action is unavailable.
+          </p>
+        ) : (
+          <>
+            {safeExternalUrl(current.source.url) ? (
+              <a
+                href={safeExternalUrl(current.source.url) ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-11 items-center text-(--info) underline"
+              >
+                Open the exact source issue
+              </a>
+            ) : (
+              <p>Source issue link unavailable.</p>
+            )}
+            <p>Observed source: {current.source.state}.</p>
+            {current.source.state === "unavailable" ? (
+              <p className="mt-2 text-(--human)">
+                Current source evidence is needed before completion can be requested.
+              </p>
+            ) : null}
+          </>
+        )}
+        {mayComplete ? (
+          <p className="mt-2 text-(--mut)">
+            This action closes the linked issue and then suspends workspace compute after the
+            completion checks pass. It does not delete retained storage or the conversation.
+          </p>
+        ) : null}
+      </section>
 
       {error ? (
         <p role="alert" className="mt-3 text-sm text-(--bad)">
@@ -180,7 +229,33 @@ export function StoryCompletionPanel({
           label="Workspace"
           value={`${current.retention.workspaceState ?? "none"} · ${current.retention.storageRetained ? "storage retained" : "no retained storage"}`}
         />
+        <Fact
+          label="Compute"
+          value={
+            current.retention.computeSuspended
+              ? "Suspended"
+              : current.retention.workspaceState
+                ? "Suspension not recorded"
+                : "No workspace recorded"
+          }
+        />
+        <Fact label="Archive" value={current.retention.archived ? "Archived" : "Not archived"} />
       </dl>
+
+      {current.completion.requestedAt || current.completion.completedAt ? (
+        <details className="mt-4 text-xs text-(--mut)">
+          <summary className="min-h-11 cursor-pointer py-3">Completion record</summary>
+          <dl className="grid gap-3 sm:grid-cols-2">
+            <Fact label="Requested" value={formatTime(current.completion.requestedAt)} />
+            <Fact label="Completed" value={formatTime(current.completion.completedAt)} />
+            <Fact
+              label="Recorded candidate"
+              value={current.completion.candidateRevision ?? "Not recorded"}
+              mono
+            />
+          </dl>
+        </details>
+      ) : null}
 
       {current.integration.summary ? (
         <div className="mt-4 border border-(--line) bg-(--bg-subtle) p-3 text-sm">
@@ -262,7 +337,9 @@ export function StoryCompletionPanel({
               Mode
               <select
                 value={policyMode}
-                onChange={(event) => setPolicyMode(event.target.value as typeof policyMode)}
+                onChange={(event) =>
+                  setPolicy({ ...policy, mode: event.target.value as typeof policyMode })
+                }
                 className="border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink)"
               >
                 <option value="none">No integration gate</option>
@@ -274,7 +351,7 @@ export function StoryCompletionPanel({
               Connected repository
               <input
                 value={repository}
-                onChange={(event) => setRepository(event.target.value)}
+                onChange={(event) => setPolicy({ ...policy, repository: event.target.value })}
                 disabled={policyMode !== "repository_dispatch"}
                 placeholder="owner/repository"
                 className="min-w-0 border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink) disabled:opacity-50"

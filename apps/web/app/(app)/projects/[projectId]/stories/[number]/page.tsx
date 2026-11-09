@@ -13,12 +13,14 @@ import { StoryDeliveryPanel } from "@/components/story/story-delivery";
 import { StoryPlanPanel } from "@/components/story/story-plan";
 import { StoryPreviewConvergencePanel } from "@/components/story/story-preview-convergence";
 import { StoryProgress } from "@/components/story/story-progress";
+import { StorySections } from "@/components/story/story-sections";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { StoryWorkflowPanel } from "@/components/story/story-workflow";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
 import { titleStatus } from "@/lib/backlog-presentation";
 import { can } from "@/lib/permissions";
+import { storyFocus } from "@/lib/story-focus";
 import {
   computeLabel,
   errorSummary,
@@ -237,219 +239,301 @@ export default async function StoryPage({
         <ErrorNotice message={`Workflow status unavailable: ${workflow.message}`} />
       ) : null}
 
-      <StoryPlanPanel
-        key={`plan:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
-        projectId={projectId}
-        storyId={story.id}
-        initial={bundle.plans}
-        selection={selection}
-        latestPlanHref={storyReviewHref(projectId, storyId, undefined, messageId)}
-        agents={agentRows}
-        defaultAgent={agents.ok ? agents.data.defaults.ui : null}
-        queuedAgents={workflow.ok && workflow.data.blockedReason ? workflow.data.queuedAgents : []}
-        blockedReason={workflow.ok ? workflow.data.blockedReason : undefined}
-        workflow={workflow.ok ? workflow.data : undefined}
-        catalogError={agents.ok ? undefined : agents.message}
-        canWrite={canWrite && story.deletedAt === null}
-        userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}
-      />
-
-      <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <Eyebrow>conversation</Eyebrow>
-          <span className="text-[11px] text-(--dim)">
-            Newest first · each request with the run and response it produced
-          </span>
-        </div>
-        <StoryActions
-          key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
-          projectId={projectId}
-          draftOwnerId={
-            me.ok && me.data.principal?.type === "user"
-              ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
-              : undefined
-          }
-          story={story}
-          workspace={bundle.workspace}
-          agents={agentRows}
-          canExecute={canExecute}
-          canPreview={canExecute || can(permissions, "previews:read")}
-          canWrite={canWrite}
-          computeState={currentEnvironment?.inspection.state}
-          activeTurn={activeTurn}
-          waitingAgent={waitingAgent}
-          artifacts={bundle.artifacts}
-        />
-        {canExecute && !agents.ok ? (
-          <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
-        ) : null}
-        {!conversation.ok || focusError ? (
-          <div className="flex flex-col gap-3">
-            <ErrorNotice
-              message={
-                focusError ??
-                `Couldn't load conversation — ${!conversation.ok ? conversation.message : ""}`
-              }
-            />
-            <Link
-              href={storyReviewHref(projectId, storyId, selection, undefined, "conversation")}
-              className="inline-flex min-h-11 items-center text-(--info) underline"
-            >
-              Open latest conversation
-            </Link>
-          </div>
-        ) : (
-          <StoryConversation
-            key={messageId ?? "latest"}
-            projectId={projectId}
-            storyId={story.id}
-            initial={conversation.data}
-            latestHref={storyReviewHref(projectId, storyId, selection, undefined, "conversation")}
-            waitingTurnIds={waitingTurnIds}
-            canExecute={canExecute && story.deletedAt === null}
-            canProposePlan={!selection && canWrite && story.deletedAt === null}
-          />
-        )}
-      </section>
-
-      <StoryProgress
-        key={`${projectId}:${storyId}`}
-        projectId={projectId}
-        storyId={storyId}
-        progress={bundle.progress}
-      />
-
-      {workflow.ok ? (
-        <StoryWorkflowPanel
-          initial={workflow.data}
-          canWrite={canWrite && story.deletedAt === null}
-          candidateReady={bundle.delivery?.candidate.state === "recorded"}
-        />
-      ) : null}
-
-      <StoryDeliveryPanel
+      <StorySections
         key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
-        projectId={projectId}
-        storyId={story.id}
-        initial={bundle.delivery}
-        canWrite={canWrite}
-        canExecute={canExecute}
-      />
-
-      <StoryPreviewConvergencePanel
-        projectId={projectId}
-        storyId={story.id}
-        initial={bundle.previewConvergence}
-        canExecute={canExecute && story.deletedAt === null}
-      />
-
-      <StoryCompletionPanel
-        projectId={projectId}
-        storyId={story.id}
-        initial={bundle.completion}
-        canConfigure={canConfigureIntegration}
-        canConfigureNotices={canWrite}
-        canRecord={canRecordIntegration}
-        canComplete={canComplete}
-      />
-
-      <StoryConsultationPanel
-        key={`consultation:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
-        projectId={projectId}
-        storyId={story.id}
-        initial={consultations.ok ? consultations.data : undefined}
-        initialError={consultations.ok ? undefined : consultations.message}
-        agents={agentRows}
-        defaultAgent={agents.ok ? agents.data.defaults.ui : null}
-        canExecute={canExecute && story.deletedAt === null}
-        draftOwnerId={
-          me.ok && me.data.principal?.type === "user"
-            ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
-            : undefined
-        }
-      />
-
-      <section
-        id="workspace"
-        className="scroll-mt-6 flex flex-col gap-4 border border-(--line) p-5 lg:p-6"
-      >
-        <h2 className="text-lg font-semibold">Development environment</h2>
-        {bundle.workspace ? (
-          <>
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <span className="inline-flex items-center gap-2 border border-(--line) px-3 py-1">
-                {bundle.workspace.provider === "vercel" ? (
-                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24">
-                    <path fill="currentColor" d="M12 3 24 23H0Z" />
-                  </svg>
-                ) : null}
-                {bundle.workspace.provider === "vercel" ? "Vercel" : bundle.workspace.provider}
-              </span>
-              <strong>{computeLabel(currentEnvironment)}</strong>
-              <span className="text-xs text-(--mut)">
-                Last workspace activity: {formatTime(bundle.workspace.lastActivityAt)}
+        scope={{ projectId, storyId }}
+        navigationKey={JSON.stringify([
+          selection?.revision,
+          selection?.digest,
+          selection?.error,
+          messageId,
+          messageError,
+        ])}
+        focus={storyFocus(bundle, workflow.ok ? workflow.data : undefined, Boolean(selection))}
+        conversation={
+          <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-4">
+              <Eyebrow>conversation</Eyebrow>
+              <span className="text-[11px] text-(--dim)">
+                Newest first · each request with the run and response it produced
               </span>
             </div>
-            <p className="text-sm leading-relaxed text-(--mut)">
-              {currentEnvironment?.inspection.state === "sleeping"
-                ? "Compute is stopped. Your saved workspace is retained; opening the app or sending a task resumes it."
-                : currentEnvironment?.inspection.state === "running"
-                  ? "The machine is on. It may serve a preview even when no agent is running."
-                  : "Machine availability is separate from the task phase and agent activity."}
-            </p>
-            <p className="text-sm">
-              Cost:{" "}
-              {currentEnvironment ? formatCost(currentEnvironment.metrics.cost) : "Unavailable"}
-            </p>
-            {bundle.workspace.provider === "vercel" ? (
-              <p className="text-xs leading-relaxed text-(--dim)">
-                Suspended machines incur no CPU or memory usage; retained snapshots can still incur
-                storage charges.{" "}
-                <a
-                  className="text-(--info) underline"
-                  href="https://vercel.com/docs/sandbox/pricing"
-                  target="_blank"
-                  rel="noreferrer"
+            <StoryActions
+              key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+              projectId={projectId}
+              draftOwnerId={
+                me.ok && me.data.principal?.type === "user"
+                  ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+                  : undefined
+              }
+              story={story}
+              workspace={bundle.workspace}
+              agents={agentRows}
+              canExecute={canExecute}
+              canPreview={canExecute || can(permissions, "previews:read")}
+              canWrite={canWrite}
+              computeState={currentEnvironment?.inspection.state}
+              activeTurn={activeTurn}
+              waitingAgent={waitingAgent}
+              artifacts={bundle.artifacts}
+            />
+            {canExecute && !agents.ok ? (
+              <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
+            ) : null}
+            {!conversation.ok || focusError ? (
+              <div className="flex flex-col gap-3">
+                <ErrorNotice
+                  message={
+                    focusError ??
+                    `Couldn't load conversation — ${!conversation.ok ? conversation.message : ""}`
+                  }
+                />
+                <Link
+                  href={storyReviewHref(projectId, storyId, selection, undefined, "conversation")}
+                  className="inline-flex min-h-11 items-center text-(--info) underline"
                 >
-                  Vercel pricing ↗
-                </a>
-              </p>
-            ) : null}
-            <details className="text-xs text-(--mut)">
-              <summary className="cursor-pointer py-2">Environment details</summary>
-              <dl className="mt-3 grid grid-cols-[100px_minmax(0,1fr)] gap-3">
-                <dt>Image</dt>
-                <dd className="break-all font-mono">{bundle.workspace.environment.image ?? "—"}</dd>
-                <dt>Storage reference</dt>
-                <dd className="break-all font-mono">{bundle.workspace.volumeRef}</dd>
-                <dt>Recorded state</dt>
-                <dd>{bundle.workspace.state} (last saved)</dd>
-                <dt>Create / wake</dt>
-                <dd>
-                  {formatDuration(currentEnvironment?.metrics.create_time_ms ?? null)} /{" "}
-                  {formatDuration(currentEnvironment?.metrics.wake_time_ms ?? null)}
-                </dd>
-              </dl>
-            </details>
-            {!environment.ok ? (
-              <ErrorNotice
-                message={`Environment inspection unavailable — ${environment.message}`}
-              />
-            ) : null}
-            <EnvironmentLogs projectId={projectId} storyId={story.id} />
-            {bundle.workspace.state !== "destroyed" && !story.deletedAt ? (
-              <WorkspaceVariables
-                key={bundle.workspace.id}
+                  Open latest conversation
+                </Link>
+              </div>
+            ) : (
+              <StoryConversation
+                key={messageId ?? "latest"}
                 projectId={projectId}
                 storyId={story.id}
-                canExecute={canExecute}
+                initial={conversation.data}
+                latestHref={storyReviewHref(
+                  projectId,
+                  storyId,
+                  selection,
+                  undefined,
+                  "conversation",
+                )}
+                waitingTurnIds={waitingTurnIds}
+                canExecute={canExecute && story.deletedAt === null}
+                canProposePlan={!selection && canWrite && story.deletedAt === null}
               />
-            ) : null}
-          </>
-        ) : (
-          <p className="text-sm text-(--dim)">Workspace has not been created.</p>
-        )}
-      </section>
+            )}
+          </section>
+        }
+        sections={[
+          {
+            key: "plan",
+            label: "Plan and decisions",
+            content: (
+              <StoryPlanPanel
+                key={`plan:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
+                projectId={projectId}
+                storyId={story.id}
+                initial={bundle.plans}
+                selection={selection}
+                latestPlanHref={storyReviewHref(projectId, storyId, undefined, messageId)}
+                agents={agentRows}
+                defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+                queuedAgents={
+                  workflow.ok && workflow.data.blockedReason ? workflow.data.queuedAgents : []
+                }
+                blockedReason={workflow.ok ? workflow.data.blockedReason : undefined}
+                workflow={workflow.ok ? workflow.data : undefined}
+                catalogError={agents.ok ? undefined : agents.message}
+                canWrite={canWrite && story.deletedAt === null}
+                userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}
+              />
+            ),
+          },
+          {
+            key: "delivery",
+            label: "Delivery",
+            content: (
+              <StoryDeliveryPanel
+                key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+                projectId={projectId}
+                storyId={story.id}
+                initial={bundle.delivery}
+                canWrite={canWrite && story.deletedAt === null}
+                canExecute={canExecute && story.deletedAt === null}
+              />
+            ),
+          },
+          {
+            key: "workflow",
+            label: "Acceptance",
+            content: workflow.ok ? (
+              <StoryWorkflowPanel
+                initial={workflow.data}
+                canWrite={canWrite && story.deletedAt === null}
+                candidateReady={bundle.delivery?.candidate.state === "recorded"}
+              />
+            ) : (
+              <p className="text-sm text-(--mut)">
+                Workflow status is unavailable. Reload before requesting acceptance.
+              </p>
+            ),
+          },
+          {
+            key: "preview",
+            label: "Preview",
+            content: bundle.previewConvergence ? (
+              <StoryPreviewConvergencePanel
+                projectId={projectId}
+                storyId={story.id}
+                initial={bundle.previewConvergence}
+                canExecute={canExecute && story.deletedAt === null}
+              />
+            ) : (
+              <p className="text-sm text-(--mut)">
+                {bundle.previewConvergence === undefined
+                  ? "Preview delivery is unavailable from this server."
+                  : "No preview generation is recorded for this story."}
+              </p>
+            ),
+          },
+          {
+            key: "completion",
+            label: "Completion and retention",
+            content: bundle.completion ? (
+              <StoryCompletionPanel
+                projectId={projectId}
+                storyId={story.id}
+                initial={bundle.completion}
+                canConfigure={canConfigureIntegration && story.deletedAt === null}
+                canConfigureNotices={canWrite && story.deletedAt === null}
+                canRecord={canRecordIntegration && story.deletedAt === null}
+                canComplete={canComplete && story.deletedAt === null}
+              />
+            ) : (
+              <p className="text-sm text-(--mut)">
+                Completion and retention details are unavailable from this server.
+              </p>
+            ),
+          },
+          {
+            key: "progress",
+            label: "Activity",
+            content: (
+              <StoryProgress
+                key={`${projectId}:${storyId}`}
+                projectId={projectId}
+                storyId={storyId}
+                progress={bundle.progress}
+              />
+            ),
+          },
+          {
+            key: "consultation",
+            label: "Consultation",
+            content: (
+              <StoryConsultationPanel
+                key={`consultation:${JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}`}
+                projectId={projectId}
+                storyId={story.id}
+                initial={consultations.ok ? consultations.data : undefined}
+                initialError={consultations.ok ? undefined : consultations.message}
+                agents={agentRows}
+                defaultAgent={agents.ok ? agents.data.defaults.ui : null}
+                canExecute={canExecute && story.deletedAt === null}
+                draftOwnerId={
+                  me.ok && me.data.principal?.type === "user"
+                    ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+                    : undefined
+                }
+              />
+            ),
+          },
+          {
+            key: "environment",
+            label: "Environment",
+            content: (
+              <section
+                id="workspace"
+                className="scroll-mt-6 flex flex-col gap-4 border border-(--line) p-5 lg:p-6"
+              >
+                <h2 className="text-lg font-semibold">Development environment</h2>
+                {bundle.workspace ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                      <span className="inline-flex items-center gap-2 border border-(--line) px-3 py-1">
+                        {bundle.workspace.provider === "vercel" ? (
+                          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24">
+                            <path fill="currentColor" d="M12 3 24 23H0Z" />
+                          </svg>
+                        ) : null}
+                        {bundle.workspace.provider === "vercel"
+                          ? "Vercel"
+                          : bundle.workspace.provider}
+                      </span>
+                      <strong>{computeLabel(currentEnvironment)}</strong>
+                      <span className="text-xs text-(--mut)">
+                        Last workspace activity: {formatTime(bundle.workspace.lastActivityAt)}
+                      </span>
+                    </div>
+                    <p className="text-sm leading-relaxed text-(--mut)">
+                      {currentEnvironment?.inspection.state === "sleeping"
+                        ? "Compute is stopped. Your saved workspace is retained; opening the app or sending a task resumes it."
+                        : currentEnvironment?.inspection.state === "running"
+                          ? "The machine is on. It may serve a preview even when no agent is running."
+                          : "Machine availability is separate from the task phase and agent activity."}
+                    </p>
+                    <p className="text-sm">
+                      Cost:{" "}
+                      {currentEnvironment
+                        ? formatCost(currentEnvironment.metrics.cost)
+                        : "Unavailable"}
+                    </p>
+                    {bundle.workspace.provider === "vercel" ? (
+                      <p className="text-xs leading-relaxed text-(--dim)">
+                        Suspended machines incur no CPU or memory usage; retained snapshots can
+                        still incur storage charges.{" "}
+                        <a
+                          className="text-(--info) underline"
+                          href="https://vercel.com/docs/sandbox/pricing"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Vercel pricing ↗
+                        </a>
+                      </p>
+                    ) : null}
+                    <details className="text-xs text-(--mut)">
+                      <summary className="cursor-pointer py-2">Environment details</summary>
+                      <dl className="mt-3 grid grid-cols-[100px_minmax(0,1fr)] gap-3">
+                        <dt>Image</dt>
+                        <dd className="break-all font-mono">
+                          {bundle.workspace.environment.image ?? "—"}
+                        </dd>
+                        <dt>Storage reference</dt>
+                        <dd className="break-all font-mono">{bundle.workspace.volumeRef}</dd>
+                        <dt>Recorded state</dt>
+                        <dd>{bundle.workspace.state} (last saved)</dd>
+                        <dt>Create / wake</dt>
+                        <dd>
+                          {formatDuration(currentEnvironment?.metrics.create_time_ms ?? null)} /{" "}
+                          {formatDuration(currentEnvironment?.metrics.wake_time_ms ?? null)}
+                        </dd>
+                      </dl>
+                    </details>
+                    {!environment.ok ? (
+                      <ErrorNotice
+                        message={`Environment inspection unavailable — ${environment.message}`}
+                      />
+                    ) : null}
+                    <EnvironmentLogs projectId={projectId} storyId={story.id} />
+                    {bundle.workspace.state !== "destroyed" && !story.deletedAt ? (
+                      <WorkspaceVariables
+                        key={bundle.workspace.id}
+                        projectId={projectId}
+                        storyId={story.id}
+                        canExecute={canExecute}
+                      />
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-(--dim)">Workspace has not been created.</p>
+                )}
+              </section>
+            ),
+          },
+        ]}
+      />
 
       <StoryTimeline projectId={projectId} storyId={story.id} />
 

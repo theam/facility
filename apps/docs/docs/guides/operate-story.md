@@ -8,6 +8,16 @@ MCP is the primary way to automate a Facility story. The web UI exposes the same
 useful for browsing conversations, inspecting environments, opening previews, and taking lifecycle
 actions.
 
+The story opens with the relevant recorded step: a proposed or explicitly linked plan,
+the delivery PR set, current work, or post-merge completion and retention. The conversation
+follows that panel. Other sections stay available as disclosures and through **Story sections**;
+links to a plan, source message or activity open the relevant content. Preparing a plan from an
+agent response also reveals its panel without starting work.
+
+Refreshes update the facts while preserving the panels and drafts being inspected. If the next
+step changes, **Show the current step first** brings its panel forward explicitly. Unknown
+completion or workflow data remains unavailable; it is never displayed as a successful result.
+
 ## Find work
 
 The Stories page is the project's backlog. It lists mirrored GitHub issues that nobody has started
@@ -376,6 +386,14 @@ the source issue. Manual integration remains a human-recorded result. Repository
 for a result from the exact dispatched event. Completion requires both `projects:write` and
 `github:write`; changing integration policy requires both `projects:write` and `repos:write`.
 Ordinary project preferences preserve these policies.
+
+The panel links to the exact source issue and shows its observed state. A manual story with no
+authoritative source issue, or a source whose current observation is unavailable, explains the
+missing evidence and does not offer **Complete source issue**. Merging its PRs or closing an
+unrelated issue does not establish source completion. For an available source, the action's
+effect is stated before requesting it: close that issue, then suspend compute after the existing
+completion checks pass, preserving retained storage and the conversation. Completion records,
+archive, compute suspension and retained storage are shown separately.
 
 Repository-dispatch callbacks must set `event_id` to the `eventId` received in the
 `facility.delivery.merged` payload (`eventId` in MCP). A destination change or policy re-enable

@@ -8,57 +8,7 @@ import type { StoryCompletion } from "../lib/api";
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
-const at = "2026-10-22T12:00:00.000Z";
-function snapshot(
-  nextAction: StoryCompletion["nextAction"] = "request_completion",
-): StoryCompletion {
-  return {
-    schemaVersion: 1,
-    orgId: "org-a",
-    projectId: "project-a",
-    storyId: "story/a",
-    generatedAt: at,
-    candidate: {
-      revision: "a".repeat(64),
-      state: "recorded",
-      requiredCount: 2,
-      mergedCount: 2,
-      allRequiredMerged: true,
-    },
-    integration: {
-      policy: { mode: "none", repository: null },
-      candidateRevision: null,
-      state: "not_required",
-      attempt: 0,
-      eventId: null,
-      repository: null,
-      summary: null,
-      evidenceUrl: null,
-      errorCode: null,
-      recordedBy: null,
-      recordedAt: null,
-    },
-    source: { kind: "github_issue", state: "open", url: "https://example.test/issues/1" },
-    completion: {
-      candidateRevision: null,
-      state: "not_requested",
-      attempt: 0,
-      errorCode: null,
-      requestedBy: null,
-      requestedAt: null,
-      completedAt: null,
-    },
-    notices: { in_app: true },
-    retention: {
-      workspaceState: "running",
-      computeSuspended: false,
-      storageRetained: true,
-      archived: false,
-      deleted: false,
-    },
-    nextAction,
-  };
-}
+import { at, snapshot } from "./fixtures/story-completion";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -195,5 +145,84 @@ describe("story completion UI", () => {
     await render(snapshot(), false, { canConfigure: true });
     expect(container.textContent).toContain("Post-merge integration policy");
     expect(container.textContent).not.toContain("Delivery notice preference");
+  });
+  it("preserves unsaved configuration and focus when completion observations refresh", async () => {
+    await render(snapshot());
+    const mode = container.querySelector<HTMLSelectElement>("select");
+    const repository = container.querySelector<HTMLInputElement>(
+      'input[placeholder="owner/repository"]',
+    );
+    const notices = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!mode || !repository || !notices) throw new Error("Missing configuration form");
+    await act(async () => {
+      mode.value = "repository_dispatch";
+      mode.dispatchEvent(new Event("change", { bubbles: true }));
+      notices.click();
+    });
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+        repository,
+        "example/draft",
+      );
+      repository.dispatchEvent(new Event("input", { bubbles: true }));
+      repository.focus();
+    });
+    const observed = snapshot("wait_completion");
+    observed.integration.policy = { mode: "manual", repository: null };
+    await render(observed);
+    expect(container.textContent).toContain("Wait for source completion");
+    expect(mode.value).toBe("repository_dispatch");
+    expect(repository.value).toBe("example/draft");
+    expect(notices.checked).toBe(false);
+    expect(document.activeElement).toBe(repository);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("updates untouched configuration from fresh observations", async () => {
+    await render(snapshot());
+    const observed = snapshot();
+    observed.integration.policy = { mode: "repository_dispatch", repository: "example/observed" };
+    observed.notices.in_app = false;
+    await render(observed);
+    expect(container.querySelector("select")?.value).toBe("repository_dispatch");
+    expect(
+      container.querySelector<HTMLInputElement>('input[placeholder="owner/repository"]')?.value,
+    ).toBe("example/observed");
+    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(
+      false,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([
+    "other",
+    "unavailable",
+  ])("explains an %s source without an executable completion action", async (reason) => {
+    const current = snapshot();
+    current.source =
+      reason === "other"
+        ? { kind: "other", state: "unavailable", url: null }
+        : { kind: "github_issue", state: "unavailable", url: "https://example.test/issues/1" };
+    await render(current, true);
+    expect(container.textContent).toContain(
+      reason === "other" ? "No source issue linked" : "Source issue unavailable",
+    );
+    expect(container.textContent).not.toContain("Complete source issue");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("identifies the exact source and the completion effect without turning a merge into completion", async () => {
+    await render(snapshot(), true);
+    expect(
+      container.querySelector('[aria-label="Completion source"] a')?.getAttribute("href"),
+    ).toBe("https://example.test/issues/1");
+    expect(container.textContent).toContain("then suspends workspace compute");
+    expect(container.textContent).toContain("Suspension not recorded");
+    expect(container.textContent).not.toContain("Delivery completed");
+    const unsafe = snapshot();
+    unsafe.source.url = "javascript:alert(1)";
+    await render(unsafe, false);
+    expect(container.querySelector('[aria-label="Completion source"] a')).toBeNull();
+    expect(container.textContent).toContain("Source issue link unavailable");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
