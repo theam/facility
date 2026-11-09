@@ -53,29 +53,38 @@ function checkAgent(dir, name) {
   const path = join(dir, relative);
   if (!existsSync(path)) return failed(relative, "missing");
   const source = readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
-  if (!source.startsWith("---\n") || !/\n---\n[\s\S]*\S/.test(source)) return failed(relative, "invalid frontmatter or empty prompt");
-  if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(source)) return failed(relative, `name must be ${name}`);
-  if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(source)) return failed(relative, "engine must be claude_code or codex");
-  if (!agentModel(source)) return failed(relative, "model is missing or invalid");
-  if (!/^triggers:\s*$/m.test(source) || !/^\s{2}- type:\s*(?:manual|schedule|github)\s*$/m.test(source)) {
+  const parsed = splitFrontmatter(source);
+  if (!parsed || !parsed.prompt.trim()) return failed(relative, "invalid frontmatter or empty prompt");
+  const { frontmatter } = parsed;
+  if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(frontmatter)) {
+    return failed(relative, `name must be ${name}`);
+  }
+  if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(frontmatter)) {
+    return failed(relative, "engine must be claude_code or codex");
+  }
+  if (!agentModel(frontmatter)) return failed(relative, "model is missing or invalid");
+  if (
+    !/^triggers:\s*$/m.test(frontmatter) ||
+    !/^\s{2}- type:\s*(?:manual|schedule|github|mcp|ui)\s*$/m.test(frontmatter)
+  ) {
     return failed(relative, "at least one supported trigger is required");
   }
-  if (/^(?:permissions|sandbox|tools):/m.test(source)) return failed(relative, "per-agent access controls are not supported");
+  if (/^(?:permissions|sandbox|tools):/m.test(frontmatter)) {
+    return failed(relative, "per-agent access controls are not supported");
+  }
   return passed(relative, "valid agent manifest");
 }
 
-function passed(label, detail) {
-  return { label, ok: true, detail };
-}
-
-function failed(label, detail) {
-  return { label, ok: false, detail };
+function splitFrontmatter(source) {
+  const match = /^---\n([\s\S]*?)\n---(?:\n|$)([\s\S]*)$/.exec(source);
+  if (!match) return null;
+  return { frontmatter: match[1] ?? "", prompt: match[2] ?? "" };
 }
 
 const MODEL_MAX = 160;
 
-function agentModel(source) {
-  const match = /^model:\s*(.*)$/m.exec(source);
+function agentModel(frontmatter) {
+  const match = /^model:[ \t]*(.*)$/m.exec(frontmatter);
   if (!match) return null;
   const value = yamlStringScalar(match[1]);
   if (value === null || value.length < 1 || value.length > MODEL_MAX) return null;
@@ -108,6 +117,14 @@ function yamlSingleQuoted(source) {
   const match = /^('(?:[^']|'')*')\s*(?:#.*)?$/.exec(source);
   if (!match) return null;
   return match[1].slice(1, -1).replaceAll("''", "'");
+}
+
+function passed(label, detail) {
+  return { label, ok: true, detail };
+}
+
+function failed(label, detail) {
+  return { label, ok: false, detail };
 }
 
 function escapeRegExp(value) {

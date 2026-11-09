@@ -260,6 +260,82 @@ test("local doctor rejects comment-only and unclosed quoted models", (t) => {
   );
   const quotedSpaces = runCli(["doctor", `--dir=${dir}`], dir);
   assert.equal(quotedSpaces.status, 0, quotedSpaces.stdout + quotedSpaces.stderr);
+
+  writeFileSync(
+    builderPath,
+    readFileSync(builderPath, "utf8").replace(/^model: .*/m, "model:"),
+  );
+  const emptyModel = runCli(["doctor", `--dir=${dir}`], dir);
+  assert.equal(emptyModel.status, 1);
+  assert.match(emptyModel.stdout, /model is missing or invalid/);
+});
+
+test("doctor inspects agent frontmatter only and accepts quoted models and mcp/ui triggers", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const init = runCli(
+    ["init", "--yes", `--dir=${dir}`, "--repo=acme/demo-app", "--start=npm run dev"],
+    dir,
+  );
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+
+  const builderPath = join(dir, ".agents/builder.md");
+  const original = readFileSync(builderPath, "utf8");
+
+  writeFileSync(
+    builderPath,
+    `${original.trimEnd()}\n\npermissions:\n  contents: read\n`,
+  );
+  const promptPermissions = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(promptPermissions.status, 0, promptPermissions.stdout + promptPermissions.stderr);
+
+  writeFileSync(
+    builderPath,
+    original.replace(/^name: builder$/m, "name: not-builder") + "\nname: builder\n",
+  );
+  const hiddenName = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(hiddenName.status, 1);
+  assert.match(hiddenName.stdout, /name must be builder/);
+
+  writeFileSync(
+    builderPath,
+    original.replace(/^model: .*/m, 'model: "gpt-5.6-sol with spaces"'),
+  );
+  const quotedModel = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(quotedModel.status, 0, quotedModel.stdout + quotedModel.stderr);
+
+  writeFileSync(builderPath, original.replace(/^model: .*/m, "model:"));
+  const emptyModelValue = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(emptyModelValue.status, 1);
+  assert.match(emptyModelValue.stdout, /model is missing or invalid/);
+
+  writeFileSync(
+    builderPath,
+    [
+      "---",
+      "name: builder",
+      "description: Implements a complete story.",
+      "engine: codex",
+      "model: gpt-5.6-sol",
+      "enabled: true",
+      "triggers:",
+      "  - type: mcp",
+      "  - type: ui",
+      "---",
+      "",
+      "# Builder",
+      "",
+      "Complete the story.",
+      "",
+    ].join("\n"),
+  );
+  const interactiveOnly = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(interactiveOnly.status, 0, interactiveOnly.stdout + interactiveOnly.stderr);
+
+  writeFileSync(builderPath, original.replace(/^enabled: true$/m, "permissions: {}\nenabled: true"));
+  const frontmatterPermissions = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(frontmatterPermissions.status, 1);
+  assert.match(frontmatterPermissions.stdout, /per-agent access controls are not supported/);
 });
 
 test("init preserves repository-owned files unless force is explicit", (t) => {
