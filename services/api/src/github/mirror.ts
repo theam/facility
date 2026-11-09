@@ -958,13 +958,22 @@ export class GithubMirrorService {
     const pullNumber = positiveInteger(pull.number);
     const headSha = string(object(pull.head).sha);
     if (!pullNumber || !headSha) return { ciUpdates: 0, checks: 0 };
-    const [statusResponse, checkRunsResponse] = await Promise.all([
-      client.request("GET /repos/{owner}/{repo}/commits/{ref}/status", { ref: headSha }),
-      client.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
-        ref: headSha,
-        per_page: 100,
-      }),
-    ]);
+    const checkRunsResponse = await client.request(
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+      { ref: headSha, per_page: 100 },
+    );
+    // A missing Commit statuses permission is unavailable CI data. Other
+    // failures, including rate limits and 5xx, still abort this refresh.
+    let statusResponse: JsonObject = {};
+    try {
+      statusResponse = object(
+        await client.request("GET /repos/{owner}/{repo}/commits/{ref}/status", {
+          ref: headSha,
+        }),
+      );
+    } catch (error) {
+      if (!isForbidden(error)) throw error;
+    }
     const checkRuns = array(object(checkRunsResponse).check_runs).map(object);
     let checks = 0;
     for (const check of checkRuns) checks += await this.upsertCheck(repository, check, pullNumber);
@@ -1302,4 +1311,12 @@ function array(value: unknown): unknown[] {
 
 function string(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isForbidden(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const status =
+    (error as { status?: unknown }).status ??
+    (error as { response?: { status?: unknown } }).response?.status;
+  return status === 403;
 }
