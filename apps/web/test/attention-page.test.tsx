@@ -139,6 +139,32 @@ beforeEach(() => {
 });
 
 describe("attention page", () => {
+  it.each([
+    "review_cycle_ready",
+    "review_cycle_decision",
+  ])("keeps %s reason visible and offers no retry", async (kind) => {
+    const data = openPage();
+    const failed = data.items[1];
+    if (!failed) throw new Error("Missing notice fixture");
+    data.items = [
+      {
+        ...failed,
+        kind,
+        title: "Review needs a human decision",
+        detail: "The proposed permissions change exceeds the approved plan.",
+        action: "dismiss",
+      },
+    ];
+    mocks.attention = { ok: true, data };
+    const { root } = await render();
+    const notices = section(root, "Notices");
+    expect(notices.textContent).toContain(
+      "The proposed permissions change exceeds the approved plan.",
+    );
+    expect(notices.textContent).not.toContain("The run reported an error");
+    expect(notices.textContent).not.toContain("Technical details");
+    expect([...notices.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["dismiss"]);
+  });
   it("lists every open notice with its verb and links to the complete Attention view", async () => {
     const { root, text } = await render();
     expect(mocks.queries).toEqual([{ status: "open", limit: 25, offset: 0 }]);

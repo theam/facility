@@ -395,6 +395,41 @@ describe("project attention list", async () => {
     expect(all.total).toBe(4);
   });
 
+  it.each([
+    "review_cycle_ready",
+    "review_cycle_decision",
+  ])("projects %s as a human notice without advertising a retry", async (kind) => {
+    const id = newId("attn");
+    const detail = "The recorded candidate requires a human decision before further correction.";
+    await db.insert(attentionItems).values({
+      id,
+      orgId,
+      projectId,
+      storyId: ids.billingStory,
+      turnId: ids.billingTurn,
+      kind,
+      title: "Delivery review needs a human decision",
+      detail,
+      status: "open",
+      createdAt: now,
+    });
+    try {
+      const page = await service.list(orgId, projectId, { ...open, kind: [kind] }, now);
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).toMatchObject({
+        id,
+        kind,
+        detail,
+        turnId: ids.billingTurn,
+        action: "dismiss",
+      });
+      const sibling = await service.list(orgId, siblingProjectId, { ...open, kind: [kind] }, now);
+      expect(sibling.items).toHaveLength(0);
+    } finally {
+      await db.delete(attentionItems).where(eq(attentionItems.id, id));
+    }
+  });
+
   it("filters by kind while the kind facets still show every kind", async () => {
     const failed = await service.list(orgId, projectId, { ...open, kind: ["turn_error"] }, now);
     expect(failed.items.map((item) => item.id)).toEqual([ids.failed]);

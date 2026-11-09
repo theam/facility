@@ -54,6 +54,12 @@ question, failing checks, a review decision), who is involved, and links to the 
 request, story, and active run. Assignees from GitHub and people who started or continued the
 story in Facility appear together; neither source removes the other.
 
+When the server records a review-cycle decision or a candidate ready for human review,
+Attention keeps the recorded reason visible. These notices do not offer a failed-turn retry.
+Open the story's acceptance section to inspect the available candidate and findings before
+deciding. Dismissing the notice does not approve a scope change, accept a delivery or restart
+work; those operations retain their own policy and confirmation requirements.
+
 ## Start a story
 
 Describe what you need in the request box. A title is optional: Facility stores the request at

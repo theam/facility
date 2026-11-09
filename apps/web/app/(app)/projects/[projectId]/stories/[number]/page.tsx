@@ -25,6 +25,7 @@ import {
   computeLabel,
   errorSummary,
   formatTime,
+  isReviewNotice,
   phaseLabel,
   safeExternalUrl,
   storyActivity,
@@ -194,12 +195,13 @@ export default async function StoryPage({
 
       {openAttention.length > 0 ? (
         <section
-          className="border border-(--bad)/50 bg-(--bg-subtle) p-5"
+          className={`border bg-(--bg-subtle) p-5 ${openAttention.every((item) => isReviewNotice(item.kind)) ? "border-(--human)/50" : "border-(--bad)/50"}`}
           id="story-attention"
           aria-label="Needs your attention"
         >
           <h2 className="mb-4 font-semibold">Needs your attention · {openAttention.length}</h2>
           {openAttention.map((item) => {
+            const reviewNotice = isReviewNotice(item.kind);
             const deliveryNotice = ["delivery_integration", "delivery_completion"].includes(
               item.kind,
             );
@@ -207,11 +209,28 @@ export default async function StoryPage({
               <div key={item.id} className="border-t border-(--line) py-4">
                 <p className="font-medium">{item.title}</p>
                 <p className="mt-2 text-sm text-(--mut)">
-                  {item.kind === "agent_waiting" || deliveryNotice
-                    ? item.detail
+                  {item.kind === "agent_waiting" || deliveryNotice || reviewNotice
+                    ? (item.detail ??
+                      (reviewNotice ? "Review the recorded candidate and findings." : null))
                     : errorSummary(item.detail)}
                 </p>
-                {item.kind !== "agent_waiting" && !deliveryNotice && item.detail ? (
+                {reviewNotice ? (
+                  <div className="mt-3 text-sm">
+                    <Link
+                      href="#story-section-workflow"
+                      className="inline-flex min-h-11 items-center text-(--info) underline"
+                    >
+                      Review the candidate and findings
+                    </Link>
+                    <p className="text-(--mut)">
+                      Dismissing this notice does not approve changes or restart work.
+                    </p>
+                  </div>
+                ) : null}
+                {item.kind !== "agent_waiting" &&
+                !deliveryNotice &&
+                !reviewNotice &&
+                item.detail ? (
                   <details className="mt-3 text-sm">
                     <summary className="cursor-pointer">Technical details</summary>
                     <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">

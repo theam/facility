@@ -6,6 +6,7 @@ import { useState } from "react";
 import { requestCompose } from "@/components/story/story-conversation";
 import type { WorkspaceStoryBundle } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
+import { isReviewNotice } from "@/lib/story-presentation";
 
 type AttentionItem = WorkspaceStoryBundle["attention"][number];
 
@@ -52,7 +53,7 @@ export function AttentionActions({
             reply
           </Button>
         ) : null
-      ) : item.turnId ? (
+      ) : item.turnId && !isReviewNotice(item.kind) ? (
         <Button size="sm" onClick={() => act("retry")} disabled={Boolean(pending)}>
           {pending === "retry" ? "retrying…" : "retry"}
         </Button>

@@ -360,6 +360,46 @@ describe("story overview integration", () => {
     expect(attention?.textContent).not.toContain("Technical details");
   });
 
+  it.each([
+    ["review_cycle_ready", "The pinned candidate is ready for human review."],
+    ["review_cycle_decision", "The permissions change exceeds the approved plan."],
+    ["review_cycle_decision", "The review limit is exhausted; a human decision is required."],
+  ])("presents %s as a human review with its recorded reason", async (kind, detail) => {
+    setUp(["*"]);
+    mocks.bundle.attention = [
+      {
+        id: "review-notice",
+        turnId: "turn_done",
+        kind,
+        title: "Review needs a human decision",
+        detail,
+        status: "open",
+        resolution: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: at,
+      },
+    ];
+    const { root } = await render();
+    const attention = root.querySelector('[aria-label="Needs your attention"]');
+    if (!attention) throw new Error("Missing human review notice");
+    expect(attention?.textContent).toContain(detail);
+    expect(attention?.textContent).not.toContain("The run reported an error");
+    expect(attention?.textContent).not.toContain("Technical details");
+    expect([...attention.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "dismiss",
+    ]);
+    expect(attention?.querySelector('a[href="#story-section-workflow"]')?.textContent).toBe(
+      "Review the candidate and findings",
+    );
+    expect(attention?.textContent).toContain("does not approve changes or restart work");
+    mocks.permissions = ["projects:read"];
+    const reader = (await render()).root.querySelector('[aria-label="Needs your attention"]');
+    expect(reader?.textContent).toContain(detail);
+    expect(reader?.querySelector("button")).toBeNull();
+    expect(reader?.querySelector('a[href="#story-section-workflow"]')).not.toBeNull();
+  });
+
   it("renders state, the final response first, participants, and folded evidence for a reader", async () => {
     setUp();
     const { html, root } = await render();
