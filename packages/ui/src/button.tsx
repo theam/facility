@@ -6,14 +6,14 @@ type Size = "sm" | "md" | "lg";
 type Tone = "agent";
 
 const sizes: Record<Size, string> = {
-  sm: "h-8 px-3.5 text-[12.5px]",
-  md: "h-10 px-6 text-[13px]",
-  lg: "h-[52px] px-10 text-[13.5px]",
+  sm: "min-h-11 px-3.5 py-2 text-[12.5px]",
+  md: "min-h-11 px-6 py-2.5 text-[13px]",
+  lg: "min-h-[52px] px-10 py-3 text-[13.5px]",
 };
 
 function classesFor(variant: Variant, size: Size, tone?: Tone, className?: string) {
   const base =
-    "group relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors disabled:pointer-events-none disabled:opacity-50";
+    "group relative inline-flex max-w-full select-none items-center justify-center gap-2 whitespace-normal text-center font-medium transition-colors disabled:pointer-events-none disabled:opacity-50";
   if (variant === "textual") {
     return cx(base, "h-auto px-0 text-(--mut) hover:text-(--ink)", className);
   }
@@ -67,7 +67,7 @@ function Label({
   return (
     <span
       className={cx(
-        "relative z-10 inline-flex items-center gap-2 transition-colors",
+        "relative z-10 inline-flex min-w-0 items-center gap-2 wrap-anywhere transition-colors",
         variant === "primary" && tone === "agent" && "group-hover:text-black",
       )}
     >

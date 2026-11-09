@@ -1,35 +1,37 @@
 /* Facility tokens — TAM-50 tier.
  * Source of truth: brand/BRAND.md.
- * The one law: --accent (#FFD923) marks agent work and focus. Never decoration. */
+ * The one law: --accent (#FFD923) marks agent work. Focus has its own blue. */
 
 :root {
   /* surfaces */
-  --bg: #000000;
-  --bg-subtle: #0d1117;
-  --card: #161b22;
+  --bg: #10151b;
+  --bg-subtle: #19212a;
+  --card: #202a35;
 
   /* ink */
-  --ink: #ffffff;
-  --mut: #999999;
-  --dim: #5c6570;
+  --ink: #eff3f6;
+  --mut: #aab8c5;
+  --dim: #9aaaba;
 
   /* hairlines */
   --line: rgba(255, 255, 255, 0.14);
   --line-strong: rgba(255, 255, 255, 0.28);
+  --control-line: #7c8e9f;
 
-  /* semantics — AI is yellow, humans are orange, machines are gray */
+  /* semantics — agents are yellow, human decisions amber, machines gray */
   --accent: #ffd923;
   /* The resting tone for large agent surfaces. The full accent works at the
    * scale of a badge or a 1px button edge, but across a whole bar it reads as
    * an alarm — same hue, lower intensity, with the full accent kept for hover
-   * and focus so the surface still answers when you reach for it. */
+   * so the surface still answers when you reach for it. */
   --accent-soft: color-mix(in srgb, var(--accent) 55%, var(--bg));
-  --human: #ffb238;
-  --ok: #2fbf71;
-  --bad: #ff6b60;
-  --info: #79c0ff;
+  --human: #eebc6b;
+  --ok: #71c6a4;
+  --bad: #ef918c;
+  --info: #91caff;
+  --focus: #91caff;
   --code: #c8cfd8;
-  --machine: #8a93a0;
+  --machine: #9aaaba;
 
   /* Floating surfaces: the plain lift, and the lift the agent surfaces take on
    * when hovered or focused. */
@@ -40,15 +42,26 @@
   color-scheme: dark;
 }
 
-/* Focus is the accent stroke — never hidden (WCAG 2.2 AA floor). */
+/* The outline surrounds the control; its gap separates it from filled buttons.
+ * Containers with clipped edges can place it inside via --focus-offset. */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
+summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: none;
-  box-shadow: 0 2px 0 0 var(--accent);
+  outline: 2px solid var(--focus);
+  outline-offset: var(--focus-offset, 3px);
+}
+
+/* Fields need a visible boundary even when empty. Keep decorative dividers soft.
+ * Existing border utilities and their hover state use these local tokens. */
+input,
+select,
+textarea {
+  --line: var(--control-line);
+  --line-strong: var(--mut);
 }
 
 /* Squared system: buttons and inputs carry no radius. */

@@ -78,7 +78,7 @@ function NavLinks({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cx(
-              "group flex min-h-11 items-center gap-3 border-l-2 px-5 py-3 text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-(--info)",
+              "group flex min-h-11 items-center gap-3 border-l-2 px-5 py-3 text-[13px] transition-colors [--focus-offset:-4px]",
               active
                 ? "border-(--line-strong) font-medium text-(--ink)"
                 : "border-transparent text-(--mut) hover:text-(--ink)",
@@ -182,7 +182,10 @@ export function Sidebar({ project, inboxCount }: { project?: NavProject; inboxCo
   return (
     <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col justify-between border-r border-(--line) py-6 lg:flex">
       <div className="flex flex-col gap-8">
-        <Link href="/" className="px-5 font-mono text-[15px] font-semibold tracking-tight">
+        <Link
+          href="/"
+          className="mx-5 inline-flex min-h-11 self-start items-center font-mono text-[15px] font-semibold tracking-tight"
+        >
           facility<span className="text-(--accent)">.</span>
         </Link>
         <NavSections project={project} inboxCount={inboxCount} />
@@ -226,7 +229,10 @@ export function MobileNav({ project, inboxCount }: { project?: NavProject; inbox
     <div className="lg:hidden">
       <div className="sticky top-0 z-40 flex items-center justify-between border-b border-(--line) bg-(--bg)/95 px-5 py-3 backdrop-blur">
         <div className="flex min-w-0 items-baseline gap-3">
-          <Link href="/" className="font-mono text-[15px] font-semibold tracking-tight">
+          <Link
+            href="/"
+            className="inline-flex min-h-11 items-center font-mono text-[15px] font-semibold tracking-tight"
+          >
             facility<span className="text-(--accent)">.</span>
           </Link>
           {project ? (

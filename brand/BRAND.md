@@ -38,6 +38,32 @@ The yellow rule is the palette's one law:
 yellow marks something an agent did or is doing. A yellow element with no
 agent behind it is off-brand.
 
+### Application surfaces
+
+The application uses a softer dark canvas while preserving the mark and the
+TAM-50 typography. Its values live in `packages/ui/src/tokens.css`:
+
+| role | value | use |
+|---|---|---|
+| canvas / subtle / card | `#10151B` / `#19212A` / `#202A35` | layered surfaces |
+| ink / secondary / dim | `#EFF3F6` / `#AAB8C5` / `#9AAABA` | readable text, including metadata |
+| control boundary | `#7C8E9F` | fields; decorative separators remain quieter |
+| human | `#EEBC6B` | a decision needs human attention |
+| success / failure | `#71C6A4` / `#EF918C` | verified result / failure, always with a label |
+| information / focus | `#91CAFF` | links, information and keyboard outlines |
+| machine | `#9AAABA` | machine activity |
+
+Agent yellow remains `#FFD923`. Focus must also identify human controls, so it
+uses blue independently of agent activity. Outlines surround controls, including
+native disclosure summaries. Fields have stronger boundaries than separators;
+primary buttons have a minimum 44px height and can grow when text wraps.
+
+Check rendered foregrounds and backgrounds, including overlays and interactive
+states, rather than treating token pairs as accessibility certification. The
+application's grain is included in contrast checks. Documentation currently has
+its own stylesheet in `apps/docs/src/css/custom.css`; these application tokens do
+not silently restyle that separate surface.
+
 ## Mark
 
 A unit of work moving through a stable workspace. Geometry only
