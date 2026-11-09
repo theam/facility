@@ -84,7 +84,7 @@ function splitFrontmatter(source) {
 const MODEL_MAX = 160;
 
 function agentModel(frontmatter) {
-  const match = /^model:\s*(.*)$/m.exec(frontmatter);
+  const match = /^model:[ \t]*(.*)$/m.exec(frontmatter);
   if (!match) return null;
   const value = yamlStringScalar(match[1]);
   if (value === null || value.length < 1 || value.length > MODEL_MAX) return null;

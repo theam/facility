@@ -237,6 +237,11 @@ test("doctor inspects agent frontmatter only and accepts quoted models and mcp/u
   assert.equal(commentModel.status, 1);
   assert.match(commentModel.stdout, /model is missing or invalid/);
 
+  writeFileSync(builderPath, original.replace(/^model: .+$/m, "model:"));
+  const emptyModel = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
+  assert.equal(emptyModel.status, 1);
+  assert.match(emptyModel.stdout, /model is missing or invalid/);
+
   writeFileSync(builderPath, original.replace(/^model: .+$/m, 'model: "unclosed'));
   const unclosedModel = runCli(["doctor", `--dir=${dir}`, "--json"], dir);
   assert.equal(unclosedModel.status, 1);
