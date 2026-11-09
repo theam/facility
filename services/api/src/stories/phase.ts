@@ -58,6 +58,7 @@ export type PhaseInput = {
     status: string;
     deletedAt: Date | null;
     hasTurns: boolean;
+    issueBacked?: boolean;
   } | null;
   issue?: { state: "open" | "closed" } | null;
   pullRequest?: PullRequestSummary | null;
@@ -67,14 +68,21 @@ export type PhaseInput = {
 
 export type PhaseResult = { phase: WorkPhase; reason: PhaseReason };
 
+export function isGithubIssueStory(story: { provider: string; externalId: string }): boolean {
+  return story.provider === "github" && /^issue:[1-9]\d*$/.test(story.externalId);
+}
+
 /** Precedence: archived/deleted, delivered, live execution, blockers, review, progress, backlog. */
 export function derivePhase(input: PhaseInput): PhaseResult {
   const story = input.story ?? null;
   const pull = input.pullRequest ?? null;
+  const issueBacked = !!input.issue || story?.issueBacked === true;
   if (story?.deletedAt) return { phase: "archived", reason: "deleted" };
   if (story?.status === "archived") return { phase: "archived", reason: "archived" };
-  if (pull?.state === "merged") return { phase: "done", reason: "merged" };
-  if (story?.status === "done") return { phase: "done", reason: "completed" };
+  // A related PR is only part of an issue's work, including for single-repo stories.
+  // Missing source-issue evidence must not fall back to a merged PR or legacy done flag.
+  if (!issueBacked && pull?.state === "merged") return { phase: "done", reason: "merged" };
+  if (!issueBacked && story?.status === "done") return { phase: "done", reason: "completed" };
   // An active turn is real work in progress even on a closed issue.
   if (input.activeTurn?.state === "running") return { phase: "in_progress", reason: "running" };
   if (input.activeTurn?.state === "queued") return { phase: "in_progress", reason: "queued" };

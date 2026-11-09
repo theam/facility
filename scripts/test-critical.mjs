@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 
 const apiTests = readdirSync(new URL("../services/api/test", import.meta.url))
-  .filter((name) => name.endsWith(".test.ts") && name !== "workspace-runtime.integration.test.ts")
+  .filter((name) => /\.test\.(?:ts|mjs)$/.test(name) && name !== "workspace-runtime.integration.test.ts")
   .sort()
   .map((name) => `test/${name}`);
 

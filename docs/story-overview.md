@@ -25,6 +25,38 @@ Preview and browser verification are everyday environment actions. Suspend, arch
 
 A suspended Vercel machine does not accrue CPU or memory usage, but retained snapshots can incur storage charges. A running machine can accrue memory charges even when no agent is working. Facility does not infer a zero bill from missing provider cost data; consult [Vercel pricing](https://vercel.com/docs/sandbox/pricing) for current rates.
 
+## Code used by automatic previews
+
+An authorized, complete delivery PR set lets Facility rebuild the preview from
+each repository's configured development branch (or GitHub default) and the exact
+required PR heads. A manual story can declare a delivery too; merely mentioning
+a PR in its conversation does not register that delivery.
+
+Before combining divergent heads, Facility confirms the PR's repository, number
+and exact head with GitHub using that repository's installation credential.
+For a merged PR, GitHub's integration commit is used only as evidence: if Git
+proves it is already in the reconstructed candidate, the original head is not
+reapplied. This preserves later integration changes after squash or rebase
+merges. Open PRs' synthetic merge commits are never evidence of integration.
+An unavailable or mismatched confirmation blocks publication; an integration
+commit outside the candidate does not hide a genuine merge conflict.
+
+Each retained workspace and repository has its own local
+`facility/preview/<scope-hash>` branch. It points to the reconstructed candidate,
+including after a force push, PR withdrawal or rewind. Facility never pushes
+this branch to GitHub or adopts it as the story's agent branch. Starting another
+agent attaches its separate work branch to the candidate; older detached previews
+remain supported. Related repositories also leave their managed preview branches
+before the agent starts.
+
+Facility records ownership and updates the preview references together with
+compare-and-swap checks in one Git transaction, without requiring stdin support
+from the provider's command API. An unowned branch, a manually changed preview tip,
+or a preview branch checked out in another worktree blocks convergence. Displaced
+commits remain under local `refs/facility/retained/` references; overlapping edits,
+tracked local overlays and ignored files remain protected. A preview is ready
+only after the environment's rebuild and readiness checks pass.
+
 The presentation helpers in `apps/web/lib/story-presentation.ts` keep state interpretation, exchange grouping, run status wording and ordering independent of React; `services/api/src/turns/activity.ts` projects stored engine events into bounded, readable activity. Unit tests cover those decisions; the story page integration test covers their combined rendering, collapsed history and read-only permissions; `apps/web/test/story-conversation.test.tsx` covers paging, merging, live updates and lazy run details; `services/api/test/story-reading-routes.integration.test.ts` covers the reading endpoints, their bounds, permissions and tenant isolation.
 
 # Reading the backlog
@@ -32,11 +64,18 @@ The presentation helpers in `apps/web/lib/story-presentation.ts` keep state inte
 The Stories page is the project backlog. `services/api/src/stories/backlog.ts` merges mirrored
 GitHub issues, stories and open pull requests into one item per unit of work and
 `services/api/src/stories/phase.ts` derives the work phase with a fixed precedence: deleted or
-archived, delivered (merged pull request, completed story, closed issue), a live turn, open
+archived, delivered non-issue work (merged pull request or completed story), a live turn,
+closed source issue, open
 attention (Facility items, failing checks, requested changes), review (open non-draft pull request),
 progress, and finally not started. The phase never inspects a workspace provider, so listing the
 backlog cannot wake compute. Agent activity (`running`, `queued`, `idle`) and the recorded workspace
 state travel alongside the phase instead of being folded into it.
+
+An issue-backed story stays open until its source GitHub issue closes, even if
+an associated PR is already merged. A task can span multiple PRs and repositories.
+Issue closure suspends idle compute but retains workspace data; reopening clears
+completion without automatically waking it. See [story integrations](story-integrations.md#issue-completion-workspace-retention-and-reopen)
+for active-turn handling, GitHub closing keywords and external cleanup boundaries.
 
 `apps/web/lib/backlog-presentation.ts` turns those values into words, the activity line, the URL
 parameters that hold every filter, and the agent choices offered by the composer. Unit tests cover

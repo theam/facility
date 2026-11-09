@@ -31,15 +31,52 @@ not the last GitHub edit or the time of this GET. A PR-backed story can legitima
 have `issue: null`; use its exact PR evidence. Missing source evidence is unknown,
 not permission to fall back to another PR with the same branch or number in a
 different repository. Issue-backed stories still require their issue evidence;
-if acting on a related PR's state, check that PR's freshness too. A closed,
-unmerged PR keeps the story in progress; a merged PR produces the done phase.
+if acting on a related PR's state, check that PR's freshness too. For an
+issue-backed story, the source issue is the completion authority: a merged
+related PR does not finish the story while its issue is open. This applies to
+both single-repository and multi-repository work. A PR-backed story without a
+source issue still reaches done when its own PR merges; a closed, unmerged PR
+does not mean delivered.
 
 `revision` is an opaque content hash; `observedAt` is observation time. A reopened
 story may revisit an earlier revision. Missing/stale GitHub data, missing workspace,
 an empty site list or HTTP 404 is not a deletion command. A child PR with the same
 branch/issue number does not close the parent. Suspension does not finish a story.
-Facility may mark a story done when its associated PR is merged; this is not proof
-of a downstream production deployment. Consumers must state their cleanup policy.
+Done is not proof of a downstream production deployment. Consumers must state
+their cleanup policy.
+
+### Issue completion, workspace retention and reopen
+
+For GitHub issue-backed stories, Facility reconciles completion from the exact
+source repository and issue, through both webhook observation and mirror polling.
+Merging one associated PR records progress but neither completes the story nor
+suspends its workspace. Closing the source issue completes it and suspends idle
+compute. Already queued/running turns or pending agent messages defer suspension
+until a later reconciliation; closure does not cancel admitted work.
+Repeated observations are idempotent. Explicitly waking an already completed
+story for inspection does not cause every later mirror pass to suspend it again.
+
+Suspension retains the worktree, conversation and persistent workspace data.
+It is not permanent deletion. External integrations may remove their owned
+registrations on completion independently of that retention. Only the separate,
+explicitly confirmed workspace deletion operation destroys retained storage.
+
+Reopening the issue clears completion without waking compute or starting an
+agent. A fresh source-issue observation also repairs older issue-backed rows
+incorrectly marked done by a PR merge. Archived/deleted stories remain untouched;
+no bulk migration, automatic wake or credential change occurs. Missing issue
+evidence cannot be replaced by a merged PR as proof of completion.
+
+This rule applies to all GitHub issue-backed projects. When an older done row is
+reconciled back to its open source issue, lifecycle consumers can observe the
+reopened state and restore registrations according to their own policy. Review
+those downstream effects before rolling out; a retained machine is not woken.
+
+GitHub itself may close an issue when a merged PR contains a closing keyword
+(for example, `Fixes #123`). That is a real source-issue closure. For partial
+deliveries use a non-closing reference such as `Refs #123`; reserve closing
+keywords or explicit issue closure for completion of the whole task. Facility
+does not count arbitrary PRs or override GitHub's issue state.
 
 ## Store small integration state
 

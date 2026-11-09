@@ -125,6 +125,9 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       // to construct endpoint URLs, so pin them to the configured issuer.
       req.headers["x-forwarded-host"] = issuerUrl.host;
       req.headers["x-forwarded-proto"] = issuerUrl.protocol.slice(0, -1);
+      if (req.method === "GET" && path === "/oauth/authorize" && req.url) {
+        req.url = authorizationUrlWithConsent(req.url);
+      }
       callback(req, res);
     } else next();
   });
@@ -157,8 +160,11 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       const clientId = escapeHtml(String(details.params?.client_id ?? "unknown client"));
       const resource = escapeHtml(String(details.params?.resource ?? config.mcpPublicUrl));
       const redirectUri = escapeHtml(String(details.params?.redirect_uri ?? "unknown redirect"));
+      const offlineAccess = oauthScopes(details.params?.scope).has("offline_access")
+        ? "<p>This client can renew its access while you are away, until the authorization expires or is revoked.</p>"
+        : "";
       reply.type("text/html; charset=utf-8");
-      return `<!doctype html><html><body><main><h1>Authorize Facility MCP</h1><p><code>${clientId}</code> requests access to <code>${resource}</code>.</p><p>After approval, Facility will return to <code>${redirectUri}</code>.</p><form method="post"><button name="confirm" value="yes">Authorize</button></form></main></body></html>`;
+      return `<!doctype html><html><body><main><h1>Authorize Facility MCP</h1><p><code>${clientId}</code> requests access to <code>${resource}</code>.</p>${offlineAccess}<p>After approval, Facility will return to <code>${redirectUri}</code>.</p><form method="post"><button name="confirm" value="yes">Authorize</button></form></main></body></html>`;
     },
   );
 
@@ -204,6 +210,24 @@ export async function registerAuthorizationServer(app: FastifyInstance, config: 
       return reply.hijack();
     },
   );
+}
+
+export function authorizationUrlWithConsent(url: string): string {
+  const queryStart = url.indexOf("?");
+  if (queryStart === -1 || url.slice(0, queryStart) !== "/oauth/authorize") return url;
+  const params = new URLSearchParams(url.slice(queryStart + 1));
+  // Leave malformed/duplicate parameters for oidc-provider to reject.
+  if (params.getAll("scope").length !== 1 || params.getAll("prompt").length > 1) return url;
+  if (!oauthScopes(params.get("scope")).has("offline_access")) return url;
+  const prompt = params.get("prompt");
+  const prompts = oauthScopes(prompt);
+  if (prompts.has("none") || prompts.has("consent")) return url;
+
+  // oidc-provider drops offline_access before consent unless it sees this prompt.
+  // MCP clients may omit prompt, so require consent before preserving that scope
+  // in the authorization code and refresh token. Never override silent requests.
+  params.set("prompt", prompt ? `${prompt} consent` : "consent");
+  return `/oauth/authorize?${params}`;
 }
 
 // Resource-server metadata belongs to its Fastify route, not oidc-provider.

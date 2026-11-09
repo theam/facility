@@ -756,7 +756,8 @@ describe("project overview", async () => {
     ]);
     if (!overview.spend.budget.available) throw new Error("budget must be available");
     expect(overview.spend.budget).toMatchObject({
-      state: "warning",
+      // An unpriced turn leaves the true bill unknown even below the warning ceiling.
+      state: "unconfirmed",
       monthlyLimitCents: 1_000,
       spentCents: 300,
     });

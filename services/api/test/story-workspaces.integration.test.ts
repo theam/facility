@@ -22,6 +22,7 @@ import {
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { GithubMirrorService } from "../src/github/mirror.js";
 import { StoryServiceError, StoryWorkspaceService } from "../src/stories/service.js";
 import { appendTurnEvent } from "../src/turns/events.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
@@ -493,6 +494,172 @@ environment:
     expect(merged.story.status).toBe("done");
     expect(merged.workspace?.state).toBe("sleeping");
     expect(await runtime.read(locator, "repos/app/HEAD")).toBe("commit-a");
+  });
+
+  async function issueFixture(number: number) {
+    const result = await service.start({ ...startInput(`issue:${number}`), repositoryId });
+    const mirror = new GithubMirrorService(
+      db,
+      async () => {
+        throw new Error("no external GitHub call expected");
+      },
+      service,
+    );
+    const observe = (
+      state: "open" | "closed",
+      at: string,
+      scope = { orgId, projectId, repositoryId },
+    ) =>
+      mirror.handleWebhook({
+        id: randomUUID(),
+        ...scope,
+        eventType: "issues",
+        payload: {
+          action: state === "closed" ? "closed" : "reopened",
+          repository: { name: `app-${suffix}`, owner: { login: "acme" } },
+          issue: {
+            number,
+            title: "Source issue",
+            html_url: `https://github.com/acme/app/issues/${number}`,
+            state,
+            updated_at: at,
+            closed_at: state === "closed" ? at : null,
+          },
+        },
+      });
+    const finish = async () => {
+      if (!result.queued.turn) throw new Error("missing turn");
+      await service.completeTurn({
+        orgId,
+        projectId,
+        turnId: result.queued.turn.id,
+        output: "done",
+        actor: { type: "system", id: "test" },
+      });
+    };
+    const merge = () =>
+      service.markMerged({
+        orgId,
+        projectId,
+        storyId: result.story.id,
+        pullRequestNumber: number,
+        pullRequestUrl: `https://github.com/acme/app/pull/${number}`,
+        branch: `feature/${number}`,
+      });
+    return { result, observe, finish, merge };
+  }
+
+  it("keeps an issue-backed workspace on PR merge, then suspends on issue closure and retains it on reopen", async () => {
+    const f = await issueFixture(7001);
+    await f.finish();
+    await f.observe("open", "2026-09-30T10:00:00Z");
+    const merged = await f.merge();
+    expect(merged.story).toMatchObject({
+      status: "working",
+      completedAt: null,
+      pullRequestNumber: 7001,
+    });
+    expect(merged.workspace?.state).toBe("running");
+    const stop = vi.spyOn(runtime, "suspend"),
+      destroy = vi.spyOn(runtime, "destroy"),
+      wake = vi.spyOn(runtime, "wake");
+    try {
+      await f.observe("closed", "2026-09-30T11:00:00Z");
+      const closed = await service.get(orgId, projectId, f.result.story.id);
+      expect(closed.story.status).toBe("done");
+      expect(closed.workspace).toMatchObject({
+        state: "sleeping",
+        id: f.result.workspace?.id,
+        volumeRef: f.result.workspace?.volumeRef,
+      });
+      await f.observe("closed", "2026-09-30T11:00:00Z");
+      expect(stop).toHaveBeenCalledTimes(1);
+      await f.observe("open", "2026-09-30T12:00:00Z");
+      // An out-of-order close must not re-close the issue after reopen.
+      await f.observe("closed", "2026-09-30T11:00:00Z");
+      const reopened = await service.get(orgId, projectId, f.result.story.id);
+      expect(reopened.story).toMatchObject({ status: "working", completedAt: null });
+      expect(reopened.workspace).toMatchObject({
+        state: "sleeping",
+        volumeRef: closed.workspace?.volumeRef,
+      });
+      expect(wake).not.toHaveBeenCalled();
+      expect(destroy).not.toHaveBeenCalled();
+      await service.restore(orgId, projectId, f.result.story.id);
+      await f.observe("closed", "2026-09-30T13:00:00Z");
+      expect(stop).toHaveBeenCalledTimes(2);
+      await service.restore(orgId, projectId, f.result.story.id);
+      await f.observe("closed", "2026-09-30T13:00:00Z");
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect((await service.get(orgId, projectId, f.result.story.id)).workspace?.state).toBe(
+        "running",
+      );
+    } finally {
+      stop.mockRestore();
+      destroy.mockRestore();
+      wake.mockRestore();
+    }
+  });
+
+  it("does not interrupt an active issue turn and retries closure after it settles", async () => {
+    const f = await issueFixture(7002);
+    await f.observe("closed", "2026-09-30T10:00:00Z");
+    expect((await service.get(orgId, projectId, f.result.story.id)).workspace?.state).toBe(
+      "running",
+    );
+    await f.finish();
+    const stop = vi
+      .spyOn(runtime, "suspend")
+      .mockRejectedValueOnce(new Error("provider unavailable"));
+    try {
+      await expect(f.observe("closed", "2026-09-30T10:00:00Z")).rejects.toThrow(
+        "provider unavailable",
+      );
+      expect((await service.get(orgId, projectId, f.result.story.id)).story.status).toBe("working");
+      await f.observe("closed", "2026-09-30T10:00:00Z");
+      expect((await service.get(orgId, projectId, f.result.story.id)).workspace?.state).toBe(
+        "sleeping",
+      );
+    } finally {
+      stop.mockRestore();
+    }
+  });
+
+  it("repairs legacy issue completion without a wake, and rejects wrong tenant/repository signals", async () => {
+    const f = await issueFixture(7003);
+    await f.finish();
+    await f.observe("open", "2026-09-30T10:00:00Z");
+    await db
+      .update(stories)
+      .set({ status: "done", completedAt: new Date() })
+      .where(eq(stories.id, f.result.story.id));
+    const wake = vi.spyOn(runtime, "wake");
+    try {
+      await f.observe("open", "2026-09-30T10:00:00Z");
+      expect((await service.get(orgId, projectId, f.result.story.id)).story).toMatchObject({
+        status: "working",
+        completedAt: null,
+      });
+      await f.observe("closed", "2026-09-30T11:00:00Z", {
+        orgId: otherOrgId,
+        projectId: otherProjectId,
+        repositoryId,
+      });
+      await f.observe("closed", "2026-09-30T11:00:00Z", {
+        orgId,
+        projectId,
+        repositoryId: newId("repo"),
+      });
+      expect((await service.get(orgId, projectId, f.result.story.id)).story.status).toBe("working");
+      await service.archive(orgId, projectId, f.result.story.id);
+      await f.observe("open", "2026-09-30T12:00:00Z");
+      expect((await service.get(orgId, projectId, f.result.story.id)).story.status).toBe(
+        "archived",
+      );
+      expect(wake).not.toHaveBeenCalled();
+    } finally {
+      wake.mockRestore();
+    }
   });
 
   it("suspends failed idle workspaces, retains files, and respects explicit wake", async () => {

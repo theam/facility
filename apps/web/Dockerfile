@@ -1,12 +1,15 @@
 # Facility web (Next.js standalone). Built once; FACILITY_API_URL is supplied
 # when the container starts so the same artifact works in every installation.
 #   docker build -f apps/web/Dockerfile -t facility/web .
-FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS base
+FROM node:24.22.2-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
-ARG DEBIAN_SECURITY_REFRESH=20260915
+ARG DEBIAN_SECURITY_REFRESH=20261105
+ARG APT_MIN_VERSION=3.0.4
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge "$APT_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg7.0)" ge "$APT_MIN_VERSION" \
   && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 WORKDIR /app

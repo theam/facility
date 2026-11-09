@@ -27,6 +27,10 @@ The verifier performs these stages:
 Tests use allowlisted disposable databases. Do not override their URLs with a
 database that contains useful data.
 
+Root Node test files run serially so subprocess startup does not compete with
+other suites' subprocesses. Security-parser deadlines and the explicit concurrency
+scenarios inside individual tests remain unchanged.
+
 ## Focused feedback
 
 The story preview controls request a new one-time access grant on every launch,

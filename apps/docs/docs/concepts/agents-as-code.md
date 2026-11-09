@@ -11,6 +11,12 @@ are explicit, and at least one trigger is required.
 The Markdown body is the agent prompt. The frontmatter is execution configuration. Keeping both in
 one reviewed file makes a model change, schedule change, or prompt change visible in Git history.
 
+Discovery uses the primary repository's optional project `developmentBranch`, with the connected
+GitHub default as fallback. The same source supplies skills and `.facility.yml`, new story bases,
+and configuration PR bases. See the [development source contract](../reference/project-manifest.md#development-source).
+Changing this setting does not replace queued/running turns' captured agent manifests or move
+existing story branches.
+
 Supported triggers are:
 
 - `manual`, used by trusted internal or direct API dispatch;
