@@ -1,5 +1,6 @@
 import type { StoryDelivery } from "@facility/sdk";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { formatTime } from "@/lib/story-presentation";
 import { DecisionBrief } from "./decision-brief";
 
@@ -23,9 +24,11 @@ const reasons = {
 export function DeliveryDecisionBrief({
   projection,
   storyUrl,
+  actions,
 }: {
   projection?: Projection;
   storyUrl: string;
+  actions?: ReactNode;
 }) {
   if (!projection) return null;
   if (projection.status === "absent")
@@ -42,10 +45,9 @@ export function DeliveryDecisionBrief({
     projection.status === "invalid" ? null : (
       <>
         <DecisionBrief brief={projection.brief} delivery={projection.subject} />
+        {projection.status === "available" ? actions : null}
         <details className="mt-3 text-xs text-(--mut)">
-          <summary className="min-h-11 cursor-pointer py-3">
-            Exact subject of the author’s brief
-          </summary>
+          <summary className="min-h-11 cursor-pointer py-3">Candidate details</summary>
           <p className="break-all">
             Candidate: <code>{projection.subject.candidateRevision}</code>
           </p>
@@ -63,10 +65,7 @@ export function DeliveryDecisionBrief({
       </>
     );
   return (
-    <section
-      aria-label="Author’s delivery brief"
-      className="my-4 min-w-0 border-l-2 border-(--human) bg-(--bg-subtle) p-4 text-sm"
-    >
+    <section aria-label="Author’s delivery brief" className="my-4 min-w-0 text-sm">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-(--mut)">
           {source.turn?.agentName ?? "Unverified author"} · {formatTime(source.createdAt)}
@@ -75,7 +74,7 @@ export function DeliveryDecisionBrief({
           href={`${original.pathname}${original.search}${original.hash}`}
           className="inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
         >
-          Open original message and author
+          Open original
         </Link>
       </div>
       {projection.status === "available" ? (

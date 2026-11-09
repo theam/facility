@@ -125,31 +125,28 @@ export function StorySections({
         }}
         className="min-w-0 scroll-mt-6"
       >
-        <summary className="min-h-11 cursor-pointer border border-(--line) bg-(--bg-subtle) px-4 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-(--info)">
+        <summary
+          className={
+            section.key === lead && opened[section.key]
+              ? "sr-only focus:not-sr-only focus:min-h-11 focus:p-3 focus:outline-2 focus:outline-(--info)"
+              : "min-h-11 cursor-pointer border border-(--line) bg-(--bg-subtle) px-4 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-(--info)"
+          }
+        >
           {section.label}
-          {section.key === lead ? " · in focus" : ""}
         </summary>
         <div className="mt-3 min-w-0">{section.content}</div>
       </details>
     );
   }
-  return (
-    <div ref={root} className="flex min-w-0 flex-col gap-6" data-story-sections>
-      <div className="min-w-0 border-l-2 border-(--human) pl-4">
-        <h2 className="font-semibold">{focus.title}</h2>
-        <p className="mt-2 text-sm text-(--mut)">{focus.detail}</p>
-        {changed ? (
-          <p className="mt-2 text-sm" role="status">
-            The next step changed. Your open panels and drafts stay in place.{" "}
-            <button
-              type="button"
-              onClick={showCurrent}
-              className="min-h-11 text-(--info) underline"
-            >
-              Show the current step first
-            </button>
-          </p>
-        ) : null}
+  const reviewing = lead === "plan" || lead === "delivery";
+  const context = (
+    <div key="context" className="min-w-0 border-l-2 border-(--human) pl-4">
+      <h2 className="font-semibold">{focus.title}</h2>
+      <details className="text-sm">
+        <summary className="min-h-11 cursor-pointer py-3 text-(--mut)">
+          Details and navigation
+        </summary>
+        <p className="text-(--mut)">{focus.detail}</p>
         <nav aria-label="Story sections" className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
           <a
             href="#conversation"
@@ -167,10 +164,24 @@ export function StorySections({
             </a>
           ))}
         </nav>
-      </div>
+      </details>
+      {changed ? (
+        <p className="mt-2 text-sm" role="status">
+          The next step changed. Your open panels and drafts stay in place.{" "}
+          <button type="button" onClick={showCurrent} className="min-h-11 text-(--info) underline">
+            Show the current step first
+          </button>
+        </p>
+      ) : null}
+    </div>
+  );
+  return (
+    <div ref={root} className="flex min-w-0 flex-col gap-6" data-story-sections>
       {[
+        ...(!reviewing ? [context] : []),
         ...(first ? [panel(first)] : []),
         <div key="conversation">{conversation}</div>,
+        ...(reviewing ? [context] : []),
         ...sections.filter((section) => section.key !== lead).map(panel),
       ]}
     </div>

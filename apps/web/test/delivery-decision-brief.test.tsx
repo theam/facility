@@ -66,7 +66,7 @@ describe("delivery author brief", () => {
       expect(input.checked).toBe(true);
       expect(container.textContent).toContain(fixture.brief.summary.text);
       expect(container.textContent).toContain(fixture.brief.decisiveRisk.text);
-      expect(container.textContent).toContain("Reviewing options submits nothing");
+      expect(container.textContent).toContain("Author recommends:");
       expect(
         container.querySelectorAll('a[href="https://example.com/reviews/delivery-4"]').length,
       ).toBeGreaterThan(0);

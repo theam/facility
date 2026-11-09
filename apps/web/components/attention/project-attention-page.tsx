@@ -3,7 +3,6 @@ import { DeliveryReview } from "@/components/attention/delivery-review";
 import { OtherPullReviews } from "@/components/attention/other-pull-reviews";
 import { ProjectConditions } from "@/components/attention/project-conditions";
 import { ErrorNotice, Offline } from "@/components/offline";
-import { DecisionBrief } from "@/components/story/decision-brief";
 import { type AttentionStoriesQuery, api } from "@/lib/api";
 import { attentionKindLabel, relativeTime, storyHref } from "@/lib/overview-presentation";
 import { storyReviewHref } from "@/lib/story-review-navigation";
@@ -54,99 +53,100 @@ export default async function ProjectAttentionPage({
     return `${base}${search.size ? `?${search}` : ""}`;
   };
   const now = new Date();
+  const projectNeedsAttention =
+    result.ok &&
+    (result.data.workflowPolicy?.available === false ||
+      (result.data.budget?.available &&
+        ["exceeded", "unconfirmed", "warning"].includes(result.data.budget.state)));
   const control =
     "inline-flex min-h-11 items-center border border-(--line) px-3 text-sm text-(--ink) hover:bg-(--card)";
 
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <header className="flex flex-col gap-3">
-        <p className="text-xs text-(--mut)">Project review</p>
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-semibold tracking-tight">Attention</h1>
-        <p className="max-w-2xl text-sm text-(--mut)">
-          Plans, notices and delivery sets, grouped by story, with other open PRs alongside them.
-          Each decision keeps its own review and confirmation.
-        </p>
-        <nav aria-label="Related project views" className="flex flex-wrap gap-3">
-          <Link href={`${base}/activity`} className={control}>
-            Activity
-          </Link>
-          <Link href={`${base}/attention`} className={control}>
-            All notices
-          </Link>
-          <Link href={`${base}/attention?status=resolved`} className={control}>
-            Resolved notices
-          </Link>
-          <Link href={`${base}/stories`} className={control}>
-            All stories
-          </Link>
-        </nav>
-      </header>
-      {result.ok ? <ProjectConditions data={result.data} base={base} /> : null}
-      <h2 className="text-xl font-semibold">Next review</h2>
-      <form
-        method="get"
-        action={`${base}`}
-        aria-label="Find stories and pull requests"
-        className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
-      >
-        <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm" htmlFor="review-search">
-          Story, notice or PR text
-          <input
-            id="review-search"
-            type="search"
-            name="q"
-            defaultValue={q}
-            className="min-h-11 min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
-          />
-        </label>
-        <label className="flex flex-col gap-2 text-sm" htmlFor="review-category">
-          Show
-          <select
-            id="review-category"
-            name="category"
-            defaultValue={query.category}
-            className="min-h-11 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
-          >
-            <option value="all">Stories and other PRs</option>
-            <option value="plans">Stories with pending plans</option>
-            <option value="notices">Stories with open notices</option>
-            <option value="deliveries">Stories with deliveries</option>
-            <option value="pulls">Other open PRs</option>
-          </select>
-        </label>
-        <button type="submit" className={control}>
-          Apply
-        </button>
-        {q || query.category !== "all" ? (
-          <Link href={`${base}`} className={control}>
-            Clear filters
-          </Link>
+        {result.ok ? (
+          <p className="text-sm text-(--mut)" role="status">
+            {result.data.counts.stories} pending{" "}
+            {result.data.counts.stories === 1 ? "story" : "stories"}
+          </p>
         ) : null}
-      </form>
+      </header>
+      <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+        <details className="min-w-0 flex-1" open={!!q || query.category !== "all"}>
+          <summary className="min-h-11 w-fit cursor-pointer py-3 text-sm text-(--mut)">
+            Filters{q || query.category !== "all" ? " · active" : ""}
+          </summary>
+          <div className="pb-4 pt-2">
+            <form
+              method="get"
+              action={`${base}`}
+              aria-label="Find stories and pull requests"
+              className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"
+            >
+              <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm" htmlFor="review-search">
+                Search
+                <input
+                  id="review-search"
+                  type="search"
+                  name="q"
+                  defaultValue={q}
+                  className="min-h-11 min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-sm" htmlFor="review-category">
+                Type
+                <select
+                  id="review-category"
+                  name="category"
+                  defaultValue={query.category}
+                  className="min-h-11 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
+                >
+                  <option value="all">All</option>
+                  <option value="plans">Plans</option>
+                  <option value="notices">Notices</option>
+                  <option value="deliveries">Deliveries</option>
+                  <option value="pulls">Other open PRs</option>
+                </select>
+              </label>
+              <button type="submit" className={control}>
+                Apply
+              </button>
+              {q || query.category !== "all" ? (
+                <Link href={`${base}`} className={control}>
+                  Clear filters
+                </Link>
+              ) : null}
+            </form>
+          </div>
+        </details>
+        <details>
+          <summary className="min-h-11 cursor-pointer py-3 text-sm text-(--mut)">
+            More views
+          </summary>
+          <nav aria-label="Related project views" className="flex flex-wrap gap-3">
+            <Link href={`${base}/activity`} className={control}>
+              Activity
+            </Link>
+            <Link href={`${base}/attention`} className={control}>
+              All notices
+            </Link>
+            <Link href={`${base}/attention?status=resolved`} className={control}>
+              Resolved notices
+            </Link>
+            <Link href={`${base}/stories`} className={control}>
+              All stories
+            </Link>
+          </nav>
+        </details>
+      </div>
+      {result.ok && projectNeedsAttention ? (
+        <ProjectConditions data={result.data} base={base} />
+      ) : null}
       {!result.ok ? (
         <ErrorNotice message={`Couldn't load pending stories — ${result.message}`} />
       ) : (
         <>
-          {query.category !== "pulls" ? (
-            <p className="text-sm text-(--mut)" role="status">
-              {result.data.counts.stories} {result.data.counts.stories === 1 ? "story" : "stories"}{" "}
-              · {result.data.counts.plans} pending{" "}
-              {result.data.counts.plans === 1 ? "plan" : "plans"} · {result.data.counts.notices}{" "}
-              open {result.data.counts.notices === 1 ? "notice" : "notices"} ·{" "}
-              {result.data.counts.deliveries}{" "}
-              {result.data.counts.deliveries === 1 ? "delivery" : "deliveries"}
-              {q || query.category !== "all" ? " in matching stories" : ""}.
-            </p>
-          ) : null}
-          <p className="text-xs text-(--mut)">
-            Updated {relativeTime(result.data.generatedAt, now)}.{" "}
-            <a
-              href={href(pageNumber)}
-              className="inline-flex min-h-11 items-center underline underline-offset-4"
-            >
-              Refresh this view
-            </a>
-          </p>
           {query.category !== "pulls" ? (
             <>
               {result.data.items.length === 0 ? (
@@ -158,112 +158,90 @@ export default async function ProjectAttentionPage({
                         ? "No matching pending stories"
                         : "No pending plans, notices or deliveries"}
                   </h2>
-                  <p className="mt-2 text-sm text-(--mut)">
-                    Other open PRs have their own list below when selected. Open Stories to follow
-                    ongoing work.
-                  </p>
+                  <Link
+                    href={`${base}/stories`}
+                    className="mt-2 inline-flex min-h-11 items-center text-sm text-(--info)"
+                  >
+                    Open Stories
+                  </Link>
                 </section>
               ) : (
                 <ol aria-label="Pending stories" className="flex flex-col gap-4">
                   {result.data.items.map((item) => {
                     const target = storyHref(projectId, item.storyId);
                     const brief = item.plan?.decisionBrief;
+                    const review = item.plan
+                      ? storyReviewHref(projectId, item.storyId, {
+                          revision: item.plan.revision,
+                          digest: item.plan.digest,
+                        })
+                      : `${target}${item.delivery ? "#story-delivery" : "#story-attention"}`;
+                    const kind = item.plan ? "Plan" : item.delivery ? "Delivery" : "Notice";
+                    const tone = item.plan
+                      ? "border-l-(--human)"
+                      : item.delivery
+                        ? "border-l-(--info)"
+                        : "border-l-(--mut)";
                     return (
                       <li
                         key={item.storyId}
-                        className="min-w-0 border border-(--line) bg-(--bg-subtle) p-5 sm:p-6"
+                        className={`min-w-0 border border-(--line) border-l-2 ${tone} bg-(--bg-subtle) p-4 sm:p-5`}
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h2 className="break-words text-lg font-semibold">
-                              <Link href={target}>{item.storyTitle}</Link>
-                            </h2>
-                            <p className="mt-1 text-xs text-(--mut)">
-                              Story: {item.storyStatus} · Pending since{" "}
+                        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <p className="mb-1 text-xs text-(--mut)">
+                              {kind}
+                              {item.plan ? ` · r${item.plan.revision}` : ""} ·{" "}
                               {relativeTime(item.waitingSince, now)}
                             </p>
-                          </div>
-                          {item.plan || !item.delivery ? (
-                            <Link
-                              href={
-                                item.plan
-                                  ? storyReviewHref(projectId, item.storyId, {
-                                      revision: item.plan.revision,
-                                      digest: item.plan.digest,
-                                    })
-                                  : `${target}#story-attention`
-                              }
-                              className={control}
-                            >
-                              {item.plan
-                                ? `Review plan r${item.plan.revision}`
-                                : item.delivery
-                                  ? "Open delivery"
-                                  : "Open notices"}
-                            </Link>
-                          ) : null}
-                        </div>
-                        {item.plan ? (
-                          <div className="mt-4 flex flex-col gap-3">
-                            <p className="text-sm font-medium">
-                              Plan r{item.plan.revision} awaits review
-                            </p>
+                            <h2 className="break-words text-lg font-semibold">
+                              <Link href={review}>{item.storyTitle}</Link>
+                            </h2>
                             {brief?.status === "available" ? (
-                              <>
-                                <p className="break-words text-sm">{brief.brief.summary.text}</p>
-                                <details>
-                                  <summary className="min-h-11 cursor-pointer py-3 text-sm text-(--info)">
-                                    Author’s recommendation, alternatives and sources
-                                  </summary>
-                                  <div className="border-t border-(--line) pt-4">
-                                    <DecisionBrief
-                                      key={item.plan.digest}
-                                      brief={brief.brief}
-                                      revision={item.plan.revision}
-                                    />
-                                  </div>
-                                </details>
-                              </>
-                            ) : (
-                              <p className="text-sm text-(--mut)">
-                                {brief?.status === "invalid"
-                                  ? "The author’s brief could not be read."
-                                  : "No structured brief was supplied."}{" "}
-                                Open the plan to read the original.
+                              <p className="mt-2 line-clamp-2 break-words text-sm text-(--mut)">
+                                {brief.brief.summary.text}
                               </p>
-                            )}
-                            <p className="text-xs text-(--mut)">
-                              Opens this exact revision r{item.plan.revision}. If a newer plan
-                              exists, the linked revision stays visible until you choose the current
-                              one.
-                            </p>
-                          </div>
-                        ) : null}
-                        {item.delivery ? (
-                          <DeliveryReview delivery={item.delivery} storyUrl={target} />
-                        ) : null}
-                        {item.noticeCount > 0 ? (
-                          <div className="mt-4 border-t border-(--line) pt-3 text-sm">
-                            <p>
-                              {item.noticeCount} open{" "}
-                              {item.noticeCount === 1 ? "notice" : "notices"}
-                            </p>
-                            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-(--mut)">
-                              {item.noticeKinds.map(({ kind, count }) => (
-                                <li key={kind}>
-                                  {attentionKindLabel(kind)} · {count}
-                                </li>
-                              ))}
-                            </ul>
-                            {item.plan ? (
-                              <Link
-                                href={`${target}#story-attention`}
-                                className="mt-2 inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
-                              >
-                                Open notices
-                              </Link>
+                            ) : null}
+                            {!item.plan && item.delivery ? (
+                              <p className="mt-2 text-sm text-(--mut)">
+                                {item.delivery.blocked?.message ??
+                                  `${item.delivery.candidate.requiredCount} required PRs · ${item.delivery.acceptance.status === "current" ? "Accepted" : "Awaiting review"}`}
+                              </p>
+                            ) : null}
+                            {!item.plan && !item.delivery ? (
+                              <p className="mt-2 text-sm text-(--mut)">
+                                {item.noticeKinds
+                                  .map(({ kind }) => attentionKindLabel(kind))
+                                  .join(" · ")}
+                              </p>
                             ) : null}
                           </div>
+                          <Link href={review} className={`${control} w-fit shrink-0`}>
+                            {item.plan
+                              ? `Review plan r${item.plan.revision}`
+                              : item.delivery
+                                ? "Review delivery"
+                                : "Open notices"}{" "}
+                            <span aria-hidden="true" className="ml-2">
+                              →
+                            </span>
+                          </Link>
+                        </div>
+                        {item.noticeCount > 0 && (item.plan || item.delivery) ? (
+                          <Link
+                            href={`${target}#story-attention`}
+                            className="mt-2 inline-flex min-h-11 items-center text-xs text-(--mut) underline underline-offset-4"
+                          >
+                            {item.noticeCount} {item.noticeCount === 1 ? "notice" : "notices"}
+                          </Link>
+                        ) : null}
+                        {item.delivery ? (
+                          <details className="mt-2">
+                            <summary className="min-h-11 cursor-pointer py-3 text-sm text-(--mut)">
+                              Delivery details
+                            </summary>
+                            <DeliveryReview delivery={item.delivery} storyUrl={target} />
+                          </details>
                         ) : null}
                       </li>
                     );
@@ -300,7 +278,8 @@ export default async function ProjectAttentionPage({
               </nav>
             </>
           ) : null}
-          {query.category === "all" || query.category === "pulls" ? (
+          {query.category === "pulls" ||
+          (query.category === "all" && result.data.otherPullRequests?.total !== 0) ? (
             <OtherPullReviews
               data={result.data.otherPullRequests}
               projectId={projectId}
@@ -308,6 +287,31 @@ export default async function ProjectAttentionPage({
               href={(page) => `${href(pageNumber, page)}#other-pull-requests`}
             />
           ) : null}
+          <details className="text-xs text-(--mut)">
+            <summary className="min-h-11 cursor-pointer py-3">Queue details</summary>
+            {!projectNeedsAttention ? <ProjectConditions data={result.data} base={base} /> : null}
+            {query.category !== "pulls" ? (
+              <p className="text-sm text-(--mut)" role="status">
+                {result.data.counts.stories}{" "}
+                {result.data.counts.stories === 1 ? "story" : "stories"} ·{" "}
+                {result.data.counts.plans} pending{" "}
+                {result.data.counts.plans === 1 ? "plan" : "plans"} · {result.data.counts.notices}{" "}
+                open {result.data.counts.notices === 1 ? "notice" : "notices"} ·{" "}
+                {result.data.counts.deliveries}{" "}
+                {result.data.counts.deliveries === 1 ? "delivery" : "deliveries"}
+                {q || query.category !== "all" ? " in matching stories" : ""}.
+              </p>
+            ) : null}
+            <p className="text-xs text-(--mut)">
+              Updated {relativeTime(result.data.generatedAt, now)}.{" "}
+              <a
+                href={href(pageNumber)}
+                className="inline-flex min-h-11 items-center underline underline-offset-4"
+              >
+                Refresh this view
+              </a>
+            </p>
+          </details>
         </>
       )}
     </div>

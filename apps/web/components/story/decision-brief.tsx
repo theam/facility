@@ -65,171 +65,165 @@ export function DecisionBrief({
   return (
     <section
       aria-label={`Author’s decision brief for ${subject}`}
-      className="grid min-w-0 gap-4 text-sm sm:grid-cols-2"
+      className="flex min-w-0 flex-col gap-4 text-sm"
     >
-      <div className="flex flex-col gap-2 sm:col-span-2">
-        <h3 className="font-medium">The decision in brief</h3>
-        {claim(brief.summary)}
-        <p className="text-xs text-(--mut)">
-          {delivery ? `Supplied for ${subject}` : `Supplied in ${subject}`}. Sources and
-          recommendations are the author’s statements.
-        </p>
-      </div>
       <div className="flex flex-col gap-2">
-        <h4 className="font-medium">Why the author asks for a decision</h4>
-        {claim(brief.whyNow)}
+        <h3 className="font-medium">Summary</h3>
+        {claim(brief.summary)}
       </div>
       <div className="flex flex-col gap-2 border-l-2 border-(--info) pl-4">
         <h4 className="font-medium">
-          {recommended ? `Recommended: ${recommended.label}` : "No recommendation supplied"}
+          {recommended ? `Author recommends: ${recommended.label}` : "No recommendation supplied"}
         </h4>
         {brief.recommendation ? claim(brief.recommendation.reason) : null}
       </div>
-      <fieldset className="min-w-0 sm:col-span-2">
-        <legend className="mb-2 text-xs text-(--mut)">How to view the options</legend>
-        <div className="flex flex-wrap gap-2">
-          {(
-            [
-              ["summary", "Summary"],
-              ["comparison", "Comparison"],
-              ["diagram", "Diagram"],
-            ] as const
-          ).map(([value, label]) => (
-            <label
-              key={value}
-              className={`flex min-h-11 cursor-pointer items-center gap-2 border px-3 py-2 ${format === value ? "border-(--info) bg-(--card)" : "border-(--line)"}`}
-            >
-              <input
-                type="radio"
-                name={group}
-                value={value}
-                checked={format === value}
-                onChange={() => setFormat(value)}
-                className="accent-(--info)"
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <div aria-live="polite" aria-atomic="true" className="sr-only">
-        Options shown as {format}. The recommendation and sources are unchanged.
-      </div>
-      {format === "comparison" ? (
-        <section className="min-w-0 overflow-x-auto sm:col-span-2" aria-label="Option comparison">
-          <table className="w-full table-fixed border-collapse text-left text-sm">
-            <caption className="sr-only">
-              Options and consequences from the same{" "}
-              {delivery ? "delivery candidate" : "plan revision"}
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col" className="w-2/5 border-b border-(--line) p-2 align-top">
-                  Option
-                </th>
-                <th scope="col" className="border-b border-(--line) p-2">
-                  Consequence
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {brief.options.map((option, index) => (
-                <tr key={option.id}>
-                  <th
-                    scope="row"
-                    className="break-words border-b border-(--line) p-2 align-top font-medium"
-                  >
-                    {optionLabel(option, index)}
-                  </th>
-                  <td className="break-words border-b border-(--line) p-2 align-top">
-                    {claim(option.consequence)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      ) : (
-        <div className="min-w-0 sm:col-span-2">
-          {format === "diagram" ? (
-            <p className="mb-3 text-xs text-(--mut)">
-              Each option leads to the consequence described by the author.
-            </p>
-          ) : null}
-          <ol className="grid min-w-0 gap-4 sm:grid-cols-2" aria-label="Options and consequences">
-            {brief.options.map((option, index) => (
-              <li
-                key={option.id}
-                className={`min-w-0 ${format === "diagram" ? "border border-(--line) bg-(--card) p-4" : ""}`}
-              >
-                <p className="break-words font-medium">{optionLabel(option, index)}</p>
-                {format === "diagram" ? (
-                  <span aria-hidden="true" className="my-2 block text-(--mut)">
-                    ↓
-                  </span>
-                ) : null}
-                <div className={format === "summary" ? "mt-2 text-(--mut)" : "text-(--mut)"}>
-                  {claim(option.consequence)}
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-      <div className="flex flex-col gap-2 border-t border-(--line) pt-4">
-        <h4 className="font-medium">Risk that could change the decision</h4>
+      <div className="flex flex-col gap-2 border-l-2 border-(--human) pl-4">
+        <h4 className="font-medium">Risk</h4>
         {claim(brief.decisiveRisk)}
       </div>
-      <div className="flex flex-col gap-2 border-t border-(--line) pt-4">
-        <h4 className="font-medium">Still unknown</h4>
-        {brief.unknowns.length ? (
+      {brief.unknowns.length ? (
+        <div className="flex flex-col gap-2">
+          <h4 className="font-medium">Still unknown</h4>
           <ul className="flex flex-col gap-2">
             {brief.unknowns.map((value, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: immutable statements in a single revision
               <li key={index}>{claim(value)}</li>
             ))}
           </ul>
-        ) : (
-          <p className="text-(--mut)">
-            The author listed no missing evidence. This is not a verification result.
-          </p>
-        )}
-      </div>
-      {brief.evidence.length ? (
-        <details className="text-xs text-(--mut) sm:col-span-2">
-          <summary className="cursor-pointer py-2">
-            Source references · {brief.evidence.length}
-          </summary>
-          <ul className="mt-2 flex flex-col gap-3">
-            {brief.evidence.map((source) => (
-              <li key={source.id} className="break-words">
-                <a
-                  href={source.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-4"
+        </div>
+      ) : null}
+      <details className="min-w-0 border-t border-(--line) pt-2">
+        <summary className="min-h-11 cursor-pointer py-3 text-(--info)">
+          Alternatives and sources
+        </summary>
+        <div className="flex min-w-0 flex-col gap-4 pt-2">
+          <div className="flex flex-col gap-2">
+            <h4 className="font-medium">Why now</h4>
+            {claim(brief.whyNow)}
+          </div>
+          <fieldset className="min-w-0 sm:col-span-2">
+            <legend className="sr-only">Option format</legend>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["summary", "Summary"],
+                  ["comparison", "Comparison"],
+                  ["diagram", "Diagram"],
+                ] as const
+              ).map(([value, label]) => (
+                <label
+                  key={value}
+                  className={`flex min-h-11 cursor-pointer items-center border-b-2 px-3 py-2 has-focus-visible:outline-2 has-focus-visible:outline-(--info) ${format === value ? "border-(--info) text-(--ink)" : "border-transparent text-(--mut)"}`}
                 >
-                  {source.label}
-                </a>
-                <p className="mt-1">{source.reference}</p>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3">
-            References are saved with this {delivery ? "source message" : "plan"}; their current
-            contents have not been checked by opening this page.
+                  <input
+                    type="radio"
+                    name={group}
+                    value={value}
+                    checked={format === value}
+                    onChange={() => setFormat(value)}
+                    className="sr-only"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div aria-live="polite" aria-atomic="true" className="sr-only">
+            Options shown as {format}. The recommendation and sources are unchanged.
+          </div>
+          {format === "comparison" ? (
+            <section
+              className="min-w-0 overflow-x-auto sm:col-span-2"
+              aria-label="Option comparison"
+            >
+              <table className="w-full table-fixed border-collapse text-left text-sm">
+                <caption className="sr-only">
+                  Options and consequences from the same{" "}
+                  {delivery ? "delivery candidate" : "plan revision"}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col" className="w-2/5 border-b border-(--line) p-2 align-top">
+                      Option
+                    </th>
+                    <th scope="col" className="border-b border-(--line) p-2">
+                      Consequence
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brief.options.map((option, index) => (
+                    <tr key={option.id}>
+                      <th
+                        scope="row"
+                        className="break-words border-b border-(--line) p-2 align-top font-medium"
+                      >
+                        {optionLabel(option, index)}
+                      </th>
+                      <td className="break-words border-b border-(--line) p-2 align-top">
+                        {claim(option.consequence)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          ) : (
+            <div className="min-w-0 sm:col-span-2">
+              <ol
+                className="grid min-w-0 gap-4 sm:grid-cols-2"
+                aria-label="Options and consequences"
+              >
+                {brief.options.map((option, index) => (
+                  <li
+                    key={option.id}
+                    className={`min-w-0 ${format === "diagram" ? "border border-(--line) bg-(--card) p-4" : ""}`}
+                  >
+                    <p className="break-words font-medium">{optionLabel(option, index)}</p>
+                    {format === "diagram" ? (
+                      <span aria-hidden="true" className="my-2 block text-(--mut)">
+                        ↓
+                      </span>
+                    ) : null}
+                    <div className={format === "summary" ? "mt-2 text-(--mut)" : "text-(--mut)"}>
+                      {claim(option.consequence)}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {brief.evidence.length ? (
+            <details className="text-xs text-(--mut) sm:col-span-2">
+              <summary className="cursor-pointer py-2">
+                Source references · {brief.evidence.length}
+              </summary>
+              <ul className="mt-2 flex flex-col gap-3">
+                {brief.evidence.map((source) => (
+                  <li key={source.id} className="break-words">
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-4"
+                    >
+                      {source.label}
+                    </a>
+                    <p className="mt-1">{source.reference}</p>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : (
+            <p className="text-xs text-(--mut) sm:col-span-2">
+              No source links were supplied in this brief.
+            </p>
+          )}
+          <p className="text-xs text-(--mut)">
+            {delivery ? `Supplied for ${subject}` : `Supplied in ${subject}`}. Author statements.
           </p>
-        </details>
-      ) : (
-        <p className="text-xs text-(--mut) sm:col-span-2">
-          No source links were supplied in this brief.
-        </p>
-      )}
-      <p className="text-xs text-(--mut) sm:col-span-2">
-        {delivery
-          ? "Reviewing options submits nothing. Delivery acceptance, PR review, merge and completion retain their own checks."
-          : "Reviewing options does not change the plan. Approval applies to the complete revision and scope below; a different scope needs a new plan revision."}
-      </p>
+        </div>
+      </details>
     </section>
   );
 }

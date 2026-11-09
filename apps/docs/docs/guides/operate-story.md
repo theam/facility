@@ -10,7 +10,7 @@ actions.
 
 The story opens with the relevant recorded step: a proposed or explicitly linked plan,
 the delivery PR set, current work, or post-merge completion and retention. The conversation
-follows that panel. Other sections stay available as disclosures and through **Story sections**;
+follows that panel. Other sections stay available as disclosures and through **Details and navigation**;
 links to a plan, source message or activity open the relevant content. Preparing a plan from an
 agent response also reveals its panel without starting work.
 
@@ -194,8 +194,10 @@ and does not confirm a plan or accept delivery.
 ## Agree on a versioned plan
 
 When the author includes a [decision brief](../reference/decision-brief.md), review its summary,
-recommended option, consequences, decisive risk and missing evidence first. **Summary**,
-**Comparison** and **Diagram** present the same saved statements. Open a source beside a claim or
+recommendation, decisive risk and missing evidence first. **Alternatives and sources**
+contains the optional **Summary**, **Comparison** and **Diagram** views of the same saved options.
+**Review approval** opens the existing exact-scope confirmation; **Request changes** prepares
+a separate decision. **Plan options** contains reload and proposal editing. Open a source beside a claim or
 expand **Original plan** to inspect the full text, including the exact source message text when
 the plan was attributed to one. The proposer and selected execution agents are shown separately.
 Source references are author claims; opening this page does not verify them or invoke a model.
@@ -388,8 +390,10 @@ preserved under the same rules as other preview updates.
 ### Read the author’s delivery brief
 
 A final response can include a [delivery brief](../reference/decision-brief.md#delivery-decisions).
-Attention and the story show the same saved summary, options and sources. Switch between Summary,
-Comparison and Diagram without submitting a decision. Open the original message to inspect its
+Attention links to the same saved summary, options and sources in the story. The review leads
+with summary, recommendation and risk. Expand **Alternatives and sources** to switch between
+Summary, Comparison and Diagram without submitting a decision. **Review acceptance** opens
+the acceptance section; it does not submit or confirm acceptance. Open the original message to inspect its
 recorded author and full text. Every required and optional head must still match; changed scope
 or heads make the brief historical, and stale observations or an unverified source are explicit.
 A new invalid brief does not reuse an older recommendation. The observed PRs, checks, preview and

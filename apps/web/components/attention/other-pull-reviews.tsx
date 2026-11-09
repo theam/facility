@@ -26,10 +26,6 @@ export function OtherPullReviews({
       <h2 id="other-pulls-heading" className="text-xl font-semibold">
         Other pull requests
       </h2>
-      <p className="max-w-2xl text-sm text-(--mut)">
-        Open PRs observed outside the active delivery sets above, including those linked to finished
-        or archived stories. A source story is context; it does not declare a complete delivery.
-      </p>
       {!data ? (
         <p role="status">
           The other pull request inventory is unavailable in this response. Open the project
@@ -38,8 +34,7 @@ export function OtherPullReviews({
       ) : (
         <>
           <p className="text-sm text-(--mut)" role="status">
-            {data.total} matching open {data.total === 1 ? "PR" : "PRs"} · oldest PR update first.
-            This is the recorded GitHub mirror; no live refresh was requested.
+            {data.total} matching open {data.total === 1 ? "PR" : "PRs"}
           </p>
           {!data.items.length ? (
             <p className="border border-(--line) p-5">
@@ -81,34 +76,37 @@ export function OtherPullReviews({
                       {currentCheckLabel(pull)}
                       {pull.stale ? " · observation outdated" : ""}
                     </p>
-                    <p className="mt-2 break-all text-xs text-(--mut)">
-                      Observed head: <code>{pull.headSha ?? "unavailable"}</code>
-                    </p>
-                    <p className="mt-2 text-xs text-(--mut)">
-                      PR updated {formatTime(pull.updatedAt)} · mirror observed{" "}
-                      {formatTime(pull.observedAt)}
-                    </p>
-                    {pull.stories.length ? (
-                      <ul className="mt-3 flex flex-col gap-1" aria-label="Related stories">
-                        {pull.stories.map((story) => (
-                          <li key={story.id}>
-                            <Link
-                              className="inline-flex min-h-11 items-center break-words text-(--info) underline underline-offset-4"
-                              href={storyHref(projectId, story.id)}
-                            >
-                              {story.title}
-                            </Link>
-                            <span className="text-(--mut)">
-                              {" "}
-                              · {story.status} ·{" "}
-                              {story.relation === "source" ? "PR source" : "delivery link"}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="mt-3 text-(--mut)">No story association recorded.</p>
-                    )}
+                    <details className="mt-2 text-xs text-(--mut)">
+                      <summary className="min-h-11 cursor-pointer py-3">PR details</summary>
+                      <p className="break-all">
+                        Observed head: <code>{pull.headSha ?? "unavailable"}</code>
+                      </p>
+                      <p className="mt-2 text-xs text-(--mut)">
+                        PR updated {formatTime(pull.updatedAt)} · mirror observed{" "}
+                        {formatTime(pull.observedAt)}
+                      </p>
+                      {pull.stories.length ? (
+                        <ul className="mt-3 flex flex-col gap-1" aria-label="Related stories">
+                          {pull.stories.map((story) => (
+                            <li key={story.id}>
+                              <Link
+                                className="inline-flex min-h-11 items-center break-words text-(--info) underline underline-offset-4"
+                                href={storyHref(projectId, story.id)}
+                              >
+                                {story.title}
+                              </Link>
+                              <span className="text-(--mut)">
+                                {" "}
+                                · {story.status} ·{" "}
+                                {story.relation === "source" ? "PR source" : "delivery link"}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-3 text-(--mut)">No story association recorded.</p>
+                      )}
+                    </details>
                   </li>
                 );
               })}
@@ -140,10 +138,6 @@ export function OtherPullReviews({
               ) : null}
             </div>
           </nav>
-          <p className="text-xs text-(--mut)">
-            GitHub links open the current PR. Compare its head with this observation before
-            deciding. CI results alone do not establish review or acceptance.
-          </p>
         </>
       )}
     </section>

@@ -120,8 +120,10 @@ export default async function StoryPage({
       .map((item) => bundle.turns.find((turn) => turn.id === item.turnId)?.agentName ?? null)
       .find((name) => name !== null) ?? null;
 
+  const focus = storyFocus(bundle, workflow.ok ? workflow.data : undefined, Boolean(selection));
+  const reviewing = focus.section === "plan" || focus.section === "delivery";
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-8">
+    <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <LiveRefresh seconds={8} />
       <header className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -140,57 +142,63 @@ export default async function StoryPage({
           </Link>
         </div>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">{story.title}</h1>
-        <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-(--mut)">
-          <div className="inline-flex items-center gap-2">
-            <dt className="sr-only">Agent activity</dt>
-            <StatusDot tone={activity.active ? "agent" : "machine"} pulse={activity.active} />
-            <dd className="text-(--ink)">{activity.label}</dd>
-          </div>
-          <div className="inline-flex gap-1.5">
-            <dt>Task phase:</dt>
-            <dd className="text-(--ink)">{phaseLabel(story.status)}</dd>
-          </div>
-          <div className="inline-flex gap-1.5">
-            <dt>Environment:</dt>
-            <dd className="text-(--ink)">{computeLabel(currentEnvironment)}</dd>
-          </div>
-          {story.branch ? (
+        <details open={!reviewing} className="text-sm text-(--mut)">
+          <summary className="min-h-11 cursor-pointer py-3">Story status</summary>
+          <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-(--mut)">
+            <div className="inline-flex items-center gap-2">
+              <dt className="sr-only">Agent activity</dt>
+              <StatusDot tone={activity.active ? "agent" : "machine"} pulse={activity.active} />
+              <dd className="text-(--ink)">{activity.label}</dd>
+            </div>
             <div className="inline-flex gap-1.5">
-              <dt className="sr-only">Branch</dt>
-              <dd className="font-mono text-(--mut)">{story.branch}</dd>
+              <dt>Task phase:</dt>
+              <dd className="text-(--ink)">{phaseLabel(story.status)}</dd>
             </div>
-          ) : null}
-          {bundle.assignees.length > 0 ? (
             <div className="inline-flex gap-1.5">
-              <dt>Working on it:</dt>
-              <dd className="text-(--ink)">
-                {bundle.assignees
-                  .map(
-                    (person) => person.name ?? (person.login ? `@${person.login}` : person.subject),
-                  )
-                  .join(", ")}
-              </dd>
+              <dt>Environment:</dt>
+              <dd className="text-(--ink)">{computeLabel(currentEnvironment)}</dd>
             </div>
+            {story.branch ? (
+              <div className="inline-flex gap-1.5">
+                <dt className="sr-only">Branch</dt>
+                <dd className="font-mono text-(--mut)">{story.branch}</dd>
+              </div>
+            ) : null}
+            {bundle.assignees.length > 0 ? (
+              <div className="inline-flex gap-1.5">
+                <dt>Working on it:</dt>
+                <dd className="text-(--ink)">
+                  {bundle.assignees
+                    .map(
+                      (person) =>
+                        person.name ?? (person.login ? `@${person.login}` : person.subject),
+                    )
+                    .join(", ")}
+                </dd>
+              </div>
+            ) : null}
+            {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt }) ? (
+              <div className="inline-flex gap-1.5 text-(--dim)">
+                <dt className="sr-only">Title</dt>
+                <dd>
+                  {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt })}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+          {bundle.progress?.latest ? (
+            <p className="text-xs text-(--mut)">
+              Latest recorded activity: {bundle.progress.latest.turn.agentName} ·{" "}
+              {bundle.progress.latest.activity.title}.{" "}
+              <Link
+                href="#story-progress"
+                className="inline-flex min-h-11 items-center text-(--info) underline"
+              >
+                Inspect activity
+              </Link>
+            </p>
           ) : null}
-          {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt }) ? (
-            <div className="inline-flex gap-1.5 text-(--dim)">
-              <dt className="sr-only">Title</dt>
-              <dd>{titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt })}</dd>
-            </div>
-          ) : null}
-        </dl>
-        {bundle.progress?.latest ? (
-          <p className="text-xs text-(--mut)">
-            Latest recorded activity: {bundle.progress.latest.turn.agentName} ·{" "}
-            {bundle.progress.latest.activity.title}.{" "}
-            <Link
-              href="#story-progress"
-              className="inline-flex min-h-11 items-center text-(--info) underline"
-            >
-              Inspect activity
-            </Link>
-          </p>
-        ) : null}
+        </details>
       </header>
 
       {openAttention.length > 0 ? (
@@ -268,7 +276,7 @@ export default async function StoryPage({
           messageId,
           messageError,
         ])}
-        focus={storyFocus(bundle, workflow.ok ? workflow.data : undefined, Boolean(selection))}
+        focus={focus}
         conversation={
           <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
             <div className="flex flex-wrap items-baseline justify-between gap-4">

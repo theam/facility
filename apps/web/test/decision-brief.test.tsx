@@ -51,6 +51,25 @@ async function format(value: string) {
   await act(async () => radio.click());
 }
 describe("saved author brief presentation", () => {
+  it("keeps the decision and risk visible before optional formats, with the exact original still accessible", async () => {
+    await render();
+    const section = container.querySelector("section");
+    const alternatives = section?.querySelector("details");
+    expect(alternatives?.open).toBe(false);
+    expect(alternatives?.querySelector("fieldset")).not.toBeNull();
+    const risk = [...(section?.querySelectorAll("p") ?? [])].find(
+      (node) => node.textContent === brief.decisiveRisk.text,
+    );
+    expect(risk).toBeDefined();
+    expect(risk?.closest("details")).toBeNull();
+    expect(section?.textContent).not.toContain("How to view the options");
+    expect(section?.textContent).not.toContain("The decision in brief");
+    await act(async () => alternatives?.querySelector("summary")?.click());
+    expect(alternatives?.open).toBe(true);
+    await format("diagram");
+    expect(section?.textContent).toContain(brief.decisiveRisk.text);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("presents identical options, decisive risk, missing evidence and direct sources in all three formats without writes", async () => {
     await render();
     for (const value of ["summary", "comparison", "diagram"]) {

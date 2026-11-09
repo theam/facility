@@ -14,8 +14,12 @@ an empty queue.
 exhausted or unconfirmed spending or an invalid workflow policy. It explains the
 observed effect and links to the relevant spending or policy view. A budget
 warning is labelled for the next review; it does not by itself stop work. These
-conditions appear once for the project. Ordinary reviews remain under **Next
-review**. The view does not infer a recipient, deadline or urgency from agent text.
+conditions appear once for the project. Ordinary reviews appear directly in the
+list, with a labelled color accent for plan, delivery or notice. Color does not
+imply urgency. **Filters** opens search and category controls; **More views**
+contains activity and notice history. **Queue details** contains the full counts
+and observation time. Active filters stay visible on arrival and can be cleared.
+The view does not infer a recipient, deadline or urgency from agent text.
 
 **Attention** and **Stories** are the primary project navigation. **Activity**,
 **Insights** and **Settings** remain one step away under project tools. Settings
@@ -110,8 +114,9 @@ Deleted stories are excluded. Delivery sets in done or archived
 stories remain on their history, outside this queue. No recipient, severity or
 deadline is inferred.
 
-Expand the saved author's plan brief for the recommendation, alternatives, risk
-and sources. These are the author's statements, not independently verified facts.
+The list shows a short plan summary. Open the review for the recommendation,
+risk and sources; expand **Alternatives and sources** for the options and their
+comparison or diagram. These are author statements, not independently verified facts.
 **Review plan rN** opens that exact saved revision and digest. A newer plan does
 not replace the linked content on refresh. Historical or unverifiable revisions
 remain read-only; choose **Open current plan** explicitly before deciding the
@@ -121,7 +126,7 @@ existing confirmation flow remains on the story. Each notice keeps its own actio
 
 ### Review the complete delivery
 
-The delivery card shows every registered PR, which ones are required and primary,
+Expand **Delivery details** or open the delivery review to see every registered PR, which ones are required and primary,
 the observed heads, and whether the recorded checks belong to those heads.
 A registered candidate does not mean CI passed. Drafts, stale observations,
 unobserved checks and checks from a previous head stay distinguishable.

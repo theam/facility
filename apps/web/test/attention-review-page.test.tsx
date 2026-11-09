@@ -97,6 +97,22 @@ beforeEach(() => {
   mocks.queries = [];
 });
 describe("project Attention entry", () => {
+  it("starts with a review list while keeping filters and secondary navigation folded", async () => {
+    const root = await render();
+    expect(root.querySelector("form")?.closest("details")?.open).toBe(false);
+    expect(
+      root.querySelector('nav[aria-label="Related project views"]')?.closest("details")?.open,
+    ).toBe(false);
+    expect(root.querySelector('ol[aria-label="Pending stories"]')?.closest("details")).toBeNull();
+    expect(root.textContent).not.toContain("Plans, notices and delivery sets, grouped");
+    expect(root.textContent).not.toContain("Next review");
+    const filtered = await render({ category: "plans", q: "scope" });
+    expect(filtered.querySelector("form")?.closest("details")?.open).toBe(true);
+    expect(filtered.querySelector<HTMLInputElement>('input[name="q"]')?.value).toBe("scope");
+    expect(filtered.querySelector('a[href="/projects/project"]')?.textContent).toBe(
+      "Clear filters",
+    );
+  });
   it("retains saved review URLs while every filter and related route leads to the project entry", async () => {
     const root = await render();
     expect(root.querySelector("form")?.getAttribute("action")).toBe("/projects/project");
@@ -140,7 +156,7 @@ describe("project Attention entry", () => {
     expect(root.querySelectorAll('ol[aria-label="Pending stories"] > li')).toHaveLength(2);
     expect(
       Array.from(root.querySelectorAll("a"))
-        .find((link) => link.textContent === "Review plan r3")
+        .find((link) => link.textContent?.startsWith("Review plan r3"))
         ?.getAttribute("href"),
     ).toBe(
       `/projects/project/stories/plan-story?planRevision=3&planDigest=${"a".repeat(64)}#story-plan`,
@@ -151,8 +167,8 @@ describe("project Attention entry", () => {
     expect(
       root.querySelector('a[href="/projects/project/stories/question-story#story-attention"]'),
     ).not.toBeNull();
-    expect(root.textContent).toContain("No structured brief was supplied");
-    expect(root.textContent).toContain("Opens this exact revision r3");
+    expect(root.textContent).toContain("Plan · r3");
+    expect(root.textContent).not.toContain("Opens this exact revision");
     expect(root.textContent).not.toMatch(/Approve|Urgent|For me|All clear/);
   });
   it("paginates and filters stories on the server, retaining filters in links", async () => {
@@ -186,7 +202,7 @@ describe("project Attention entry", () => {
     };
     const empty = await render();
     expect(empty.textContent).toContain("No pending plans, notices or deliveries");
-    expect(empty.textContent).toContain("Other open PRs have their own list below");
+    expect(empty.querySelector('ol[aria-label="Other open pull requests"]')).not.toBeNull();
   });
   it("keeps other PR pages independent while exposing stale-head checks and historical associations", async () => {
     const root = await render({ page: "2", pullPage: "2", q: "scope & risk" });

@@ -311,7 +311,7 @@ describe("revision-bound plan UI", () => {
     fetch.mockResolvedValueOnce(Response.json(snapshot()));
     await click("Save plan proposal");
     expect(body().agents).toEqual(["planner"]);
-    expect(container.textContent).toContain("Review the plan to resume existing work");
+    expect(container.textContent).toContain("Pending approval");
     expect(container.textContent).toContain("A current approval is required.");
     expect(container.textContent).toContain("Waiting agents: planner");
     await render(snapshot(), true, agents, { queuedAgents: ["builder"] });
@@ -457,7 +457,7 @@ describe("revision-bound plan UI", () => {
     await click("Save plan proposal");
     expect(body()).not.toHaveProperty("source_message_id");
     expect(writes()).toHaveLength(1);
-    expect(container.textContent).toContain("Awaiting a decision on this revision");
+    expect(container.textContent).toContain("Pending approval");
   });
 
   it("keeps exact source attribution when an existing proposal is saved without editing", async () => {

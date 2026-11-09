@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Eyebrow, Field, TextInput } from "@facility/ui";
+import { Button, Field, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import type { StoryDelivery } from "@/lib/api";
@@ -168,8 +168,7 @@ export function StoryDeliveryPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Eyebrow>delivery</Eyebrow>
-          <h2 className="mt-2 text-lg font-semibold">Pull requests for this story</h2>
+          <h2 className="mt-2 text-lg font-semibold">Delivery</h2>
         </div>
         {current && canWrite && !editing ? (
           <Button
@@ -189,6 +188,16 @@ export function StoryDeliveryPanel({
       {!editing && current ? (
         <DeliveryDecisionBrief
           projection={current.decisionBrief}
+          actions={
+            canWrite ? (
+              <a
+                href="#story-section-workflow"
+                className="inline-flex min-h-11 w-fit items-center border border-(--info) px-4 font-medium text-(--info)"
+              >
+                Review acceptance →
+              </a>
+            ) : null
+          }
           storyUrl={`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`}
         />
       ) : null}

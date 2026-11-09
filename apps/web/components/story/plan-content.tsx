@@ -1,5 +1,6 @@
 import type { StoryPlan } from "@facility/sdk";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Markdown } from "@/components/markdown";
 import { DecisionBrief } from "@/components/story/decision-brief";
 import { formatTime } from "@/lib/story-presentation";
@@ -9,9 +10,11 @@ export function PlanContent({
   plan,
   originalOnly = false,
   location,
+  actions,
 }: {
   plan: StoryPlan;
   originalOnly?: boolean;
+  actions?: ReactNode;
   location?: { projectId: string; storyId: string };
 }) {
   const brief =
@@ -32,10 +35,10 @@ export function PlanContent({
       {brief ? (
         <>
           <DecisionBrief key={plan.digest} brief={brief} revision={plan.revision} />
+          {actions}
           <details className="min-w-0 border-t border-(--line) pt-3">
             <summary className="cursor-pointer py-2 text-sm font-medium">
               Original plan r{plan.revision}
-              {plan.source ? " · exact source message text" : ""}
             </summary>
             <div className="mt-3">{original}</div>
           </details>
@@ -50,40 +53,47 @@ export function PlanContent({
             </p>
           ) : null}
           {original}
+          {actions}
         </>
       )}
-      <dl className="grid min-w-0 gap-4 border-t border-(--line) pt-4 text-[12px] sm:grid-cols-2">
-        <div className="min-w-0">
-          <dt className="mb-1 text-(--dim)">Repositories in this plan</dt>
-          <dd>
-            <ul>
-              {plan.repositories.map((repo) => (
-                <li key={repo.repositoryId} className="break-words">
-                  {repo.repository}
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="mb-1 text-(--dim)">Agents selected for execution</dt>
-          <dd>
-            <ul>
-              {plan.agents.map((agent) => (
-                <li key={agent.name} className="break-words">
-                  {agent.name}{" "}
-                  <span className="text-(--mut)">
-                    · {agent.engine === "codex" ? "Codex" : "Claude Code"} · {agent.model}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </dd>
-        </div>
-      </dl>
+      <details className="min-w-0 text-sm">
+        <summary className="min-h-11 cursor-pointer py-3 text-(--mut)">
+          Scope · {plan.repositories.length}{" "}
+          {plan.repositories.length === 1 ? "repository" : "repositories"} ·{" "}
+          {plan.agents.map((agent) => agent.name).join(", ")}
+        </summary>
+        <dl className="grid min-w-0 gap-4 border-t border-(--line) pt-4 text-[12px] sm:grid-cols-2">
+          <div className="min-w-0">
+            <dt className="mb-1 text-(--dim)">Repositories in this plan</dt>
+            <dd>
+              <ul>
+                {plan.repositories.map((repo) => (
+                  <li key={repo.repositoryId} className="break-words">
+                    {repo.repository}
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="mb-1 text-(--dim)">Agents selected for execution</dt>
+            <dd>
+              <ul>
+                {plan.agents.map((agent) => (
+                  <li key={agent.name} className="break-words">
+                    {agent.name}{" "}
+                    <span className="text-(--mut)">
+                      · {agent.engine === "codex" ? "Codex" : "Claude Code"} · {agent.model}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+        </dl>
+      </details>
       {plan.source ? (
         <div className="flex flex-col gap-2 text-[12px] text-(--mut)">
-          <p>Proposed from the exact {plan.source.role} message text in this story.</p>
           {location ? (
             <Link
               className="inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
