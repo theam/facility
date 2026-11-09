@@ -8,6 +8,16 @@ import { clientApi } from "@/lib/client-api";
 import { completionStepTitle } from "@/lib/story-focus";
 import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
 
+type RequestKey = { signature: string; key: string };
+
+function requestKey(ref: { current: RequestKey | null }, path: string, request: object) {
+  const signature = JSON.stringify([path, request]);
+  if (ref.current?.signature !== signature) {
+    ref.current = { signature, key: crypto.randomUUID() };
+  }
+  return ref.current.key;
+}
+
 export function StoryCompletionPanel({
   projectId,
   storyId,
@@ -37,8 +47,8 @@ export function StoryCompletionPanel({
   const [inAppNotices, setInAppNotices] = useState(initial?.notices.in_app ?? true);
   const [summary, setSummary] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
-  const integrationKey = useRef<string | null>(null);
-  const completionKey = useRef<string | null>(null);
+  const integrationKey = useRef<RequestKey | null>(null);
+  const completionKey = useRef<RequestKey | null>(null);
   const previousInitial = useRef(initial);
   useEffect(() => {
     const previous = previousInitial.current;
@@ -95,16 +105,19 @@ export function StoryCompletionPanel({
 
   async function recordIntegration(state: "succeeded" | "failed") {
     if (!candidate || !current) return;
-    integrationKey.current ??= crypto.randomUUID();
-    setPending(`integration:${state}`);
-    setError(null);
-    const result = await clientApi<StoryCompletion>("POST", `${story}/integration-result`, {
+    const path = `${story}/integration-result`;
+    const request = {
       candidate_revision: candidate,
       event_id: current.integration.eventId,
       state,
       summary: summary.trim(),
       evidence_url: evidenceUrl.trim() || null,
-      idempotency_key: integrationKey.current,
+    };
+    setPending(`integration:${state}`);
+    setError(null);
+    const result = await clientApi<StoryCompletion>("POST", path, {
+      ...request,
+      idempotency_key: requestKey(integrationKey, path, request),
     });
     setPending("");
     if (!result.ok) {
@@ -118,13 +131,13 @@ export function StoryCompletionPanel({
 
   async function requestCompletion() {
     if (!candidate) return;
-    completionKey.current ??= crypto.randomUUID();
+    const path = `${story}/complete`;
+    const request = { candidate_revision: candidate, confirm: true };
     setPending("completion");
     setError(null);
-    const result = await clientApi<StoryCompletion>("POST", `${story}/complete`, {
-      candidate_revision: candidate,
-      confirm: true,
-      idempotency_key: completionKey.current,
+    const result = await clientApi<StoryCompletion>("POST", path, {
+      ...request,
+      idempotency_key: requestKey(completionKey, path, request),
     });
     setPending("");
     if (!result.ok) {

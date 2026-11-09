@@ -53,6 +53,97 @@ async function render(
 }
 
 describe("story completion UI", () => {
+  async function click(label: string) {
+    const button = [...container.querySelectorAll("button")].find(
+      (item) => item.textContent === label,
+    );
+    if (!button) throw new Error(`Missing ${label}`);
+    await act(async () => button.click());
+  }
+
+  async function type(selector: string, value: string) {
+    const node = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector);
+    if (!node) throw new Error(`Missing ${selector}`);
+    await act(async () => {
+      const prototype =
+        node instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(node, value);
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function attempts() {
+    return fetch.mock.calls.map(([, request]) => {
+      const body = JSON.parse(request.body);
+      expect(request.headers["idempotency-key"]).toBe(body.idempotency_key);
+      return body;
+    });
+  }
+
+  function rejectRequests() {
+    fetch.mockImplementation(async () =>
+      Response.json(
+        { error: { code: "conflict", message: "Retry after review" } },
+        { status: 409 },
+      ),
+    );
+  }
+
+  it("retries completion once per exact candidate after a conflict", async () => {
+    rejectRequests();
+    await render(snapshot());
+    await click("Complete source issue");
+    await click("Complete source issue");
+    const refreshed = snapshot();
+    refreshed.candidate.revision = "b".repeat(64);
+    await render(refreshed);
+    await click("Complete source issue");
+    const [first, retry, changed] = attempts();
+    expect(retry.idempotency_key).toBe(first.idempotency_key);
+    expect(changed.candidate_revision).toBe(refreshed.candidate.revision);
+    expect(changed.idempotency_key).not.toBe(first.idempotency_key);
+  });
+
+  it.each([
+    "state",
+    "summary",
+    "evidence",
+    "event",
+    "candidate",
+  ])("uses a new integration key when %s changes after a conflict", async (change) => {
+    rejectRequests();
+    const initial = snapshot("record_integration");
+    initial.integration.policy = { mode: "manual", repository: null };
+    initial.integration.state = "pending";
+    await render(initial);
+    await type("textarea", "Staging deploy");
+    await click("Record success");
+    await click("Record success");
+    if (change === "summary") await type("textarea", "Staging deploy verified");
+    if (change === "evidence") await type('input[type="url"]', "https://example.test/evidence");
+    if (change === "event" || change === "candidate") {
+      const refreshed = structuredClone(initial);
+      if (change === "event") refreshed.integration.eventId = "new-event";
+      else refreshed.candidate.revision = "b".repeat(64);
+      await render(refreshed);
+    }
+    await click(change === "state" ? "Record failure" : "Record success");
+    const [first, retry, changed] = attempts();
+    expect(retry.idempotency_key).toBe(first.idempotency_key);
+    expect(changed.idempotency_key).not.toBe(first.idempotency_key);
+    expect(changed.summary).toBe(
+      change === "summary" ? "Staging deploy verified" : "Staging deploy",
+    );
+    expect(changed.state).toBe(change === "state" ? "failed" : "succeeded");
+    expect(changed.evidence_url).toBe(
+      change === "evidence" ? "https://example.test/evidence" : null,
+    );
+    expect(changed.event_id).toBe(change === "event" ? "new-event" : null);
+    expect(changed.candidate_revision).toBe((change === "candidate" ? "b" : "a").repeat(64));
+  });
+
   it("shows a manual integration result only while that exact gate is pending", async () => {
     const initial = snapshot("record_integration");
     initial.integration = {
