@@ -22,6 +22,12 @@ function git(cwd, args) {
   }
 }
 
+// Facility waits for `environment.start` to exit, so a package script that keeps a dev server in
+// the foreground runs detached, with its output kept in the workspace.
+function detachedStart(command) {
+  return `nohup ${command} >>/workspace/.facility/start.log 2>&1 </dev/null &`;
+}
+
 export function detect(dir) {
   const pkg = readJson(join(dir, "package.json"));
   const scripts = pkg?.scripts ?? {};
@@ -39,9 +45,9 @@ export function detect(dir) {
     existsSync(join(dir, "compose.yml")) || existsSync(join(dir, "docker-compose.yml"))
       ? "docker compose up -d"
       : runner && scripts.dev
-        ? `${runner} dev`
+        ? detachedStart(`${runner} dev`)
         : runner && scripts.start
-          ? `${runner} start`
+          ? detachedStart(`${runner} start`)
           : "";
   const remote = git(dir, ["remote", "get-url", "origin"]);
   const match = remote.match(/[/:]([^/:]+)\/([^/]+?)(\.git)?$/);

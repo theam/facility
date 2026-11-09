@@ -120,7 +120,8 @@ can skip `setup` when that checksum is unchanged, but it always runs `start`. `s
 setup so a normal wake does not repeatedly seed the environment.
 
 Make `start` safe to repeat. It should return after bringing services up; use a detached Compose
-command, process manager, or equivalent. Make `ready` fail quickly while the service is unavailable
+command, process manager, or equivalent. A dev server that stays in the foreground can run as
+`nohup npm run dev >>/workspace/.facility/start.log 2>&1 </dev/null &`. Make `ready` fail quickly while the service is unavailable
 and succeed only when a user can exercise it.
 
 ## Workspace resources

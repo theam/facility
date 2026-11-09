@@ -24,7 +24,9 @@ repository checkout inside the workspace.
 ## Kickstart from the UI
 
 Create a project in the UI and choose a repository visible to the GitHub App. Facility detects a
-Compose file or a package start script. Review and, if needed, edit the setup command, start
+Compose file or a package `dev` or `start` script. Facility waits for `start` to exit, so a package
+script is proposed detached, as `nohup npm run dev >>/workspace/.facility/start.log 2>&1 </dev/null &`,
+and the server's output goes to that log. Review and, if needed, edit the setup command, start
 command, readiness command, and exposed application port.
 
 Kickstart opens a pull request containing exactly `.facility.yml` and six initial agent manifests

@@ -110,6 +110,20 @@ test("init installs the complete 0.12 repository contract and nothing from the l
   assert.match(again.stdout, /left untouched/);
 });
 
+test("init proposes a detected dev script detached, because Facility waits for start to exit", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const result = runCli(["init", "--yes", `--dir=${dir}`, "--repo=acme/demo-app"], dir);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const environment = readFileSync(join(dir, ".facility.yml"), "utf8");
+  assert.match(
+    environment,
+    /start: "nohup npm run dev >>\/workspace\/\.facility\/start\.log 2>&1 <\/dev\/null &"/,
+  );
+});
+
 test("init configures Claude and Codex models in the same agent catalog", (t) => {
   const dir = makeTargetRepo();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
