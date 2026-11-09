@@ -150,6 +150,31 @@ describe("work phase derivation", () => {
     expect(pickPullRequest([closed, merged])?.number).toBe(2);
     expect(pickPullRequest([])).toBeNull();
   });
+
+  it("lets the source issue, not a merged PR or legacy done status, finish issue-backed work", () => {
+    const story = { ...startedStory, status: "done", issueBacked: true };
+    const input = {
+      story,
+      pullRequest: { ...openPull, state: "merged" as const },
+      openAttention: [],
+    };
+    expect(derivePhase({ ...input, issue: { state: "open" } })).toEqual({
+      phase: "in_progress",
+      reason: "started",
+    });
+    expect(derivePhase({ ...input, issue: null }).phase).not.toBe("done");
+    expect(derivePhase({ ...input, issue: { state: "closed" } })).toEqual({
+      phase: "done",
+      reason: "issue_closed",
+    });
+    expect(
+      derivePhase({ ...input, issue: { state: "closed" }, activeTurn: { state: "running" } }),
+    ).toEqual({ phase: "in_progress", reason: "running" });
+    expect(
+      derivePhase({ ...input, story: { ...story, status: "archived" }, issue: { state: "open" } }),
+    ).toEqual({ phase: "archived", reason: "archived" });
+    expect(derivePhase({ ...input, story: null, issue: { state: "open" } }).phase).not.toBe("done");
+  });
 });
 
 describe("review decision", () => {

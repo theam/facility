@@ -1,3 +1,5 @@
+import { CONSULTATION_LIMITS } from "./story-consultations.js";
+
 export type ModelPrice = {
   input: number;
   output: number;
@@ -6,6 +8,12 @@ export type ModelPrice = {
 };
 
 export const MODEL_PRICES_USD_PER_1M = {
+  // Standard global API rates, with 5-minute cache writes (verified 2026-09-29).
+  // https://platform.claude.com/docs/en/about-claude/pricing
+  "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-fable-5": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
   "claude-opus-4-8": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
   "claude-sonnet-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
@@ -41,6 +49,46 @@ export function normalizeModel(model: string): keyof typeof MODEL_PRICES_USD_PER
   return undated in MODEL_PRICES_USD_PER_1M
     ? (undated as keyof typeof MODEL_PRICES_USD_PER_1M)
     : null;
+}
+
+/**
+ * Tokens held against the monthly budget before measured usage replaces them.
+ * Cache writes are included because the first turn of a session pays them;
+ * later turns are usually cheaper, so this estimate blocks work that cannot
+ * afford a full turn rather than a short follow-up.
+ */
+export const TURN_RESERVATION_TOKENS = {
+  inputTokens: 100_000,
+  outputTokens: 8_000,
+  cacheWriteTokens: 100_000,
+} as const;
+
+/** Title calls send a short excerpt and expect a single line back. */
+export const TITLE_RESERVATION_TOKENS = {
+  inputTokens: 8_000,
+  outputTokens: 256,
+} as const;
+
+export function reservationCents(
+  model: string,
+  purpose: "turn" | "title" | "consultation",
+): number | null {
+  if (purpose === "consultation") {
+    const key = normalizeModel(model);
+    const price: ModelPrice | undefined = key ? MODEL_PRICES_USD_PER_1M[key] : undefined;
+    if (!price) return null;
+    const inputPrice = Math.max(price.input, price.cacheRead ?? 0, price.cacheWrite ?? 0);
+    return (
+      Math.ceil(
+        (((CONSULTATION_LIMITS.inputBytes + 1_024) * inputPrice +
+          CONSULTATION_LIMITS.outputTokens * price.output) /
+          10_000) *
+          1_000_000,
+      ) / 1_000_000
+    );
+  }
+  const tokens = purpose === "turn" ? TURN_RESERVATION_TOKENS : TITLE_RESERVATION_TOKENS;
+  return costCents({ model, ...tokens });
 }
 
 /** Calculate cents with six decimal places so low-token turns are not rounded away. */

@@ -21,6 +21,15 @@ The image contains:
 Go-based container and GitHub tools are rebuilt from checksum-pinned source and
 audited during the image build. Base image and package changes must preserve
 that executable supply-chain check rather than bypassing it.
+The containerd source build pins `github.com/klauspost/compress` to `v1.18.7`
+for GHSA-259r-337f-4rfw; other tools retain their newer reviewed dependencies.
+The build checks the effective embedded module, including Go replacements,
+in every copied Go binary and rejects versions below that floor or substituted copies.
+
+Docker CLI and containerd also replace `github.com/go-jose/go-jose/v4` with
+`v4.1.6` for [GHSA-mgcc-cww5-fp2q](https://github.com/advisories/GHSA-mgcc-cww5-fp2q).
+The same final-binary inspection rejects affected effective JOSE versions,
+substituted modules and metadata inspection failures across the copied toolchain.
 
 ## Persistent layout
 
@@ -101,3 +110,17 @@ binary version alone.
 Do not put engine tokens, GitHub credentials, project secrets, or provider
 configuration into the image. Facility injects short-lived and project-scoped
 values when preparing a story.
+
+### Claude Code model compatibility
+
+The runner pins Claude Code 2.1.284, which includes explicit support for
+`claude-opus-5-5` and `claude-sonnet-5-5`. Model selection still belongs to each
+agent manifest; updating this CLI does not switch a project's models or credentials.
+See the [upstream changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md).
+
+Publishing a new runner image does not upgrade a persistent sandbox's existing
+filesystem on resume. Check `claude --version` in the actual workspace. Existing
+workspaces need a separately managed tool upgrade or the provider's supported
+compute replacement procedure with persistent data retained; do not delete a
+workspace merely to pick up a CLI update. Test fresh and resumed agent sessions
+after an upgrade, and keep a rollback path to the previous toolchain.

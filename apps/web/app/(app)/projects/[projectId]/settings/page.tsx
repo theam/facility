@@ -1,8 +1,10 @@
 import { Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { DevelopmentBranch } from "@/components/project/development-branch";
 import { DisconnectRepository } from "@/components/project/disconnect-repository";
 import { NativePreviews } from "@/components/project/native-previews";
+import { WorkflowPolicy } from "@/components/project/workflow-policy";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api } from "@/lib/api";
 import { can } from "@/lib/permissions";
@@ -15,10 +17,12 @@ export default async function ProjectSettingsPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const [project, repos, me] = await Promise.all([
+  const [project, repos, me, workflow, agents] = await Promise.all([
     api.project(projectId),
     api.projectRepos(projectId),
     api.me(),
+    api.projectWorkflowPolicy(projectId),
+    api.storyAgents(projectId),
   ]);
   if (!project.ok) {
     return project.offline ? (
@@ -40,6 +44,41 @@ export default async function ProjectSettingsPage({
           models and triggers are configured together under <code>.agents/</code>.
         </p>
       </div>
+
+      {repos.ok && repos.data.find((repo) => repo.role === "primary") && (
+        <DevelopmentBranch
+          key={`${projectId}-${String(project.data.settings.developmentBranch ?? "")}`}
+          projectId={projectId}
+          branch={
+            typeof project.data.settings.developmentBranch === "string"
+              ? project.data.settings.developmentBranch
+              : null
+          }
+          defaultBranch={
+            repos.data.find((repo) => repo.role === "primary")?.defaultBranch ?? "main"
+          }
+          canWrite={
+            can(me.ok ? me.data.permissions : [], "projects:write") &&
+            can(me.ok ? me.data.permissions : [], "repos:write")
+          }
+        />
+      )}
+
+      {workflow.ok ? (
+        <WorkflowPolicy
+          key={projectId}
+          projectId={projectId}
+          initial={workflow.data}
+          agents={agents.ok ? agents.data.agents : []}
+          catalogError={agents.ok ? undefined : agents.message}
+          canWrite={
+            can(me.ok ? me.data.permissions : [], "projects:write") &&
+            can(me.ok ? me.data.permissions : [], "repos:write")
+          }
+        />
+      ) : (
+        <ErrorNotice message={`Workflow policy unavailable: ${workflow.message}`} />
+      )}
 
       <WorkspaceVariables
         projectId={projectId}
@@ -102,8 +141,9 @@ export default async function ProjectSettingsPage({
         <Eyebrow>access model</Eyebrow>
         <p className="text-sm leading-relaxed text-(--mut)">
           Every configured agent gets the same full shell, network, Docker, browser and GitHub App
-          installation access. There are no per-agent permission profiles or internal approvals.
-          GitHub branch protection and pull-request review remain the merge boundary.
+          installation access. Workflow policies can require plan approval before native execution;
+          they do not narrow an agent’s tools or repository access. GitHub branch protection and
+          pull-request review remain the merge boundary.
         </p>
       </section>
     </div>

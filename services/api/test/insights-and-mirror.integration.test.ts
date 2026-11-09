@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { newId } from "@facility/core";
+import { newId, reservationCents } from "@facility/core";
 import {
   auditEvents,
+  budgetReservations,
   createDb,
   githubBranches,
   githubChecks,
@@ -18,6 +19,8 @@ import {
   projects,
   stories,
   storyConversations,
+  storyDeliveryPullRequests,
+  storyDeliveryScopes,
   storyEvidenceEvents,
   turnGitEvidence,
   turns,
@@ -158,6 +161,29 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
     await client.end();
   });
 
+  function turnFixture(
+    id: string,
+    scopedProjectId: string,
+    scopedStoryId: string,
+    scopedConversationId: string,
+  ) {
+    return {
+      id,
+      orgId,
+      projectId: scopedProjectId,
+      storyId: scopedStoryId,
+      conversationId: scopedConversationId,
+      agentName: "builder",
+      manifestHash: "hash",
+      manifest: {},
+      engine: "claude_code" as const,
+      model: "claude-haiku-4-5",
+      state: "succeeded" as const,
+      triggerType: "manual" as const,
+      createdBy: { type: "user", id: "maintainer" },
+    };
+  }
+
   it("summarizes large webhook bodies in SQL without transferring their payloads", async () => {
     const otherProjectId = newId("proj");
     await db.insert(projects).values({
@@ -224,6 +250,63 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
       warningPercent: 50,
       enabled: true,
     });
+    // New catalog entries must pass the real budget guard and persist priced
+    // usage without a provider-reported cost. Keep each turn below this budget.
+    const claudeModels = [
+      ["claude-fable-5-1", 0.07275],
+      ["claude-opus-5-5", 0.0292],
+      ["claude-sonnet-5-5", 0.0147],
+      ["claude-opus-5", 0.03675],
+    ] as const;
+    for (const [model, expectedCents] of claudeModels) {
+      await expect(costs.assertTurnAllowed(orgId, projectId, model)).resolves.toMatchObject({
+        state: "ok",
+      });
+      const claudeTurnId = newId("turn");
+      await db.insert(turns).values({
+        id: claudeTurnId,
+        orgId,
+        projectId,
+        storyId,
+        conversationId,
+        agentName: "builder",
+        manifestHash: "hash",
+        manifest: {},
+        engine: "claude_code",
+        model,
+        state: "succeeded",
+        triggerType: "mcp",
+        createdBy: { type: "user", id: "maintainer" },
+      });
+      const claudeRecord = {
+        orgId,
+        projectId,
+        storyId,
+        turnId: claudeTurnId,
+        agentName: "builder",
+        engine: "claude_code",
+        model,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 10,
+          cacheReadTokens: 10,
+          cacheWriteTokens: 10,
+        },
+        durationMs: 10,
+        status: "succeeded" as const,
+      };
+      expect(await costs.record(claudeRecord)).toMatchObject({
+        model,
+        costCents: expectedCents,
+        priced: true,
+        source: "price_book",
+      });
+      expect(await costs.record(claudeRecord)).toBeNull();
+    }
+    expect((await costs.budgetState(orgId, projectId)).spentCents).toBeCloseTo(0.1534, 6);
+    await expect(
+      costs.assertTurnAllowed(orgId, projectId, "private-unpriced-model"),
+    ).rejects.toMatchObject({ code: "budget_model_unpriced" });
     const record = {
       orgId,
       projectId,
@@ -247,6 +330,11 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
     await expect(costs.assertTurnAllowed(orgId, projectId, "gpt-5.6-sol")).rejects.toMatchObject({
       code: "budget_exceeded",
     });
+    for (const [model] of claudeModels) {
+      await expect(costs.assertTurnAllowed(orgId, projectId, model)).rejects.toMatchObject({
+        code: "budget_exceeded",
+      });
+    }
     await expect(
       costs.assertTurnAllowed(orgId, projectId, "private-unpriced-model"),
     ).rejects.toBeInstanceOf(BudgetPolicyError);
@@ -254,6 +342,177 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
       budget: null,
       spentCents: 0,
     });
+  });
+
+  it("reserves only one of two turns when the budget fits a single estimate", async () => {
+    const estimate = reservationCents("claude-haiku-4-5", "turn");
+    if (estimate === null || estimate <= 0) throw new Error("expected a priced turn reservation");
+    const limit = Math.ceil(estimate);
+    expect(limit).toBeLessThan(estimate * 2);
+
+    const reserveProjectId = newId("proj");
+    const reserveStoryId = newId("story");
+    const reserveConversationId = newId("sess");
+    const otherReserveStoryId = newId("story");
+    const otherReserveConversationId = newId("sess");
+    const turnA = newId("turn");
+    const turnB = newId("turn");
+    await db.insert(projects).values({
+      id: reserveProjectId,
+      orgId,
+      name: "Reservations",
+      slug: `reserve-${suffix}`,
+      settings: {},
+    });
+    await db.insert(stories).values([
+      {
+        id: reserveStoryId,
+        orgId,
+        projectId: reserveProjectId,
+        provider: "manual",
+        externalId: `reserve-${suffix}`,
+        title: "Reservation race",
+        createdBy: { type: "user", id: "maintainer" },
+      },
+      {
+        id: otherReserveStoryId,
+        orgId,
+        projectId: reserveProjectId,
+        provider: "manual",
+        externalId: `other-reserve-${suffix}`,
+        title: "Concurrent reservation",
+        createdBy: { type: "user", id: "maintainer" },
+      },
+    ]);
+    await db.insert(storyConversations).values([
+      {
+        id: reserveConversationId,
+        orgId,
+        projectId: reserveProjectId,
+        storyId: reserveStoryId,
+      },
+      {
+        id: otherReserveConversationId,
+        orgId,
+        projectId: reserveProjectId,
+        storyId: otherReserveStoryId,
+      },
+    ]);
+    await db.insert(turns).values([
+      {
+        ...turnFixture(turnA, reserveProjectId, reserveStoryId, reserveConversationId),
+        state: "queued",
+      },
+      {
+        ...turnFixture(turnB, reserveProjectId, otherReserveStoryId, otherReserveConversationId),
+        state: "queued",
+      },
+    ]);
+    await db.insert(projectBudgets).values({
+      id: newId("bud"),
+      orgId,
+      projectId: reserveProjectId,
+      monthlyLimitCents: limit,
+      warningPercent: 80,
+      enabled: true,
+    });
+
+    const costs = new CostBudgetService(db);
+    const results = await Promise.allSettled([
+      db.transaction(async (tx) =>
+        costs.reserveTurn(tx as unknown as typeof db, {
+          orgId,
+          projectId: reserveProjectId,
+          storyId: reserveStoryId,
+          turnId: turnA,
+          model: "claude-haiku-4-5",
+        }),
+      ),
+      db.transaction(async (tx) =>
+        costs.reserveTurn(tx as unknown as typeof db, {
+          orgId,
+          projectId: reserveProjectId,
+          storyId: otherReserveStoryId,
+          turnId: turnB,
+          model: "claude-haiku-4-5",
+        }),
+      ),
+    ]);
+    const admitted = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(admitted).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({ code: "budget_exceeded" }),
+    });
+    const held = await db
+      .select()
+      .from(budgetReservations)
+      .where(eq(budgetReservations.projectId, reserveProjectId));
+    expect(held).toHaveLength(1);
+    expect(held[0]?.reservedCents).toBeCloseTo(estimate, 6);
+    expect((await costs.budgetState(orgId, reserveProjectId)).spentCents).toBeCloseTo(estimate, 6);
+    expect(await costs.budgetState(otherOrgId, reserveProjectId)).toMatchObject({
+      budget: null,
+      spentCents: 0,
+    });
+
+    const winnerId = held[0]?.turnId;
+    const winnerStoryId = held[0]?.storyId;
+    if (!winnerId || !winnerStoryId) throw new Error("expected the admitted turn");
+    await costs.record({
+      orgId,
+      projectId: reserveProjectId,
+      storyId: winnerStoryId,
+      turnId: winnerId,
+      agentName: "builder",
+      engine: "claude_code",
+      model: "claude-haiku-4-5",
+      usage: { inputTokens: 10, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      durationMs: 5,
+      status: "succeeded",
+    });
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.projectId, reserveProjectId)),
+    ).toEqual([]);
+    const measured = (await costs.budgetState(orgId, reserveProjectId)).spentCents;
+    expect(measured).toBeGreaterThan(0);
+    expect(measured).toBeLessThan(estimate);
+
+    const loserId = winnerId === turnA ? turnB : turnA;
+    const loserStoryId = winnerId === turnA ? otherReserveStoryId : reserveStoryId;
+    const second = await db.transaction(async (tx) =>
+      costs.reserveTurn(tx as unknown as typeof db, {
+        orgId,
+        projectId: reserveProjectId,
+        storyId: loserStoryId,
+        turnId: loserId,
+        model: "claude-haiku-4-5",
+      }),
+    );
+    expect(second).toEqual(expect.any(String));
+    await costs.record({
+      orgId,
+      projectId: reserveProjectId,
+      storyId: loserStoryId,
+      turnId: loserId,
+      agentName: "builder",
+      engine: "claude_code",
+      model: "claude-haiku-4-5",
+      durationMs: 1,
+      status: "failed",
+    });
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.projectId, reserveProjectId)),
+    ).toEqual([]);
+    expect((await costs.budgetState(orgId, reserveProjectId)).spentCents).toBeCloseTo(measured, 6);
   });
 
   it("mirrors issue, pull request, and CI webhooks into the story pipeline", async () => {
@@ -480,6 +739,78 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
         target: { type: "project", id: projectId },
       }),
     ).rejects.toMatchObject({ cause: { code: "23503" } });
+  });
+
+  it("hydrates and refreshes reviews for a delivery-only child without changing source authority", async () => {
+    const number = 1245,
+      head = "f".repeat(40);
+    const pull = {
+      number,
+      title: "Required child",
+      state: "open",
+      draft: false,
+      head: { ref: "external/child-only", sha: head },
+      base: { ref: "main" },
+      html_url: "https://github.com/acme/app/pull/1245",
+      updated_at: new Date().toISOString(),
+    };
+    let reviewState = "APPROVED";
+    const request = vi.fn(async (route: string) => {
+      if (route.endsWith("/branches") || route.endsWith("/issues")) return { data: [] };
+      if (route.endsWith("/pulls")) return { data: [pull] };
+      if (route.endsWith("/reviews"))
+        return {
+          data: [
+            {
+              id: 12450,
+              state: reviewState,
+              commit_id: head,
+              user: { login: "reviewer" },
+              submitted_at: new Date().toISOString(),
+            },
+          ],
+        };
+      if (route.endsWith("/status")) return { data: { state: "success", statuses: [] } };
+      if (route.endsWith("/check-runs")) return { data: { check_runs: [] } };
+      throw Error(route);
+    });
+    const mirror = new GithubMirrorService(db, async () => ({ request, rest: {} as never }));
+    await mirror.syncProject(orgId, projectId);
+    expect(request.mock.calls.filter(([route]) => route.endsWith("/reviews"))).toHaveLength(0);
+    await db.insert(storyDeliveryScopes).values({
+      orgId,
+      projectId,
+      storyId,
+      revision: 1,
+      declaredComplete: true,
+      updatedBy: { type: "user", id: "maintainer" },
+    });
+    await db.insert(storyDeliveryPullRequests).values({
+      orgId,
+      projectId,
+      storyId,
+      repositoryId,
+      pullNumber: number,
+      required: true,
+      isPrimary: true,
+    });
+    await mirror.syncProject(orgId, projectId);
+    expect(request.mock.calls.filter(([route]) => route.endsWith("/reviews"))).toHaveLength(1);
+    reviewState = "DISMISSED";
+    await mirror.syncProject(orgId, projectId);
+    const [review] = await db
+      .select()
+      .from(githubPullRequestReviews)
+      .where(
+        and(
+          eq(githubPullRequestReviews.repositoryId, repositoryId),
+          eq(githubPullRequestReviews.reviewId, "12450"),
+        ),
+      );
+    expect(review?.state).toBe("dismissed");
+    const [source] = await db.select().from(stories).where(eq(stories.id, storyId));
+    expect(source?.pullRequestNumber).not.toBe(number);
+    expect(request.mock.calls.filter(([route]) => route.endsWith("/reviews"))).toHaveLength(2);
   });
 
   it("periodically reconciles external branch, review, and check changes", async () => {
@@ -713,12 +1044,14 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
         .from(githubPullRequests)
         .where(eq(githubPullRequests.repositoryId, repositoryId)),
     ).toContainEqual({ state: "merged" });
-    const backlog = await new ProjectBacklogService(db).list(orgId, projectId, { phase: ["done"] });
+    const backlog = await new ProjectBacklogService(db).list(orgId, projectId, {
+      phase: ["in_progress"],
+    });
     expect(backlog.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          phase: "done",
-          reason: "merged",
+          phase: "in_progress",
+          reason: "started",
           issue: expect.objectContaining({ number: 17 }),
           pullRequest: expect.objectContaining({ number: 23, state: "merged" }),
         }),
