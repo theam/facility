@@ -172,6 +172,7 @@ export function StoryActions({
               projectId={projectId}
               storyId={story.id}
               draftOwnerId={draftOwnerId}
+              computeState={computeState}
               agents={enabled}
               preset={preset}
               open={open}
@@ -207,6 +208,7 @@ export function StoryComposer({
   composerId = "story-composer",
   formLabel = "Send a task",
   retargetRequest = 0,
+  computeState,
 }: {
   projectId: string;
   storyId: string;
@@ -221,6 +223,7 @@ export function StoryComposer({
   composerId?: string;
   formLabel?: string;
   retargetRequest?: number;
+  computeState?: StoryWorkspace["state"];
 }) {
   const router = useRouter();
   const defaultAgent =
@@ -379,6 +382,7 @@ export function StoryComposer({
           selected={draft.attachmentIds ?? []}
           attempt={uploadAttempt}
           attemptSaved={uploadSaved}
+          computeState={computeState}
           onAttempt={updateUploadAttempt}
           onChange={(attachmentIds) =>
             setDraft((current) => ({ ...current, attachmentIds, idempotencyKey: undefined }))

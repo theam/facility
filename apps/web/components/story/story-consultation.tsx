@@ -7,6 +7,7 @@ import type {
   StoryConsultationHandoff,
   StoryConsultationOptions,
   StoryConsultations,
+  StoryWorkspace,
 } from "@facility/sdk";
 import { Button, Eyebrow, Field, Select, TextArea, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
@@ -93,6 +94,7 @@ export function StoryConsultationPanel({
   defaultAgent,
   canExecute,
   draftOwnerId,
+  computeState,
 }: {
   projectId: string;
   storyId: string;
@@ -102,6 +104,7 @@ export function StoryConsultationPanel({
   defaultAgent: string | null;
   canExecute: boolean;
   draftOwnerId?: string;
+  computeState?: StoryWorkspace["state"];
 }) {
   const router = useRouter();
   const base = `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/consultations`;
@@ -713,6 +716,7 @@ export function StoryConsultationPanel({
             key={handoff.consultationId}
             projectId={projectId}
             storyId={storyId}
+            computeState={computeState}
             agents={agents.filter((agent) => agent.enabled)}
             initialDraft={{ agent: defaultAgent ?? "", message: handoff.message }}
             draftOwnerId={

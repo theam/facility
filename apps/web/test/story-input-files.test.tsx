@@ -47,9 +47,9 @@ describe("story input files UI", () => {
     expect(container.textContent).toContain("No input files yet");
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
-    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(
-      false,
-    );
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(container.textContent).toContain("Upload without resuming");
+    expect(container.textContent).toContain("could not be confirmed");
   });
   it("uploads bytes over HTTP, selects only available IDs and labels availability honestly", async () => {
     const id = "infile_0123456789abcdef";

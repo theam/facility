@@ -428,6 +428,7 @@ export default async function StoryPage({
                 storyId={story.id}
                 initial={consultations.ok ? consultations.data : undefined}
                 initialError={consultations.ok ? undefined : consultations.message}
+                computeState={currentEnvironment?.inspection.state}
                 agents={agentRows}
                 defaultAgent={agents.ok ? agents.data.defaults.ui : null}
                 canExecute={canExecute && story.deletedAt === null}

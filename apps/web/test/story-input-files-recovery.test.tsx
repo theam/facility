@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StoryInputFiles } from "../components/story/story-input-files";
+import type { StoryWorkspace } from "../lib/api";
 import type { StoryUploadAttempt } from "../lib/story-upload";
 
 vi.mock("../components/story/workspace-story-controls", () => ({
@@ -33,7 +34,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function Harness({ original }: { original?: StoryUploadAttempt }) {
+function Harness({
+  original,
+  computeState,
+}: {
+  original?: StoryUploadAttempt;
+  computeState?: StoryWorkspace["state"];
+}) {
   const [attempt, setAttempt] = useState(original),
     [selected, setSelected] = useState<string[]>([]);
   return (
@@ -42,6 +49,7 @@ function Harness({ original }: { original?: StoryUploadAttempt }) {
       storyId="s"
       selected={selected}
       attempt={attempt}
+      computeState={computeState}
       disabled={false}
       onChange={(ids) => {
         onChange(ids);
@@ -55,8 +63,8 @@ function Harness({ original }: { original?: StoryUploadAttempt }) {
     />
   );
 }
-async function mount(original?: StoryUploadAttempt) {
-  await act(async () => root.render(<Harness original={original} />));
+async function mount(original?: StoryUploadAttempt, computeState?: StoryWorkspace["state"]) {
+  await act(async () => root.render(<Harness original={original} computeState={computeState} />));
 }
 async function choose(text = content, waitForCompletion = true) {
   const file = new File([text], "fixture.txt", { type: "text/plain" });
@@ -201,9 +209,8 @@ describe("recovering the original upload", () => {
   });
   it("recovers a lost preparation with the same identity and resume choice, then transfers once", async () => {
     const api = server("prepare");
-    await mount();
-    const resume = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    await act(async () => resume?.click());
+    await mount(undefined, "sleeping");
+    await click("Resume and upload files");
     await choose();
     expect(api.rows).toHaveLength(1);
     expect(api.puts()).toBe(0);
@@ -212,6 +219,8 @@ describe("recovering the original upload", () => {
     expect(api.puts()).toBe(0);
     expect(api.rows).toHaveLength(1);
     expect(container.textContent).toContain("Choose the original file");
+    await mount(undefined, "running");
+    await click("Resume and continue upload");
     await choose();
     expect(api.rows).toHaveLength(1);
     expect(api.puts()).toBe(1);
@@ -220,6 +229,46 @@ describe("recovering the original upload", () => {
     expect(onChange).toHaveBeenLastCalledWith([api.rows[0]?.id]);
     expect(onAttempt).toHaveBeenLastCalledWith(undefined);
     expect(api.fetch.mock.calls.some(([url]) => url.endsWith("/messages"))).toBe(false);
+  });
+  it.each([
+    ["running", "Upload files", false, "sleeping"],
+    ["sleeping", "Resume and upload files", true, "running"],
+    [undefined, "Upload without resuming", false, "sleeping"],
+    [undefined, "Resume if needed and upload", true, "running"],
+    ["error", "Resume if needed and upload", true, "running"],
+  ] as const)("binds %s / %s before opening the picker even if compute changes", async (state, label, resume, nextState) => {
+    const api = server();
+    await mount(undefined, state);
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    const picker = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!picker) throw Error("Missing file picker");
+    const opened = vi.spyOn(picker, "click");
+    await click(label);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(api.bodies).toHaveLength(0);
+    expect(api.puts()).toBe(0);
+    expect(onAttempt).not.toHaveBeenCalled();
+    await mount(undefined, nextState);
+    await choose();
+    expect(api.bodies).toHaveLength(1);
+    expect(api.bodies[0]?.resume).toBe(resume);
+    expect(api.puts()).toBe(1);
+  });
+  it.each([
+    "creating",
+    "deleting",
+    "destroyed",
+  ] as const)("keeps %s metadata readable without offering an upload", async (state) => {
+    const api = server();
+    await mount(undefined, state);
+    const button = [...container.querySelectorAll("button")].find(
+      (item) => item.textContent === "Upload unavailable",
+    );
+    expect(button?.disabled).toBe(true);
+    expect(container.textContent).toContain(`compute is ${state}`);
+    expect(api.bodies).toHaveLength(0);
+    expect(api.puts()).toBe(0);
+    expect(api.fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
   });
   it("uses observed availability after a lost transfer result without replaying its consumed grant", async () => {
     const api = server("transfer");

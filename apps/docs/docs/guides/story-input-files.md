@@ -11,10 +11,19 @@ a plan, import knowledge, or authorize external operations.
 ## In the web app
 
 1. Open the story's reply composer and select **attach files**.
-2. Choose files. If the workspace is sleeping, explicitly allow resuming compute
-   before uploading. This may incur workspace compute costs, but no inference.
+2. Select **Upload files** when compute was observed running, or **Resume and upload
+   files** when it was observed sleeping. The latter explicitly permits resuming
+   compute for transfer, which may incur workspace costs but no inference. Then
+   choose files in the system picker; canceling it starts no upload.
 3. Wait for **available**, select up to five files, write your instructions and
    send the message to the intended agent.
+
+If compute could not be confirmed, **Upload without resuming** requires it to be
+running. **Resume if needed and upload** explicitly permits the possible compute
+cost. Creating, deleting or destroyed workspaces do not offer an upload action;
+their metadata remains readable. These observations do not replace the server's
+state and permission checks at transfer time. If a workspace goes to sleep after
+choosing an upload without resumption, Facility does not silently authorize a wake.
 
 The picker distinguishes checking the local file, preparing its reservation and
 transferring bytes. Resuming sleeping compute can happen during transfer; preparing
@@ -36,7 +45,9 @@ separate. Failed or expired reservations still count toward storage limits.
 For an identified user, the original upload intent is kept in this tab for up to
 24 hours, isolated by person, project and story. It contains metadata and the retry
 identity, never file bytes or the transfer credential. Closing or navigating back
-can restore the attempt; reselect the original local file if bytes are needed.
+to the composer can restore the attempt; reselect the original local file if bytes
+are needed. **Continue original upload** or **Resume and continue upload** retains
+the attempt's original authorization even if compute observations have changed.
 When browser storage is unavailable, keep the page open to retain the intent.
 
 The agent receives file names, hashes and local paths, not the entire contents

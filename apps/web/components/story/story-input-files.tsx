@@ -1,7 +1,8 @@
 "use client";
 
 import { Button } from "@facility/ui";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { StoryWorkspace } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import type { StoryUploadAttempt } from "@/lib/story-upload";
 import { storyPath } from "./workspace-story-controls";
@@ -49,6 +50,7 @@ export function StoryInputFiles({
   attempt,
   attemptSaved = false,
   onAttempt,
+  computeState,
 }: {
   projectId: string;
   storyId: string;
@@ -59,20 +61,42 @@ export function StoryInputFiles({
   attempt?: StoryUploadAttempt;
   attemptSaved?: boolean;
   onAttempt: (attempt?: StoryUploadAttempt) => void;
+  computeState?: StoryWorkspace["state"];
 }) {
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [metadataError, setMetadataError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [resume, setResume] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const pickerResume = useRef(false);
+  const effectId = useId();
   const live = useRef(true);
   const working = useRef(false);
   const reads = useRef(0);
   const base = storyPath(projectId, storyId, "/input-files");
   const maxFiles = inventory?.limits.messageFiles ?? 5;
   const maxBytes = inventory?.limits.fileBytes ?? 25 * 1024 * 1024;
+  const unavailable =
+    computeState === "creating" || computeState === "deleting" || computeState === "destroyed";
+  const unknown = !computeState || computeState === "error";
+  const uploadLabel = attempt
+    ? attempt.resume
+      ? "Resume and continue upload"
+      : "Continue original upload"
+    : unavailable
+      ? "Upload unavailable"
+      : computeState === "sleeping"
+        ? "Resume and upload files"
+        : unknown
+          ? "Upload without resuming"
+          : "Upload files";
+  function chooseFiles(resume: boolean) {
+    if (disabled || working.current || unavailable || !inventory || metadataError) return;
+    // Bind the explicit choice before opening the picker, even if observations refresh meanwhile.
+    pickerResume.current = attempt?.resume ?? resume;
+    input.current?.click();
+  }
   const reload = useCallback(async () => {
     const sequence = ++reads.current;
     const result = await clientApi<Inventory>("GET", base);
@@ -185,7 +209,7 @@ export function StoryInputFiles({
       setWorking(false);
     }
   }
-  async function upload(files: FileList | null) {
+  async function upload(files: FileList | null, resume: boolean) {
     if (!files?.length || disabled || working.current || !inventory || metadataError) return;
     setError("");
     setStatus("");
@@ -308,28 +332,57 @@ export function StoryInputFiles({
   }
   return (
     <section aria-label="Story input files" className="grid gap-3 border border-(--line) p-3">
-      <label className="min-w-0 text-[12px]">
-        {attempt
-          ? "Choose the original file to continue"
-          : `Attach files (up to ${sizeLabel(maxBytes)} each; ${maxFiles} per message)`}
-        <input
-          ref={input}
-          type="file"
-          multiple={!attempt}
-          disabled={disabled || busy || !inventory || Boolean(metadataError)}
-          onChange={(event) => void upload(event.target.files)}
-          className="mt-2 block min-h-11 w-full min-w-0 text-[12px] file:mr-3 file:min-h-11 file:cursor-pointer file:border file:border-(--line) file:bg-(--bg-subtle) file:px-3 file:text-(--ink)"
-        />
-      </label>
-      <label className="flex min-h-11 items-center gap-2 text-[12px]">
-        <input
-          type="checkbox"
-          checked={attempt?.resume ?? resume}
-          disabled={disabled || busy || Boolean(attempt)}
-          onChange={(e) => setResume(e.target.checked)}
-        />
-        Allow uploads to resume sleeping workspace compute
-      </label>
+      <p className="text-[12px]">
+        {attempt ? "Choose the original file to continue. " : "Choose files to upload. "}
+        Up to {sizeLabel(maxBytes)} each; {maxFiles} per message.
+      </p>
+      <input
+        ref={input}
+        type="file"
+        multiple={!attempt}
+        tabIndex={-1}
+        aria-hidden="true"
+        disabled={disabled || busy || unavailable || !inventory || Boolean(metadataError)}
+        onChange={(event) => void upload(event.target.files, pickerResume.current)}
+        className="hidden"
+      />
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          aria-describedby={effectId}
+          disabled={disabled || busy || unavailable || !inventory || Boolean(metadataError)}
+          onClick={() => chooseFiles(computeState === "sleeping")}
+          className="min-h-11"
+        >
+          {uploadLabel}
+        </Button>
+        {!attempt && unknown ? (
+          <Button
+            type="button"
+            size="sm"
+            aria-describedby={effectId}
+            disabled={disabled || busy || !inventory || Boolean(metadataError)}
+            onClick={() => chooseFiles(true)}
+            className="min-h-11"
+          >
+            Resume if needed and upload
+          </Button>
+        ) : null}
+      </div>
+      <p id={effectId} className="text-[12px] text-(--mut)">
+        {unavailable
+          ? `Workspace compute is ${computeState}. Uploads need an available workspace; you can still check file metadata.`
+          : attempt
+            ? attempt.resume
+              ? "Original authorization: resuming compute is permitted; workspace costs may apply."
+              : "Original authorization: upload without resuming compute."
+            : computeState === "sleeping"
+              ? "Compute was last observed sleeping. Uploading may resume it and incur workspace costs."
+              : unknown
+                ? "Compute could not be confirmed. Upload without resuming requires it to be running. Allowing a resume may incur workspace costs."
+                : "Compute was last observed running. This action will not resume sleeping compute."}
+      </p>
       <p className="text-[12px] text-(--mut)">
         Private to this story, outside Git. Uploading does not run an agent or import knowledge.
         Available does not mean read. Downloads require a running workspace.
