@@ -23,6 +23,7 @@ type RequestOptions<Method extends FacilityRouteMethod, Path extends FacilityRou
   idempotencyKey?: string;
   signal?: AbortSignal;
   responseType?: "json" | "text";
+  headers?: Record<string, string>;
 };
 
 export type FacilityClientOptions = {
@@ -35,7 +36,11 @@ export type FacilityClientOptions = {
   retryBaseMs?: number;
 };
 
-export type FacilityWriteOptions = { idempotencyKey?: string; signal?: AbortSignal };
+export type FacilityWriteOptions = {
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+};
 
 export class FacilityApiError extends Error {
   constructor(
@@ -93,6 +98,14 @@ export class FacilityClient {
     return this.send("POST", path, { body, ...options });
   }
 
+  put<Path extends FacilityRoutePath<"PUT">>(
+    path: Path,
+    body: FacilityRouteBody<"PUT", Path>,
+    options: FacilityWriteOptions = {},
+  ) {
+    return this.send("PUT", path, { body, ...options });
+  }
+
   patch<Path extends FacilityRoutePath<"PATCH">>(
     path: Path,
     body: FacilityRouteBody<"PATCH", Path>,
@@ -127,10 +140,21 @@ export class FacilityClient {
     options: RequestOptions<Method, Path>,
   ): Promise<FacilityRouteResponse<Method, Path>> {
     const hasBody = options.body !== undefined;
+    const binary = rawBinaryBody(options.body);
     const headers = new Headers(this.headers);
-    headers.set("accept", options.responseType === "text" ? "text/plain" : "application/json");
+    new Headers(options.headers).forEach((value, name) => {
+      headers.set(name, value);
+    });
+    headers.set(
+      "accept",
+      options.responseType === "text" ? "text/plain" : "application/json, application/octet-stream",
+    );
     if (this.apiKey) headers.set("authorization", `Bearer ${this.apiKey}`);
-    if (hasBody) headers.set("content-type", "application/json");
+    if (hasBody)
+      headers.set(
+        "content-type",
+        binary === undefined ? "application/json" : "application/octet-stream",
+      );
     if (options.idempotencyKey) headers.set("idempotency-key", options.idempotencyKey);
 
     let attempt = 0;
@@ -144,10 +168,14 @@ export class FacilityClient {
           headers,
           credentials: "include",
           signal,
-          body: hasBody ? JSON.stringify(options.body) : undefined,
+          body: binary ?? (hasBody ? JSON.stringify(options.body) : undefined),
         });
       } catch (error) {
-        if (attempt < this.maxRetries && retryable(method, options.idempotencyKey)) {
+        if (
+          binary === undefined &&
+          attempt < this.maxRetries &&
+          retryable(method, options.idempotencyKey)
+        ) {
           await delay(this.retryBaseMs * 2 ** attempt, options.signal);
           attempt += 1;
           continue;
@@ -158,6 +186,7 @@ export class FacilityClient {
       if (
         [429, 502, 503, 504].includes(response.status) &&
         attempt < this.maxRetries &&
+        binary === undefined &&
         retryable(method, options.idempotencyKey)
       ) {
         await delay(retryDelay(response, this.retryBaseMs * 2 ** attempt), options.signal);
@@ -169,6 +198,11 @@ export class FacilityClient {
       if (options.responseType === "text") {
         return (await response.text()) as FacilityRouteResponse<Method, Path>;
       }
+      if (
+        response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===
+        "application/octet-stream"
+      )
+        return (await response.arrayBuffer()) as FacilityRouteResponse<Method, Path>;
       return (await response.json()) as FacilityRouteResponse<Method, Path>;
     }
   }
@@ -180,6 +214,14 @@ export class FacilityClient {
     }
     return url.toString();
   }
+}
+
+function rawBinaryBody(value: unknown): Blob | ArrayBuffer | undefined {
+  if (value instanceof ArrayBuffer || (typeof Blob !== "undefined" && value instanceof Blob))
+    return value;
+  if (ArrayBuffer.isView(value))
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice().buffer;
+  return undefined;
 }
 
 function retryable(method: FacilityRouteMethod, idempotencyKey?: string) {

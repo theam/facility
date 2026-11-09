@@ -25,11 +25,43 @@ type ExpandOpenApiPath<Path extends string> = Path extends `${infer Head}{${stri
   ? `${Head}${string}${ExpandOpenApiPath<Tail>}`
   : Path;
 
-export type FacilityOpenApiPath<Path extends string> = {
+type MatchingOpenApiPaths<Path extends string> = {
   [Spec in Extract<keyof OpenApiPaths, string>]: PathMatches<Path, Spec> extends true
     ? Spec
     : never;
 }[Extract<keyof OpenApiPaths, string>];
+
+type ParameterCount<
+  Path extends string,
+  Count extends unknown[] = [],
+> = Path extends `${infer Head}/${infer Tail}`
+  ? ParameterCount<Tail, Head extends `{${string}}` ? [...Count, unknown] : Count>
+  : Path extends `{${string}}`
+    ? [...Count, unknown]["length"]
+    : Count["length"];
+
+type PathsWithParameterCount<Matches extends string, Count extends number> = Matches extends string
+  ? ParameterCount<Matches> extends Count
+    ? Matches
+    : never
+  : never;
+
+// Counting avoids comparing every route pair when the generic client accepts
+// the full route union. A matching literal has fewer parameters than /{id}.
+type MostSpecificPaths<Matches extends string, Count extends unknown[] = []> = [Matches] extends [
+  never,
+]
+  ? never
+  : Count["length"] extends 8
+    ? Matches
+    : [PathsWithParameterCount<Matches, Count["length"]>] extends [never]
+      ? MostSpecificPaths<Matches, [...Count, unknown]>
+      : PathsWithParameterCount<Matches, Count["length"]>;
+
+/** A literal endpoint such as /options takes precedence over /{consultationId}. */
+export type FacilityOpenApiPath<Path extends string> = Path extends keyof OpenApiPaths
+  ? Path
+  : MostSpecificPaths<MatchingOpenApiPaths<Path>>;
 
 type OpenApiOperation<Method extends string, Path extends string> = {
   [Spec in FacilityOpenApiPath<Path>]: Lowercase<Method> extends keyof OpenApiPaths[Spec]
@@ -37,11 +69,13 @@ type OpenApiOperation<Method extends string, Path extends string> = {
     : never;
 }[FacilityOpenApiPath<Path>];
 
-type JsonContent<Value> = Value extends { content: { "application/json": infer Payload } }
+type ResponseContent<Value> = Value extends { content: { "application/json": infer Payload } }
   ? Payload
-  : Value extends { content?: never }
-    ? undefined
-    : unknown;
+  : Value extends { content: { "application/octet-stream": unknown } }
+    ? ArrayBuffer
+    : Value extends { content?: never }
+      ? undefined
+      : unknown;
 
 type SuccessfulResponse<Responses> = Responses extends { 200: infer Success }
   ? Success
@@ -55,7 +89,7 @@ type SuccessfulResponse<Responses> = Responses extends { 200: infer Success }
 
 export type FacilityGeneratedResponse<Method extends string, Path extends string> =
   OpenApiOperation<Method, Path> extends { responses: infer Responses }
-    ? JsonContent<SuccessfulResponse<Responses>>
+    ? ResponseContent<SuccessfulResponse<Responses>>
     : unknown;
 
 export type FacilityGeneratedBody<Method extends string, Path extends string> =
@@ -63,7 +97,11 @@ export type FacilityGeneratedBody<Method extends string, Path extends string> =
     requestBody: { content: { "application/json": infer Body } };
   }
     ? Body
-    : undefined;
+    : OpenApiOperation<Method, Path> extends {
+          requestBody: { content: { "application/octet-stream": unknown } };
+        }
+      ? FacilityBinaryBody
+      : undefined;
 
 export type FacilityGeneratedQuery<Method extends string, Path extends string> =
   OpenApiOperation<Method, Path> extends { parameters: { query?: infer Query } }
@@ -72,7 +110,9 @@ export type FacilityGeneratedQuery<Method extends string, Path extends string> =
 
 type ArrayItem<Value> = Value extends readonly (infer Item)[] ? Item : never;
 
-export type FacilityRouteMethod = "GET" | "POST" | "PATCH" | "DELETE";
+/** Unencoded bytes for application/octet-stream requests. */
+export type FacilityBinaryBody = ArrayBuffer | ArrayBufferView | Blob;
+export type FacilityRouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type FacilityRoutePath<Method extends FacilityRouteMethod> = {
   [Spec in Extract<keyof OpenApiPaths, string>]: Lowercase<Method> extends keyof OpenApiPaths[Spec]
     ? ExpandOpenApiPath<Spec>
@@ -238,7 +278,75 @@ export type StoryWorkspace = {
   lastActivityAt: string;
   destroyedAt: string | null;
 };
+export type StoryDelivery = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery"
+>;
+export type ReplaceStoryDelivery = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery"
+>;
+export type StoryPreviewConvergence = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/preview-convergence"
+>;
+export type StoryCompletion = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/completion"
+>;
+export type DeliveryIntegrationPolicy = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/delivery-integration"
+>;
+export type DeliveryNoticePolicy = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/delivery-notices"
+>;
+export type StoryPlans = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan"
+>;
+export type StoryPlan = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/revisions/{revision}"
+>;
+export type PlanDecisionReview = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/decisions/{requestId}"
+>;
+export type StoryPlanRepositories = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/plan/repositories"
+>;
+export type StoryConsultations = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations"
+>;
+export type StoryConsultation = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations/{consultationId}"
+>;
+export type StoryConsultationOptions = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations/options"
+>;
+export type StoryConsultationHandoff = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations/{consultationId}/handoff"
+>;
+export type RequestStoryConsultation = FacilityGeneratedBody<
+  "POST",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations"
+>;
 export type WorkspaceStoryBundle = {
+  /** Absent on older servers; an absent register never means a complete PR set. */
+  delivery?: StoryDelivery;
+  /** Absent on older servers; null until a complete exact delivery generation is observed. */
+  previewConvergence?: StoryPreviewConvergence | null;
+  /** Absent on older servers. Review, merge, integration and retention remain separate. */
+  completion?: StoryCompletion;
+  /** Absent on older servers. Missing metadata never implies an approved plan. */
+  plans?: StoryPlans;
   story: WorkspaceStory;
   assignees: StoryAssignee[];
   workspace: StoryWorkspace | null;
@@ -324,6 +432,13 @@ export type StoryMessageContent = {
   reportedModel: string | null;
 };
 export type StoryMessage = {
+  attachments?: Array<{
+    id: string;
+    name: string;
+    size: number;
+    sha256: string;
+    mediaType: string;
+  }>;
   id: string;
   seq: number;
   role: "user" | "agent" | "system";
@@ -432,3 +547,28 @@ export type BacklogItem = ArrayItem<ProjectBacklog["items"]>;
 export type BacklogPhase = BacklogItem["phase"];
 export type BacklogPerson = ArrayItem<BacklogItem["assignees"]>;
 export type BacklogQuery = FacilityGeneratedQuery<"GET", "/v1/projects/{projectId}/backlog">;
+
+export type StoryWorkflowPolicyState = FacilityGeneratedResponse<
+  "get",
+  "/v1/projects/{projectId}/workflow-policy"
+>;
+export type WorkflowPolicyReview = FacilityGeneratedResponse<
+  "post",
+  "/v1/projects/{projectId}/workflow-policy/review"
+>;
+export type StoryWorkflowStatus = FacilityGeneratedResponse<
+  "get",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/workflow"
+>;
+export type StoryDeliveryAcceptance = FacilityGeneratedResponse<
+  "get",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery-acceptance"
+>;
+export type DeliveryAcceptanceRequest = FacilityGeneratedResponse<
+  "post",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery-acceptance"
+>;
+export type DeliveryAcceptanceReview = FacilityGeneratedResponse<
+  "get",
+  "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery-acceptance/{requestId}"
+>;
