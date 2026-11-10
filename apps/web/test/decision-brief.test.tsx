@@ -89,6 +89,28 @@ describe("saved author brief presentation", () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(container.querySelector("button")).toBeNull();
   });
+  it("links each source once in the visible brief and keeps every link in the options view", async () => {
+    await render();
+    const section = container.querySelector("section");
+    const visible = [...(section?.querySelectorAll("a") ?? [])]
+      .filter((link) => !link.closest("details"))
+      .map((link) => link.href);
+    expect(visible.length).toBeGreaterThan(0);
+    expect(new Set(visible).size).toBe(visible.length);
+    const cited = new Set(
+      [brief.summary, brief.whyNow, brief.decisiveRisk, ...brief.unknowns].flatMap(
+        (claim) => claim.evidenceIds,
+      ),
+    );
+    for (const id of cited)
+      expect(visible).toContain(brief.evidence.find((source) => source.id === id)?.url);
+    const options = section?.querySelector("details");
+    for (const option of brief.options)
+      for (const id of option.consequence.evidenceIds)
+        expect([...(options?.querySelectorAll("a") ?? [])].map((link) => link.href)).toContain(
+          brief.evidence.find((source) => source.id === id)?.url,
+        );
+  });
   it("keeps the full original one toggle away and separates proposer, source and execution roles", async () => {
     await render();
     const original = [...container.querySelectorAll("details")].find((node) =>

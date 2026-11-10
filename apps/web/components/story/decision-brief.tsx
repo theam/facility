@@ -20,16 +20,21 @@ export function DecisionBrief({
   const [format, setFormat] = useState<Format>("summary");
   const group = useId();
   const recommended = brief.options.find((option) => option.id === brief.recommendation?.optionId);
-  function claim(value: Claim) {
+  // The visible brief links each source once, at its first statement; the
+  // options view keeps every statement's own links.
+  const linked = new Set<string>();
+  function claim(value: Claim, once = false) {
+    const ids = once ? value.evidenceIds.filter((id) => !linked.has(id)) : value.evidenceIds;
+    if (once) for (const id of ids) linked.add(id);
     return (
       <div className="flex min-w-0 flex-col gap-1">
         <p className="break-words">{value.text}</p>
-        {value.evidenceIds.length ? (
+        {ids.length ? (
           <ul
             className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-normal text-(--mut)"
             aria-label="Sources for this statement"
           >
-            {value.evidenceIds.map((id) => {
+            {ids.map((id) => {
               const source = brief.evidence.find((item) => item.id === id);
               return source ? (
                 <li key={id} className="min-w-0 break-words">
@@ -67,13 +72,13 @@ export function DecisionBrief({
       aria-label={`Author’s decision brief for ${subject}`}
       className="flex min-w-0 flex-col gap-4 text-[15px] leading-relaxed"
     >
-      <div className="text-[17px] font-medium leading-snug">{claim(brief.summary)}</div>
-      <div className="text-(--mut)">{claim(brief.whyNow)}</div>
+      <div className="text-[17px] font-medium leading-snug">{claim(brief.summary, true)}</div>
+      <div className="text-(--mut)">{claim(brief.whyNow, true)}</div>
       <div className="flex flex-col gap-1">
         <p className="font-medium">
           {recommended ? `Author recommends: ${recommended.label}` : "No recommendation supplied"}
         </p>
-        {brief.recommendation ? claim(brief.recommendation.reason) : null}
+        {brief.recommendation ? claim(brief.recommendation.reason, true) : null}
       </div>
       <div className="flex gap-2">
         <svg
@@ -89,7 +94,7 @@ export function DecisionBrief({
         </svg>
         <div className="min-w-0">
           <h4 className="sr-only">Risk</h4>
-          {claim(brief.decisiveRisk)}
+          {claim(brief.decisiveRisk, true)}
         </div>
       </div>
       {brief.unknowns.length ? (
@@ -98,7 +103,7 @@ export function DecisionBrief({
           <ul className="flex flex-col gap-1">
             {brief.unknowns.map((value, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: immutable statements in a single revision
-              <li key={index}>{claim(value)}</li>
+              <li key={index}>{claim(value, true)}</li>
             ))}
           </ul>
         </div>

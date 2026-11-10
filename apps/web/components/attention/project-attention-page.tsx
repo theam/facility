@@ -146,6 +146,11 @@ export default async function ProjectAttentionPage({
                                 .map(({ kind }) => attentionKindLabel(kind))
                                 .join(" · ")
                             : null;
+                    const action = item.plan
+                      ? `Review plan r${item.plan.revision}`
+                      : item.delivery
+                        ? "Review delivery"
+                        : "Open notices";
                     return (
                       <li
                         key={item.storyId}
@@ -182,16 +187,21 @@ export default async function ProjectAttentionPage({
                               {summary}
                             </p>
                           ) : null}
+                          <Link
+                            href={review}
+                            className="mt-1 inline-flex min-h-11 items-center text-sm text-(--info) hover:underline sm:hidden"
+                          >
+                            {action}
+                            <span aria-hidden="true" className="ml-1.5">
+                              →
+                            </span>
+                          </Link>
                         </div>
                         <Link
                           href={review}
-                          className="inline-flex min-h-11 shrink-0 items-center self-center text-sm text-(--info) hover:underline"
+                          className="hidden min-h-11 shrink-0 items-center self-center text-sm text-(--info) hover:underline sm:inline-flex"
                         >
-                          {item.plan
-                            ? `Review plan r${item.plan.revision}`
-                            : item.delivery
-                              ? "Review delivery"
-                              : "Open notices"}
+                          {action}
                           <span aria-hidden="true" className="ml-1.5">
                             →
                           </span>
@@ -244,7 +254,7 @@ export default async function ProjectAttentionPage({
           ) : null}
         </>
       )}
-      <footer className="flex flex-col gap-1 border-t border-(--line) pt-2 text-[12px] text-(--mut)">
+      <footer className="flex flex-col gap-1 text-[12px] text-(--mut)">
         <details open={filtered}>
           <summary className="min-h-11 w-fit cursor-pointer py-3">Search and filter</summary>
           <form
