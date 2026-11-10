@@ -287,10 +287,7 @@ export function StoryConsultationPanel({
     } else setError(result.message);
   }
   return (
-    <section
-      id="consultation"
-      className="flex min-w-0 flex-col gap-4 border border-(--line) p-5 lg:p-6"
-    >
+    <section id="consultation" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Eyebrow>read-only consultation</Eyebrow>

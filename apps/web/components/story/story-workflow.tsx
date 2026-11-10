@@ -140,10 +140,7 @@ export function StoryWorkflowPanel({
     setRequest(result.data);
   }
   return (
-    <section
-      aria-label="Workflow status"
-      className="flex min-w-0 flex-col gap-3 border border-(--line) p-4 sm:p-5"
-    >
+    <section aria-label="Workflow status" className="flex min-w-0 flex-col gap-3">
       <Eyebrow>approvals and acceptance</Eyebrow>
       {cycle ? <ReviewCycleDetails cycle={cycle} /> : null}
       {refreshError ? (

@@ -59,7 +59,7 @@ export function StoryPreviewConvergencePanel({
   }
 
   return (
-    <section aria-label="Preview delivery" className="min-w-0 border border-(--line) p-5 lg:p-6">
+    <section aria-label="Preview delivery" className="min-w-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Eyebrow>preview delivery</Eyebrow>

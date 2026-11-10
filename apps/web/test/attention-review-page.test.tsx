@@ -97,12 +97,19 @@ beforeEach(() => {
   mocks.queries = [];
 });
 describe("project Attention entry", () => {
-  it("starts with a review list while keeping filters and secondary navigation folded", async () => {
+  it("starts with a review list, with search folded and related views in the footer", async () => {
     const root = await render();
     expect(root.querySelector("form")?.closest("details")?.open).toBe(false);
+    expect(root.querySelector("form")?.closest("footer")).not.toBeNull();
+    const related = root.querySelector('nav[aria-label="Related project views"]');
+    expect(related?.closest("details")).toBeNull();
+    expect(related?.closest("footer")).not.toBeNull();
     expect(
-      root.querySelector('nav[aria-label="Related project views"]')?.closest("details")?.open,
-    ).toBe(false);
+      root
+        .querySelector('ol[aria-label="Pending stories"]')
+        ?.compareDocumentPosition(related as Node),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(root.textContent).not.toContain("Queue details");
     expect(root.querySelector('ol[aria-label="Pending stories"]')?.closest("details")).toBeNull();
     expect(root.textContent).not.toContain("Plans, notices and delivery sets, grouped");
     expect(root.textContent).not.toContain("Next review");

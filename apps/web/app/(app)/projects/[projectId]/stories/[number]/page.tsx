@@ -121,141 +121,101 @@ export default async function StoryPage({
       .find((name) => name !== null) ?? null;
 
   const focus = storyFocus(bundle, workflow.ok ? workflow.data : undefined, Boolean(selection));
-  const reviewing = focus.section === "plan" || focus.section === "delivery";
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6">
+    <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <LiveRefresh seconds={8} />
-      <header className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Eyebrow>
+      <header className="flex flex-col gap-2">
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-(--mut)">
+          <Link
+            href={`/projects/${encodeURIComponent(projectId)}`}
+            className="inline-flex min-h-11 items-center hover:text-(--ink)"
+          >
+            ← Attention
+          </Link>
+          <span aria-hidden="true">·</span>
+          <span>
             {story.provider === "manual"
               ? "Started in Facility"
               : story.provider === "schedule"
                 ? `Scheduled · ${story.externalId}`
                 : `GitHub · ${story.externalId.replace(":", " #")}`}
-          </Eyebrow>
-          <Link
-            href={`/projects/${encodeURIComponent(projectId)}/stories`}
-            className="text-[11.5px] text-(--dim) hover:text-(--ink)"
-          >
-            ← all stories
-          </Link>
-        </div>
-        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">{story.title}</h1>
-        <details open={!reviewing} className="text-sm text-(--mut)">
-          <summary className="min-h-11 cursor-pointer py-3">Story status</summary>
-          <dl className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-(--mut)">
-            <div className="inline-flex items-center gap-2">
-              <dt className="sr-only">Agent activity</dt>
-              <StatusDot tone={activity.active ? "agent" : "machine"} pulse={activity.active} />
-              <dd className="text-(--ink)">{activity.label}</dd>
-            </div>
-            <div className="inline-flex gap-1.5">
-              <dt>Task phase:</dt>
-              <dd className="text-(--ink)">{phaseLabel(story.status)}</dd>
-            </div>
-            <div className="inline-flex gap-1.5">
-              <dt>Environment:</dt>
-              <dd className="text-(--ink)">{computeLabel(currentEnvironment)}</dd>
-            </div>
-            {story.branch ? (
-              <div className="inline-flex gap-1.5">
-                <dt className="sr-only">Branch</dt>
-                <dd className="font-mono text-(--mut)">{story.branch}</dd>
-              </div>
-            ) : null}
-            {bundle.assignees.length > 0 ? (
-              <div className="inline-flex gap-1.5">
-                <dt>Working on it:</dt>
-                <dd className="text-(--ink)">
-                  {bundle.assignees
-                    .map(
-                      (person) =>
-                        person.name ?? (person.login ? `@${person.login}` : person.subject),
-                    )
-                    .join(", ")}
-                </dd>
-              </div>
-            ) : null}
-            {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt }) ? (
-              <div className="inline-flex gap-1.5 text-(--dim)">
-                <dt className="sr-only">Title</dt>
-                <dd>
-                  {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt })}
-                </dd>
-              </div>
-            ) : null}
-          </dl>
+          </span>
+        </p>
+        <h1 className="text-[clamp(22px,2.6vw,28px)] font-semibold leading-tight tracking-tight">
+          {story.title}
+        </h1>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-(--mut)">
+          <StatusDot tone={activity.active ? "agent" : "machine"} pulse={activity.active} />
+          <span className="text-(--ink)">{activity.label}</span>
+          <span aria-hidden="true">·</span>
+          <span>{phaseLabel(story.status)}</span>
           {bundle.progress?.latest ? (
-            <p className="text-xs text-(--mut)">
-              Latest recorded activity: {bundle.progress.latest.turn.agentName} ·{" "}
-              {bundle.progress.latest.activity.title}.{" "}
-              <Link
-                href="#story-progress"
-                className="inline-flex min-h-11 items-center text-(--info) underline"
-              >
-                Inspect activity
-              </Link>
-            </p>
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="min-w-0 break-words">
+                {bundle.progress.latest.turn.agentName}: {bundle.progress.latest.activity.title}
+              </span>
+            </>
           ) : null}
-        </details>
+        </p>
       </header>
 
       {openAttention.length > 0 ? (
-        <section
-          className={`border bg-(--bg-subtle) p-5 ${openAttention.every((item) => isReviewNotice(item.kind)) ? "border-(--human)/50" : "border-(--bad)/50"}`}
-          id="story-attention"
-          aria-label="Needs your attention"
-        >
-          <h2 className="mb-4 font-semibold">Needs your attention · {openAttention.length}</h2>
+        <section id="story-attention" aria-label="Needs your attention" className="flex flex-col">
           {openAttention.map((item) => {
             const reviewNotice = isReviewNotice(item.kind);
             const deliveryNotice = ["delivery_integration", "delivery_completion"].includes(
               item.kind,
             );
+            const failure = !reviewNotice && !deliveryNotice && item.kind !== "agent_waiting";
             return (
-              <div key={item.id} className="border-t border-(--line) py-4">
-                <p className="font-medium">{item.title}</p>
-                <p className="mt-2 text-sm text-(--mut)">
-                  {item.kind === "agent_waiting" || deliveryNotice || reviewNotice
-                    ? (item.detail ??
-                      (reviewNotice ? "Review the recorded candidate and findings." : null))
-                    : errorSummary(item.detail)}
-                </p>
-                {reviewNotice ? (
-                  <div className="mt-3 text-sm">
+              <div key={item.id} className="flex gap-3 border-b border-(--line) py-4 first:pt-0">
+                <span
+                  aria-hidden="true"
+                  className={`mt-2 size-2 shrink-0 rounded-full ${failure ? "bg-(--bad)" : "bg-(--human)"}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{item.title}</p>
+                  <p className="mt-1 text-sm text-(--mut)">
+                    {failure
+                      ? errorSummary(item.detail)
+                      : (item.detail ??
+                        (reviewNotice ? "Review the recorded candidate and findings." : null))}
+                  </p>
+                  {reviewNotice ? (
                     <Link
                       href="#story-section-workflow"
-                      className="inline-flex min-h-11 items-center text-(--info) underline"
+                      className="inline-flex min-h-11 items-center text-sm text-(--info) underline"
                     >
                       Review the candidate and findings
                     </Link>
-                    <p className="text-(--mut)">
+                  ) : null}
+                  {reviewNotice ? (
+                    <p className="text-xs text-(--mut)">
                       Dismissing this notice does not approve changes or restart work.
                     </p>
-                  </div>
-                ) : null}
-                {item.kind !== "agent_waiting" &&
-                !deliveryNotice &&
-                !reviewNotice &&
-                item.detail ? (
-                  <details className="mt-3 text-sm">
-                    <summary className="cursor-pointer">Technical details</summary>
-                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
-                      {item.detail}
-                    </pre>
-                  </details>
-                ) : null}
-                {canExecute ? (
-                  <AttentionActions
-                    projectId={projectId}
-                    storyId={story.id}
-                    item={item}
-                    agentName={
-                      bundle.turns.find((turn) => turn.id === item.turnId)?.agentName ?? null
-                    }
-                  />
-                ) : null}
+                  ) : null}
+                  {failure && item.detail ? (
+                    <details className="text-sm">
+                      <summary className="min-h-11 cursor-pointer py-3 text-(--mut)">
+                        Technical details
+                      </summary>
+                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
+                        {item.detail}
+                      </pre>
+                    </details>
+                  ) : null}
+                  {canExecute ? (
+                    <AttentionActions
+                      projectId={projectId}
+                      storyId={story.id}
+                      item={item}
+                      agentName={
+                        bundle.turns.find((turn) => turn.id === item.turnId)?.agentName ?? null
+                      }
+                    />
+                  ) : null}
+                </div>
               </div>
             );
           })}
@@ -279,12 +239,7 @@ export default async function StoryPage({
         focus={focus}
         conversation={
           <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
-            <div className="flex flex-wrap items-baseline justify-between gap-4">
-              <Eyebrow>conversation</Eyebrow>
-              <span className="text-[11px] text-(--dim)">
-                Newest first · each request with the run and response it produced
-              </span>
-            </div>
+            <h2 className="text-sm font-medium text-(--mut)">Conversation</h2>
             <StoryActions
               key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
               projectId={projectId}
@@ -437,12 +392,40 @@ export default async function StoryPage({
             key: "progress",
             label: "Activity",
             content: (
-              <StoryProgress
-                key={`${projectId}:${storyId}`}
-                projectId={projectId}
-                storyId={storyId}
-                progress={bundle.progress}
-              />
+              <div className="flex min-w-0 flex-col gap-6">
+                <StoryProgress
+                  key={`${projectId}:${storyId}`}
+                  projectId={projectId}
+                  storyId={storyId}
+                  progress={bundle.progress}
+                />
+                <StoryTimeline projectId={projectId} storyId={story.id} />
+                {resolvedAttention.length > 0 ? (
+                  <details className="text-sm">
+                    <summary className="min-h-11 cursor-pointer py-3 text-(--mut)">
+                      Resolved and dismissed notices · {resolvedAttention.length}
+                    </summary>
+                    {resolvedAttention.map((item) => (
+                      <div key={item.id} className="border-t border-(--line) py-3">
+                        <p>
+                          {item.title} · {item.resolution ?? "Resolved"}
+                        </p>
+                        <p className="text-xs text-(--dim)">
+                          {formatTime(item.resolvedAt ?? item.createdAt)}
+                        </p>
+                        <details>
+                          <summary className="mt-2 cursor-pointer text-xs">
+                            Original details
+                          </summary>
+                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">
+                            {item.detail}
+                          </pre>
+                        </details>
+                      </div>
+                    ))}
+                  </details>
+                ) : null}
+              </div>
             ),
           },
           {
@@ -471,15 +454,48 @@ export default async function StoryPage({
             key: "environment",
             label: "Environment",
             content: (
-              <section
-                id="workspace"
-                className="scroll-mt-6 flex flex-col gap-4 border border-(--line) p-5 lg:p-6"
-              >
-                <h2 className="text-lg font-semibold">Development environment</h2>
+              <section id="workspace" className="scroll-mt-6 flex flex-col gap-4">
+                <h2 className="text-base font-semibold">Development environment</h2>
+                <dl className="flex flex-wrap gap-x-5 gap-y-2 text-[12px] text-(--mut)">
+                  <div className="inline-flex gap-1.5">
+                    <dt>Environment:</dt>
+                    <dd className="text-(--ink)">{computeLabel(currentEnvironment)}</dd>
+                  </div>
+                  {story.branch ? (
+                    <div className="inline-flex gap-1.5">
+                      <dt>Branch:</dt>
+                      <dd className="font-mono">{story.branch}</dd>
+                    </div>
+                  ) : null}
+                  {bundle.assignees.length > 0 ? (
+                    <div className="inline-flex gap-1.5">
+                      <dt>Working on it:</dt>
+                      <dd className="text-(--ink)">
+                        {bundle.assignees
+                          .map(
+                            (person) =>
+                              person.name ?? (person.login ? `@${person.login}` : person.subject),
+                          )
+                          .join(", ")}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {titleStatus({ titleSource: story.titleSource, createdAt: story.createdAt }) ? (
+                    <div className="inline-flex gap-1.5 text-(--dim)">
+                      <dt className="sr-only">Title</dt>
+                      <dd>
+                        {titleStatus({
+                          titleSource: story.titleSource,
+                          createdAt: story.createdAt,
+                        })}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
                 {bundle.workspace ? (
                   <>
                     <div className="flex flex-wrap items-center gap-3 text-sm">
-                      <span className="inline-flex items-center gap-2 border border-(--line) px-3 py-1">
+                      <span className="inline-flex items-center gap-2 text-(--mut)">
                         {bundle.workspace.provider === "vercel" ? (
                           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24">
                             <path fill="currentColor" d="M12 3 24 23H0Z" />
@@ -563,40 +579,14 @@ export default async function StoryPage({
         ]}
       />
 
-      <StoryTimeline projectId={projectId} storyId={story.id} />
-
-      {resolvedAttention.length > 0 ? (
-        <details className="border border-(--line) p-5">
-          <summary className="cursor-pointer text-sm text-(--mut)">
-            Resolved and dismissed notices · {resolvedAttention.length}
-          </summary>
-          {resolvedAttention.map((item) => (
-            <div key={item.id} className="mt-4 border-t border-(--line) pt-3 text-sm">
-              <p>
-                {item.title} · {item.resolution ?? "Resolved"}
-              </p>
-              <p className="text-xs text-(--dim)">
-                {formatTime(item.resolvedAt ?? item.createdAt)}
-              </p>
-              <details>
-                <summary className="mt-2 cursor-pointer text-xs">Original details</summary>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">
-                  {item.detail}
-                </pre>
-              </details>
-            </div>
-          ))}
-        </details>
-      ) : null}
-
       {bundle.artifacts.length > 3 ? (
         <section id="results" className="scroll-mt-6 flex flex-col gap-3">
           <Eyebrow>results · {bundle.artifacts.length}</Eyebrow>
-          <div className="flex flex-col border border-(--line)">
+          <div className="flex flex-col border-t border-(--line)">
             {bundle.artifacts.map((artifact) => (
               <div
                 key={artifact.id}
-                className="flex items-center gap-3 border-b border-(--line) p-4 last:border-b-0"
+                className="flex items-center gap-3 border-b border-(--line) py-3"
               >
                 <span className="font-mono text-[10px] text-(--dim)">{artifact.kind}</span>
                 {safeExternalUrl(artifact.uri) ? (

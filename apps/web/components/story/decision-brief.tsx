@@ -26,7 +26,7 @@ export function DecisionBrief({
         <p className="break-words">{value.text}</p>
         {value.evidenceIds.length ? (
           <ul
-            className="flex flex-wrap gap-x-3 gap-y-1 text-xs"
+            className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-normal text-(--mut)"
             aria-label="Sources for this statement"
           >
             {value.evidenceIds.map((id) => {
@@ -37,10 +37,10 @@ export function DecisionBrief({
                     href={source.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="underline underline-offset-4"
+                    className="underline decoration-(--line-strong) underline-offset-4 hover:text-(--ink)"
                     title={source.reference}
                   >
-                    {source.label}
+                    {source.label} ↗
                   </a>
                 </li>
               ) : null;
@@ -65,26 +65,37 @@ export function DecisionBrief({
   return (
     <section
       aria-label={`Author’s decision brief for ${subject}`}
-      className="flex min-w-0 flex-col gap-4 text-sm"
+      className="flex min-w-0 flex-col gap-4 text-[15px] leading-relaxed"
     >
-      <div className="flex flex-col gap-2">
-        <h3 className="font-medium">Summary</h3>
-        {claim(brief.summary)}
-      </div>
-      <div className="flex flex-col gap-2 border-l-2 border-(--info) pl-4">
-        <h4 className="font-medium">
+      <div className="text-[17px] font-medium leading-snug">{claim(brief.summary)}</div>
+      <div className="text-(--mut)">{claim(brief.whyNow)}</div>
+      <div className="flex flex-col gap-1">
+        <p className="font-medium">
           {recommended ? `Author recommends: ${recommended.label}` : "No recommendation supplied"}
-        </h4>
+        </p>
         {brief.recommendation ? claim(brief.recommendation.reason) : null}
       </div>
-      <div className="flex flex-col gap-2 border-l-2 border-(--human) pl-4">
-        <h4 className="font-medium">Risk</h4>
-        {claim(brief.decisiveRisk)}
+      <div className="flex gap-2">
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 16 16"
+          className="mt-1 size-4 shrink-0 text-(--human)"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
+          <path d="M8 1.75 15 14.25H1L8 1.75Z" strokeLinejoin="round" />
+          <path d="M8 6v3.5M8 11.5v.5" strokeLinecap="round" />
+        </svg>
+        <div className="min-w-0">
+          <h4 className="sr-only">Risk</h4>
+          {claim(brief.decisiveRisk)}
+        </div>
       </div>
       {brief.unknowns.length ? (
-        <div className="flex flex-col gap-2">
-          <h4 className="font-medium">Still unknown</h4>
-          <ul className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1 text-sm text-(--mut)">
+          <h4>Still unknown</h4>
+          <ul className="flex flex-col gap-1">
             {brief.unknowns.map((value, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: immutable statements in a single revision
               <li key={index}>{claim(value)}</li>
@@ -92,15 +103,11 @@ export function DecisionBrief({
           </ul>
         </div>
       ) : null}
-      <details className="min-w-0 border-t border-(--line) pt-2">
-        <summary className="min-h-11 cursor-pointer py-3 text-(--info)">
-          Alternatives and sources
+      <details className="min-w-0 text-sm">
+        <summary className="min-h-11 w-fit cursor-pointer py-3 text-(--info)">
+          Options and sources
         </summary>
         <div className="flex min-w-0 flex-col gap-4 pt-2">
-          <div className="flex flex-col gap-2">
-            <h4 className="font-medium">Why now</h4>
-            {claim(brief.whyNow)}
-          </div>
           <fieldset className="min-w-0 sm:col-span-2">
             <legend className="sr-only">Option format</legend>
             <div className="flex flex-wrap gap-2">

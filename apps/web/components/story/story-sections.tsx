@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import type { StoryFocus, StorySection } from "@/lib/story-focus";
 import { PLAN_PROPOSAL_EVENT, type PlanProposalSource } from "@/lib/story-plan-events";
 
@@ -10,7 +10,30 @@ export type StorySectionContent = {
   content: ReactNode;
 };
 
-/** Stable keyed panels keep drafts and inspections while their observations refresh. */
+type StoryTab = "plan" | "delivery" | "progress" | "consultation" | "environment";
+
+/** Five places for the details; each section keeps its own id and gates. */
+const TABS: { key: StoryTab; label: string; sections: StorySection[] }[] = [
+  { key: "plan", label: "Plan", sections: ["plan"] },
+  {
+    key: "delivery",
+    label: "Delivery",
+    sections: ["delivery", "workflow", "preview", "completion"],
+  },
+  { key: "progress", label: "Activity", sections: ["progress"] },
+  { key: "consultation", label: "Consult", sections: ["consultation"] },
+  { key: "environment", label: "Environment", sections: ["environment"] },
+];
+
+function tabOf(section: StorySection): StoryTab {
+  return TABS.find((tab) => tab.sections.includes(section))?.key ?? "plan";
+}
+
+/**
+ * A step that waits on a person comes first, alone. The conversation follows,
+ * and every other section sits in one tab row. Panels stay mounted while
+ * hidden so drafts and inspections survive refreshes and tab changes.
+ */
 export function StorySections({
   focus,
   sections,
@@ -24,13 +47,22 @@ export function StorySections({
   scope: { projectId: string; storyId: string };
   navigationKey: string;
 }) {
-  const [lead, setLead] = useState(focus.section);
-  const [opened, setOpened] = useState<Partial<Record<StorySection, boolean>>>({
-    [focus.section]: true,
-  });
+  const [lead, setLead] = useState({ section: focus.section, decision: focus.decision });
+  const ids = useId();
   const root = useRef<HTMLDivElement>(null);
   const revealedNavigation = useRef<string | null>(null);
-  const changed = lead !== focus.section;
+  const changed = lead.section !== focus.section || lead.decision !== focus.decision;
+
+  const tabs = TABS.map((tab) => ({
+    ...tab,
+    sections: sections.filter(
+      (section) =>
+        tab.sections.includes(section.key) && !(lead.decision && section.key === lead.section),
+    ),
+  })).filter((tab) => tab.sections.length > 0);
+  const preferred = lead.decision ? "progress" : tabOf(lead.section);
+  const [selected, setSelected] = useState<StoryTab>(preferred);
+  const current = tabs.some((tab) => tab.key === selected) ? selected : (tabs[0]?.key ?? "plan");
 
   useEffect(() => {
     function reveal(hash: string, moveFocus: boolean) {
@@ -42,11 +74,8 @@ export function StorySections({
       }
       const target = document.getElementById(id);
       if (!target || !root.current?.contains(target)) return;
-      const section = target.closest<HTMLDetailsElement>("details[data-story-section]");
-      if (section) {
-        const key = section.dataset.storySection as StorySection;
-        setOpened((old) => (old[key] ? old : { ...old, [key]: true }));
-      }
+      const panel = target.closest<HTMLElement>("[data-story-tab]");
+      if (panel) setSelected(panel.dataset.storyTab as StoryTab);
       requestAnimationFrame(() => {
         if (!target.isConnected) return;
         target.scrollIntoView({ block: "start" });
@@ -101,88 +130,120 @@ export function StorySections({
   }, [scope.projectId, scope.storyId, navigationKey]);
 
   function showCurrent() {
-    setLead(focus.section);
-    setOpened((old) => ({ ...old, [focus.section]: true }));
+    setLead({ section: focus.section, decision: focus.decision });
+    setSelected(focus.decision ? "progress" : tabOf(focus.section));
     requestAnimationFrame(() => {
-      const summary = root.current?.querySelector<HTMLElement>(
-        `details[data-story-section="${focus.section}"] > summary`,
+      const target = document.getElementById(
+        focus.decision ? `story-section-${focus.section}` : `${ids}-tab-${tabOf(focus.section)}`,
       );
-      summary?.focus();
-      summary?.scrollIntoView({ block: "start" });
+      target?.focus();
+      target?.scrollIntoView({ block: "start" });
     });
   }
-  const first = sections.find((section) => section.key === lead);
+
+  function moveTab(event: KeyboardEvent<HTMLButtonElement>) {
+    const index = tabs.findIndex((tab) => tab.key === current);
+    const next =
+      event.key === "ArrowRight"
+        ? (index + 1) % tabs.length
+        : event.key === "ArrowLeft"
+          ? (index - 1 + tabs.length) % tabs.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? tabs.length - 1
+              : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    const key = tabs[next]?.key;
+    if (!key) return;
+    setSelected(key);
+    document.getElementById(`${ids}-tab-${key}`)?.focus();
+  }
+
+  const decision = lead.decision ? sections.find((section) => section.key === lead.section) : null;
+  const tabFor = (key: StorySection) => tabs.find((tab) => tab.sections.some((s) => s.key === key));
+  const panelId = (key: StorySection) => `story-section-${key}`;
+  // One parent for every panel: changing the lead or the tab moves or hides
+  // the same instances, so drafts, focus and open inspections survive.
+  const ordered = [...(decision ? [decision] : []), ...tabs.flatMap((tab) => tab.sections)];
   function panel(section: StorySectionContent) {
+    const lead = section === decision;
+    const tab = tabFor(section.key);
     return (
-      <details
-        key={section.key}
-        id={`story-section-${section.key}`}
+      <section
+        key={`section:${section.key}`}
+        id={panelId(section.key)}
         data-story-section={section.key}
-        open={opened[section.key] ?? false}
-        onToggle={(event) => {
-          const open = event.currentTarget.open;
-          setOpened((old) => (old[section.key] === open ? old : { ...old, [section.key]: open }));
-        }}
-        className="min-w-0 scroll-mt-6"
+        data-story-tab={lead ? undefined : tab?.key}
+        role={lead ? undefined : "tabpanel"}
+        aria-labelledby={lead || !tab ? undefined : `${ids}-tab-${tab.key}`}
+        aria-label={lead ? "Your decision" : undefined}
+        tabIndex={-1}
+        hidden={!lead && tab?.key !== current}
+        className={
+          lead
+            ? "min-w-0 scroll-mt-6 bg-(--bg-subtle) px-4 py-5 focus:outline-none sm:px-6 sm:py-6"
+            : "min-w-0 scroll-mt-6 focus:outline-none"
+        }
       >
-        <summary
-          className={
-            section.key === lead && opened[section.key]
-              ? "sr-only focus:not-sr-only focus:min-h-11 focus:p-3 focus:outline-2 focus:outline-(--info)"
-              : "min-h-11 cursor-pointer border border-(--line) bg-(--bg-subtle) px-4 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-(--info)"
-          }
-        >
-          {section.label}
-        </summary>
-        <div className="mt-3 min-w-0">{section.content}</div>
-      </details>
+        {lead ? (
+          <p key="label" className="mb-3 text-[12px] font-medium text-(--human)">
+            {focus.title}
+          </p>
+        ) : null}
+        <div key="content" className="min-w-0">
+          {section.content}
+        </div>
+      </section>
     );
   }
-  const reviewing = lead === "plan" || lead === "delivery";
-  const context = (
-    <div key="context" className="min-w-0 border-l-2 border-(--human) pl-4">
-      <h2 className="font-semibold">{focus.title}</h2>
-      <details className="text-sm">
-        <summary className="min-h-11 cursor-pointer py-3 text-(--mut)">
-          Details and navigation
-        </summary>
-        <p className="text-(--mut)">{focus.detail}</p>
-        <nav aria-label="Story sections" className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          <a
-            href="#conversation"
-            className="inline-flex min-h-11 items-center text-(--info) underline"
-          >
-            Conversation
-          </a>
-          {sections.map((section) => (
-            <a
-              key={section.key}
-              href={`#story-section-${section.key}`}
-              className="inline-flex min-h-11 items-center text-(--info) underline"
-            >
-              {section.label}
-            </a>
-          ))}
-        </nav>
-      </details>
-      {changed ? (
-        <p className="mt-2 text-sm" role="status">
-          The next step changed. Your open panels and drafts stay in place.{" "}
-          <button type="button" onClick={showCurrent} className="min-h-11 text-(--info) underline">
-            Show the current step first
-          </button>
-        </p>
-      ) : null}
+  const tablist = tabs.length ? (
+    <div
+      key="tabs"
+      role="tablist"
+      aria-label="Story details"
+      className="-mb-2 flex gap-6 overflow-x-auto border-b border-(--line)"
+    >
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          id={`${ids}-tab-${tab.key}`}
+          type="button"
+          role="tab"
+          aria-selected={tab.key === current}
+          aria-controls={tab.sections.map((section) => panelId(section.key)).join(" ")}
+          tabIndex={tab.key === current ? 0 : -1}
+          onClick={() => setSelected(tab.key)}
+          onKeyDown={moveTab}
+          className={`-mb-px min-h-11 shrink-0 border-b-2 text-sm focus-visible:outline-2 focus-visible:outline-(--info) ${tab.key === current ? "border-(--ink) text-(--ink)" : "border-transparent text-(--mut) hover:text-(--ink)"}`}
+        >
+          {tab.label}
+        </button>
+      ))}
     </div>
-  );
+  ) : null;
   return (
-    <div ref={root} className="flex min-w-0 flex-col gap-6" data-story-sections>
+    <div ref={root} className="flex min-w-0 flex-col gap-8" data-story-sections>
       {[
-        ...(!reviewing ? [context] : []),
-        ...(first ? [panel(first)] : []),
+        ...(changed
+          ? [
+              <p key="changed" className="text-sm text-(--mut)" role="status">
+                The next step changed.{" "}
+                <button
+                  type="button"
+                  onClick={showCurrent}
+                  className="min-h-11 text-(--info) underline"
+                >
+                  Show it
+                </button>
+              </p>,
+            ]
+          : []),
+        ...(decision ? [panel(decision)] : []),
         <div key="conversation">{conversation}</div>,
-        ...(reviewing ? [context] : []),
-        ...sections.filter((section) => section.key !== lead).map(panel),
+        ...(tablist ? [tablist] : []),
+        ...ordered.filter((section) => section !== decision).map(panel),
       ]}
     </div>
   );

@@ -18,11 +18,7 @@ export function StoryProgress({
   const latest = progress?.latest;
   const excerpt = latest?.activity.text?.slice(0, 240);
   return (
-    <section
-      id="story-progress"
-      aria-label="Latest recorded activity"
-      className="min-w-0 border border-(--line) bg-(--bg-subtle) p-4"
-    >
+    <section id="story-progress" aria-label="Latest recorded activity" className="min-w-0">
       <h2 className="text-sm font-semibold">Latest recorded activity</h2>
       {!progress ? (
         <p className="mt-2 text-sm text-(--mut)">

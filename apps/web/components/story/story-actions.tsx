@@ -120,7 +120,7 @@ export function StoryActions({
             href={pullRequestUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex h-8 items-center gap-2 border border-(--line-strong) px-3.5 text-[12.5px] font-medium text-(--ink) hover:bg-(--card)"
+            className="inline-flex min-h-8 items-center gap-2 px-2 text-[12.5px] text-(--info) underline-offset-4 hover:underline"
           >
             source pull request #{story.pullRequestNumber} ↗
           </a>
@@ -343,7 +343,7 @@ export function StoryComposer({
       ref={form}
       id={composerId}
       onSubmit={submit}
-      className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
+      className="grid gap-3 bg-(--bg-subtle) p-4 sm:p-5"
       aria-label={formLabel}
     >
       <Field label="Message">

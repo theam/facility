@@ -29,9 +29,7 @@ describe("project navigation", () => {
       ["Settings", "/projects/project/settings"],
     ]);
     expect(root.textContent).toContain("Atlas");
-    expect(root.querySelector('a[href="/projects"]')?.textContent).toContain(
-      "Back to all projects",
-    );
+    expect(root.querySelector('a[href="/projects"]')?.textContent).toContain("All projects");
   });
   it("marks one section for deep links without claiming a different project's path", () => {
     for (const [path, label] of [

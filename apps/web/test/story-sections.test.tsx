@@ -21,10 +21,11 @@ function Draft({ id }: { id: string }) {
   }, [id]);
   return <textarea aria-label={id} defaultValue="Draft in progress" />;
 }
-const focus = (section: "plan" | "delivery"): StoryFocus => ({
+const focus = (section: "plan" | "delivery", decision = true): StoryFocus => ({
   section,
   title: `Current ${section}`,
   detail: "Recorded next step",
+  decision,
 });
 async function render(current = focus("plan"), navigationKey = "current") {
   await act(async () =>
@@ -37,6 +38,7 @@ async function render(current = focus("plan"), navigationKey = "current") {
           <section id="conversation">
             <Draft id="conversation-draft" />
             <p id="message-source">Exact original</p>
+            <a href="#story-section-delivery">Linked delivery evidence</a>
           </section>
         }
         sections={[
@@ -81,22 +83,74 @@ afterEach(async () => {
   if (previousScroll) Object.defineProperty(Element.prototype, "scrollIntoView", previousScroll);
   else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
 });
+const panel = (key: string) =>
+  container.querySelector<HTMLElement>(`[data-story-section="${key}"]`);
+const tab = (label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+    (node) => node.textContent === label,
+  );
+const children = () =>
+  [...(container.querySelector("[data-story-sections]")?.children ?? [])].map(
+    (node) => node.getAttribute("data-story-section") ?? node.getAttribute("role") ?? node.tagName,
+  );
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
 describe("story sections", () => {
-  it("keeps the active review next to conversation and opens linked secondary evidence without writes", async () => {
+  it("shows a pending decision first and alone, then conversation, then details in tabs", async () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
     await render();
-    const plan = container.querySelector<HTMLDetailsElement>('[data-story-section="plan"]');
-    const delivery = container.querySelector<HTMLDetailsElement>('[data-story-section="delivery"]');
-    expect(plan?.open).toBe(true);
-    expect(delivery?.open).toBe(false);
-    expect(plan?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
-    const link = container.querySelector<HTMLAnchorElement>('a[href="#story-section-delivery"]');
-    await act(async () => {
-      link?.click();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-    expect(delivery?.open).toBe(true);
+    expect(children()).toEqual(["plan", "DIV", "tablist", "delivery"]);
+    expect(panel("plan")?.getAttribute("aria-label")).toBe("Your decision");
+    expect(panel("plan")?.hidden).toBe(false);
+    expect(panel("plan")?.textContent).toContain("Current plan");
+    expect(tab("Plan")).toBeUndefined();
+    expect(tab("Delivery")?.getAttribute("aria-selected")).toBe("true");
+    expect(tab("Delivery")?.getAttribute("aria-controls")).toBe("story-section-delivery");
+    expect(panel("delivery")?.getAttribute("role")).toBe("tabpanel");
+    expect(container.textContent).not.toContain("Details and navigation");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("keeps the details in tabs without a decision block when no person is needed", async () => {
+    await render(focus("delivery", false));
+    expect(container.querySelector('[aria-label="Your decision"]')).toBeNull();
+    expect(children()).toEqual(["DIV", "tablist", "plan", "delivery"]);
+    expect(tab("Delivery")?.getAttribute("aria-selected")).toBe("true");
+    expect(panel("plan")?.hidden).toBe(true);
+    expect(panel("delivery")?.hidden).toBe(false);
+    await act(async () => tab("Plan")?.click());
+    expect(panel("plan")?.hidden).toBe(false);
+    expect(panel("delivery")?.hidden).toBe(true);
+  });
+  it("moves between tabs with the keyboard and keeps one tab stop", async () => {
+    await render(focus("delivery", false));
+    const delivery = tab("Delivery");
+    delivery?.focus();
+    await act(async () =>
+      delivery?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })),
+    );
+    expect(document.activeElement).toBe(tab("Plan"));
+    expect(tab("Plan")?.getAttribute("aria-selected")).toBe("true");
+    expect(tab("Plan")?.tabIndex).toBe(0);
+    expect(tab("Delivery")?.tabIndex).toBe(-1);
+    await act(async () =>
+      tab("Plan")?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })),
+    );
+    expect(document.activeElement).toBe(tab("Delivery"));
+  });
+  it("opens the tab that holds linked evidence without writes", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await render(focus("plan", false));
+    expect(panel("delivery")?.hidden).toBe(true);
+    await act(async () =>
+      container.querySelector<HTMLAnchorElement>('a[href="#story-section-delivery"]')?.click(),
+    );
+    await settle();
+    expect(panel("delivery")?.hidden).toBe(false);
+    expect(tab("Delivery")?.getAttribute("aria-selected")).toBe("true");
     expect(fetch).not.toHaveBeenCalled();
   });
   it("preserves both drafts and focus on refresh, and keeps their instances when explicitly changing the lead", async () => {
@@ -111,21 +165,14 @@ describe("story sections", () => {
     plan.focus();
     await render(focus("delivery"));
     expect(document.activeElement).toBe(plan);
-    expect(
-      container
-        .querySelector("[data-story-sections] > details")
-        ?.getAttribute("data-story-section"),
-    ).toBe("plan");
+    expect(panel("plan")?.getAttribute("aria-label")).toBe("Your decision");
     expect(container.textContent).toContain("The next step changed");
     await act(async () => {
-      container.querySelector<HTMLButtonElement>("button")?.click();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      container.querySelector<HTMLButtonElement>('[role="status"] button')?.click();
     });
-    expect(
-      container
-        .querySelector("[data-story-sections] > details")
-        ?.getAttribute("data-story-section"),
-    ).toBe("delivery");
+    await settle();
+    expect(panel("delivery")?.getAttribute("aria-label")).toBe("Your decision");
+    expect(panel("plan")?.getAttribute("role")).toBe("tabpanel");
     expect(container.querySelector('[aria-label="plan-draft"]')).toBe(plan);
     expect(container.querySelector('[aria-label="conversation-draft"]')).toBe(conversation);
     expect(plan.value).toBe("Unsaved scope");
@@ -133,23 +180,16 @@ describe("story sections", () => {
     expect(mounted).toHaveBeenCalledTimes(2);
     expect(unmounted).not.toHaveBeenCalled();
   });
-  it("reveals an exact fragment on entry while preserving the default review and conversation", async () => {
+  it("reveals an exact fragment on entry while preserving the decision and conversation", async () => {
     window.history.replaceState({}, "", "/#story-delivery");
     await render();
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-    expect(
-      container.querySelector<HTMLDetailsElement>('[data-story-section="delivery"]')?.open,
-    ).toBe(true);
-    expect(container.querySelector<HTMLDetailsElement>('[data-story-section="plan"]')?.open).toBe(
-      true,
-    );
+    await settle();
+    expect(panel("delivery")?.hidden).toBe(false);
+    expect(panel("plan")?.hidden).toBe(false);
     expect(scroll).toHaveBeenCalled();
   });
   it("reveals a plan proposed from this conversation, while ignoring another story's event", async () => {
-    await render(focus("delivery"));
-    const plan = container.querySelector<HTMLDetailsElement>('[data-story-section="plan"]');
+    await render(focus("delivery", false));
     const source = {
       projectId: "project",
       storyId: "other",
@@ -157,23 +197,24 @@ describe("story sections", () => {
       markdown: "Original proposal",
     };
     await act(async () => requestPlanProposal(source));
-    expect(plan?.open).toBe(false);
+    await settle();
+    expect(panel("plan")?.hidden).toBe(true);
     await act(async () => requestPlanProposal({ ...source, storyId: "story" }));
-    expect(plan?.open).toBe(true);
+    await settle();
+    expect(panel("plan")?.hidden).toBe(false);
+    expect(tab("Plan")?.getAttribute("aria-selected")).toBe("true");
   });
   it("reopens an exact destination when its query changes but the fragment stays the same", async () => {
     window.history.replaceState({}, "", "/?planRevision=2#story-plan");
-    await render(focus("delivery"), "plan:2");
-    const plan = container.querySelector<HTMLDetailsElement>('[data-story-section="plan"]');
-    if (!plan) throw Error("Missing plan panel");
-    await act(async () => {
-      plan.open = false;
-      plan.dispatchEvent(new Event("toggle"));
-    });
-    expect(plan.open).toBe(false);
+    await render(focus("delivery", false), "plan:2");
+    await settle();
+    expect(panel("plan")?.hidden).toBe(false);
+    await act(async () => tab("Delivery")?.click());
+    expect(panel("plan")?.hidden).toBe(true);
     window.history.replaceState({}, "", "/?planRevision=3#story-plan");
-    await render(focus("plan"), "plan:3");
-    expect(plan.open).toBe(true);
+    await render(focus("delivery", false), "plan:3");
+    await settle();
+    expect(panel("plan")?.hidden).toBe(false);
     expect(unmounted).not.toHaveBeenCalled();
   });
 });

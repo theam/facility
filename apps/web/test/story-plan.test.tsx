@@ -218,7 +218,7 @@ describe("revision-bound plan UI", () => {
       selection: { revision: 3, digest: current.plan?.digest, plan: current.plan ?? undefined },
     });
     expect(container.querySelector("textarea")).toBeNull();
-    expect(container.textContent).toContain("Review approval");
+    expect(container.textContent).toContain("Approve plan r3");
     expect(container.textContent).not.toContain("Save plan proposal");
     await render(current);
     expect(textarea().value).toBe("Unsent plan changes");
@@ -233,7 +233,7 @@ describe("revision-bound plan UI", () => {
     original.source = { messageId: "msg-source", turnId: "turn-author", role: "agent" };
     const selection = { revision: 1, digest: original.digest, plan: original };
     await render({ ...snapshot(1), plan: original }, true, agents, { selection });
-    expect(button("Review approval")).toBeDefined();
+    expect(button("Approve plan r1")).toBeDefined();
     expect(container.querySelector('a[href*="messageId=msg-source"]')?.textContent).toBe(
       "Open original message and author",
     );
@@ -243,7 +243,7 @@ describe("revision-bound plan UI", () => {
     expect(container.textContent).toContain("Original linked scope");
     expect(container.textContent).not.toContain("New unreviewed scope");
     expect(container.textContent).toContain("The current plan is r2");
-    expect(container.textContent).not.toContain("Review approval");
+    expect(container.textContent).not.toContain("Approve plan r3");
     expect(fetch).not.toHaveBeenCalled();
     expect(navigation.push).not.toHaveBeenCalled();
   });
@@ -253,11 +253,11 @@ describe("revision-bound plan UI", () => {
     });
     expect(container.textContent).toContain("Linked plan not found");
     expect(container.textContent).not.toContain("Implement and verify the change");
-    expect(container.textContent).not.toContain("Review approval");
+    expect(container.textContent).not.toContain("Approve plan r3");
     await render(snapshot(2), true, agents, {
       selection: { revision: 2, digest: "e".repeat(64), plan: plan(2) },
     });
-    expect(container.textContent).not.toContain("Review approval");
+    expect(container.textContent).not.toContain("Approve plan r3");
     expect(fetch).not.toHaveBeenCalled();
   });
   it("requests only the exact linked current revision with the existing decision boundary", async () => {
@@ -266,7 +266,7 @@ describe("revision-bound plan UI", () => {
     await render({ ...snapshot(3), plan: selected }, true, agents, {
       selection: { revision: 3, digest: selected.digest, plan: selected },
     });
-    await click("Review approval");
+    await click("Approve plan r3");
     expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
       expected_revision: 3,
       expected_decision_revision: 0,
@@ -401,7 +401,7 @@ describe("revision-bound plan UI", () => {
     expect(container.textContent).toContain("approved on r1 by Ada");
     expect(
       [...container.querySelectorAll("button")].some((node) =>
-        /Propose|Review approval|Request changes/.test(node.textContent ?? ""),
+        /Propose|Approve plan r|Request changes/.test(node.textContent ?? ""),
       ),
     ).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
@@ -530,7 +530,7 @@ describe("revision-bound plan UI", () => {
       expected_decision_revision: 0,
     });
     fetch.mockResolvedValueOnce(Response.json({ request: { id: "dreq-next" } }));
-    await click("Review approval");
+    await click("Approve plan r1");
     expect(body(2).intent).toBe("approve");
     expect(body(2)).not.toHaveProperty("reason");
     expect(navigation.push).toHaveBeenCalledWith(

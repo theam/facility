@@ -37,7 +37,7 @@ export function StoryTimeline({ projectId, storyId }: { projectId: string; story
 
   return (
     <details
-      className="group border border-(--line) p-5"
+      className="group"
       onToggle={(event) => {
         if (event.currentTarget.open && !opened) {
           setOpened(true);

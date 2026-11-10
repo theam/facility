@@ -23,8 +23,8 @@ export function PlanExecutionScope({
   const retainedWork = (
     <ul className="flex min-w-0 flex-col gap-3">
       {scope.queuedWork.map((turn) => (
-        <li key={turn.turnId} className="min-w-0 border-l-2 border-(--line-strong) pl-3">
-          <p className="break-words font-medium">
+        <li key={turn.turnId} className="min-w-0">
+          <p className="break-words">
             {turn.agentName} ·{" "}
             {turn.engine === "codex"
               ? "Codex"
@@ -66,22 +66,21 @@ export function PlanExecutionScope({
     </ul>
   );
   return (
-    <section
-      aria-label="Execution scope"
-      className="flex min-w-0 flex-col gap-3 border-t border-(--line) pt-4 text-sm"
-    >
-      <div>
-        <h3 className="font-medium">Scope and retained work</h3>
-        <p className="mt-1 text-xs text-(--dim)">
-          Observed {formatTime(scope.observedAt)} · plan r{scope.planRevision}
-        </p>
-      </div>
-      <p className={scope.repositories.matches ? "text-(--mut)" : "text-(--human)"}>
-        {!planRevision
-          ? `When plan approval is required, the plan must cover the ${scope.repositories.connectedCount} connected project repositories.`
-          : scope.repositories.matches
-            ? `The plan covers all ${scope.repositories.connectedCount} current repository connections.`
-            : "This plan does not cover the current repository scope. Review the connections before approving recovery."}
+    <section aria-label="Execution scope" className="flex min-w-0 flex-col gap-2 text-sm">
+      <h3 className="text-[12px] text-(--mut)">
+        Checked by Facility · {formatTime(scope.observedAt)} · plan r{scope.planRevision}
+      </h3>
+      <p className={`flex gap-2 ${scope.repositories.matches ? "text-(--ink)" : "text-(--human)"}`}>
+        <span aria-hidden="true" className={scope.repositories.matches ? "text-(--ok)" : ""}>
+          {scope.repositories.matches ? "✓" : "!"}
+        </span>
+        <span>
+          {!planRevision
+            ? `When plan approval is required, the plan must cover the ${scope.repositories.connectedCount} connected project repositories.`
+            : scope.repositories.matches
+              ? `The plan covers all ${scope.repositories.connectedCount} current repository connections.`
+              : "This plan does not cover the current repository scope. Review the connections before approving recovery."}
+        </span>
       </p>
       {planRevision > 0 && scope.repositories.missing.length > 0 ? (
         <p className="break-words">
@@ -110,7 +109,7 @@ export function PlanExecutionScope({
           released if it matches the approved scope.
         </p>
       ) : null}
-      <p className="text-xs text-(--mut)">
+      <p className="text-xs text-(--dim)">
         {scope.queuedWork.length
           ? "This is a scope check, not execution authorization. Current policy, permissions, budget and capacity still apply when each turn starts."
           : "No queued turns were present in this scope check. Approval does not create a new request."}

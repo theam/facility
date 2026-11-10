@@ -322,11 +322,20 @@ describe("story overview integration", () => {
     mocks.reviewCycle = reviewCycleFixture();
     mocks.reviewCycle.phase = phase;
     const { root } = await render();
-    const workflow = root.querySelector('details[data-story-section="workflow"]');
-    expect(workflow?.hasAttribute("open")).toBe(true);
+    const workflow = root.querySelector('[data-story-section="workflow"]');
+    expect(workflow?.hasAttribute("hidden")).toBe(false);
+    expect(workflow?.getAttribute("aria-label")).toBe(
+      phase === "correction" ? null : "Your decision",
+    );
     expect(root.querySelector('[aria-label="Recorded delivery review"]')).not.toBeNull();
-    expect(root.querySelector('a[href="#conversation"]')).not.toBeNull();
-    expect(root.querySelector("#conversation")).not.toBeNull();
+    const conversation = root.querySelector("#conversation");
+    expect(conversation).not.toBeNull();
+    expect(
+      (workflow?.compareDocumentPosition(conversation as Node) ?? 0) &
+        (phase === "correction"
+          ? Node.DOCUMENT_POSITION_PRECEDING
+          : Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBeTruthy();
   });
   it("loads only the requested plan revision and rejects mismatched or missing source reads", async () => {
     setUp(["projects:write"]);
@@ -496,12 +505,12 @@ describe("story overview integration", () => {
     const { root } = await render();
     const plan = root.querySelector("#story-plan");
     const conversation = root.querySelector("#conversation");
-    if (!conversation) throw new Error("Missing conversation");
+    if (!conversation || !plan) throw new Error("Missing conversation or plan");
+    expect(plan.closest("[data-story-section]")?.hasAttribute("hidden")).toBe(false);
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Plan");
     expect(
-      plan
-        ?.closest("details[data-story-section]")
-        ?.nextElementSibling?.querySelector("#conversation"),
-    ).toBe(conversation);
+      conversation.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(conversation?.querySelector('[aria-label="Story actions"]')).not.toBeNull();
     expect(
       conversation.compareDocumentPosition(
@@ -517,13 +526,12 @@ describe("story overview integration", () => {
     setUp(["projects:read"]);
     mocks.bundle.delivery = deliverySnapshot();
     const { root } = await render();
-    const lead = root.querySelector("[data-story-sections] > details");
+    const lead = root.querySelector('[aria-label="Your decision"]');
     expect(lead?.getAttribute("data-story-section")).toBe("delivery");
-    expect(lead?.hasAttribute("open")).toBe(true);
     expect(lead?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
-    for (const key of ["plan", "workflow", "completion", "environment"])
-      expect(root.querySelector(`details[data-story-section="${key}"]`)?.hasAttribute("open")).toBe(
-        false,
+    for (const key of ["plan", "environment"])
+      expect(root.querySelector(`[data-story-section="${key}"]`)?.hasAttribute("hidden")).toBe(
+        true,
       );
     expect(root.textContent).not.toContain("Edit PR set");
     expect(root.textContent).not.toContain("Request delivery acceptance");
@@ -535,7 +543,7 @@ describe("story overview integration", () => {
     mocks.bundle.completion = completionSnapshot();
     mocks.bundle.completion.source = { kind: "other", state: "unavailable", url: null };
     const { root } = await render();
-    const lead = root.querySelector("[data-story-sections] > details");
+    const lead = root.querySelector('[aria-label="Your decision"]');
     expect(lead?.getAttribute("data-story-section")).toBe("completion");
     expect(lead?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
     expect(lead?.textContent).toContain("No source issue linked");
@@ -549,8 +557,10 @@ describe("story overview integration", () => {
     mocks.bundle.story.archivedAt = at;
     mocks.workflowError = true;
     const { root } = await render();
-    const lead = root.querySelector("[data-story-sections] > details");
-    expect(lead?.getAttribute("data-story-section")).toBe("completion");
+    expect(root.querySelector('[aria-label="Your decision"]')).toBeNull();
+    const lead = root.querySelector('[data-story-section="completion"]');
+    expect(lead?.hasAttribute("hidden")).toBe(false);
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Delivery");
     expect(lead?.textContent).toContain("Completion and retention details are unavailable");
     expect(root.textContent).toContain("Workflow read failed");
     expect(root.textContent).not.toContain("Delivery completed");

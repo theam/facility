@@ -142,8 +142,6 @@ export function WorkspaceControls({
               <Button
                 key={service.service}
                 size="sm"
-                variant="primary"
-                tone="agent"
                 onClick={() => openPreview(service.service)}
                 disabled={Boolean(pending) || workspaceDeleted}
               >
@@ -164,7 +162,7 @@ export function WorkspaceControls({
         ) : null}
         {maintenance.length > 0 || canDelete ? (
           <details className="group relative">
-            <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-2 border border-(--line) px-3.5 text-[12.5px] font-medium text-(--mut) hover:border-(--line-strong) hover:text-(--ink)">
+            <summary className="inline-flex min-h-8 cursor-pointer list-none items-center gap-2 px-2 text-[12.5px] text-(--mut) hover:text-(--ink)">
               maintenance
               <span aria-hidden="true" className="transition-transform group-open:rotate-180">
                 ▾

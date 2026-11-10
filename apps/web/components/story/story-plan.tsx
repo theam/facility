@@ -407,7 +407,7 @@ export function StoryPlanPanel({
       <section
         id="story-plan"
         aria-label="Story plan"
-        className="flex min-w-0 scroll-mt-6 flex-col gap-4 border border-(--line) p-4 sm:p-5"
+        className="flex min-w-0 scroll-mt-6 flex-col gap-4"
       >
         <h2 className="text-lg font-semibold">
           {selection.revision ? `Linked plan r${selection.revision}` : "Linked plan unavailable"}
@@ -436,7 +436,7 @@ export function StoryPlanPanel({
     );
   const decisionActions =
     canWrite && current?.plan && (!editing || selection) ? (
-      <div className="flex flex-col gap-3 border-t border-(--line) pt-4">
+      <div className="flex flex-col gap-3">
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
@@ -447,7 +447,7 @@ export function StoryPlanPanel({
               void mutate("approve");
             }}
           >
-            Review approval
+            Approve plan r{current.state.revision}
           </Button>
           <Button size="sm" disabled={busy} onClick={() => setRejecting((value) => !value)}>
             Request changes
@@ -495,40 +495,14 @@ export function StoryPlanPanel({
     <section
       id="story-plan"
       aria-label="Story plan"
-      className="flex min-w-0 scroll-mt-6 flex-col gap-4 border border-(--line) p-4 sm:p-5"
+      className="flex min-w-0 scroll-mt-6 flex-col gap-4"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="mt-1 text-[18px] font-semibold">
-            {current?.plan ? `Plan r${current.state.revision}` : "Agree on the plan"}
-          </h2>
-          {current?.state.status === "proposed" ? (
-            <p className="mt-1 text-xs text-(--human)">Pending approval</p>
-          ) : null}
-        </div>
-        <details>
-          <summary className="min-h-11 cursor-pointer py-3 text-sm text-(--mut)">
-            Plan options
-          </summary>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={busy} onClick={() => void load()}>
-              {busy ? "Loading…" : "Reload plan"}
-            </Button>
-            {selection ? (
-              <Link
-                href={latestPlanHref ?? `${storyPath}#story-plan`}
-                className="inline-flex min-h-11 items-center text-sm text-(--info) underline"
-              >
-                Open current plan to edit
-              </Link>
-            ) : canWrite && current && !editing ? (
-              <Button size="sm" disabled={busy} onClick={() => startEdit()}>
-                {current.plan ? "Propose revision" : "Propose plan"}
-              </Button>
-            ) : null}
-          </div>
-        </details>
-      </div>
+      <h2 className="flex flex-wrap items-baseline gap-x-3 text-[18px] font-semibold">
+        {current?.plan ? `Plan r${current.state.revision}` : "Agree on the plan"}
+        {current?.state.status === "proposed" ? (
+          <span className="text-xs font-normal text-(--human)">Pending approval</span>
+        ) : null}
+      </h2>
       {error ? (
         <p role="alert" className="break-words text-sm text-(--bad)">
           {error}
@@ -609,14 +583,16 @@ export function StoryPlanPanel({
           <PlanContent
             plan={selection?.plan ?? current.plan}
             location={{ projectId, storyId }}
+            checks={
+              (!editing || selection) && (current.state.status !== "approved" || blockedReason) ? (
+                <PlanExecutionScope
+                  scope={workflow?.executionScope}
+                  planRevision={current.state.revision}
+                />
+              ) : null
+            }
             actions={decisionActions}
           />
-          {(!editing || selection) && (current.state.status !== "approved" || blockedReason) ? (
-            <PlanExecutionScope
-              scope={workflow?.executionScope}
-              planRevision={current.state.revision}
-            />
-          ) : null}
           {current.decision ? (
             <p className="break-words text-[12px] text-(--mut)">
               {current.decision.planRevision !== current.state.revision
@@ -843,9 +819,38 @@ export function StoryPlanPanel({
           </div>
         </form>
       ) : null}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-(--mut)">
+        {selection ? (
+          <Link
+            href={latestPlanHref ?? `${storyPath}#story-plan`}
+            className="inline-flex min-h-11 items-center text-(--info) underline"
+          >
+            Open current plan to edit
+          </Link>
+        ) : canWrite && current && !editing ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => startEdit()}
+            className="min-h-11 underline underline-offset-4 hover:text-(--ink)"
+          >
+            {current.plan ? "Propose revision" : "Propose plan"}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void load()}
+          className="min-h-11 underline underline-offset-4 hover:text-(--ink)"
+        >
+          {busy ? "Loading…" : "Reload plan"}
+        </button>
+      </div>
       {history.length || decisions.length ? (
-        <details className="border-t border-(--line) pt-4 text-[12px]">
-          <summary className="cursor-pointer">Plan and decision history</summary>
+        <details className="text-[12px]">
+          <summary className="min-h-11 w-fit cursor-pointer py-3 text-(--mut)">
+            Plan and decision history
+          </summary>
           <div className="mt-3 flex flex-col gap-3">
             {history.map((item) => (
               <div key={item.revision} className="flex flex-wrap items-center gap-2">

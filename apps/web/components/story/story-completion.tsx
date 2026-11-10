@@ -162,11 +162,7 @@ export function StoryCompletionPanel({
     ["request_completion", "retry_completion"].includes(current.nextAction);
 
   return (
-    <section
-      id="story-completion"
-      aria-label="Delivery completion"
-      className="min-w-0 border border-(--line) p-5 lg:p-6"
-    >
+    <section id="story-completion" aria-label="Delivery completion" className="min-w-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Eyebrow>delivery completion</Eyebrow>

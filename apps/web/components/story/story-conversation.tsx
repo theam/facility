@@ -161,9 +161,9 @@ export function StoryConversation({
         </div>
       ) : null}
       {exchanges.length === 0 ? (
-        <p className="border border-(--line) p-6 text-sm text-(--dim)">No messages yet.</p>
+        <p className="py-4 text-sm text-(--dim)">No messages yet.</p>
       ) : (
-        <ol className="flex flex-col gap-4" aria-label="Conversation, newest first">
+        <ol className="flex flex-col" aria-label="Conversation, newest first">
           {exchanges.map((exchange) => (
             <li key={exchange.key}>
               <ExchangeCard
@@ -217,7 +217,7 @@ function ExchangeCard({
   const active = turn ? ["queued", "running"].includes(turn.state) : false;
   return (
     <article
-      className="flex flex-col border border-(--line) bg-(--bg)"
+      className="flex flex-col border-b border-(--line)"
       aria-label={`${request?.author.name ?? "Request"} asked ${agentName}${
         request ? ` on ${formatTime(request.createdAt)}` : ""
       } · ${status.label}`}
@@ -236,7 +236,7 @@ function ExchangeCard({
       <div
         id={response ? `message-${response.id}` : undefined}
         tabIndex={-1}
-        className="flex min-w-0 scroll-mt-20 flex-col gap-3 border-t border-dashed border-(--line) p-4 sm:p-5"
+        className="flex min-w-0 scroll-mt-20 flex-col gap-3 py-4 pl-4 sm:pl-6"
       >
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <AgentLine
@@ -290,7 +290,7 @@ function ExchangeCard({
           </div>
         ) : null}
         {waitingForReply ? (
-          <div className="flex flex-wrap items-center gap-3 border border-(--human)/60 bg-(--bg-subtle) px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3 text-(--human)">
             <p className="text-[13px]">
               <span className="font-mono">{agentName}</span> is waiting for your answer.
             </p>
@@ -343,13 +343,13 @@ function RequestBlock({
     <div
       id={`message-${message.id}`}
       tabIndex={-1}
-      className="flex min-w-0 scroll-mt-20 flex-col gap-3 p-4 sm:p-5"
+      className="flex min-w-0 scroll-mt-20 flex-col gap-3 pt-5"
     >
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <Person author={message.author} />
           <span className="text-[12px] text-(--mut)">asked</span>
-          <span className="inline-flex items-center gap-1.5 border border-(--line-strong) px-2 py-0.5 font-mono text-[12px] text-(--ink)">
+          <span className="inline-flex items-center gap-1.5 font-mono text-[12px] text-(--ink)">
             {message.requestedAgentName ?? agentName}
           </span>
         </div>

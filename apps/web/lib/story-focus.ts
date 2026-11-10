@@ -31,7 +31,21 @@ export type StorySection =
   | "preview"
   | "consultation"
   | "environment";
-export type StoryFocus = { section: StorySection; title: string; detail: string };
+/** `decision` marks a step that waits on a person; it is shown first, apart from the details. */
+export type StoryFocus = {
+  section: StorySection;
+  title: string;
+  detail: string;
+  decision: boolean;
+};
+
+const ACTIONABLE_COMPLETION: StoryCompletion["nextAction"][] = [
+  "configure_integration",
+  "record_integration",
+  "inspect_integration_failure",
+  "request_completion",
+  "retry_completion",
+];
 
 /** Presentation priority only. Domain facts and every operation's gates remain unchanged. */
 export function storyFocus(
@@ -43,6 +57,7 @@ export function storyFocus(
     return {
       section: "plan",
       title: "Review the linked plan",
+      decision: true,
       detail:
         "This link keeps its exact revision. The current plan and conversation remain accessible.",
     };
@@ -54,12 +69,14 @@ export function storyFocus(
     return {
       section: "completion",
       title: "Completion and retention",
+      decision: false,
       detail: "Check the source issue, completion result, compute and retained storage separately.",
     };
   if (workflow?.blockedReason || bundle.plans?.state.status === "proposed")
     return {
       section: "plan",
       title: "Review the plan and retained work",
+      decision: true,
       detail:
         workflow?.blockedReason ??
         "The current proposal is waiting for a decision. Approval and execution are separate results.",
@@ -68,6 +85,7 @@ export function storyFocus(
   if (workflow?.reviewCycle)
     return {
       section: "workflow",
+      decision: ["decision_required", "human_review"].includes(workflow.reviewCycle.phase),
       title:
         workflow.reviewCycle.phase === "decision_required"
           ? "Review needs your decision"
@@ -82,6 +100,7 @@ export function storyFocus(
     return {
       section: "completion",
       title: completionStepTitle(completion),
+      decision: ACTIONABLE_COMPLETION.includes(completion.nextAction),
       detail:
         completion.source.kind === "other"
           ? "No source GitHub issue is linked to this story. Merged PRs alone do not establish source completion."
@@ -93,6 +112,7 @@ export function storyFocus(
     return {
       section: "delivery",
       title: "Review the delivery",
+      decision: bundle.delivery.candidate.state === "recorded",
       detail:
         "Inspect all PRs and their current heads. Acceptance, preview, merge and completion keep their own evidence.",
     };
@@ -103,12 +123,14 @@ export function storyFocus(
     return {
       section: "progress",
       title: "Follow the current work",
+      decision: false,
       detail:
         "The latest recorded activity is shown below. The conversation stays next to it for questions and instructions.",
     };
   return {
     section: "plan",
     title: "Plan and conversation",
+    decision: false,
     detail:
       "Review the recorded scope or describe the next task. Opening this page starts no agent.",
   };

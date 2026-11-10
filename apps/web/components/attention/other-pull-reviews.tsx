@@ -23,7 +23,7 @@ export function OtherPullReviews({
       aria-labelledby="other-pulls-heading"
       className="flex min-w-0 flex-col gap-4 border-t border-(--line) pt-6"
     >
-      <h2 id="other-pulls-heading" className="text-xl font-semibold">
+      <h2 id="other-pulls-heading" className="text-base font-semibold">
         Other pull requests
       </h2>
       {!data ? (
@@ -37,23 +37,26 @@ export function OtherPullReviews({
             {data.total} matching open {data.total === 1 ? "PR" : "PRs"}
           </p>
           {!data.items.length ? (
-            <p className="border border-(--line) p-5">
+            <p className="py-2">
               {data.total
                 ? "No pull requests on this page."
                 : "No other observed open PRs match this selection."}{" "}
               Ongoing work remains in Stories.
             </p>
           ) : (
-            <ol aria-label="Other open pull requests" className="flex flex-col gap-4">
+            <ol
+              aria-label="Other open pull requests"
+              className="flex flex-col border-t border-(--line)"
+            >
               {data.items.map((pull) => {
                 const url = safeExternalUrl(pull.url);
                 return (
                   <li
                     key={`${pull.repository}#${pull.number}`}
-                    className="min-w-0 border border-(--line) bg-(--bg-subtle) p-5 text-sm"
+                    className="min-w-0 border-b border-(--line) py-4 text-sm"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                      <h3 className="min-w-0 break-words text-base font-semibold">
+                      <h3 className="min-w-0 break-words font-medium">
                         {pull.title ?? `${pull.repository} #${pull.number}`}
                       </h3>
                       <span className="text-(--mut)">{pull.draft ? "Draft · open" : "Open"}</span>

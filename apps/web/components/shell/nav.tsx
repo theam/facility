@@ -59,10 +59,12 @@ function NavLinks({
   items,
   label = "Primary",
   onNavigate,
+  quiet = false,
 }: {
   items: NavItem[];
   label?: string;
   onNavigate?: () => void;
+  quiet?: boolean;
 }) {
   const pathname = usePathname();
   return (
@@ -78,7 +80,8 @@ function NavLinks({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cx(
-              "group flex min-h-11 items-center gap-3 border-l-2 px-5 py-3 text-[13px] transition-colors [--focus-offset:-4px]",
+              "group flex min-h-11 items-center gap-3 border-l-2 px-5 transition-colors [--focus-offset:-4px]",
+              quiet ? "py-2 text-[12px]" : "py-3 text-[13px]",
               active
                 ? "border-(--line-strong) font-medium text-(--ink)"
                 : "border-transparent text-(--mut) hover:text-(--ink)",
@@ -146,18 +149,18 @@ function NavSections({
         <span aria-hidden className="font-mono">
           ←
         </span>
-        Back to all projects
+        All projects
       </Link>
       <div className="flex flex-col gap-2">
         <SectionLabel>{project.name ?? project.slug}</SectionLabel>
         <NavLinks items={projectNav(project.id, inboxCount)} onNavigate={onNavigate} />
       </div>
-      <div className="flex flex-col gap-2">
-        <SectionLabel>project tools</SectionLabel>
+      <div className="flex flex-col gap-2 border-t border-(--line) pt-4">
         <NavLinks
           items={projectToolsNav(project.id)}
           label="Project tools"
           onNavigate={onNavigate}
+          quiet
         />
       </div>
     </div>
