@@ -68,7 +68,6 @@ export function StoryActions({
   const [notice, setNotice] = useState("");
   const actionBar = useRef<HTMLElement>(null);
   const panelId = useId();
-  const pullRequestUrl = safeExternalUrl(story.pullRequestUrl);
   const results = artifacts.filter((artifact) => safeExternalUrl(artifact.uri)).slice(0, 3);
 
   useEffect(() => {
@@ -112,18 +111,18 @@ export function StoryActions({
               }
             }}
           >
-            {waitingAgent ? `reply to ${waitingAgent}` : "send a task"}
+            {waitingAgent ? `Reply to ${waitingAgent}` : "Send a task"}
           </Button>
         ) : null}
-        {pullRequestUrl ? (
-          <a
-            href={pullRequestUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex min-h-8 items-center gap-2 px-2 text-[12.5px] text-(--info) underline-offset-4 hover:underline"
+        {canSend ? (
+          <Button
+            size="sm"
+            onClick={() => {
+              window.location.hash = "story-section-consultation";
+            }}
           >
-            source pull request #{story.pullRequestNumber} ↗
-          </a>
+            Ask without changes
+          </Button>
         ) : null}
         {canExecute && activeTurn ? (
           <CancelTurnButton

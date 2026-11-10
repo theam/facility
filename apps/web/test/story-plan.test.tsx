@@ -212,7 +212,7 @@ describe("revision-bound plan UI", () => {
   it("preserves an existing draft while reading a linked current plan", async () => {
     const current = snapshot(3);
     await render(current);
-    await click("Propose revision");
+    await click("Propose a revision");
     await type("Unsent plan changes");
     await render(current, true, agents, {
       selection: { revision: 3, digest: current.plan?.digest, plan: current.plan ?? undefined },
@@ -226,6 +226,38 @@ describe("revision-bound plan UI", () => {
       expect.anything(),
       expect.objectContaining({ method: "POST" }),
     );
+  });
+  it("opens the editor on the current plan when proposing a revision from a linked plan", async () => {
+    const current = snapshot(1);
+    if (!current.plan) throw Error("Missing plan");
+    const selection = { revision: 1, digest: current.plan.digest, plan: current.plan };
+    await render(current, true, agents, { selection });
+    const link = [...container.querySelectorAll("a")].find(
+      (node) => node.textContent === "Propose a revision",
+    );
+    expect(link?.getAttribute("href")).toBe(
+      "/projects/project-a/stories/story-a?edit=plan#story-plan",
+    );
+    expect(container.querySelector("textarea")).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    window.history.replaceState({}, "", "/projects/project-a/stories/story-a?edit=plan#story-plan");
+    await render(current);
+    expect(textarea().value).toBe(current.plan.markdown);
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("#story-plan");
+    window.history.replaceState({}, "", "/");
+  });
+  it("does not open the editor for a reader or without the explicit marker", async () => {
+    window.history.replaceState({}, "", "/projects/project-a/stories/story-a?edit=plan");
+    await render(snapshot(1), false);
+    expect(container.querySelector("textarea")).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    window.history.replaceState({}, "", "/projects/project-a/stories/story-a");
+    await render(snapshot(1));
+    expect(container.querySelector("textarea")).toBeNull();
+    window.history.replaceState({}, "", "/");
   });
   it("keeps the linked original visible after live refresh advances the current plan", async () => {
     const original = plan(1);
@@ -306,7 +338,7 @@ describe("revision-bound plan UI", () => {
       queuedAgents: ["planner", "planner"],
       blockedReason: "A current approval is required.",
     });
-    await click("Propose plan");
+    await click("Propose a plan");
     await type("Resume the held task");
     fetch.mockResolvedValueOnce(Response.json(snapshot()));
     await click("Save plan proposal");
@@ -342,7 +374,7 @@ describe("revision-bound plan UI", () => {
         nextOffset: null,
       }),
     );
-    await click("Propose revision");
+    await click("Propose a revision");
     await click("Find repositories");
     fetch.mockResolvedValueOnce(Response.json(snapshot(2)));
     await click("Save plan proposal");
@@ -355,7 +387,7 @@ describe("revision-bound plan UI", () => {
       Response.json({ error: { message: "Repository read unavailable" } }, { status: 503 }),
     );
     await render(snapshot(0));
-    await click("Propose plan");
+    await click("Propose a plan");
     await type("Recover the task");
     expect(button("Save plan proposal").disabled).toBe(true);
     fetch.mockResolvedValueOnce(
@@ -386,7 +418,7 @@ describe("revision-bound plan UI", () => {
       }),
     );
     await render(snapshot(0));
-    await click("Propose plan");
+    await click("Propose a plan");
     await type("Scope requires review");
     expect(button("Save plan proposal").disabled).toBe(true);
     expect(container.textContent).toContain("No partial scope was selected automatically");
@@ -408,7 +440,7 @@ describe("revision-bound plan UI", () => {
   });
   it("preserves a proposal after failure and retries with the same key and exact scope", async () => {
     await render(snapshot(0));
-    await click("Propose plan");
+    await click("Propose a plan");
     expect(document.activeElement).toBe(textarea());
     await type("  ## New plan\n\nPreserve this exact text.\n");
     fetch.mockResolvedValueOnce(
@@ -433,7 +465,7 @@ describe("revision-bound plan UI", () => {
   });
   it("requires an explicit action before replacing a draft with an exact source message", async () => {
     await render();
-    await click("Propose revision");
+    await click("Propose a revision");
     await type("Keep my draft");
     await proposeSource("Other story", "story-other");
     expect(container.textContent).not.toContain("Replace your current draft");
@@ -465,7 +497,7 @@ describe("revision-bound plan UI", () => {
     if (!value.plan) throw Error("Missing fixture plan");
     value.plan.source = { messageId: "msg-original", turnId: null, role: "agent" };
     await render(value);
-    await click("Propose revision");
+    await click("Propose a revision");
     fetch.mockResolvedValueOnce(Response.json(value));
     await click("Save plan proposal");
     expect(body()).toMatchObject({
@@ -477,7 +509,7 @@ describe("revision-bound plan UI", () => {
   });
   it("preserves a draft across live refresh and requires an explicit new base after a conflict", async () => {
     await render();
-    await click("Propose revision");
+    await click("Propose a revision");
     await type("My scoped change");
     await render({ ...snapshot(2), generatedAt: "2026-10-21T10:01:00.000Z" });
     expect(textarea().value).toBe("My scoped change");
@@ -493,7 +525,7 @@ describe("revision-bound plan UI", () => {
       true,
       agents.filter((agent) => agent.name === "builder"),
     );
-    await click("Propose revision");
+    await click("Propose a revision");
     expect(button("Save plan proposal").disabled).toBe(true);
     const labels = [...container.querySelectorAll("label")];
     await act(async () =>
@@ -813,7 +845,7 @@ describe("interactive confirmation UI", () => {
 describe("newer plan drafts during save", () => {
   it("keeps a newer unsaved draft when an older proposal finishes saving", async () => {
     await render(snapshot(0));
-    await click("Propose plan");
+    await click("Propose a plan");
     await type("Submitted text A");
     let release: (value: Response) => void = () => {
       throw Error("No pending request");

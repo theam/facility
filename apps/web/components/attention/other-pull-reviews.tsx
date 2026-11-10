@@ -1,4 +1,5 @@
 import type { ProjectAttentionStories } from "@facility/sdk";
+import { buttonClassName } from "@facility/ui";
 import Link from "next/link";
 import { storyHref } from "@/lib/overview-presentation";
 import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
@@ -15,8 +16,7 @@ export function OtherPullReviews({
   page: number;
   href: (page: number) => string;
 }) {
-  const control =
-    "inline-flex min-h-11 items-center border border-(--line) px-3 text-sm hover:bg-(--card)";
+  const control = buttonClassName();
   return (
     <section
       id="other-pull-requests"

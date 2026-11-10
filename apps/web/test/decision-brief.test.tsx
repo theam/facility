@@ -45,69 +45,65 @@ afterEach(async () => {
 async function render(value = plan()) {
   await act(async () => root.render(<PlanContent plan={value} />));
 }
-async function format(value: string) {
-  const radio = container.querySelector<HTMLInputElement>(`input[value="${value}"]`);
-  if (!radio) throw Error("Missing format control");
-  await act(async () => radio.click());
-}
 describe("saved author brief presentation", () => {
-  it("keeps the decision and risk visible before optional formats, with the exact original still accessible", async () => {
+  it("reads top to bottom with options, recommendation and risk visible and no format switch", async () => {
     await render();
     const section = container.querySelector("section");
-    const alternatives = section?.querySelector("details");
-    expect(alternatives?.open).toBe(false);
-    expect(alternatives?.querySelector("fieldset")).not.toBeNull();
-    const risk = [...(section?.querySelectorAll("p") ?? [])].find(
-      (node) => node.textContent === brief.decisiveRisk.text,
-    );
-    expect(risk).toBeDefined();
-    expect(risk?.closest("details")).toBeNull();
-    expect(section?.textContent).not.toContain("How to view the options");
-    expect(section?.textContent).not.toContain("The decision in brief");
-    await act(async () => alternatives?.querySelector("summary")?.click());
-    expect(alternatives?.open).toBe(true);
-    await format("diagram");
-    expect(section?.textContent).toContain(brief.decisiveRisk.text);
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-  it("presents identical options, decisive risk, missing evidence and direct sources in all three formats without writes", async () => {
-    await render();
-    for (const value of ["summary", "comparison", "diagram"]) {
-      await format(value);
-      const section = container.querySelector("section");
-      for (const option of brief.options) {
-        expect(section?.textContent).toContain(option.label);
-        expect(section?.textContent).toContain(option.consequence.text);
-      }
-      expect(section?.textContent).toContain(brief.decisiveRisk.text);
-      expect(section?.textContent).toContain(brief.unknowns[0]?.text);
-      expect(section?.querySelector("a")?.href).toBe(brief.evidence[0]?.url);
-      expect(container.querySelector<HTMLInputElement>(`input[value="${value}"]`)?.checked).toBe(
-        true,
-      );
+    if (!section) throw Error("Missing brief");
+    expect(section.querySelector("fieldset, input[type='radio']")).toBeNull();
+    expect(section.querySelector("details")).toBeNull();
+    expect(section.textContent).not.toContain("Options and sources");
+    expect(section.textContent).not.toContain("Author recommends");
+    const options = section.querySelector('ol[aria-label="Options and consequences"]');
+    for (const option of brief.options) {
+      expect(options?.textContent).toContain(option.label);
+      expect(options?.textContent).toContain(option.consequence.text);
     }
+    const recommended = [...(options?.querySelectorAll("li") ?? [])].find((item) =>
+      item.textContent?.includes("Recommended"),
+    );
+    expect(recommended?.textContent).toContain(
+      brief.options.find((option) => option.id === brief.recommendation?.optionId)?.label,
+    );
+    expect(recommended?.textContent).toContain(`Why: ${brief.recommendation?.reason.text}`);
+    const text = section.textContent ?? "";
+    const order = [
+      brief.summary.text,
+      brief.whyNow.text,
+      brief.options[0]?.label ?? "",
+      brief.decisiveRisk.text,
+      brief.unknowns[0]?.text ?? "",
+      "Sources",
+    ].map((value) => text.indexOf(value));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(section.textContent).toContain("not checks made by Facility");
     expect(fetcher).not.toHaveBeenCalled();
     expect(container.querySelector("button")).toBeNull();
   });
-  it("links each source once in the visible brief and keeps every link in the options view", async () => {
+  it("numbers each source once in reading order and links every statement to it", async () => {
     await render();
     const section = container.querySelector("section");
-    const visible = [...(section?.querySelectorAll("a") ?? [])]
-      .filter((link) => !link.closest("details"))
-      .map((link) => link.href);
-    expect(visible.length).toBeGreaterThan(0);
-    expect(new Set(visible).size).toBe(visible.length);
-    const cited = new Set(
-      [brief.summary, brief.whyNow, brief.decisiveRisk, ...brief.unknowns].flatMap(
-        (claim) => claim.evidenceIds,
-      ),
-    );
-    for (const id of cited)
-      expect(visible).toContain(brief.evidence.find((source) => source.id === id)?.url);
-    const options = section?.querySelector("details");
-    for (const option of brief.options)
-      for (const id of option.consequence.evidenceIds)
-        expect([...(options?.querySelectorAll("a") ?? [])].map((link) => link.href)).toContain(
+    const markers = [...(section?.querySelectorAll<HTMLAnchorElement>("p a") ?? [])];
+    expect(markers.length).toBeGreaterThan(0);
+    expect(section?.querySelector("a")?.href).toBe(brief.evidence[0]?.url);
+    for (const marker of markers) {
+      const index = Number(marker.textContent?.replace(/\D/g, ""));
+      const listed = section?.querySelectorAll<HTMLAnchorElement>('ol[aria-label="Sources"] a')[
+        index - 1
+      ];
+      expect(listed?.href).toBe(marker.href);
+      expect(marker.getAttribute("aria-label")).toMatch(/^Source \d+: /);
+    }
+    const listed = [
+      ...(section?.querySelectorAll<HTMLAnchorElement>('ol[aria-label="Sources"] a') ?? []),
+    ];
+    expect(new Set(listed.map((link) => link.href)).size).toBe(listed.length);
+    for (const source of brief.evidence)
+      expect(listed.map((link) => link.href)).toContain(source.url);
+    for (const claim of [brief.summary, brief.whyNow, brief.decisiveRisk])
+      for (const id of claim.evidenceIds)
+        expect(markers.map((link) => link.href)).toContain(
           brief.evidence.find((source) => source.id === id)?.url,
         );
   });
@@ -148,11 +144,10 @@ describe("saved author brief presentation", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain('<img src=x onerror="attack()">');
   });
-  it("resets presentation when the immutable plan changes and keeps every view bound to its revision", async () => {
+  it("keeps every view bound to its immutable revision", async () => {
     await render();
-    await format("comparison");
     await render({ ...plan(), revision: 4, digest: "e".repeat(64) });
-    expect(container.querySelector<HTMLInputElement>('input[value="summary"]')?.checked).toBe(true);
     expect(container.querySelector("section")?.getAttribute("aria-label")).toContain("plan r4");
+    expect(container.textContent).toContain("Supplied in plan r4");
   });
 });

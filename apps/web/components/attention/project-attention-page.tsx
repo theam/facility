@@ -1,3 +1,4 @@
+import { buttonClassName } from "@facility/ui";
 import Link from "next/link";
 import { OtherPullReviews } from "@/components/attention/other-pull-reviews";
 import { ProjectConditions } from "@/components/attention/project-conditions";
@@ -57,8 +58,7 @@ export default async function ProjectAttentionPage({
     (result.data.workflowPolicy?.available === false ||
       (result.data.budget?.available &&
         ["exceeded", "unconfirmed", "warning"].includes(result.data.budget.state)));
-  const control =
-    "inline-flex min-h-11 items-center border border-(--line) px-3 text-sm text-(--ink) hover:bg-(--card)";
+  const control = buttonClassName();
   const filtered = !!q || query.category !== "all";
   const plural = (count: number, one: string, many: string) =>
     `${count} ${count === 1 ? one : many}`;

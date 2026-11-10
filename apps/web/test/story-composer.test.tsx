@@ -139,7 +139,7 @@ describe("story composer continuity", () => {
       ),
     );
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(container.textContent).toContain("Resolve this attempt before sending");
     expect(button("send to agent").disabled).toBe(true);
     await click("hide files");
@@ -147,7 +147,7 @@ describe("story composer continuity", () => {
     expect(button("review unfinished upload")).toBeDefined();
     expect(fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
     await click("close");
-    await click("send a task");
+    await click("Send a task");
     expect(readStoryUpload(key)).toEqual(original);
     await click("review unfinished upload");
     await click("Check upload status");
@@ -176,18 +176,18 @@ describe("story composer continuity", () => {
       Response.json({ items: [], limits: { fileBytes: 26214400, messageFiles: 5 } }),
     );
     await render("other-person");
-    await click("send a task");
+    await click("Send a task");
     expect(fetch).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain("Original upload");
     await render("person-a", "other-story");
-    await click("send a task");
+    await click("Send a task");
     expect(fetch).not.toHaveBeenCalled();
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(container.textContent).toContain("Original upload: fixture.txt");
     await click("close");
     expect(readStoryUpload(key)).toEqual(original);
-    await click("send a task");
+    await click("Send a task");
     await click("discard draft");
     expect(readStoryUpload(key)).toBeUndefined();
     expect(fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
@@ -219,7 +219,7 @@ describe("story composer continuity", () => {
       ),
     );
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(fetch).not.toHaveBeenCalled();
     await click("files (1)");
     expect(container.querySelector('section[aria-label="Story input files"]')).not.toBeNull();
@@ -233,13 +233,13 @@ describe("story composer continuity", () => {
     await render();
     await reply("designer");
     await type("Preserve this review context");
-    button("send a task").focus();
+    button("Send a task").focus();
     await reply("implementer");
     expect(recipient().value).toBe("implementer");
     expect(message().value).toBe("Preserve this review context");
     expect(document.activeElement).toBe(message());
     expect(scroll).toHaveBeenCalled();
-    button("send a task").focus();
+    button("Send a task").focus();
     await reply("implementer");
     expect(document.activeElement).toBe(message());
     expect(fetch).not.toHaveBeenCalled();
@@ -250,8 +250,8 @@ describe("story composer continuity", () => {
     await reply("designer");
     await type("Unsent draft");
     await click("close");
-    expect(document.activeElement).toBe(button("send a task"));
-    await click("send a task");
+    expect(document.activeElement).toBe(button("Send a task"));
+    await click("Send a task");
     expect(message().value).toBe("Unsent draft");
     await click("discard draft");
     expect(message().value).toBe("");
@@ -266,13 +266,13 @@ describe("story composer continuity", () => {
     await reply("implementer");
     await type("Only person A, story A");
     await render("person-b");
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("");
     await render("person-a", "story-b");
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("");
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("Only person A, story A");
     expect(recipient().value).toBe("implementer");
   });
@@ -314,7 +314,7 @@ describe("story composer continuity", () => {
     expect(first.message).toBe("Retry this exact request");
     await render("person-b");
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("");
   });
 
@@ -348,7 +348,7 @@ describe("story composer continuity", () => {
     await reply("implementer");
     await type("Keep in-memory text");
     await click("close");
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("Keep in-memory text");
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -378,7 +378,7 @@ describe("story composer continuity", () => {
     const key = JSON.parse(failed[1].body).idempotency_key;
     await render("person-b");
     await render();
-    await click("send a task");
+    await click("Send a task");
     await submit();
     const retried = fetch.mock.calls[1];
     if (!retried) throw Error("Missing retry");
@@ -412,7 +412,7 @@ describe("draft ownership and explicit recipient intent", () => {
     });
     expect(recipient().value).toBe("implementer");
     await click("close");
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("Please implement this change");
     expect(recipient().value).toBe("implementer");
   });
@@ -431,7 +431,7 @@ describe("draft ownership and explicit recipient intent", () => {
     await submit();
     await render("person-a", "story-b");
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("First message, still sending");
     await type("New unsent message after navigation");
     const storedKey = sessionStorage.key(0);
@@ -441,7 +441,7 @@ describe("draft ownership and explicit recipient intent", () => {
     expect(message().value).toBe("New unsent message after navigation");
     await render("person-a", "story-b");
     await render();
-    await click("send a task");
+    await click("Send a task");
     expect(message().value).toBe("New unsent message after navigation");
   });
 });

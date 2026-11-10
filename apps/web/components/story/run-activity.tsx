@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClassName } from "@facility/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LoadMore, type LoadState } from "@/components/story/load-more";
 import type { StoryActivityItem, StoryTurnActivityPage, StoryTurnEvent } from "@/lib/api";
@@ -182,8 +183,9 @@ function RunActivityView({
     };
   }, [open, checkNew]);
 
-  const control =
-    "inline-flex min-h-11 items-center border border-(--line) px-3 text-sm text-(--ink) focus-visible:outline-2 focus-visible:outline-(--info)";
+  const control = buttonClassName({
+    className: "focus-visible:outline-2 focus-visible:outline-(--info)",
+  });
   return (
     <details
       className="group border-t border-(--line) pt-3"

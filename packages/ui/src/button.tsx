@@ -6,40 +6,50 @@ type Size = "sm" | "md" | "lg";
 type Tone = "agent";
 
 const sizes: Record<Size, string> = {
-  sm: "min-h-11 px-3.5 py-2 text-[12.5px]",
-  md: "min-h-11 px-6 py-2.5 text-[13px]",
-  lg: "min-h-[52px] px-10 py-3 text-[13.5px]",
+  sm: "min-h-11 px-4 py-2 text-[13px]",
+  md: "min-h-11 px-5 py-2.5 text-[13.5px]",
+  lg: "min-h-[52px] px-8 py-3 text-[14px]",
 };
 
+/**
+ * Buttons always have their own surface and a 4px radius, so they never read as
+ * text. Links stay plain blue text. One primary action per decision; every other
+ * action uses the filled secondary surface.
+ */
 function classesFor(variant: Variant, size: Size, tone?: Tone, className?: string) {
   const base =
-    "group relative inline-flex max-w-full select-none items-center justify-center gap-2 whitespace-normal text-center font-medium transition-colors disabled:pointer-events-none disabled:opacity-50";
+    "group relative inline-flex max-w-full select-none items-center justify-center gap-2 overflow-hidden rounded-[4px] whitespace-normal text-center font-medium transition-colors disabled:pointer-events-none disabled:opacity-50";
   if (variant === "textual") {
-    return cx(base, "h-auto px-0 text-(--mut) hover:text-(--ink)", className);
+    return cx(base, "h-auto rounded-none px-0 text-(--mut) hover:text-(--ink)", className);
   }
   if (variant === "danger") {
     return cx(
       base,
       sizes[size],
-      "border border-(--bad) text-(--bad) hover:bg-(--bad) hover:text-black",
+      "border border-(--bad)/70 bg-(--bad)/10 text-(--bad) hover:bg-(--bad) hover:text-black",
       className,
     );
   }
   if (variant === "primary") {
     if (tone === "agent") {
-      return cx(base, sizes[size], "border border-(--accent) text-(--accent)", className);
+      return cx(
+        base,
+        sizes[size],
+        "border border-(--accent)/70 bg-(--accent)/10 text-(--accent)",
+        className,
+      );
     }
     return cx(
       base,
       sizes[size],
-      "border border-(--line-strong) bg-(--ink) text-(--bg) hover:bg-(--card) hover:text-(--ink)",
+      "border border-transparent bg-(--ink) text-(--bg) hover:bg-white",
       className,
     );
   }
   return cx(
     base,
     sizes[size],
-    "border border-(--line) text-(--mut) hover:border-(--line-strong) hover:text-(--ink)",
+    "border border-(--line) bg-(--card) text-(--ink) hover:border-(--line-strong) hover:bg-[#2a3644]",
     className,
   );
 }
@@ -116,4 +126,17 @@ export function ButtonLink({
       </Label>
     </a>
   );
+}
+
+/** The same surface for a navigation link that must look like a button, such as pagination. */
+export function buttonClassName({
+  variant = "outline",
+  size = "sm",
+  className,
+}: {
+  variant?: Variant;
+  size?: Size;
+  className?: string;
+} = {}) {
+  return classesFor(variant, size, undefined, className);
 }

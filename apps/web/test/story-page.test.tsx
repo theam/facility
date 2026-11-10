@@ -415,7 +415,7 @@ describe("story overview integration", () => {
     expect(attention?.textContent).not.toContain("The run reported an error");
     expect(attention?.textContent).not.toContain("Technical details");
     expect([...attention.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-      "dismiss",
+      "Dismiss",
     ]);
     expect(attention?.querySelector('a[href="#story-section-workflow"]')?.textContent).toBe(
       "Review the candidate and findings",
@@ -459,8 +459,8 @@ describe("story overview integration", () => {
     expect(timeline?.open).toBe(false);
     expect(timeline?.querySelector("ol")).toBeNull();
 
-    // The newest exchange comes first and pairs the request with its response.
-    const exchanges = [...root.querySelectorAll("article")];
+    // Shown oldest first, next to the composer; each request pairs with its response.
+    const exchanges = [...root.querySelectorAll("article")].reverse();
     expect(exchanges[0]?.textContent).toContain("Ada Lovelace");
     expect(exchanges[0]?.textContent).toContain("Please add the feature");
     expect(exchanges[0]?.textContent).toContain("The feature ships in the pull request.");
@@ -483,21 +483,24 @@ describe("story overview integration", () => {
     for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')) {
       expect(root.querySelector(link.getAttribute("href") ?? "")).not.toBeNull();
     }
-    expect(root.textContent).not.toContain("suspend compute");
-    expect(root.textContent).not.toContain("send a task");
-    expect(root.textContent).not.toContain("open app");
+    expect(root.textContent).not.toContain("Suspend compute");
+    expect(root.textContent).not.toContain("Send a task");
+    expect(root.textContent).not.toContain("Ask without changes");
+    expect(root.textContent).not.toContain("Open app");
   });
 
   it("offers the everyday actions from the top for an executor", async () => {
     setUp(["workspaces:execute", "projects:write"]);
     const { root } = await render();
     const actions = root.querySelector('[aria-label="Story actions"]');
-    expect(actions?.textContent).toContain("send a task");
-    expect(actions?.textContent).toContain("open app ↗");
-    expect(actions?.textContent).toContain("maintenance");
+    expect(actions?.textContent).toContain("Send a task");
+    expect(actions?.textContent).toContain("Ask without changes");
+    expect(actions?.textContent).toContain("Open app ↗");
+    expect(actions?.textContent).toContain("More");
+    expect(actions?.querySelector("a")).toBeNull();
     expect(actions?.textContent).not.toContain("cancel turn");
     expect(root.querySelector("#story-composer")).toBeNull();
-    expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("send a task");
+    expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("Send a task");
   });
 
   it("keeps the plan and conversation together before delivery and environment controls", async () => {

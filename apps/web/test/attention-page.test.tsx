@@ -163,7 +163,7 @@ describe("attention page", () => {
     );
     expect(notices.textContent).not.toContain("The run reported an error");
     expect(notices.textContent).not.toContain("Technical details");
-    expect([...notices.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["dismiss"]);
+    expect([...notices.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Dismiss"]);
   });
   it("lists every open notice with its verb and links to the complete Attention view", async () => {
     const { root, text } = await render();
@@ -195,7 +195,7 @@ describe("attention page", () => {
     ).toBe("Reply in the story →");
     expect(notices.textContent).toContain("Technical details");
     const buttons = [...notices.querySelectorAll("button")].map((button) => button.textContent);
-    expect(buttons).toEqual(["dismiss", "retry", "dismiss"]);
+    expect(buttons).toEqual(["Dismiss", "Retry", "Dismiss"]);
     expect(text).toContain("Showing 1–2 of 2");
     expect(text).not.toContain("Older →");
   });

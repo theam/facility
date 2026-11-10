@@ -50,16 +50,16 @@ export function AttentionActions({
       {item.kind === "agent_waiting" ? (
         replyAnchor ? (
           <Button size="sm" onClick={() => requestCompose(agentName ?? undefined)}>
-            reply
+            Reply
           </Button>
         ) : null
       ) : item.turnId && !isReviewNotice(item.kind) ? (
         <Button size="sm" onClick={() => act("retry")} disabled={Boolean(pending)}>
-          {pending === "retry" ? "retrying…" : "retry"}
+          {pending === "retry" ? "Retrying…" : "Retry"}
         </Button>
       ) : null}
       <Button size="sm" onClick={() => act("dismiss")} disabled={Boolean(pending)}>
-        {pending === "dismiss" ? "dismissing…" : "dismiss"}
+        {pending === "dismiss" ? "Dismissing…" : "Dismiss"}
       </Button>
       {error ? (
         <p role="alert" className="basis-full text-[11.5px] text-(--bad)">

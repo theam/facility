@@ -48,7 +48,9 @@ const render = async (projection?: Projection) =>
     root.render(<DeliveryDecisionBrief projection={projection} storyUrl="/projects/p/stories/s" />),
   );
 describe("delivery author brief", () => {
-  it("presents the same saved claims and sources in three formats with an exact original link", async () => {
+  it("presents the saved claims, options and numbered sources with an exact original link", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
     await render(available);
     expect(container.textContent).toContain("custom-reviewer");
     expect(container.textContent).toContain("Supplied for delivery scope r4");
@@ -57,20 +59,16 @@ describe("delivery author brief", () => {
     expect(original?.getAttribute("href")).toBe(
       "/projects/p/stories/s?messageId=msg-review#message-msg-review",
     );
-    const fetch = vi.fn();
-    vi.stubGlobal("fetch", fetch);
-    for (const format of ["summary", "comparison", "diagram"]) {
-      const input = container.querySelector<HTMLInputElement>(`input[value="${format}"]`);
-      if (!input) throw Error("Missing format");
-      await act(async () => input.click());
-      expect(input.checked).toBe(true);
-      expect(container.textContent).toContain(fixture.brief.summary.text);
-      expect(container.textContent).toContain(fixture.brief.decisiveRisk.text);
-      expect(container.textContent).toContain("Author recommends:");
-      expect(
-        container.querySelectorAll('a[href="https://example.com/reviews/delivery-4"]').length,
-      ).toBeGreaterThan(0);
-    }
+    expect(container.querySelector("input[type='radio']")).toBeNull();
+    expect(container.textContent).toContain(fixture.brief.summary.text);
+    expect(container.textContent).toContain(fixture.brief.decisiveRisk.text);
+    for (const option of fixture.brief.options)
+      expect(container.textContent).toContain(option.label);
+    expect(container.textContent).toContain("Recommended");
+    expect(container.textContent).not.toContain("Author recommends");
+    expect(
+      container.querySelectorAll('a[href="https://example.com/reviews/delivery-4"]').length,
+    ).toBeGreaterThan(0);
     expect(fetch).not.toHaveBeenCalled();
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });

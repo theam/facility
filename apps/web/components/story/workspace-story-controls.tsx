@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@facility/ui";
+import { Button, buttonClassName } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { StoryWorkspace, WorkspaceStory } from "@/lib/api";
@@ -91,6 +91,16 @@ export function WorkspaceControls({
   }
 
   const maintenance = [
+    canExecute && !workspaceDeleted ? (
+      <Button
+        key="browser-test"
+        size="sm"
+        onClick={() => environmentAction("browser-test")}
+        disabled={Boolean(pending)}
+      >
+        {pending === "browser-test" ? "Testing…" : "Run browser test"}
+      </Button>
+    ) : null,
     story.status === "archived" && canWrite && !workspaceDeleted ? (
       <Button
         key="restore"
@@ -98,7 +108,7 @@ export function WorkspaceControls({
         onClick={() => lifecycle("restore")}
         disabled={Boolean(pending)}
       >
-        {pending === "restore" ? "restoring…" : "restore"}
+        {pending === "restore" ? "Restoring…" : "Restore"}
       </Button>
     ) : null,
     story.status !== "archived" && !workspaceDeleted && canExecute && computeState === "running" ? (
@@ -108,7 +118,7 @@ export function WorkspaceControls({
         onClick={() => lifecycle("suspend")}
         disabled={Boolean(pending)}
       >
-        {pending === "suspend" ? "suspending…" : "suspend compute"}
+        {pending === "suspend" ? "Suspending…" : "Suspend compute"}
       </Button>
     ) : null,
     story.status !== "archived" && !workspaceDeleted && canWrite ? (
@@ -118,7 +128,7 @@ export function WorkspaceControls({
         onClick={() => lifecycle("archive")}
         disabled={Boolean(pending)}
       >
-        {pending === "archive" ? "archiving…" : "archive"}
+        {pending === "archive" ? "Archiving…" : "Archive"}
       </Button>
     ) : null,
     canWrite && !workspaceDeleted ? (
@@ -128,7 +138,7 @@ export function WorkspaceControls({
         onClick={() => environmentAction("clean-setup")}
         disabled={Boolean(pending)}
       >
-        {pending === "clean-setup" ? "setting up…" : "clean setup"}
+        {pending === "clean-setup" ? "Setting up…" : "Clean setup"}
       </Button>
     ) : null,
   ].filter(Boolean);
@@ -146,32 +156,24 @@ export function WorkspaceControls({
                 disabled={Boolean(pending) || workspaceDeleted}
               >
                 {pending === `preview:${service.service}`
-                  ? "opening…"
-                  : `open ${service.service} ↗`}
+                  ? "Opening…"
+                  : `Open ${service.service} ↗`}
               </Button>
             ))
           : null}
-        {canExecute && !workspaceDeleted ? (
-          <Button
-            size="sm"
-            onClick={() => environmentAction("browser-test")}
-            disabled={Boolean(pending)}
-          >
-            {pending === "browser-test" ? "testing…" : "run browser test"}
-          </Button>
-        ) : null}
         {maintenance.length > 0 || canDelete ? (
           <details className="group relative">
-            <summary className="inline-flex min-h-8 cursor-pointer list-none items-center gap-2 px-2 text-[12.5px] text-(--mut) hover:text-(--ink)">
-              maintenance
+            <summary className={buttonClassName({ className: "cursor-pointer list-none" })}>
+              More
               <span aria-hidden="true" className="transition-transform group-open:rotate-180">
                 ▾
               </span>
             </summary>
-            <div className="absolute left-0 z-20 mt-2 flex w-[min(92vw,26rem)] flex-col gap-4 border border-(--line) bg-(--bg) p-4 shadow-(--shadow-lift)">
+            <div className="absolute right-0 z-20 mt-2 flex w-[min(92vw,26rem)] flex-col gap-4 rounded-[4px] border border-(--line) bg-(--bg) p-4 shadow-(--shadow-lift)">
               <p className="text-xs leading-relaxed text-(--dim)">
-                Suspend stops compute and preserves files. Archive keeps the workspace as history.
-                Clean setup reruns project setup and can reset development data.
+                Run browser test checks the app in this workspace. Suspend stops compute and
+                preserves files. Archive keeps the workspace as history. Clean setup reruns project
+                setup and can reset development data.
               </p>
               {maintenance.length > 0 ? (
                 <div className="flex flex-wrap gap-2">{maintenance}</div>

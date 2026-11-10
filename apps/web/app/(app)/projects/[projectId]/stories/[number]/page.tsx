@@ -140,6 +140,19 @@ export default async function StoryPage({
                 ? `Scheduled · ${story.externalId}`
                 : `GitHub · ${story.externalId.replace(":", " #")}`}
           </span>
+          {safeExternalUrl(story.pullRequestUrl) ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <a
+                href={story.pullRequestUrl ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-11 items-center text-(--info) hover:underline"
+              >
+                Source pull request #{story.pullRequestNumber} ↗
+              </a>
+            </>
+          ) : null}
         </p>
         <h1 className="text-[clamp(22px,2.6vw,28px)] font-semibold leading-tight tracking-tight">
           {story.title}
@@ -240,25 +253,6 @@ export default async function StoryPage({
         conversation={
           <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
             <h2 className="text-sm font-medium text-(--mut)">Conversation</h2>
-            <StoryActions
-              key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
-              projectId={projectId}
-              draftOwnerId={
-                me.ok && me.data.principal?.type === "user"
-                  ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
-                  : undefined
-              }
-              story={story}
-              workspace={bundle.workspace}
-              agents={agentRows}
-              canExecute={canExecute}
-              canPreview={canExecute || can(permissions, "previews:read")}
-              canWrite={canWrite}
-              computeState={currentEnvironment?.inspection.state}
-              activeTurn={activeTurn}
-              waitingAgent={waitingAgent}
-              artifacts={bundle.artifacts}
-            />
             {canExecute && !agents.ok ? (
               <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
             ) : null}
@@ -295,6 +289,25 @@ export default async function StoryPage({
                 canProposePlan={!selection && canWrite && story.deletedAt === null}
               />
             )}
+            <StoryActions
+              key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+              projectId={projectId}
+              draftOwnerId={
+                me.ok && me.data.principal?.type === "user"
+                  ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+                  : undefined
+              }
+              story={story}
+              workspace={bundle.workspace}
+              agents={agentRows}
+              canExecute={canExecute}
+              canPreview={canExecute || can(permissions, "previews:read")}
+              canWrite={canWrite}
+              computeState={currentEnvironment?.inspection.state}
+              activeTurn={activeTurn}
+              waitingAgent={waitingAgent}
+              artifacts={bundle.artifacts}
+            />
           </section>
         }
         sections={[

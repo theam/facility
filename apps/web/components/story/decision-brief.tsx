@@ -1,13 +1,14 @@
-"use client";
-
 import type { StoryPlan } from "@facility/sdk";
-import { useId, useState } from "react";
 
 type Brief = Extract<NonNullable<StoryPlan["decisionBrief"]>, { status: "available" }>["brief"];
 type Claim = Brief["summary"];
-type Format = "summary" | "comparison" | "diagram";
 
-/** Formats explain the same saved statements; none of these controls makes a decision. */
+/**
+ * The saved brief as one block read top to bottom: what is decided and why now,
+ * the options with their consequences, the recommendation and its reason, the
+ * risk and what is still unknown. Each statement carries numbered links to its
+ * sources, listed once at the end. Nothing here makes a decision.
+ */
 export function DecisionBrief({
   brief,
   revision,
@@ -17,68 +18,79 @@ export function DecisionBrief({
   | { revision?: never; delivery: { scopeRevision: number; candidateRevision: string } }
 )) {
   const subject = delivery ? `delivery scope r${delivery.scopeRevision}` : `plan r${revision}`;
-  const [format, setFormat] = useState<Format>("summary");
-  const group = useId();
-  const recommended = brief.options.find((option) => option.id === brief.recommendation?.optionId);
-  // The visible brief links each source once, at its first statement; the
-  // options view keeps every statement's own links.
-  const linked = new Set<string>();
-  function claim(value: Claim, once = false) {
-    const ids = once ? value.evidenceIds.filter((id) => !linked.has(id)) : value.evidenceIds;
-    if (once) for (const id of ids) linked.add(id);
+  const sources = new Map(brief.evidence.map((source) => [source.id, source]));
+  const order: string[] = [];
+  function number(id: string) {
+    if (!order.includes(id)) order.push(id);
+    return order.indexOf(id) + 1;
+  }
+  function claim(value: Claim, className = "", prefix?: string) {
     return (
-      <div className="flex min-w-0 flex-col gap-1">
-        <p className="break-words">{value.text}</p>
-        {ids.length ? (
-          <ul
-            className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-normal text-(--mut)"
-            aria-label="Sources for this statement"
-          >
-            {ids.map((id) => {
-              const source = brief.evidence.find((item) => item.id === id);
-              return source ? (
-                <li key={id} className="min-w-0 break-words">
-                  <a
-                    href={source.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline decoration-(--line-strong) underline-offset-4 hover:text-(--ink)"
-                    title={source.reference}
-                  >
-                    {source.label} ↗
-                  </a>
-                </li>
-              ) : null;
-            })}
-          </ul>
-        ) : null}
-      </div>
+      <p className={`break-words ${className}`}>
+        {prefix ? <span className="text-(--mut)">{prefix} </span> : null}
+        {value.text}
+        {value.evidenceIds.map((id) => {
+          const source = sources.get(id);
+          if (!source) return null;
+          const index = number(id);
+          return (
+            <a
+              key={id}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              title={`${source.label} · ${source.reference}`}
+              aria-label={`Source ${index}: ${source.label}`}
+              className="ml-1 align-super text-[11px] font-normal text-(--info) hover:underline"
+            >
+              [{index}]
+            </a>
+          );
+        })}
+      </p>
     );
   }
-  function optionLabel(option: Brief["options"][number], index: number) {
-    return (
-      <>
-        <span>
-          {index + 1}. {option.label}
-        </span>
-        {option.id === recommended?.id ? (
-          <span className="mt-1 block text-xs font-normal text-(--mut)">Recommended</span>
-        ) : null}
-      </>
-    );
-  }
+  const recommended = brief.recommendation?.optionId;
   return (
     <section
       aria-label={`Author’s decision brief for ${subject}`}
-      className="flex min-w-0 flex-col gap-4 text-[15px] leading-relaxed"
+      className="flex min-w-0 flex-col gap-5 text-[15px] leading-relaxed"
     >
-      <div className="text-[17px] font-medium leading-snug">{claim(brief.summary, true)}</div>
-      <div className="text-(--mut)">{claim(brief.whyNow, true)}</div>
       <div className="flex flex-col gap-1">
-        <p className="font-medium">
-          {recommended ? `Author recommends: ${recommended.label}` : "No recommendation supplied"}
-        </p>
-        {brief.recommendation ? claim(brief.recommendation.reason, true) : null}
+        {claim(brief.summary, "text-[17px] font-medium leading-snug")}
+        {claim(brief.whyNow, "text-(--mut)")}
+      </div>
+      <div className="flex flex-col gap-2">
+        <h4 className="text-[12px] font-medium text-(--mut)">Options</h4>
+        <ol className="flex flex-col gap-3" aria-label="Options and consequences">
+          {brief.options.map((option, index) => (
+            <li key={option.id} className="flex min-w-0 gap-3">
+              <span
+                aria-hidden="true"
+                className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border border-(--line) text-[12px] text-(--mut)"
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="break-words font-medium">
+                  {option.label}
+                  {option.id === recommended ? (
+                    <span className="ml-2 inline-block rounded-[4px] bg-(--info)/15 px-1.5 align-middle text-[11px] font-medium text-(--info)">
+                      Recommended
+                    </span>
+                  ) : null}
+                </p>
+                {claim(option.consequence, "text-sm text-(--mut)")}
+                {option.id === recommended && brief.recommendation
+                  ? claim(brief.recommendation.reason, "mt-1 text-sm", "Why:")
+                  : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+        {brief.recommendation ? null : (
+          <p className="text-sm text-(--mut)">No recommendation supplied.</p>
+        )}
       </div>
       <div className="flex gap-2">
         <svg
@@ -94,7 +106,7 @@ export function DecisionBrief({
         </svg>
         <div className="min-w-0">
           <h4 className="sr-only">Risk</h4>
-          {claim(brief.decisiveRisk, true)}
+          {claim(brief.decisiveRisk)}
         </div>
       </div>
       {brief.unknowns.length ? (
@@ -103,139 +115,43 @@ export function DecisionBrief({
           <ul className="flex flex-col gap-1">
             {brief.unknowns.map((value, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: immutable statements in a single revision
-              <li key={index}>{claim(value, true)}</li>
+              <li key={index}>{claim(value)}</li>
             ))}
           </ul>
         </div>
       ) : null}
-      <details className="min-w-0 text-sm">
-        <summary className="min-h-11 w-fit cursor-pointer py-3 text-(--info)">
-          Options and sources
-        </summary>
-        <div className="flex min-w-0 flex-col gap-4 pt-2">
-          <fieldset className="min-w-0 sm:col-span-2">
-            <legend className="sr-only">Option format</legend>
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ["summary", "Summary"],
-                  ["comparison", "Comparison"],
-                  ["diagram", "Diagram"],
-                ] as const
-              ).map(([value, label]) => (
-                <label
-                  key={value}
-                  className={`flex min-h-11 cursor-pointer items-center border-b-2 px-3 py-2 has-focus-visible:outline-2 has-focus-visible:outline-(--info) ${format === value ? "border-(--info) text-(--ink)" : "border-transparent text-(--mut)"}`}
-                >
-                  <input
-                    type="radio"
-                    name={group}
-                    value={value}
-                    checked={format === value}
-                    onChange={() => setFormat(value)}
-                    className="sr-only"
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <div aria-live="polite" aria-atomic="true" className="sr-only">
-            Options shown as {format}. The recommendation and sources are unchanged.
-          </div>
-          {format === "comparison" ? (
-            <section
-              className="min-w-0 overflow-x-auto sm:col-span-2"
-              aria-label="Option comparison"
-            >
-              <table className="w-full table-fixed border-collapse text-left text-sm">
-                <caption className="sr-only">
-                  Options and consequences from the same{" "}
-                  {delivery ? "delivery candidate" : "plan revision"}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col" className="w-2/5 border-b border-(--line) p-2 align-top">
-                      Option
-                    </th>
-                    <th scope="col" className="border-b border-(--line) p-2">
-                      Consequence
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {brief.options.map((option, index) => (
-                    <tr key={option.id}>
-                      <th
-                        scope="row"
-                        className="break-words border-b border-(--line) p-2 align-top font-medium"
-                      >
-                        {optionLabel(option, index)}
-                      </th>
-                      <td className="break-words border-b border-(--line) p-2 align-top">
-                        {claim(option.consequence)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          ) : (
-            <div className="min-w-0 sm:col-span-2">
-              <ol
-                className="grid min-w-0 gap-4 sm:grid-cols-2"
-                aria-label="Options and consequences"
-              >
-                {brief.options.map((option, index) => (
-                  <li
-                    key={option.id}
-                    className={`min-w-0 ${format === "diagram" ? "border border-(--line) bg-(--card) p-4" : ""}`}
-                  >
-                    <p className="break-words font-medium">{optionLabel(option, index)}</p>
-                    {format === "diagram" ? (
-                      <span aria-hidden="true" className="my-2 block text-(--mut)">
-                        ↓
-                      </span>
-                    ) : null}
-                    <div className={format === "summary" ? "mt-2 text-(--mut)" : "text-(--mut)"}>
-                      {claim(option.consequence)}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-          {brief.evidence.length ? (
-            <details className="text-xs text-(--mut) sm:col-span-2">
-              <summary className="cursor-pointer py-2">
-                Source references · {brief.evidence.length}
-              </summary>
-              <ul className="mt-2 flex flex-col gap-3">
-                {brief.evidence.map((source) => (
-                  <li key={source.id} className="break-words">
+      {(() => {
+        for (const source of brief.evidence) number(source.id);
+        return order.length ? (
+          <div className="text-xs text-(--mut)">
+            <h4 className="mb-1 font-medium">Sources</h4>
+            <ol className="flex flex-col gap-1" aria-label="Sources">
+              {order.map((id, index) => {
+                const source = sources.get(id);
+                return source ? (
+                  <li key={id} className="break-words">
                     <a
                       href={source.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="underline underline-offset-4"
+                      className="text-(--info) hover:underline"
                     >
-                      {source.label}
-                    </a>
-                    <p className="mt-1">{source.reference}</p>
+                      [{index + 1}] {source.label} ↗
+                    </a>{" "}
+                    <span className="text-(--dim)">{source.reference}</span>
                   </li>
-                ))}
-              </ul>
-            </details>
-          ) : (
-            <p className="text-xs text-(--mut) sm:col-span-2">
-              No source links were supplied in this brief.
-            </p>
-          )}
-          <p className="text-xs text-(--mut)">
-            {delivery ? `Supplied for ${subject}` : `Supplied in ${subject}`}. Author statements.
-          </p>
-        </div>
-      </details>
+                ) : null;
+              })}
+            </ol>
+          </div>
+        ) : (
+          <p className="text-xs text-(--mut)">No source links were supplied in this brief.</p>
+        );
+      })()}
+      <p className="text-xs text-(--dim)">
+        {delivery ? `Supplied for ${subject}` : `Supplied in ${subject}`}. These are the author’s
+        statements, not checks made by Facility.
+      </p>
     </section>
   );
 }

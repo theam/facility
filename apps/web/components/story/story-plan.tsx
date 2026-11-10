@@ -242,6 +242,23 @@ export function StoryPlanPanel({
     retry.current = null;
     void loadRepositories();
   }
+  // "Propose a revision" from a linked plan lands here with ?edit=plan: open the
+  // editor once on the current plan and drop the marker from the address.
+  const editRequested = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once when the current plan is known.
+  useEffect(() => {
+    if (editRequested.current || selection || !canWrite || !current) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("edit") !== "plan") return;
+    editRequested.current = true;
+    url.searchParams.delete("edit");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+    startEdit();
+  }, [current, selection, canWrite]);
   async function load(kind: "current" | "history" | "decisions" = "current") {
     if (busyRef.current) return;
     const params = new URLSearchParams();
@@ -821,27 +838,29 @@ export function StoryPlanPanel({
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-(--mut)">
         {selection ? (
-          <Link
-            href={latestPlanHref ?? `${storyPath}#story-plan`}
-            className="inline-flex min-h-11 items-center text-(--info) underline"
-          >
-            Open current plan to edit
-          </Link>
+          canWrite ? (
+            <Link
+              href={`${storyPath}?edit=plan#story-plan`}
+              className="inline-flex min-h-11 items-center text-(--info) hover:underline"
+            >
+              Propose a revision
+            </Link>
+          ) : null
         ) : canWrite && current && !editing ? (
           <button
             type="button"
             disabled={busy}
             onClick={() => startEdit()}
-            className="min-h-11 underline underline-offset-4 hover:text-(--ink)"
+            className="min-h-11 text-(--info) hover:underline"
           >
-            {current.plan ? "Propose revision" : "Propose plan"}
+            {current.plan ? "Propose a revision" : "Propose a plan"}
           </button>
         ) : null}
         <button
           type="button"
           disabled={busy}
           onClick={() => void load()}
-          className="min-h-11 underline underline-offset-4 hover:text-(--ink)"
+          className="min-h-11 text-(--info) hover:underline"
         >
           {busy ? "Loading…" : "Reload plan"}
         </button>
