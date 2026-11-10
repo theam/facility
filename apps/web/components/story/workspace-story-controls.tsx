@@ -210,7 +210,7 @@ export function WorkspaceControls({
                       disabled={!deleteConfirmed || Boolean(pending)}
                       onClick={deleteWorkspace}
                     >
-                      {pending === "delete" ? "deleting…" : "delete workspace"}
+                      {pending === "delete" ? "Deleting…" : "Delete workspace"}
                     </Button>
                   </div>
                 </details>

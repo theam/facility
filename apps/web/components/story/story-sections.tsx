@@ -76,14 +76,17 @@ export function StorySections({
       if (!target || !root.current?.contains(target)) return;
       const panel = target.closest<HTMLElement>("[data-story-tab]");
       if (panel) setSelected(panel.dataset.storyTab as StoryTab);
-      requestAnimationFrame(() => {
-        if (!target.isConnected) return;
-        target.scrollIntoView({ block: "start" });
-        if (moveFocus) {
-          if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
-          target.focus({ preventScroll: true });
-        }
-      });
+      // Two frames: the selected tab must render visible before it can scroll into view.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!target.isConnected) return;
+          target.scrollIntoView({ block: "start" });
+          if (moveFocus) {
+            if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+            target.focus({ preventScroll: true });
+          }
+        }),
+      );
     }
     function hashChange() {
       reveal(window.location.hash, false);
