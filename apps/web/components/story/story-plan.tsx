@@ -252,11 +252,8 @@ export function StoryPlanPanel({
     if (url.searchParams.get("edit") !== "plan") return;
     editRequested.current = true;
     url.searchParams.delete("edit");
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${url.pathname}${url.search}${url.hash}`,
-    );
+    // The router owns the address; a native replace would be restored on the next navigation.
+    router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
     startEdit();
   }, [current, selection, canWrite]);
   async function load(kind: "current" | "history" | "decisions" = "current") {

@@ -15,7 +15,7 @@ import { PLAN_PROPOSAL_EVENT } from "../lib/story-plan-events";
 import type { PlanSelection } from "../lib/story-review-navigation";
 import { workflowFixture } from "./fixtures/workflow";
 
-const navigation = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 const at = "2026-10-21T10:00:00.000Z";
 const actor = { type: "user" as const, id: "person-a", name: "Ada" };
@@ -244,8 +244,12 @@ describe("revision-bound plan UI", () => {
     window.history.replaceState({}, "", "/projects/project-a/stories/story-a?edit=plan#story-plan");
     await render(current);
     expect(textarea().value).toBe(current.plan.markdown);
-    expect(window.location.search).toBe("");
-    expect(window.location.hash).toBe("#story-plan");
+    expect(navigation.replace).toHaveBeenCalledWith(
+      "/projects/project-a/stories/story-a#story-plan",
+      {
+        scroll: false,
+      },
+    );
     window.history.replaceState({}, "", "/");
   });
   it("does not open the editor for a reader or without the explicit marker", async () => {
