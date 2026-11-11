@@ -132,8 +132,8 @@ export function PlanContent({
           {!originalOnly ? (
             <p className="text-xs text-(--mut)">
               {plan.decisionBrief?.status === "invalid"
-                ? "The structured brief could not be read. Review the complete original plan below."
-                : "No structured brief was supplied. Review the complete plan below."}
+                ? "The structured brief could not be read. The plan is shown as its author wrote it."
+                : "No structured brief was supplied. The plan is shown as its author wrote it."}
             </p>
           ) : null}
           <div className="min-w-0 break-words text-[14px] leading-relaxed [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
