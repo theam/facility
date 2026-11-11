@@ -13,7 +13,7 @@ type Shape = {
 function bundle(shape: Shape = {}) {
   return {
     story: { status: shape.status ?? "working", deletedAt: null, archivedAt: null },
-    plans: shape.plan ? { state: { status: shape.plan } } : null,
+    plans: shape.plan ? { state: { status: shape.plan, revision: 3 } } : null,
     delivery: shape.delivery
       ? { pullRequests: [{ number: 1 }], candidate: { state: shape.delivery } }
       : null,
@@ -35,7 +35,10 @@ describe("story focus", () => {
       section: "plan",
       decision: true,
     });
-    expect(storyFocus(bundle({ plan: "approved" }), undefined, true).decision).toBe(true);
+    expect(storyFocus(bundle({ plan: "proposed" }), undefined, { revision: 3 })).toMatchObject({
+      title: "Review the linked plan",
+      decision: true,
+    });
     expect(storyFocus(bundle({ delivery: "recorded" }), undefined)).toMatchObject({
       section: "delivery",
       decision: true,
@@ -57,6 +60,14 @@ describe("story focus", () => {
       expect(storyFocus(bundle({ delivery: state }), undefined).decision).toBe(false);
     expect(storyFocus(bundle({ completion: "wait_completion" }), undefined).decision).toBe(false);
     expect(storyFocus(bundle(), review("correction")).decision).toBe(false);
+    expect(storyFocus(bundle({ plan: "approved" }), undefined, { revision: 3 })).toMatchObject({
+      section: "plan",
+      title: "Linked plan",
+      decision: false,
+    });
+    expect(storyFocus(bundle({ plan: "proposed" }), undefined, { revision: 2 }).decision).toBe(
+      false,
+    );
     expect(storyFocus(bundle({ status: "done" }), undefined).decision).toBe(false);
     expect(storyFocus(bundle(), undefined).decision).toBe(false);
   });

@@ -120,7 +120,11 @@ export default async function StoryPage({
       .map((item) => bundle.turns.find((turn) => turn.id === item.turnId)?.agentName ?? null)
       .find((name) => name !== null) ?? null;
 
-  const focus = storyFocus(bundle, workflow.ok ? workflow.data : undefined, Boolean(selection));
+  const focus = storyFocus(
+    bundle,
+    workflow.ok ? workflow.data : undefined,
+    selection ? { revision: selection.revision } : false,
+  );
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <LiveRefresh seconds={8} />
@@ -160,8 +164,12 @@ export default async function StoryPage({
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-(--mut)">
           <StatusDot tone={activity.active ? "agent" : "machine"} pulse={activity.active} />
           <span className="text-(--ink)">{activity.label}</span>
-          <span aria-hidden="true">·</span>
-          <span>{phaseLabel(story.status)}</span>
+          {/attention/i.test(activity.label) && story.status === "attention" ? null : (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{phaseLabel(story.status)}</span>
+            </>
+          )}
           {bundle.progress?.latest ? (
             <>
               <span aria-hidden="true">·</span>

@@ -51,16 +51,23 @@ const ACTIONABLE_COMPLETION: StoryCompletion["nextAction"][] = [
 export function storyFocus(
   bundle: WorkspaceStoryBundle,
   workflow: StoryWorkflowStatus | undefined,
-  linkedPlan = false,
+  linkedPlan: boolean | { revision?: number | null } = false,
 ): StoryFocus {
-  if (linkedPlan)
+  if (linkedPlan) {
+    // A link opens its exact revision. It is a decision only while that revision
+    // is the current proposal; an earlier or approved one is read as history.
+    const revision = typeof linkedPlan === "object" ? linkedPlan.revision : undefined;
+    const pending =
+      bundle.plans?.state.status === "proposed" &&
+      (revision == null || revision === bundle.plans.state.revision);
     return {
       section: "plan",
-      title: "Review the linked plan",
-      decision: true,
+      title: pending ? "Review the linked plan" : "Linked plan",
+      decision: pending,
       detail:
         "This link keeps its exact revision. The current plan and conversation remain accessible.",
     };
+  }
   if (
     bundle.story.deletedAt ||
     bundle.story.archivedAt ||

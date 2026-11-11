@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Markdown } from "@/components/markdown";
 import { DecisionBrief } from "@/components/story/decision-brief";
+import { ExpandableMarkdown } from "@/components/story/expandable-markdown";
 import { formatTime } from "@/lib/story-presentation";
 import { storyReviewHref } from "@/lib/story-review-navigation";
 
@@ -135,7 +136,9 @@ export function PlanContent({
                 : "No structured brief was supplied. Review the complete plan below."}
             </p>
           ) : null}
-          {original}
+          <div className="min-w-0 break-words text-[14px] leading-relaxed [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
+            <ExpandableMarkdown source={plan.markdown} label={`plan r${plan.revision}`} />
+          </div>
           {checks}
           {actions}
           <details className="min-w-0 border-t border-(--line) pt-1 text-sm">

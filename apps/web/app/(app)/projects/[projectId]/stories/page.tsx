@@ -92,25 +92,37 @@ export default async function ProjectStoriesPage({
 
       {canStart ? (
         agents ? (
-          <NewStory
-            projectId={projectId}
-            agents={choices}
-            defaultAgent={agents.defaults.ui}
-            titleGeneration={agents.title_generation}
-            linked={
-              linked?.issue
-                ? {
-                    key: linked.key,
-                    title: linked.title,
-                    number: linked.issue.number,
-                    repository: linked.issue.repository,
-                    repositoryId: linked.issue.repositoryId,
-                    url: linked.issue.url,
-                  }
-                : null
-            }
-            clearHref={`${storiesHref(projectId, search)}#new-story`}
-          />
+          // Folded so the backlog stays in view; opens for a Start link or #new-story.
+          <details className="group" open={Boolean(linked)}>
+            <summary
+              className={buttonClassName({
+                variant: "primary",
+                className:
+                  "cursor-pointer list-none group-open:hidden [&::-webkit-details-marker]:hidden",
+              })}
+            >
+              New story
+            </summary>
+            <NewStory
+              projectId={projectId}
+              agents={choices}
+              defaultAgent={agents.defaults.ui}
+              titleGeneration={agents.title_generation}
+              linked={
+                linked?.issue
+                  ? {
+                      key: linked.key,
+                      title: linked.title,
+                      number: linked.issue.number,
+                      repository: linked.issue.repository,
+                      repositoryId: linked.issue.repositoryId,
+                      url: linked.issue.url,
+                    }
+                  : null
+              }
+              clearHref={`${storiesHref(projectId, search)}#new-story`}
+            />
+          </details>
         ) : (
           <ErrorNotice
             message={`Couldn't load the project's agents — ${agentsResult.ok ? "" : agentsResult.message}`}
@@ -129,7 +141,7 @@ export default async function ProjectStoriesPage({
             ) : null}
             <WorkGroups projectId={projectId} search={search} counts={backlog.data.groupCounts} />
             <p className="text-xs text-(--mut)">
-              Counts include every matching record, across pages. Last checked{" "}
+              Last checked{" "}
               <time dateTime={backlog.data.generatedAt}>
                 {new Date(backlog.data.generatedAt).toLocaleString("en-GB", { timeZone: "UTC" })}{" "}
                 UTC
