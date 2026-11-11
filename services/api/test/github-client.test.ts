@@ -39,6 +39,7 @@ function fixture() {
       owner: "acme",
       repo: "app",
       defaultBranch: "main",
+      developmentBranch: "develop",
     }),
     createRef,
     updateRef,
@@ -91,6 +92,21 @@ describe("FacilityGithubClient", () => {
     await expect(
       client.createPullRequest({ title: "Unsafe", body: "", head: "heads/main" }),
     ).rejects.toThrow(/Refusing to write to default branch/);
+    expect(createRef).not.toHaveBeenCalled();
+    expect(updateRef).not.toHaveBeenCalled();
+    expect(createPullRequest).not.toHaveBeenCalled();
+  });
+  it("also refuses writes and PR heads on the development branch", async () => {
+    const { client, createRef, updateRef, createPullRequest } = fixture();
+    await expect(client.createBranch("develop", "a".repeat(40))).rejects.toThrow(
+      /development branch/,
+    );
+    await expect(client.updateBranch("refs/heads/develop", "a".repeat(40))).rejects.toThrow(
+      /development branch/,
+    );
+    await expect(
+      client.createPullRequest({ title: "Unsafe", body: "", head: "heads/develop" }),
+    ).rejects.toThrow(/development branch/);
     expect(createRef).not.toHaveBeenCalled();
     expect(updateRef).not.toHaveBeenCalled();
     expect(createPullRequest).not.toHaveBeenCalled();
