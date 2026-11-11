@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { transferInputFile, type WorkspaceInputFile } from "./input-files.js";
 import {
   assertWorkspaceId,
   type CreateWorkspace,
@@ -25,6 +26,21 @@ type FakeRecord = {
 /** Deterministic local runtime for the default test suite. It never provides isolation. */
 export class FakeWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "fake" as const;
+  private inputTransport = {
+    write: async (path: string, bytes: Buffer) => {
+      await writeFile(path, bytes, { flag: "wx", mode: 0o644 });
+    },
+    read: (path: string) => readFile(path),
+  };
+  async writeInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile, bytes: Buffer) {
+    await transferInputFile(this, workspace, "publish", file, this.inputTransport, bytes);
+  }
+  readInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile) {
+    return transferInputFile(this, workspace, "export", file, this.inputTransport);
+  }
+  async removeInputFile(workspace: WorkspaceLocator, file: WorkspaceInputFile) {
+    await transferInputFile(this, workspace, "remove", file, this.inputTransport);
+  }
   private readonly records = new Map<string, FakeRecord>();
 
   constructor(readonly root = join(tmpdir(), "facility-fake-workspaces")) {}
@@ -64,7 +80,19 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
     workspace: WorkspaceLocator,
     command: WorkspaceCommand,
   ): Promise<WorkspaceCommandResult> {
-    const record = command.resume === false ? await this.record(workspace) : undefined;
+    const record =
+      command.resume === false || workspace.expectedComputeRef
+        ? await this.record(workspace)
+        : undefined;
+    if (
+      record &&
+      workspace.expectedComputeRef &&
+      workspace.expectedComputeRef !== this.computeRef(workspace.id, record)
+    )
+      throw new WorkspaceRuntimeError(
+        "workspace_compute_replaced",
+        "Workspace compute has been replaced",
+      );
     if (record && record.state !== "running")
       throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
     const handle = record ? this.handle(record) : await this.wake(workspace);
@@ -175,7 +203,19 @@ export class FakeWorkspaceRuntime implements WorkspaceRuntime {
 
   async suspend(workspace: WorkspaceLocator): Promise<void> {
     const record = await this.record(workspace);
+    if (
+      workspace.expectedComputeRef &&
+      workspace.expectedComputeRef !== this.computeRef(workspace.id, record)
+    )
+      return;
     if (record.state !== "destroyed") record.state = "sleeping";
+  }
+
+  async retireCompute(workspace: WorkspaceLocator & { expectedComputeRef: string }): Promise<void> {
+    const record = await this.record(workspace);
+    if (workspace.expectedComputeRef !== this.computeRef(workspace.id, record)) return;
+    record.generation += 1;
+    record.state = "sleeping";
   }
 
   async destroy(workspace: WorkspaceLocator): Promise<void> {

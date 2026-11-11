@@ -10,8 +10,11 @@ import type {
   FacilityRouteResponse,
   ProjectSkill,
   StoryAgent,
+  StoryConsultations,
   StoryConversationPage,
+  StoryDelivery,
   StoryEnvironment,
+  StoryPreviewConvergence,
   StoryTimelinePage,
   StoryTurnActivityPage,
   StoryTurnEvent,
@@ -54,10 +57,13 @@ export type {
   StoryActivityItem,
   StoryAgent,
   StoryAssignee,
+  StoryCompletion,
   StoryConversationPage,
+  StoryDelivery,
   StoryEnvironment,
   StoryMessage,
   StoryMessageAuthor,
+  StoryPreviewConvergence,
   StoryTimelineEntry,
   StoryTimelinePage,
   StoryTurnActivityPage,
@@ -161,6 +167,44 @@ export const api = {
         `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}`,
         { query: { evidence: "none" } },
       ),
+    ),
+  workspaceStoryDelivery: (projectId: string, storyId: string) =>
+    typed<StoryDelivery>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/delivery`,
+      ),
+    ),
+  workspaceStoryPreviewConvergence: (projectId: string, storyId: string) =>
+    typed<StoryPreviewConvergence | null>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/preview-convergence`,
+      ),
+    ),
+  workspaceStoryConsultations: (projectId: string, storyId: string) =>
+    typed<StoryConsultations>(
+      apiFetch(
+        "GET",
+        `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/consultations`,
+      ),
+    ),
+  projectWorkflowPolicy: (projectId: string) =>
+    apiFetch("GET", `/v1/projects/${encodeURIComponent(projectId)}/workflow-policy`),
+  storyWorkflow: (projectId: string, storyId: string) =>
+    apiFetch(
+      "GET",
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/workflow`,
+    ),
+  reviewDeliveryAcceptance: (projectId: string, storyId: string, requestId: string) =>
+    apiFetch(
+      "GET",
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/delivery-acceptance/${encodeURIComponent(requestId)}`,
+    ),
+  reviewStoryPlanDecision: (projectId: string, storyId: string, requestId: string) =>
+    apiFetch(
+      "GET",
+      `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/plan/decisions/${encodeURIComponent(requestId)}`,
     ),
   workspaceStoryConversation: (projectId: string, storyId: string, before?: number) =>
     typed<StoryConversationPage>(
