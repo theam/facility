@@ -6,6 +6,7 @@ import { z } from "zod";
 import { ApiError } from "../../errors.js";
 import type { AppConfig } from "../../types.js";
 import { previewCookieName, previewCookieOptions } from "../../workspaces/preview.js";
+import { PreviewSocketWatch } from "../../workspaces/preview-socket-watch.js";
 import { registerNativeWorkspacePreviewRoutes } from "./native-workspace-previews.js";
 import { principal as authenticatedPrincipal } from "./shared.js";
 import { registerWorkspacePreviewSiteRoutes } from "./workspace-preview-sites.js";
@@ -17,6 +18,9 @@ const ExchangeQuery = z.object({ token: z.string() });
 
 export async function registerWorkspacePreviewRoutes(app: FastifyInstance, config: AppConfig) {
   const previews = app.storyDomain.previews;
+  const sockets = new PreviewSocketWatch((sessionId, token) =>
+    previews.authorize(sessionId, token),
+  );
   await registerWorkspacePreviewSiteRoutes(app, config);
   await registerNativeWorkspacePreviewRoutes(app, config);
 
@@ -122,11 +126,19 @@ export async function registerWorkspacePreviewRoutes(app: FastifyInstance, confi
           if (upstream?.readyState === WebSocket.OPEN) upstream.send(data, { binary });
           else pending.push({ data, binary });
         });
-        const authorized = previews
-          .authorize(sessionId, token)
-          .then((session) => previews.target(session, pathWithQuery(path, request.url)));
+        const authorized = previews.authorize(sessionId, token).then(async (session) => ({
+          session,
+          target: await previews.target(session, pathWithQuery(path, request.url)),
+        }));
         void authorized
-          .then((target) => {
+          .then(({ session, target }) => {
+            if (socket.readyState !== WebSocket.OPEN) return;
+            // The upgrade's authorization is re-run for as long as the socket is open.
+            const unwatch = sockets.watch(session, token, (code, reason) => {
+              closeWebSocket(socket, code, reason);
+              if (upstream) closeWebSocket(upstream, code, reason);
+            });
+            socket.on("close", unwatch);
             const targetUrl = new URL(target.url);
             targetUrl.protocol = targetUrl.protocol === "https:" ? "wss:" : "ws:";
             upstream = new WebSocket(targetUrl, {
