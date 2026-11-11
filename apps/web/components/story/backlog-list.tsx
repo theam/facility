@@ -1,4 +1,4 @@
-import { cx, StatusDot } from "@facility/ui";
+import { cardClassName, cx, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import type { BacklogItem, BacklogPerson, ProjectBacklog } from "@/lib/api";
 import {
@@ -46,7 +46,7 @@ export function BacklogList({
   const trackingGroups = search.sort === "activity" && groupCounts !== undefined;
   let lastPhase: string | null = null;
   return (
-    <ol className="flex flex-col border-t border-(--line)">
+    <ol className={`${cardClassName} flex flex-col overflow-hidden`}>
       {items.map((item) => {
         const group = trackingGroups
           ? TRACKING_GROUPS.find((group) => group.value === item.tracking?.group)
@@ -57,7 +57,7 @@ export function BacklogList({
         return (
           <li key={item.key} className="flex flex-col">
             {header ? (
-              <h3 className="flex items-center gap-2 border-b border-(--line) px-1 pb-2 pt-6 text-[12px] font-medium text-(--mut)">
+              <h3 className="flex items-center gap-2 border-b border-(--line) bg-(--bg) px-5 py-2.5 text-[11px] font-medium uppercase tracking-[0.06em] text-(--dim)">
                 <StatusDot tone={group?.tone ?? phaseTone(item.phase)} />
                 {group?.label ?? phaseLabel(item.phase)}
                 <span className="font-mono text-(--dim)">
@@ -106,7 +106,7 @@ function BacklogRow({
 
   return (
     <article
-      className="grid gap-x-6 gap-y-2 border-b border-(--line) px-1 py-4 hover:bg-(--bg-subtle) lg:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]"
+      className="grid gap-x-6 gap-y-2 border-b border-(--line) px-5 py-4 last:border-b-0 hover:bg-(--bg) lg:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]"
       aria-label={item.title}
     >
       <div className="flex min-w-0 flex-col gap-1.5">
@@ -196,7 +196,7 @@ function BacklogRow({
             item.phase === "attention"
               ? "text-(--bad)"
               : running
-                ? "text-(--accent)"
+                ? "text-(--accent-ink)"
                 : "text-(--mut)",
           )}
         >
@@ -223,7 +223,7 @@ function BacklogRow({
           {storyHref && item.activity.turnId ? (
             <Link
               href={`${storyHref}#run-${item.activity.turnId}`}
-              className="text-(--accent) underline-offset-4 hover:underline"
+              className="text-(--accent-ink) underline-offset-4 hover:underline"
             >
               Run →
             </Link>
@@ -251,7 +251,7 @@ function BacklogRow({
           {canStart && item.kind === "issue" && item.phase === "not_started" ? (
             <Link
               href={startHref}
-              className="rounded-md border border-(--accent)/70 bg-(--accent)/10 px-2 py-0.5 text-(--accent) hover:bg-(--accent) hover:text-black"
+              className="rounded-md border border-(--accent) bg-(--accent)/25 px-2 py-0.5 text-(--ink) hover:bg-(--accent)"
             >
               Start
             </Link>

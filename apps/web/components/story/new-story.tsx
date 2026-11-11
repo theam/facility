@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, cx, TextArea } from "@facility/ui";
+import { Button, cardClassName, cx, TextArea } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useId, useRef, useState } from "react";
@@ -93,7 +93,7 @@ export function NewStory({
       id="new-story"
       onSubmit={submit}
       aria-labelledby={headingId}
-      className="scroll-mt-6 flex flex-col gap-4 rounded-lg bg-(--bg-subtle) p-4 sm:p-5"
+      className={`${cardClassName} scroll-mt-6 flex flex-col gap-4 p-5 sm:p-6`}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id={headingId} className="text-[15px] font-semibold text-(--ink)">

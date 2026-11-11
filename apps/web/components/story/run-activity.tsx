@@ -303,7 +303,7 @@ function ActivityRow({
       : item.kind === "result"
         ? "text-(--ok)"
         : item.kind === "message"
-          ? "text-(--accent)"
+          ? "text-(--accent-ink)"
           : "text-(--mut)";
 
   async function loadRaw() {

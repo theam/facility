@@ -77,7 +77,8 @@ export default async function ProjectStoriesPage({
       <LiveRefresh seconds={15} />
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Stories</h1>
+          <p className="eyebrow">Project</p>
+          <h1 className="text-[26px] font-semibold tracking-tight">Stories</h1>
           <p className="text-[12.5px] text-(--mut)">
             {backlog.ok
               ? `${total} matching record${total === 1 ? "" : "s"}`

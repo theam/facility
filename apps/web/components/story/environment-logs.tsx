@@ -81,7 +81,7 @@ export function EnvironmentLogs({ projectId, storyId }: { projectId: string; sto
           <div className="max-h-96 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
             {events.map((event) => (
               <div key={event.seq} className="mb-3 last:mb-0">
-                <p className="text-(--accent)">
+                <p className="text-(--accent-ink)">
                   {event.seq} · {event.type}
                   <span className="ml-2 text-(--dim)">{formatTime(event.createdAt)}</span>
                 </p>

@@ -14,5 +14,6 @@ export {
   StatusDot,
   toneFor,
 } from "./primitives";
+export { Card, cardClassName, KpiCard, StatusPill } from "./surface";
 export type { TerminalLine } from "./terminal";
 export { Terminal } from "./terminal";

@@ -80,18 +80,19 @@ function NavLinks({
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cx(
-              "group flex min-h-11 items-center gap-3 border-l-2 px-5 transition-colors [--focus-offset:-4px]",
-              quiet ? "py-2 text-[12px]" : "py-3 text-[13px]",
+              "group mx-3 flex items-center gap-3 rounded-lg px-3 transition-colors [--focus-offset:-2px]",
+              quiet ? "min-h-9 py-1.5 text-[13px]" : "min-h-10 py-2 text-[14px]",
+              "pointer-coarse:min-h-11",
               active
-                ? "border-(--line-strong) font-medium text-(--ink)"
-                : "border-transparent text-(--mut) hover:text-(--ink)",
+                ? "bg-(--bg-subtle) font-medium text-(--ink) shadow-(--shadow-card) ring-1 ring-(--line)"
+                : "text-(--mut) hover:bg-(--bg-subtle)/70 hover:text-(--ink)",
             )}
           >
             <NavIcon
               name={item.icon}
               className={cx(
                 "size-4 shrink-0 transition-colors",
-                active ? "text-(--ink)" : "text-(--dim) group-hover:text-(--ink)",
+                active ? "text-(--info)" : "text-(--dim) group-hover:text-(--ink)",
               )}
             />
             <span className="min-w-0">{item.label}</span>
@@ -107,7 +108,7 @@ function NavLinks({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="px-5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-(--mut)">
+    <span className="px-6 text-[11px] font-medium uppercase tracking-[0.08em] text-(--dim)">
       {children}
     </span>
   );
@@ -144,18 +145,19 @@ function NavSections({
       <Link
         href="/projects"
         onClick={onNavigate}
-        className="flex min-h-11 items-center gap-2 px-5 text-[12px] text-(--mut) transition-colors hover:text-(--ink)"
+        className="mx-3 flex min-h-9 items-center gap-2 rounded-lg px-3 text-[13px] text-(--mut) transition-colors hover:bg-(--bg-subtle)/70 hover:text-(--ink)"
       >
         <span aria-hidden className="font-mono">
           ←
         </span>
         All projects
       </Link>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1">
         <SectionLabel>{project.name ?? project.slug}</SectionLabel>
         <NavLinks items={projectNav(project.id, inboxCount)} onNavigate={onNavigate} />
       </div>
-      <div className="flex flex-col gap-2 border-t border-(--line) pt-4">
+      <div className="flex flex-col gap-1">
+        <SectionLabel>tools</SectionLabel>
         <NavLinks
           items={projectToolsNav(project.id)}
           label="Project tools"
@@ -183,11 +185,11 @@ function FooterSignature() {
 
 export function Sidebar({ project, inboxCount }: { project?: NavProject; inboxCount?: number }) {
   return (
-    <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col justify-between border-r border-(--line) py-6 lg:flex">
+    <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col justify-between border-r border-(--line) bg-(--card) py-5 lg:flex">
       <div className="flex flex-col gap-8">
         <Link
           href="/"
-          className="mx-5 inline-flex min-h-11 self-start items-center font-mono text-[15px] font-semibold tracking-tight"
+          className="mx-6 inline-flex min-h-10 self-start items-center font-mono text-[16px] font-semibold tracking-tight"
         >
           facility<span className="text-(--accent)">.</span>
         </Link>
@@ -230,7 +232,7 @@ export function MobileNav({ project, inboxCount }: { project?: NavProject; inbox
 
   return (
     <div className="lg:hidden">
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-(--line) bg-(--bg)/95 px-5 py-3 backdrop-blur">
+      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-(--line) bg-(--bg-subtle)/95 px-5 py-3 backdrop-blur">
         <div className="flex min-w-0 items-baseline gap-3">
           <Link
             href="/"

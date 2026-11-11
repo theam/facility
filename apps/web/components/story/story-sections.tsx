@@ -1,5 +1,6 @@
 "use client";
 
+import { cardClassName, StatusPill } from "@facility/ui";
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import type { StoryFocus, StorySection } from "@/lib/story-focus";
 import { PLAN_PROPOSAL_EVENT, type PlanProposalSource } from "@/lib/story-plan-events";
@@ -184,15 +185,11 @@ export function StorySections({
         aria-label={lead ? "Your decision" : undefined}
         tabIndex={-1}
         hidden={!lead && tab?.key !== current}
-        className={
-          lead
-            ? "min-w-0 scroll-mt-6 bg-(--bg-subtle) px-4 py-5 focus:outline-none sm:px-6 sm:py-6"
-            : "min-w-0 scroll-mt-6 focus:outline-none"
-        }
+        className={`${cardClassName} min-w-0 scroll-mt-6 px-5 py-5 focus:outline-none sm:px-6 ${lead ? "ring-1 ring-(--human)/25" : ""}`}
       >
         {lead ? (
-          <p key="label" className="mb-3 text-[12px] font-medium text-(--human)">
-            {focus.title}
+          <p key="label" className="mb-4">
+            <StatusPill tone="human">{focus.title}</StatusPill>
           </p>
         ) : null}
         <div key="content" className="min-w-0">
@@ -206,7 +203,7 @@ export function StorySections({
       key="tabs"
       role="tablist"
       aria-label="Story details"
-      className="-mb-2 flex gap-6 overflow-x-auto border-b border-(--line)"
+      className="-mb-4 flex gap-6 overflow-x-auto border-b border-(--line)"
     >
       {tabs.map((tab) => (
         <button

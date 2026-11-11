@@ -1,4 +1,4 @@
-import { Eyebrow, StatusDot } from "@facility/ui";
+import { cardClassName, Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ErrorNotice, Offline } from "@/components/offline";
@@ -126,7 +126,7 @@ export default async function StoryPage({
     selection ? { revision: selection.revision } : false,
   );
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-8">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <LiveRefresh seconds={8} />
       <header className="flex flex-col gap-2">
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-(--mut)">
@@ -182,7 +182,11 @@ export default async function StoryPage({
       </header>
 
       {openAttention.length > 0 ? (
-        <section id="story-attention" aria-label="Needs your attention" className="flex flex-col">
+        <section
+          id="story-attention"
+          aria-label="Needs your attention"
+          className={`${cardClassName} flex flex-col px-5 py-4 sm:px-6`}
+        >
           {openAttention.map((item) => {
             const reviewNotice = isReviewNotice(item.kind);
             const deliveryNotice = ["delivery_integration", "delivery_completion"].includes(
@@ -190,7 +194,10 @@ export default async function StoryPage({
             );
             const failure = !reviewNotice && !deliveryNotice && item.kind !== "agent_waiting";
             return (
-              <div key={item.id} className="flex gap-3 border-b border-(--line) py-4 first:pt-0">
+              <div
+                key={item.id}
+                className="flex gap-3 border-b border-(--line) py-4 first:pt-0 last:border-b-0 last:pb-0"
+              >
                 <span
                   aria-hidden="true"
                   className={`mt-2 size-2 shrink-0 rounded-full ${failure ? "bg-(--bad)" : "bg-(--human)"}`}
@@ -259,8 +266,11 @@ export default async function StoryPage({
         ])}
         focus={focus}
         conversation={
-          <section id="conversation" className="scroll-mt-6 flex flex-col gap-4">
-            <h2 className="text-sm font-medium text-(--mut)">Conversation</h2>
+          <section
+            id="conversation"
+            className={`${cardClassName} scroll-mt-6 flex flex-col gap-4 px-5 py-5 sm:px-6`}
+          >
+            <h2 className="text-[15px] font-semibold">Conversation</h2>
             {canExecute && !agents.ok ? (
               <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
             ) : null}

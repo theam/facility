@@ -121,7 +121,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 pt-[18vh]"
+      className="fixed inset-0 z-[100] flex items-start justify-center bg-[rgba(16,24,40,0.35)] pt-[18vh]"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}

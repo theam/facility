@@ -1,5 +1,5 @@
 import type { ProjectAttentionStories } from "@facility/sdk";
-import { buttonClassName } from "@facility/ui";
+import { buttonClassName, cardClassName, StatusPill } from "@facility/ui";
 import Link from "next/link";
 import { storyHref } from "@/lib/overview-presentation";
 import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
@@ -21,23 +21,23 @@ export function OtherPullReviews({
     <section
       id="other-pull-requests"
       aria-labelledby="other-pulls-heading"
-      className="flex min-w-0 flex-col gap-4 border-t border-(--line) pt-6"
+      className={`${cardClassName} flex min-w-0 scroll-mt-6 flex-col gap-3 py-4`}
     >
-      <h2 id="other-pulls-heading" className="text-base font-semibold">
+      <h2 id="other-pulls-heading" className="px-5 text-[15px] font-semibold sm:px-6">
         Other pull requests
       </h2>
       {!data ? (
-        <p role="status">
+        <p role="status" className="px-5 text-sm sm:px-6">
           The other pull request inventory is unavailable in this response. Open the project
           overview to inspect recorded PRs.
         </p>
       ) : (
         <>
-          <p className="text-sm text-(--mut)" role="status">
+          <p className="-mt-2 px-5 text-[13px] text-(--dim) sm:px-6" role="status">
             {data.total} matching open {data.total === 1 ? "PR" : "PRs"}
           </p>
           {!data.items.length ? (
-            <p className="py-2">
+            <p className="px-5 py-2 text-sm sm:px-6">
               {data.total
                 ? "No pull requests on this page."
                 : "No other observed open PRs match this selection."}{" "}
@@ -53,34 +53,48 @@ export function OtherPullReviews({
                 return (
                   <li
                     key={`${pull.repository}#${pull.number}`}
-                    className="min-w-0 border-b border-(--line) py-4 text-sm"
+                    className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-1 border-b border-(--line) px-5 py-3.5 text-sm last:border-b-0 sm:px-6"
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
                       <h3 className="min-w-0 break-words font-medium">
                         {pull.title ?? `${pull.repository} #${pull.number}`}
                       </h3>
-                      <span className="text-(--mut)">{pull.draft ? "Draft · open" : "Open"}</span>
-                    </div>
-                    {url ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex min-h-11 items-center break-all text-(--info) underline underline-offset-4"
-                      >
-                        {pull.repository} #{pull.number} ↗
-                      </a>
-                    ) : (
-                      <p className="break-all">
-                        {pull.repository} #{pull.number} · link unavailable
+                      <p className="text-[13px] text-(--mut)">
+                        {url ? (
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="break-all text-(--info) hover:underline"
+                          >
+                            {pull.repository} #{pull.number} ↗
+                          </a>
+                        ) : (
+                          <span className="break-all">
+                            {pull.repository} #{pull.number} · link unavailable
+                          </span>
+                        )}
+                        {pull.draft ? " · Draft" : ""}
                       </p>
-                    )}
-                    <p>
+                    </div>
+                    <StatusPill
+                      tone={
+                        !pull.checks.current || pull.stale
+                          ? "neutral"
+                          : pull.checks.state === "failure"
+                            ? "bad"
+                            : pull.checks.state === "success"
+                              ? "ok"
+                              : pull.checks.state === "pending"
+                                ? "human"
+                                : "neutral"
+                      }
+                    >
                       {currentCheckLabel(pull)}
                       {pull.stale ? " · observation outdated" : ""}
-                    </p>
-                    <details className="mt-2 text-xs text-(--mut)">
-                      <summary className="min-h-11 cursor-pointer py-3">PR details</summary>
+                    </StatusPill>
+                    <details className="basis-full text-xs text-(--mut)">
+                      <summary className="min-h-9 w-fit cursor-pointer py-2">PR details</summary>
                       <p className="break-all">
                         Observed head: <code>{pull.headSha ?? "unavailable"}</code>
                       </p>
@@ -117,7 +131,7 @@ export function OtherPullReviews({
           )}
           <nav
             aria-label="Other pull request pages"
-            className="flex flex-wrap items-center justify-between gap-3 text-sm"
+            className="flex flex-wrap items-center justify-between gap-3 px-5 text-sm sm:px-6"
           >
             <p>
               {data.items.length ? `${data.offset + 1}–${data.offset + data.items.length}` : "0"} of{" "}

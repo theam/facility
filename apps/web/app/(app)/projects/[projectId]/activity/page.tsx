@@ -1,4 +1,4 @@
-import { Eyebrow, StatusDot } from "@facility/ui";
+import { cardClassName, Eyebrow, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -184,7 +184,7 @@ export default async function ProjectActivityPage({
                 </span>
               }
             >
-              <p className="border-b border-(--line) px-1 py-3 text-[12px] text-(--mut)">
+              <p className="border-b border-(--line) px-5 py-3 text-[12px] text-(--mut)">
                 {backlogLine(overview.backlog)}
               </p>
               {overview.backlog.ready.length === 0 ? (
@@ -237,7 +237,7 @@ function Panel({
         </h2>
         {aside}
       </div>
-      <div className="flex flex-col border-t border-(--line)">{children}</div>
+      <div className={`${cardClassName} flex flex-col overflow-hidden`}>{children}</div>
     </section>
   );
 }
@@ -247,7 +247,11 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 function Row({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-col gap-2 border-b border-(--line) px-1 py-3.5">{children}</div>;
+  return (
+    <div className="flex flex-col gap-2 border-b border-(--line) px-5 py-3.5 last:border-b-0">
+      {children}
+    </div>
+  );
 }
 
 function ActiveTurnRow({
@@ -266,7 +270,7 @@ function ActiveTurnRow({
     <Row>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <StatusDot tone={running ? "agent" : "info"} pulse={running} />
-        <span className="font-mono text-[12px] text-(--accent)">{turn.agentName}</span>
+        <span className="font-mono text-[12px] text-(--accent-ink)">{turn.agentName}</span>
         <span className="text-[12px] text-(--mut)">
           {running
             ? `running for ${duration(now.getTime() - new Date(turn.startedAt ?? turn.createdAt).getTime()) ?? "a moment"}`
@@ -418,7 +422,7 @@ function SpendSection({
           Insights →
         </Link>
       </div>
-      <div className="grid gap-px overflow-hidden rounded-lg border border-(--line) bg-(--line) md:grid-cols-3">
+      <div className="grid gap-px overflow-hidden rounded-xl border border-(--line) bg-(--line) shadow-(--shadow-card) md:grid-cols-3">
         <div className="flex flex-col gap-2 bg-(--bg) p-5">
           <Eyebrow>
             agent cost · {agents.available ? monthLabel(agents.month.from) : "this month"} (UTC)

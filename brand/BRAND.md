@@ -40,18 +40,23 @@ agent behind it is off-brand.
 
 ### Application surfaces
 
-The application uses a softer dark canvas while preserving the mark and the
-TAM-50 typography. Its values live in `packages/ui/src/tokens.css`:
+The application uses a light canvas with white cards, like a calm report:
+one card per topic, a hairline border, a 12px radius and a faint shadow. Its
+values live in `packages/ui/src/tokens.css`:
 
 | role | value | use |
 |---|---|---|
-| canvas / subtle / card | `#10151B` / `#19212A` / `#202A35` | layered surfaces |
-| ink / secondary / dim | `#EFF3F6` / `#AAB8C5` / `#9AAABA` | readable text, including metadata |
-| control boundary | `#7C8E9F` | fields; decorative separators remain quieter |
-| human | `#EEBC6B` | a decision needs human attention |
-| success / failure | `#71C6A4` / `#EF918C` | verified result / failure, always with a label |
-| information / focus | `#91CAFF` | links, information and keyboard outlines |
-| machine | `#9AAABA` | machine activity |
+| canvas / card / fill | `#F5F6F8` / `#FFFFFF` / `#EEF0F3` | page, cards and fields, sidebar and chips |
+| ink / secondary / dim | `#111827` / `#4B5563` / `#5F6774` | readable text, including metadata |
+| hairline / strong / control | `#E4E7EC` / `#D0D5DD` / `#8B95A1` | separators, card edges, field boundaries |
+| human | `#B45309` | a decision needs human attention |
+| success / failure | `#047857` / `#B42318` | verified result / failure, always with a label |
+| information / focus | `#2563EB` | links, information and keyboard outlines |
+| agent text | `#8A6800` | text about agent work; yellow itself stays a fill |
+
+Status is shown with rounded pills (tinted background, dot and label) and key
+figures with metric cards: an uppercase label, a large number and one line of
+context.
 
 Agent yellow remains `#FFD923`. Focus must also identify human controls, so it
 uses blue independently of agent activity. Outlines surround controls, including

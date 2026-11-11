@@ -1,4 +1,4 @@
-import { Divider, Eyebrow, PillTag } from "@facility/ui";
+import { cardClassName, Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { DevelopmentBranch } from "@/components/project/development-branch";
@@ -35,7 +35,7 @@ export default async function ProjectSettingsPage({
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-10">
       <div className="flex flex-col gap-2">
-        <p className="text-[12px] text-(--mut)">Project settings</p>
+        <p className="eyebrow">Project settings</p>
         <h1 className="text-2xl font-semibold tracking-tight">{project.data.name}</h1>
         <p className="text-sm leading-relaxed text-(--mut)">
           Repository behavior is configured in <code>.facility.yml</code>. Agent prompts, engines,
@@ -132,11 +132,11 @@ export default async function ProjectSettingsPage({
             .
           </p>
         ) : (
-          <div className="flex flex-col border-t border-(--line)">
+          <div className={`${cardClassName} flex flex-col overflow-hidden`}>
             {repos.data.map((repo) => (
               <div
                 key={repo.id}
-                className="flex flex-wrap items-center gap-3 border-b border-(--line) px-1 py-4"
+                className="flex flex-wrap items-center gap-3 border-b border-(--line) px-5 py-4 last:border-b-0"
               >
                 <a
                   href={`https://github.com/${repo.owner}/${repo.name}`}

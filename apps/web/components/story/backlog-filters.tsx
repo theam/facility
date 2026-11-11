@@ -204,7 +204,9 @@ function Menu({
         )}
       >
         {label}
-        {count > 0 ? <span className="font-mono text-[11px] text-(--accent)">{count}</span> : null}
+        {count > 0 ? (
+          <span className="font-mono text-[11px] text-(--accent-ink)">{count}</span>
+        ) : null}
         <span aria-hidden className="text-(--dim)">
           ▾
         </span>

@@ -80,7 +80,7 @@ export function AgentLine({
         {engine?.brand ? (
           <AiMark brand={engine.brand} className="size-full" />
         ) : (
-          <span className="font-mono text-[10px] font-semibold text-(--accent)">AI</span>
+          <span className="font-mono text-[10px] font-semibold text-(--accent-ink)">AI</span>
         )}
       </span>
       <span className="flex min-w-0 flex-col leading-tight">

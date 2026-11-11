@@ -35,7 +35,7 @@ function classesFor(variant: Variant, size: Size, tone?: Tone, className?: strin
     return cx(
       base,
       sizes[size],
-      "border border-(--bad)/70 bg-(--bad)/10 text-(--bad) hover:bg-(--bad) hover:text-black",
+      "border border-(--bad)/40 bg-(--bad)/5 text-(--bad) hover:bg-(--bad) hover:text-white",
       className,
     );
   }
@@ -44,21 +44,21 @@ function classesFor(variant: Variant, size: Size, tone?: Tone, className?: strin
       return cx(
         base,
         sizes[size],
-        "border border-(--accent)/70 bg-(--accent)/10 text-(--accent)",
+        "border border-(--accent) bg-(--accent)/25 text-(--ink)",
         className,
       );
     }
     return cx(
       base,
       sizes[size],
-      "border border-transparent bg-(--ink) text-(--bg) hover:bg-white",
+      "border border-transparent bg-(--ink) text-white shadow-(--shadow-card) hover:bg-[#1f2937]",
       className,
     );
   }
   return cx(
     base,
     sizes[size],
-    "border border-(--line) bg-(--card) text-(--ink) hover:border-(--line-strong) hover:bg-[#2a3644]",
+    "border border-(--line-strong) bg-(--bg-subtle) text-(--ink) shadow-(--shadow-card) hover:bg-(--bg)",
     className,
   );
 }

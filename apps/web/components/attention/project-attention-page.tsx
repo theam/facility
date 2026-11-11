@@ -1,4 +1,4 @@
-import { buttonClassName } from "@facility/ui";
+import { buttonClassName, Card, KpiCard, StatusPill } from "@facility/ui";
 import Link from "next/link";
 import { OtherPullReviews } from "@/components/attention/other-pull-reviews";
 import { ProjectConditions } from "@/components/attention/project-conditions";
@@ -64,11 +64,15 @@ export default async function ProjectAttentionPage({
     `${count} ${count === 1 ? one : many}`;
 
   return (
-    <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Attention</h1>
+        <p className="eyebrow">Project</p>
+        <h1 className="text-[26px] font-semibold tracking-tight">Attention</h1>
+        <p className="text-sm text-(--mut)">
+          What needs a person now. Agents keep working on everything else.
+        </p>
         {result.ok && query.category !== "pulls" ? (
-          <p className="text-sm text-(--mut)" role="status">
+          <p className={filtered ? "text-sm text-(--mut)" : "sr-only"} role="status">
             {result.data.counts.stories === 0
               ? filtered
                 ? "Nothing matches these filters."
@@ -93,6 +97,31 @@ export default async function ProjectAttentionPage({
           </p>
         ) : null}
       </header>
+      {result.ok && !filtered ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <KpiCard
+            label="Waiting on you"
+            value={result.data.counts.stories}
+            hint={result.data.counts.stories === 1 ? "story" : "stories"}
+            tone={result.data.counts.stories ? "human" : undefined}
+          />
+          <KpiCard
+            label="Plans to review"
+            value={result.data.counts.plans}
+            hint="pending approval"
+          />
+          <KpiCard
+            label="Deliveries"
+            value={result.data.counts.deliveries}
+            hint="ready to accept"
+          />
+          <KpiCard
+            label="Other open PRs"
+            value={result.data.otherPullRequests?.total ?? "—"}
+            hint="not tied to a decision"
+          />
+        </div>
+      ) : null}
       {result.ok && projectNeedsAttention ? (
         <ProjectConditions data={result.data} base={base} />
       ) : null}
@@ -119,97 +148,99 @@ export default async function ProjectAttentionPage({
                   </Link>
                 </section>
               ) : (
-                <ol aria-label="Pending stories" className="flex flex-col border-t border-(--line)">
-                  {result.data.items.map((item) => {
-                    const target = storyHref(projectId, item.storyId);
-                    const brief = item.plan?.decisionBrief;
-                    const review = item.plan
-                      ? storyReviewHref(projectId, item.storyId, {
-                          revision: item.plan.revision,
-                          digest: item.plan.digest,
-                        })
-                      : `${target}${item.delivery ? "#story-delivery" : "#story-attention"}`;
-                    const kind = item.plan ? "Plan" : item.delivery ? "Delivery" : "Notice";
-                    const tone = item.plan
-                      ? "bg-(--human)"
-                      : item.delivery
-                        ? "bg-(--info)"
-                        : "bg-(--mut)";
-                    const summary =
-                      brief?.status === "available"
-                        ? brief.brief.summary.text
-                        : !item.plan && item.delivery
-                          ? (item.delivery.blocked?.message ??
-                            `${item.delivery.candidate.requiredCount} required PRs · ${item.delivery.acceptance.status === "current" ? "Accepted" : "Awaiting review"}`)
-                          : !item.plan && !item.delivery
-                            ? item.noticeKinds
-                                .map(({ kind }) => attentionKindLabel(kind))
-                                .join(" · ")
-                            : null;
-                    const action = item.plan
-                      ? `Review plan r${item.plan.revision}`
-                      : item.delivery
-                        ? "Review delivery"
-                        : "Open notices";
-                    return (
-                      <li
-                        key={item.storyId}
-                        className="flex min-w-0 gap-3 border-b border-(--line) py-4"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`mt-[7px] size-2 shrink-0 rounded-full ${tone}`}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs text-(--mut)">
-                            {kind}
-                            {item.plan ? ` · r${item.plan.revision}` : ""} ·{" "}
-                            {relativeTime(item.waitingSince, now)}
-                            {item.noticeCount > 0 && (item.plan || item.delivery) ? (
-                              <>
-                                {" · "}
-                                <Link
-                                  href={`${target}#story-attention`}
-                                  className="underline underline-offset-4 hover:text-(--ink)"
-                                >
-                                  {plural(item.noticeCount, "notice", "notices")}
-                                </Link>
-                              </>
-                            ) : null}
-                          </p>
-                          <h2 className="mt-0.5 break-words font-medium">
-                            <Link href={review} className="hover:underline">
-                              {item.storyTitle}
-                            </Link>
-                          </h2>
-                          {summary ? (
-                            <p className="mt-1 line-clamp-2 break-words text-sm text-(--mut)">
-                              {summary}
+                <Card title="Needs your decision" bodyClassName="px-0 py-0 sm:px-0">
+                  <ol aria-label="Pending stories" className="flex flex-col">
+                    {result.data.items.map((item) => {
+                      const target = storyHref(projectId, item.storyId);
+                      const brief = item.plan?.decisionBrief;
+                      const review = item.plan
+                        ? storyReviewHref(projectId, item.storyId, {
+                            revision: item.plan.revision,
+                            digest: item.plan.digest,
+                          })
+                        : `${target}${item.delivery ? "#story-delivery" : "#story-attention"}`;
+                      const kind = item.plan ? "Plan" : item.delivery ? "Delivery" : "Notice";
+                      const tone = item.plan
+                        ? ("human" as const)
+                        : item.delivery
+                          ? ("info" as const)
+                          : item.noticeKinds.some(({ kind }) => /error|fail/.test(kind))
+                            ? ("bad" as const)
+                            : ("neutral" as const);
+                      const summary =
+                        brief?.status === "available"
+                          ? brief.brief.summary.text
+                          : !item.plan && item.delivery
+                            ? (item.delivery.blocked?.message ??
+                              `${item.delivery.candidate.requiredCount} required PRs · ${item.delivery.acceptance.status === "current" ? "Accepted" : "Awaiting review"}`)
+                            : !item.plan && !item.delivery
+                              ? item.noticeKinds
+                                  .map(({ kind }) => attentionKindLabel(kind))
+                                  .join(" · ")
+                              : null;
+                      const action = item.plan
+                        ? `Review plan r${item.plan.revision}`
+                        : item.delivery
+                          ? "Review delivery"
+                          : "Open notices";
+                      return (
+                        <li
+                          key={item.storyId}
+                          className="flex min-w-0 gap-3 border-t border-(--line) px-5 py-4 first:border-t-0 sm:px-6"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="flex flex-wrap items-center gap-2 text-xs text-(--mut)">
+                              <StatusPill tone={tone}>
+                                {kind}
+                                {item.plan ? ` r${item.plan.revision}` : ""}
+                              </StatusPill>
+                              {relativeTime(item.waitingSince, now)}
+                              {item.noticeCount > 0 && (item.plan || item.delivery) ? (
+                                <>
+                                  {" · "}
+                                  <Link
+                                    href={`${target}#story-attention`}
+                                    className="underline underline-offset-4 hover:text-(--ink)"
+                                  >
+                                    {plural(item.noticeCount, "notice", "notices")}
+                                  </Link>
+                                </>
+                              ) : null}
                             </p>
-                          ) : null}
+                            <h2 className="mt-0.5 break-words font-medium">
+                              <Link href={review} className="hover:underline">
+                                {item.storyTitle}
+                              </Link>
+                            </h2>
+                            {summary ? (
+                              <p className="mt-1 line-clamp-2 break-words text-sm text-(--mut)">
+                                {summary}
+                              </p>
+                            ) : null}
+                            <Link
+                              href={review}
+                              className="mt-1 inline-flex min-h-11 items-center text-sm text-(--info) hover:underline sm:hidden"
+                            >
+                              {action}
+                              <span aria-hidden="true" className="ml-1.5">
+                                →
+                              </span>
+                            </Link>
+                          </div>
                           <Link
                             href={review}
-                            className="mt-1 inline-flex min-h-11 items-center text-sm text-(--info) hover:underline sm:hidden"
+                            className="hidden min-h-11 shrink-0 items-center self-center text-sm text-(--info) hover:underline sm:inline-flex"
                           >
                             {action}
                             <span aria-hidden="true" className="ml-1.5">
                               →
                             </span>
                           </Link>
-                        </div>
-                        <Link
-                          href={review}
-                          className="hidden min-h-11 shrink-0 items-center self-center text-sm text-(--info) hover:underline sm:inline-flex"
-                        >
-                          {action}
-                          <span aria-hidden="true" className="ml-1.5">
-                            →
-                          </span>
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ol>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </Card>
               )}
               {pageNumber > 1 || offset + result.data.items.length < result.data.total ? (
                 <nav

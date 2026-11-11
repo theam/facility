@@ -342,7 +342,7 @@ export function StoryComposer({
       ref={form}
       id={composerId}
       onSubmit={submit}
-      className="grid gap-3 bg-(--bg-subtle) p-4 sm:p-5"
+      className="grid gap-3 rounded-lg border border-(--line) bg-(--bg) p-4 sm:p-5"
       aria-label={formLabel}
     >
       <Field label="Message">

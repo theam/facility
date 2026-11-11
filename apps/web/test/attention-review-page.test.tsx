@@ -174,7 +174,7 @@ describe("project Attention entry", () => {
     expect(
       root.querySelector('a[href="/projects/project/stories/question-story#story-attention"]'),
     ).not.toBeNull();
-    expect(root.textContent).toContain("Plan · r3");
+    expect(root.textContent).toContain("Plan r3");
     expect(root.textContent).not.toContain("Opens this exact revision");
     expect(root.textContent).not.toMatch(/Approve|Urgent|For me|All clear/);
   });

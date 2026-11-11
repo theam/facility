@@ -1,7 +1,7 @@
 "use client";
 
 import type { StoryAgent, StoryWorkflowPolicyState, WorkflowPolicyReview } from "@facility/sdk";
-import { Button, Eyebrow } from "@facility/ui";
+import { Button, cardClassName, Eyebrow } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { clientApi } from "@/lib/client-api";
@@ -82,7 +82,10 @@ export function WorkflowPolicy({
     ]),
   ].sort();
   return (
-    <section aria-label="Workflow approvals" className="flex min-w-0 flex-col gap-4">
+    <section
+      aria-label="Workflow approvals"
+      className={`${cardClassName} flex min-w-0 flex-col gap-4 p-5 sm:p-6`}
+    >
       <Eyebrow>workflow approvals</Eyebrow>
       <p className="text-sm text-(--mut)">
         Choose which native agents require an approved plan before their turns can start. Agents can
