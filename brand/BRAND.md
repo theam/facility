@@ -55,8 +55,14 @@ TAM-50 typography. Its values live in `packages/ui/src/tokens.css`:
 
 Agent yellow remains `#FFD923`. Focus must also identify human controls, so it
 uses blue independently of agent activity. Outlines surround controls, including
-native disclosure summaries. Fields have stronger boundaries than separators;
-primary buttons have a minimum 44px height and can grow when text wraps.
+native disclosure summaries. Fields have stronger boundaries than separators.
+
+Buttons always have their own surface and a 6px radius; links stay plain blue
+text, so the two never look alike. Each decision has one primary button (solid
+ink); secondary actions use the filled card surface, tertiary actions the ghost
+style, agent actions a tinted yellow and destructive ones a tinted red. Buttons
+and fields are 36–40px tall with a fine pointer and at least 44px on touch
+screens, and can grow when text wraps. Labels use sentence case.
 
 Check rendered foregrounds and backgrounds, including overlays and interactive
 states, rather than treating token pairs as accessibility certification. The

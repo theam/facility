@@ -291,7 +291,7 @@ describe("story conversation paging", () => {
     await act(async () => button("Show latest").click());
     expect(exchangeTexts()).toHaveLength(3);
     expect(exchangeTexts().reverse()[0]).toContain("Running");
-    expect(exchangeTexts().reverse()[0]).toContain("cancel turn");
+    expect(exchangeTexts().reverse()[0]).toContain("Cancel turn");
     expect(exchangeTexts().reverse()[0]).not.toContain("Response");
 
     // A refresh that completes the run updates the exchange in place.

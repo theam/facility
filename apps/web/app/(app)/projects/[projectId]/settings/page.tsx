@@ -33,38 +33,36 @@ export default async function ProjectSettingsPage({
   }
 
   return (
-    <div className="flex max-w-3xl flex-col gap-10">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-10">
       <div className="flex flex-col gap-2">
-        <Eyebrow>project settings</Eyebrow>
-        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
-          {project.data.name}
-        </h1>
+        <p className="text-[12px] text-(--mut)">Project settings</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{project.data.name}</h1>
         <p className="text-sm leading-relaxed text-(--mut)">
           Repository behavior is configured in <code>.facility.yml</code>. Agent prompts, engines,
           models and triggers are configured together under <code>.agents/</code>.
         </p>
-        <nav aria-label="Project configuration" className="flex flex-wrap gap-3 text-sm">
+        <nav
+          aria-label="Project configuration"
+          className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-(--info)"
+        >
           <Link
             href={`/projects/${encodeURIComponent(projectId)}/agents`}
-            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+            className="inline-flex min-h-11 items-center hover:underline"
           >
             Agents and skills
           </Link>
           <Link
             href="#workflow-policy"
-            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+            className="inline-flex min-h-11 items-center hover:underline"
           >
             Workflow policy
           </Link>
-          <Link
-            href="#repositories"
-            className="inline-flex min-h-11 items-center border border-(--line) px-3"
-          >
+          <Link href="#repositories" className="inline-flex min-h-11 items-center hover:underline">
             Repositories
           </Link>
           <Link
             href={`/projects/${encodeURIComponent(projectId)}/insights`}
-            className="inline-flex min-h-11 items-center border border-(--line) px-3"
+            className="inline-flex min-h-11 items-center hover:underline"
           >
             Budget and usage
           </Link>
@@ -134,11 +132,11 @@ export default async function ProjectSettingsPage({
             .
           </p>
         ) : (
-          <div className="flex flex-col border border-(--line)">
+          <div className="flex flex-col border-t border-(--line)">
             {repos.data.map((repo) => (
               <div
                 key={repo.id}
-                className="flex flex-wrap items-center gap-3 border-b border-(--line) px-5 py-4 last:border-0"
+                className="flex flex-wrap items-center gap-3 border-b border-(--line) px-1 py-4"
               >
                 <a
                   href={`https://github.com/${repo.owner}/${repo.name}`}

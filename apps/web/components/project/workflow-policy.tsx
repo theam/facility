@@ -82,10 +82,7 @@ export function WorkflowPolicy({
     ]),
   ].sort();
   return (
-    <section
-      aria-label="Workflow approvals"
-      className="flex min-w-0 flex-col gap-4 border border-(--line) p-4 sm:p-5"
-    >
+    <section aria-label="Workflow approvals" className="flex min-w-0 flex-col gap-4">
       <Eyebrow>workflow approvals</Eyebrow>
       <p className="text-sm text-(--mut)">
         Choose which native agents require an approved plan before their turns can start. Agents can

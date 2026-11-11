@@ -93,7 +93,7 @@ export function NewStory({
       id="new-story"
       onSubmit={submit}
       aria-labelledby={headingId}
-      className="scroll-mt-6 flex flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
+      className="scroll-mt-6 flex flex-col gap-4 rounded-lg bg-(--bg-subtle) p-4 sm:p-5"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id={headingId} className="text-[15px] font-semibold text-(--ink)">
@@ -206,7 +206,7 @@ function AgentPicker({
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
         aria-controls={groupId}
-        className="flex h-10 items-center gap-2 border border-(--line) px-3 text-[12.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
+        className="flex min-h-9 items-center gap-2 rounded-md border border-(--line) bg-(--card) px-3 text-[13px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink) pointer-coarse:min-h-11"
       >
         <span className="text-(--dim)">Run with</span>
         {shown ? (
@@ -225,7 +225,7 @@ function AgentPicker({
       <fieldset
         id={groupId}
         hidden={!open}
-        className="absolute right-0 z-20 mt-1 flex w-[min(92vw,26rem)] flex-col gap-1 border border-(--line) bg-(--bg) p-2 shadow-(--shadow-lift)"
+        className="absolute right-0 z-20 mt-1 flex w-[min(92vw,26rem)] flex-col gap-1 rounded-md border border-(--line) bg-(--bg) p-2 shadow-(--shadow-lift)"
       >
         <legend className="sr-only">Reusable action to run</legend>
         <p className="px-2 py-1 text-[11px] leading-relaxed text-(--dim)">

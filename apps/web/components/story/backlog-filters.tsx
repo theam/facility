@@ -1,6 +1,6 @@
 "use client";
 
-import { cx } from "@facility/ui";
+import { buttonClassName, cx } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useId, useRef } from "react";
@@ -75,7 +75,7 @@ export function BacklogFilters({
           name="q"
           defaultValue={search.q}
           placeholder="Search #123 or words"
-          className="min-h-11 w-full min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-64"
+          className="min-h-9 w-full min-w-0 rounded-md border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) pointer-coarse:min-h-11 sm:w-64"
         />
         <Menu label="Labels" count={search.label.length}>
           {facets.labels.length === 0 ? (
@@ -149,7 +149,7 @@ export function BacklogFilters({
             ))}
           </Menu>
         ) : null}
-        <label className="flex min-h-11 items-center gap-2 border border-(--line) px-3 text-[12.5px] text-(--mut)">
+        <label className="flex min-h-9 items-center gap-2 rounded-md border border-(--line) bg-(--card) px-3 text-[13px] text-(--mut) pointer-coarse:min-h-11">
           <span className="text-(--dim)">Sort</span>
           <select
             name="sort"
@@ -163,10 +163,7 @@ export function BacklogFilters({
             <option value="created">Recently added</option>
           </select>
         </label>
-        <button
-          type="submit"
-          className="min-h-11 border border-(--line) px-3 text-[12.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
-        >
+        <button type="submit" className={buttonClassName()}>
           Apply
         </button>
         {active > 0 ? (
@@ -202,7 +199,7 @@ function Menu({
     <details className="relative">
       <summary
         className={cx(
-          "flex min-h-11 cursor-pointer list-none items-center gap-2 border px-3 text-[12.5px] hover:border-(--line-strong) hover:text-(--ink) [&::-webkit-details-marker]:hidden",
+          "flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-md border bg-(--card) px-3 text-[13px] hover:border-(--line-strong) hover:text-(--ink) pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden",
           count > 0 ? "border-(--line-strong) text-(--ink)" : "border-(--line) text-(--mut)",
         )}
       >
@@ -212,7 +209,7 @@ function Menu({
           ▾
         </span>
       </summary>
-      <div className="absolute left-0 z-20 mt-1 flex max-h-72 w-64 flex-col overflow-y-auto border border-(--line) bg-(--bg) p-1 shadow-(--shadow-lift)">
+      <div className="absolute left-0 z-20 mt-1 flex max-h-72 w-64 flex-col overflow-y-auto rounded-md border border-(--line) bg-(--bg) p-1 shadow-(--shadow-lift)">
         {children}
       </div>
     </details>

@@ -19,7 +19,7 @@ describe("project settings entry", () => {
     root.innerHTML = renderToStaticMarkup(
       await ProjectSettingsPage({ params: Promise.resolve({ projectId: "project" }) }),
     );
-    expect(root.textContent).toContain("project settings");
+    expect(root.textContent).toContain("Project settings");
     expect(root.querySelector("h1")?.textContent).toBe("Atlas");
     expect(
       [...root.querySelectorAll('nav[aria-label="Project configuration"] a')].map((a) => [

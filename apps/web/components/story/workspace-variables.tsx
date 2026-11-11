@@ -66,8 +66,8 @@ export function WorkspaceVariables({
 
   if (!opened)
     return (
-      <Button size="sm" onClick={load}>
-        {projectDefaults ? "project environment variables" : "environment variables"}
+      <Button size="sm" className="self-start" onClick={load}>
+        {projectDefaults ? "Project environment variables" : "Environment variables"}
       </Button>
     );
   return (
@@ -75,7 +75,7 @@ export function WorkspaceVariables({
       aria-label={
         projectDefaults ? "Project environment variables" : "Workspace environment variables"
       }
-      className="grid gap-4 border border-(--line) bg-(--bg-subtle) p-4"
+      className="grid gap-4 rounded-lg bg-(--bg-subtle) p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">

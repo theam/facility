@@ -30,7 +30,7 @@ export function Field({
 }
 
 const inputClasses =
-  "min-h-11 w-full border border-(--line) bg-(--bg-subtle) px-3 py-2 text-[14px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong)";
+  "min-h-10 w-full rounded-md border border-(--line) bg-(--bg-subtle) px-3 py-2 text-[14px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) pointer-coarse:min-h-11";
 
 export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(inputClasses, className)} {...props} />;

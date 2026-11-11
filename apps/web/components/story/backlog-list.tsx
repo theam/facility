@@ -46,7 +46,7 @@ export function BacklogList({
   const trackingGroups = search.sort === "activity" && groupCounts !== undefined;
   let lastPhase: string | null = null;
   return (
-    <ol className="flex flex-col border border-(--line)">
+    <ol className="flex flex-col border-t border-(--line)">
       {items.map((item) => {
         const group = trackingGroups
           ? TRACKING_GROUPS.find((group) => group.value === item.tracking?.group)
@@ -57,7 +57,7 @@ export function BacklogList({
         return (
           <li key={item.key} className="flex flex-col">
             {header ? (
-              <h3 className="flex items-center gap-2 border-b border-(--line) bg-(--bg-subtle) px-4 py-2 text-[11.5px] font-medium text-(--mut) sm:px-5">
+              <h3 className="flex items-center gap-2 border-b border-(--line) px-1 pb-2 pt-6 text-[12px] font-medium text-(--mut)">
                 <StatusDot tone={group?.tone ?? phaseTone(item.phase)} />
                 {group?.label ?? phaseLabel(item.phase)}
                 <span className="font-mono text-(--dim)">
@@ -106,7 +106,7 @@ function BacklogRow({
 
   return (
     <article
-      className="grid gap-x-6 gap-y-2 border-b border-(--line) px-4 py-3 last:border-b-0 hover:bg-(--bg-subtle) sm:px-5 lg:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]"
+      className="grid gap-x-6 gap-y-2 border-b border-(--line) px-1 py-4 hover:bg-(--bg-subtle) lg:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]"
       aria-label={item.title}
     >
       <div className="flex min-w-0 flex-col gap-1.5">
@@ -170,7 +170,7 @@ function BacklogRow({
                 <Link
                   key={label}
                   href={storiesHref(projectId, search, { label: [label], page: 1 })}
-                  className="border border-(--line) px-1.5 py-px text-[10.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
+                  className="rounded bg-(--card) px-1.5 py-px text-[11px] text-(--mut) hover:text-(--ink)"
                 >
                   {label}
                 </Link>
@@ -251,7 +251,7 @@ function BacklogRow({
           {canStart && item.kind === "issue" && item.phase === "not_started" ? (
             <Link
               href={startHref}
-              className="border border-(--accent) px-2 py-px text-(--accent) hover:bg-(--accent) hover:text-black"
+              className="rounded-md border border-(--accent)/70 bg-(--accent)/10 px-2 py-0.5 text-(--accent) hover:bg-(--accent) hover:text-black"
             >
               Start
             </Link>
@@ -259,7 +259,7 @@ function BacklogRow({
         </nav>
       </div>
       {item.tracking ? (
-        <div className="min-w-0 border-t border-(--line) pt-2 lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           <TrackingDetails projectId={projectId} item={item} storyHref={storyHref} />
         </div>
       ) : null}
@@ -341,7 +341,7 @@ export function PhaseChips({
     { value: "all", label: "All", count: all },
   ];
   return (
-    <nav aria-label="Work phase" className="flex flex-wrap gap-1.5">
+    <nav aria-label="Work phase" className="flex flex-wrap gap-x-5 gap-y-1">
       {chips.map((chip) => (
         <Link
           key={chip.value}
@@ -352,14 +352,14 @@ export function PhaseChips({
           })}
           aria-current={selected === chip.value ? "page" : undefined}
           className={cx(
-            "inline-flex min-h-11 items-center gap-1.5 border px-2.5 text-[12px] transition-colors",
+            "inline-flex min-h-11 items-center gap-1.5 border-b-2 text-[13px] transition-colors",
             selected === chip.value
-              ? "border-(--line-strong) text-(--ink)"
-              : "border-(--line) text-(--mut) hover:text-(--ink)",
+              ? "border-(--ink) text-(--ink)"
+              : "border-transparent text-(--mut) hover:text-(--ink)",
           )}
         >
           {chip.label}
-          <span className="font-mono text-[10.5px] text-(--dim)">{chip.count}</span>
+          <span className="text-(--dim)">{chip.count}</span>
         </Link>
       ))}
     </nav>
@@ -451,7 +451,7 @@ export function WorkGroups({
       </p>
     );
   return (
-    <nav aria-label="Work groups" className="flex flex-wrap gap-2">
+    <nav aria-label="Work groups" className="flex gap-6 overflow-x-auto border-b border-(--line)">
       {[
         {
           value: undefined,
@@ -467,13 +467,13 @@ export function WorkGroups({
           href={storiesHref(projectId, search, { group: group.value, page: 1, sort: "activity" })}
           aria-current={search.group === group.value ? "page" : undefined}
           className={cx(
-            "inline-flex min-h-11 items-center gap-2 border px-3 text-sm focus-visible:outline-2 focus-visible:outline-(--info)",
+            "-mb-px inline-flex min-h-11 shrink-0 items-center gap-1.5 border-b-2 text-sm focus-visible:outline-2 focus-visible:outline-(--info)",
             search.group === group.value
-              ? "border-(--info) text-(--ink)"
-              : "border-(--line) text-(--mut)",
+              ? "border-(--ink) text-(--ink)"
+              : "border-transparent text-(--mut) hover:text-(--ink)",
           )}
         >
-          {group.label} <span className="font-mono">{group.count}</span>
+          {group.label} <span className="text-(--dim)">{group.count}</span>
         </Link>
       ))}
     </nav>

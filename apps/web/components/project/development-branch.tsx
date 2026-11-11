@@ -75,7 +75,7 @@ export function DevelopmentBranch({
         value={value}
         placeholder={defaultBranch}
         disabled={!canWrite || pending}
-        className="border border-(--line) bg-transparent px-3 py-2 font-mono text-sm"
+        className="rounded-md border border-(--line) bg-(--bg-subtle) px-3 py-2 font-mono text-sm"
         onChange={(event) => {
           setValue(event.target.value);
           setMessage("");

@@ -1,4 +1,4 @@
-import { Eyebrow } from "@facility/ui";
+import { buttonClassName } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -73,12 +73,11 @@ export default async function ProjectStoriesPage({
   const linked = startTarget(search.start, items);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6">
       <LiveRefresh seconds={15} />
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <Eyebrow>backlog</Eyebrow>
-          <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Stories</h1>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Stories</h1>
           <p className="text-[12.5px] text-(--mut)">
             {backlog.ok
               ? `${total} matching record${total === 1 ? "" : "s"}`
@@ -185,7 +184,7 @@ export default async function ProjectStoriesPage({
                 {search.page > 1 ? (
                   <Link
                     href={storiesHref(projectId, search, { page: search.page - 1 })}
-                    className="inline-flex min-h-11 items-center border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className={buttonClassName()}
                   >
                     ← Newer
                   </Link>
@@ -196,7 +195,7 @@ export default async function ProjectStoriesPage({
                 {search.page < lastPage ? (
                   <Link
                     href={storiesHref(projectId, search, { page: search.page + 1 })}
-                    className="inline-flex min-h-11 items-center border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className={buttonClassName()}
                   >
                     Older →
                   </Link>
@@ -223,7 +222,7 @@ function EmptyState({
 }) {
   if (filtered && hasAnything) {
     return (
-      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+      <div className="flex flex-col items-start gap-3 py-6 text-sm text-(--dim)">
         <p>Nothing matches these filters.</p>
         <Link
           href={storiesHref(projectId, search, {
@@ -242,7 +241,7 @@ function EmptyState({
     );
   }
   return (
-    <div className="border border-(--line) p-8 text-sm leading-relaxed text-(--dim)">
+    <div className="py-6 text-sm leading-relaxed text-(--dim)">
       <p>No work here yet.</p>
       <p className="mt-2">
         Describe what you need above to start a story, or connect a GitHub repository in{" "}

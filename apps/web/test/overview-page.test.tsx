@@ -251,7 +251,7 @@ describe("project activity page", () => {
     expect(
       running.querySelector('a[href="/projects/project/stories/story-running"]'),
     ).not.toBeNull();
-    expect(running.textContent).toContain("cancel turn");
+    expect(running.textContent).toContain("Cancel turn");
 
     const recent = section(root, "Recent results");
     expect(recent.textContent).toContain("builder failed");
@@ -301,7 +301,7 @@ describe("project activity page", () => {
     mocks.permissions = ["projects:read"];
     const { root, text } = await render();
     expect(root.querySelector("button")).toBeNull();
-    expect(text).not.toContain("cancel turn");
+    expect(text).not.toContain("Cancel turn");
     expect(text).toContain("Not visible for your role");
     expect(text).not.toContain("Monthly budget warning");
   });

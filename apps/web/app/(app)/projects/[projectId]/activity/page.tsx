@@ -90,16 +90,16 @@ export default async function ProjectActivityPage({
           Recorded execution, recent results and retained environments. Decisions and delivery
           reviews are in Attention.
         </p>
-        <nav aria-label="Related project views" className="flex flex-wrap gap-3">
-          <Link
-            href={base}
-            className="inline-flex min-h-11 items-center border border-(--line) px-3 text-sm"
-          >
+        <nav
+          aria-label="Related project views"
+          className="flex flex-wrap gap-x-5 text-sm text-(--info)"
+        >
+          <Link href={base} className="inline-flex min-h-11 items-center hover:underline">
             Open Attention
           </Link>
           <Link
             href={`${base}/stories`}
-            className="inline-flex min-h-11 items-center border border-(--line) px-3 text-sm"
+            className="inline-flex min-h-11 items-center hover:underline"
           >
             All stories
           </Link>
@@ -184,7 +184,7 @@ export default async function ProjectActivityPage({
                 </span>
               }
             >
-              <p className="border-b border-(--line) px-4 py-3 text-[12px] text-(--mut)">
+              <p className="border-b border-(--line) px-1 py-3 text-[12px] text-(--mut)">
                 {backlogLine(overview.backlog)}
               </p>
               {overview.backlog.ready.length === 0 ? (
@@ -237,7 +237,7 @@ function Panel({
         </h2>
         {aside}
       </div>
-      <div className="flex flex-col border border-(--line)">{children}</div>
+      <div className="flex flex-col border-t border-(--line)">{children}</div>
     </section>
   );
 }
@@ -247,11 +247,7 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 function Row({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2 border-b border-(--line) px-4 py-3.5 last:border-b-0 sm:px-5">
-      {children}
-    </div>
-  );
+  return <div className="flex flex-col gap-2 border-b border-(--line) px-1 py-3.5">{children}</div>;
 }
 
 function ActiveTurnRow({
@@ -422,7 +418,7 @@ function SpendSection({
           Insights →
         </Link>
       </div>
-      <div className="grid gap-px border border-(--line) bg-(--line) md:grid-cols-3">
+      <div className="grid gap-px overflow-hidden rounded-lg border border-(--line) bg-(--line) md:grid-cols-3">
         <div className="flex flex-col gap-2 bg-(--bg) p-5">
           <Eyebrow>
             agent cost · {agents.available ? monthLabel(agents.month.from) : "this month"} (UTC)

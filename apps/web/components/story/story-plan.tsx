@@ -7,7 +7,7 @@ import type {
   StoryPlans,
   StoryWorkflowStatus,
 } from "@facility/sdk";
-import { Button, Field, TextArea, TextInput } from "@facility/ui";
+import { Button, buttonClassName, Field, TextArea, TextInput } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -833,34 +833,24 @@ export function StoryPlanPanel({
           </div>
         </form>
       ) : null}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-(--mut)">
+      <div className="-ml-2.5 flex flex-wrap items-center gap-1">
         {selection ? (
           canWrite ? (
             <Link
               href={`${storyPath}?edit=plan#story-plan`}
-              className="inline-flex min-h-11 items-center text-(--info) hover:underline"
+              className={buttonClassName({ variant: "ghost" })}
             >
               Propose a revision
             </Link>
           ) : null
         ) : canWrite && current && !editing ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => startEdit()}
-            className="min-h-11 text-(--info) hover:underline"
-          >
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => startEdit()}>
             {current.plan ? "Propose a revision" : "Propose a plan"}
-          </button>
+          </Button>
         ) : null}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void load()}
-          className="min-h-11 text-(--info) hover:underline"
-        >
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void load()}>
           {busy ? "Loading…" : "Reload plan"}
-        </button>
+        </Button>
       </div>
       {history.length || decisions.length ? (
         <details className="text-[12px]">
