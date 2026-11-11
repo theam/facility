@@ -31,8 +31,8 @@ export function StoryWorkflowPanel({
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const status = observation?.source === initial ? observation.workflow : initial;
   const cycle = status.reviewCycle;
-  const active = !!cycle && ["waiting_for_evidence", "review", "correction"].includes(cycle.phase);
   const cycleBlocksAcceptance = reviewCycleBlocksAcceptance(cycle);
+  const active = cycleBlocksAcceptance;
 
   useEffect(() => {
     if (!active) return;
@@ -107,7 +107,7 @@ export function StoryWorkflowPanel({
     if (reviewCycleBlocksAcceptance(workflow.data.reviewCycle)) {
       setError(
         workflow.data.reviewCycle?.reason ??
-          "Wait for the recorded review cycle or resolve its human decision before requesting acceptance.",
+          "Wait for the recorded review cycle to finish before requesting acceptance.",
       );
       working.current = false;
       setBusy(false);

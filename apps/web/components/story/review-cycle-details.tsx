@@ -13,8 +13,12 @@ export const cyclePhases: Record<ReviewCycle["phase"], string> = {
   decision_required: "Human decision required",
 };
 
+const activePhases: ReviewCycle["phase"][] = ["waiting_for_evidence", "review", "correction"];
+
+/** True while the cycle is still running. At a human stop the person decides, as
+ * the server allows; the stop's reason stays next to the acceptance action. */
 export function reviewCycleBlocksAcceptance(cycle: ReviewCycle | undefined) {
-  return !!cycle && cycle.phase !== "human_review";
+  return !!cycle && activePhases.includes(cycle.phase);
 }
 
 function sourceLink(

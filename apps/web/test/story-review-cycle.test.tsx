@@ -49,7 +49,7 @@ function required<T>(value: T | null | undefined): T {
 }
 
 describe("recorded review cycle", () => {
-  it("shows reason, configured roles and exact evidence without allowing acceptance at a decision stop", async () => {
+  it("shows reason, configured roles and exact evidence and leaves acceptance to the person at a decision stop", async () => {
     await render();
     expect(container.textContent).toContain("Human decision required");
     expect(container.textContent).toContain("The permissions change exceeds the approved plan.");
@@ -62,7 +62,7 @@ describe("recorded review cycle", () => {
         `a[href="https://github.com/example/api/blob/${"b".repeat(40)}/src/permissions.ts#L12"]`,
       ),
     ).not.toBeNull();
-    expect(acceptanceButton()?.disabled).toBe(true);
+    expect(acceptanceButton()?.disabled).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -102,12 +102,10 @@ describe("recorded review cycle", () => {
   it("rechecks the cycle before posting acceptance if it changed since the page was read", async () => {
     const initial = { ...workflowFixture(), reviewCycle: reviewCycleFixture() };
     initial.reviewCycle.phase = "human_review";
+    const restarted = { ...workflowFixture(), reviewCycle: reviewCycleFixture() };
+    restarted.reviewCycle.phase = "review";
     fetch.mockImplementation(async (url: string) =>
-      Response.json(
-        url.endsWith("/delivery")
-          ? deliveryFixture()
-          : { ...workflowFixture(), reviewCycle: reviewCycleFixture() },
-      ),
+      Response.json(url.endsWith("/delivery") ? deliveryFixture() : restarted),
     );
     await render(initial);
     await act(async () => required(acceptanceButton()).click());
@@ -154,8 +152,10 @@ describe("recorded review cycle", () => {
     await render(initial);
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
     expect(acceptanceButton()?.disabled).toBe(false);
-    await render({ ...workflowFixture(), reviewCycle: reviewCycleFixture() });
-    expect(container.textContent).toContain("Human decision required");
+    const newer = { ...workflowFixture(), reviewCycle: reviewCycleFixture() };
+    newer.reviewCycle.phase = "review";
+    await render(newer);
+    expect(container.textContent).toContain("Reviewer is checking the candidate");
     expect(acceptanceButton()?.disabled).toBe(true);
   });
 
