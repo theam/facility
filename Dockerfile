@@ -3,12 +3,13 @@
 # Web and docs build separately (Next standalone / static).
 #
 #   docker build --target api     -t facility/api .
-FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS base
+FROM node:24.22.2-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 # Keep a digest-pinned base while still making a reviewed Debian security
 # refresh invalidate BuildKit's cached package layer.
-ARG DEBIAN_SECURITY_REFRESH=20261005
+ARG DEBIAN_SECURITY_REFRESH=20261105
+ARG APT_MIN_VERSION=3.0.4
 # The slim base has Node's bundled trust roots but not the system CA package.
 # Bootstrap HTTPS with those roots; apt then installs the maintained OS bundle.
 RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recursive:true}); fs.writeFileSync('/etc/ssl/certs/ca-certificates.crt', require('node:tls').rootCertificates.join('\\n'))" \
@@ -16,6 +17,8 @@ RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recu
   && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
   && apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update \
   && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt upgrade -y \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge "$APT_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg7.0)" ge "$APT_MIN_VERSION" \
   && apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends ca-certificates curl \
   && curl --fail --silent --show-error --location --retry 3 \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
