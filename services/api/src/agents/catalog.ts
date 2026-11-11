@@ -17,11 +17,14 @@ import {
 } from "@facility/db";
 import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import { FacilityGithubClient, type GithubClientFactory } from "../github/client.js";
+import { configurationBranch, repositoryDevelopmentBranch } from "../github/development-branch.js";
 import { readRepoFiles } from "../github/repo-files.js";
 import { isAgentManifestPath, isProjectSkillPath, readAgentCatalogFiles } from "./catalog-files.js";
 
 export type AgentCatalogSnapshot = {
   commitSha: string;
+  /** Exact connected repository observed by the canonical source, when available. */
+  repositoryId?: string;
   sources: AgentManifestSource[];
   skills?: ProjectSkillSource[];
 };
@@ -105,12 +108,23 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
     }
 
     try {
+      const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
       const client = new FacilityGithubClient(await this.factory(installation.installationId), {
         owner: repository.owner,
         repo: repository.name,
         defaultBranch: repository.defaultBranch,
+        developmentBranch,
       });
-      const commitSha = await client.getDefaultBranchSha();
+      const commitSha = await client.getBranchSha(developmentBranch).catch((error: unknown) => {
+        if (developmentBranch !== repository.defaultBranch) {
+          throw new AgentCatalogError(
+            "agent_catalog_branch_unavailable",
+            "The selected development branch could not be read from GitHub",
+            503,
+          );
+        }
+        throw error;
+      });
       // Authorization and the current ref are checked before every cache read. A changed
       // repository, installation, or tenant can never reuse another scope's snapshot.
       const key = JSON.stringify([
@@ -121,6 +135,7 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
         repository.owner,
         repository.name,
         repository.defaultBranch,
+        developmentBranch,
         commitSha,
       ]);
       let snapshot = this.snapshots.get(key);
@@ -145,7 +160,7 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
         if (oldest !== undefined) this.snapshots.delete(oldest);
       }
       try {
-        return structuredClone(await snapshot);
+        return { ...structuredClone(await snapshot), repositoryId: repository.id };
       } catch (error) {
         // Failures must be retried, and must not erase the last complete DB projection.
         if (this.snapshots.get(key) === snapshot) this.snapshots.delete(key);
@@ -203,12 +218,14 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
 
     const path = `.agents/${parsedName.data}.md`;
     const agent = parseAgentManifest(input.source, path);
+    const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
     const client = new FacilityGithubClient(await this.factory(installation.installationId), {
       owner: repository.owner,
       repo: repository.name,
       defaultBranch: repository.defaultBranch,
+      developmentBranch,
     });
-    const baseCommitSha = await client.getDefaultBranchSha();
+    const baseCommitSha = await client.getBranchSha(developmentBranch);
     if (baseCommitSha !== input.expectedCommitSha) {
       throw new AgentCatalogError(
         "agent_catalog_changed",
@@ -217,10 +234,12 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
     }
     const current = (await readRepoFiles(client, baseCommitSha, [path])).get(path);
     if (!current) throw new AgentCatalogError("agent_not_found", "agent not found", 404);
-    const branch = `facility/agent-${parsedName.data}`;
-    const existing = (
-      await client.listOpenPullRequestsForHead(branch, repository.defaultBranch)
-    )[0];
+    const branch = configurationBranch(
+      `facility/agent-${parsedName.data}`,
+      developmentBranch,
+      repository.defaultBranch,
+    );
+    const existing = (await client.listOpenPullRequestsForHead(branch, developmentBranch))[0];
     if (!existing && parseAgentManifest(current, path).hash === agent.hash) {
       throw new AgentCatalogError("agent_manifest_unchanged", "The agent manifest is unchanged");
     }
@@ -275,6 +294,7 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
           "Facility does not merge this pull request automatically.",
         ].join("\n"),
         head: branch,
+        base: developmentBranch,
       }));
     return {
       agent,
@@ -310,8 +330,14 @@ export class AgentCatalogService {
   ) {}
 
   async sync(orgId: string, projectId: string): Promise<AgentManifest[]> {
+    return (await this.refreshSnapshot(orgId, projectId)).manifests;
+  }
+
+  /** Return provenance from this refresh, even if a concurrent refresh replaces the cache. */
+  async refreshSnapshot(orgId: string, projectId: string) {
     const snapshot = await this.source.load(orgId, projectId);
     const manifests = parseAgentCatalog(snapshot.sources);
+    const observedAt = new Date();
     const skills = (snapshot.skills ?? []).flatMap(({ file, source }) => {
       try {
         return [parseProjectSkill(source, file)];
@@ -337,7 +363,7 @@ export class AgentCatalogService {
             path: manifest.file,
             contentHash: manifest.hash,
             manifest,
-            syncedAt: new Date(),
+            syncedAt: observedAt,
           })
           .onConflictDoUpdate({
             target: [agentManifests.projectId, agentManifests.name],
@@ -346,7 +372,7 @@ export class AgentCatalogService {
               path: manifest.file,
               contentHash: manifest.hash,
               manifest,
-              syncedAt: new Date(),
+              syncedAt: observedAt,
               updatedAt: new Date(),
             },
           });
@@ -376,7 +402,7 @@ export class AgentCatalogService {
             directory: skill.directory,
             description: skill.description,
             contentHash: skill.hash,
-            syncedAt: new Date(),
+            syncedAt: observedAt,
           })
           .onConflictDoUpdate({
             target: [projectSkills.projectId, projectSkills.path],
@@ -386,7 +412,7 @@ export class AgentCatalogService {
               directory: skill.directory,
               description: skill.description,
               contentHash: skill.hash,
-              syncedAt: new Date(),
+              syncedAt: observedAt,
               updatedAt: new Date(),
             },
           });
@@ -407,7 +433,12 @@ export class AgentCatalogService {
           : skillScope,
       );
     });
-    return manifests;
+    return {
+      manifests,
+      commitSha: snapshot.commitSha,
+      observedAt,
+      repositoryId: snapshot.repositoryId ?? null,
+    };
   }
 
   async list(orgId: string, projectId: string, options: { refresh?: boolean } = {}) {

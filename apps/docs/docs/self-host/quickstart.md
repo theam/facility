@@ -30,7 +30,7 @@ shared packages, applies migrations, seeds the local instance, and runs the API,
 documentation site. Keep that terminal open while using the source stack.
 
 The runner build is separate because story workspaces use it as their complete development image.
-Rebuild it after changing `runner/Dockerfile` or its entrypoint scripts.
+Rebuild it after changing `runner/Dockerfile` or its entrypoint scripts. The build also updates and verifies the supported Undici 6 dependency in global npm and cached pnpm before making the package-manager cache read-only. These image dependencies are checked separately from the workspace lockfile audit.
 
 ## Verify the processes
 

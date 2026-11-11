@@ -28,8 +28,9 @@ technical problem on its own terms and the private tracker links to it.
 
 The monorepo recommends Node.js 24 LTS and uses pnpm 11.28.2. Node.js 22 is
 also supported from 22.13.0. Docker is required for the local platform stack
-and workspace end-to-end tests. For nvm users, the repository's `.nvmrc` selects
-the recommended Node.js 24 line with `nvm use`.
+and workspace end-to-end tests, and the dependency security tests need `openssl`
+on `PATH`. For nvm users, the repository's `.nvmrc` selects the recommended
+Node.js 24 line with `nvm use`.
 
 ```bash
 git clone https://github.com/theam/facility.git

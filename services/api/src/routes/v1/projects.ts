@@ -1,10 +1,18 @@
-import { newId } from "@facility/core";
+import {
+  can,
+  DeliveryIntegrationPolicySchema,
+  DeliveryNoticePolicySchema,
+  newId,
+} from "@facility/core";
 import { type FacilityDb, githubInstallations, projectRepositories, projects } from "@facility/db";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { requirePermissions } from "../../auth/required-permissions.js";
 import { ApiError, notFound } from "../../errors.js";
 import { createGithubClientFactory } from "../../github/client.js";
+import { DevelopmentBranchSchema } from "../../github/development-branch.js";
+import { createGithubClientForRepo } from "../../github/kickstart.js";
 import { removeRepositoryConnection } from "../../github/repository-connections.js";
 import { projectNativePreviewsEnabled } from "../../workspaces/project-native-previews.js";
 import {
@@ -33,7 +41,13 @@ const ProjectSchema = z.object({
 });
 
 const ProjectSettings = z
-  .object({ nativePreviewsEnabled: z.boolean().optional() })
+  .object({
+    deliveryIntegration: z.never().optional(),
+    deliveryNotices: z.never().optional(),
+    storyWorkflow: z.never().optional(),
+    nativePreviewsEnabled: z.boolean().optional(),
+    developmentBranch: DevelopmentBranchSchema.nullable().optional(),
+  })
   .catchall(z.unknown());
 
 const RepositorySchema = z.object({
@@ -95,7 +109,9 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
           name: z.string().min(1).max(160),
           slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
           description: z.string().max(2_000).optional(),
-          settings: ProjectSettings.optional(),
+          settings: ProjectSettings.refine((settings) => settings.developmentBranch == null, {
+            message: "Connect a primary repository before selecting a development branch",
+          }).optional(),
         }),
         response: { 200: ProjectSchema },
       },
@@ -136,6 +152,97 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       presentProject(await loadProject(db, principal(request).orgId, projectId(request))),
   );
 
+  app.get(
+    "/v1/projects/:projectId/delivery-integration",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: IdParams,
+        response: { 200: DeliveryIntegrationPolicySchema },
+        operationId: "getProjectDeliveryIntegration",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.getPolicy({
+        orgId: actor.orgId,
+        projectId: projectId(request),
+      });
+    },
+  );
+
+  app.patch(
+    "/v1/projects/:projectId/delivery-integration",
+    {
+      config: {
+        permission: ["projects:write", "repos:write"],
+        auditAction: "project.delivery_integration.updated",
+        idempotent: true,
+      },
+      schema: {
+        params: IdParams,
+        body: DeliveryIntegrationPolicySchema,
+        response: { 200: DeliveryIntegrationPolicySchema },
+        operationId: "updateProjectDeliveryIntegration",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      requirePermissions(actor, ["projects:write", "repos:write"]);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.setPolicy(
+        { orgId: actor.orgId, projectId: projectId(request) },
+        request.body as z.infer<typeof DeliveryIntegrationPolicySchema>,
+      );
+    },
+  );
+
+  app.get(
+    "/v1/projects/:projectId/delivery-notices",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: IdParams,
+        response: { 200: DeliveryNoticePolicySchema },
+        operationId: "getProjectDeliveryNotices",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.getNoticePolicy({
+        orgId: actor.orgId,
+        projectId: projectId(request),
+      });
+    },
+  );
+
+  app.patch(
+    "/v1/projects/:projectId/delivery-notices",
+    {
+      config: {
+        permission: "projects:write",
+        auditAction: "project.delivery_notices.updated",
+        idempotent: true,
+      },
+      schema: {
+        params: IdParams,
+        body: DeliveryNoticePolicySchema,
+        response: { 200: DeliveryNoticePolicySchema },
+        operationId: "updateProjectDeliveryNotices",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      reply.header("cache-control", "private, no-store");
+      return app.storyDomain.completion.setNoticePolicy(
+        { orgId: actor.orgId, projectId: projectId(request) },
+        request.body as z.infer<typeof DeliveryNoticePolicySchema>,
+      );
+    },
+  );
+
   app.patch(
     "/v1/projects/:projectId",
     {
@@ -148,11 +255,14 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
             description: z.string().max(2_000).nullable().optional(),
             settings: ProjectSettings.optional(),
             nativePreviewsEnabled: z.boolean().optional(),
+            developmentBranch: DevelopmentBranchSchema.nullable().optional(),
           })
           .refine(
-            (body) => body.settings === undefined || body.nativePreviewsEnabled === undefined,
+            (body) =>
+              body.settings === undefined ||
+              (body.nativePreviewsEnabled === undefined && body.developmentBranch === undefined),
             {
-              message: "Use settings or nativePreviewsEnabled, not both",
+              message: "Use settings or individual preferences, not both",
             },
           ),
         response: { 200: ProjectSchema },
@@ -166,28 +276,103 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
         description?: string | null;
         settings?: Record<string, unknown>;
         nativePreviewsEnabled?: boolean;
+        developmentBranch?: string | null;
       };
-      const { nativePreviewsEnabled, ...fields } = body;
-      const row = (
-        await db
-          .update(projects)
-          .set(
-            definedFields({
-              ...fields,
-              // The narrow UI update preserves unrelated settings, including concurrent writes.
-              ...(nativePreviewsEnabled === undefined
-                ? {}
-                : {
-                    settings: sql`${projects.settings} || ${JSON.stringify({ nativePreviewsEnabled })}::jsonb`,
-                  }),
-              updatedAt: new Date(),
-            }),
-          )
-          .where(and(eq(projects.orgId, actor.orgId), eq(projects.id, id)))
-          .returning(projectColumns)
-      )[0];
-      if (!row) throw notFound("Project not found");
-      return presentProject(row);
+      return db.transaction(async (transaction) => {
+        const db = transaction as unknown as FacilityDb;
+        await db.execute(sql`select pg_advisory_xact_lock(hashtext(${`${actor.orgId}:${id}`}))`);
+        const current = await loadProject(db, actor.orgId, id);
+        const nextBranch =
+          body.settings === undefined
+            ? body.developmentBranch
+            : ((body.settings.developmentBranch as string | null | undefined) ?? null);
+        if (
+          nextBranch !== undefined &&
+          nextBranch !== ((current.settings as Record<string, unknown>).developmentBranch ?? null)
+        ) {
+          if (!can(actor.permissions, "repos:write")) {
+            throw new ApiError(
+              403,
+              "forbidden",
+              "Changing the development branch requires repos:write",
+            );
+          }
+          if (nextBranch !== null) {
+            const repository = (
+              await db
+                .select()
+                .from(projectRepositories)
+                .where(
+                  and(
+                    eq(projectRepositories.orgId, actor.orgId),
+                    eq(projectRepositories.projectId, id),
+                    eq(projectRepositories.role, "primary"),
+                  ),
+                )
+                .limit(1)
+            )[0];
+            if (!repository)
+              throw new ApiError(
+                400,
+                "primary_repository_required",
+                "Connect a primary repository first",
+              );
+            try {
+              const client = await createGithubClientForRepo(
+                db,
+                app.githubClientFactory ?? createGithubClientFactory(context.config),
+                repository,
+              );
+              await client.getBranchSha(nextBranch);
+            } catch (error) {
+              if ((error as { status?: number }).status === 404) {
+                throw new ApiError(
+                  400,
+                  "development_branch_not_found",
+                  "The development branch is not available to the GitHub App",
+                );
+              }
+              throw new ApiError(
+                503,
+                "development_branch_unavailable",
+                "Could not validate the branch with the GitHub installation",
+              );
+            }
+          }
+        }
+        const { nativePreviewsEnabled, developmentBranch, ...fields } = body;
+        const preferences = {
+          ...(nativePreviewsEnabled === undefined ? {} : { nativePreviewsEnabled }),
+          ...(developmentBranch === undefined ? {} : { developmentBranch }),
+        };
+        const row = (
+          await db
+            .update(projects)
+            .set(
+              definedFields({
+                ...fields,
+                ...(fields.settings === undefined
+                  ? {}
+                  : {
+                      // Preserve the latest reserved controls atomically, including
+                      // policy changes committed after this request began reading.
+                      settings: sql`${JSON.stringify(fields.settings)}::jsonb || (select coalesce(jsonb_object_agg(key, value), '{}'::jsonb) from jsonb_each(${projects.settings}) where key in ('deliveryIntegration', 'deliveryNotices', 'storyWorkflow'))`,
+                    }),
+                // The narrow UI update preserves unrelated settings, including concurrent writes.
+                ...(Object.keys(preferences).length === 0
+                  ? {}
+                  : {
+                      settings: sql`${projects.settings} || ${JSON.stringify(preferences)}::jsonb`,
+                    }),
+                updatedAt: new Date(),
+              }),
+            )
+            .where(and(eq(projects.orgId, actor.orgId), eq(projects.id, id)))
+            .returning(projectColumns)
+        )[0];
+        if (!row) throw notFound("Project not found");
+        return presentProject(row);
+      });
     },
   );
 

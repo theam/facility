@@ -16,6 +16,7 @@ export type Principal = {
 };
 
 export type AppConfig = {
+  storyInputProjectMaxBytes?: number;
   databaseUrl: string;
   secretMasterKey: string;
   port: number;
