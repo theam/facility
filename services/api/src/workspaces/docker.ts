@@ -26,6 +26,15 @@ import {
 const WORKSPACE_LABEL = "facility.workspace.id";
 const KIND_LABEL = "facility.workload.kind";
 const KIND = "workspace-v2";
+/**
+ * Docker freezes a container's command when the container is created, and
+ * `start` re-runs that stored command. A fix to the bootstrap therefore never
+ * reaches a container that already exists, so each one records the revision it
+ * was created with. Bump this whenever a stopped container must not be started
+ * with an older bootstrap.
+ */
+const BOOTSTRAP_LABEL = "facility.workspace.bootstrap";
+const BOOTSTRAP_REVISION = "2";
 
 export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "docker" as const;
@@ -77,9 +86,26 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     const existing = await this.inspectContainer(names.container);
     if (existing) {
       this.assertOwned(existing, input.id, names.volume);
-      if (!existing.State?.Running) await this.docker.getContainer(existing.Id).start();
-      await this.ensureReady(names.container, this.docker.getContainer(existing.Id));
-      return this.handle(input, existing.Id, names);
+      if (!hasOutdatedBootstrap(existing)) {
+        const container = this.docker.getContainer(existing.Id);
+        if (existing.State?.Running) {
+          await this.ensureReady(names.container, container, existing);
+        } else {
+          await container.start();
+          await this.ensureReady(names.container, container);
+        }
+        return this.handle(input, existing.Id, names);
+      }
+      // A stopped container from an older bootstrap would re-run that script
+      // on start. Its compute is disposable: the volume keeps /workspace, the
+      // same way compute replacement keeps it.
+      this.readyStarts.delete(names.container);
+      await this.docker
+        .getContainer(existing.Id)
+        .remove({ force: true, v: false })
+        .catch((error) => {
+          if (!isDockerNotFound(error)) throw error;
+        });
     }
 
     await this.ensureImage(input.image);
@@ -99,7 +125,11 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
         ...persistentWorkspaceEnvironment(),
         ...(input.environment ?? {}),
       }).map(([key, value]) => `${key}=${value}`),
-      Labels: { [WORKSPACE_LABEL]: input.id, [KIND_LABEL]: KIND },
+      Labels: {
+        [WORKSPACE_LABEL]: input.id,
+        [KIND_LABEL]: KIND,
+        [BOOTSTRAP_LABEL]: BOOTSTRAP_REVISION,
+      },
       ExposedPorts: Object.fromEntries(
         gatewayPorts.map(({ gatewayPort }) => [`${gatewayPort}/tcp`, {}]),
       ),
@@ -133,11 +163,17 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   async wake(workspace: WorkspaceLocator): Promise<WorkspaceHandle> {
     const names = this.assertLocator(workspace);
     const existing = await this.inspectContainer(names.container);
-    if (!existing) return this.create(workspace);
+    if (!existing || hasOutdatedBootstrap(existing)) return this.create(workspace);
     this.assertOwned(existing, workspace.id, names.volume);
     const container = this.docker.getContainer(existing.Id);
-    if (!existing.State?.Running) await container.start();
-    await this.ensureReady(names.container, container);
+    if (existing.State?.Running) {
+      // Already inspected: `exec` wakes before every command, so it should not
+      // pay for a second inspect of a container that is up.
+      await this.ensureReady(names.container, container, existing);
+    } else {
+      await container.start();
+      await this.ensureReady(names.container, container);
+    }
     return this.handle(workspace, existing.Id, names);
   }
 
@@ -475,8 +511,12 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
    * permissions and the preview gateways. Readiness only ever moves forward
    * within one start, so each start is proven once and then remembered.
    */
-  private async ensureReady(containerName: string, container: Docker.Container) {
-    const state = await container.inspect();
+  private async ensureReady(
+    containerName: string,
+    container: Docker.Container,
+    inspected?: Docker.ContainerInspectInfo,
+  ) {
+    const state = inspected ?? (await container.inspect());
     if (!state.State.Running) {
       throw new WorkspaceRuntimeError(
         "workspace_initialize_failed",
@@ -523,6 +563,13 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       "workspace bootstrap did not become ready",
     );
   }
+}
+
+/** A running container already got past its bootstrap; only a start would re-run it. */
+function hasOutdatedBootstrap(container: Docker.ContainerInspectInfo) {
+  return (
+    !container.State?.Running && container.Config?.Labels?.[BOOTSTRAP_LABEL] !== BOOTSTRAP_REVISION
+  );
 }
 
 function dockerNames(id: string) {

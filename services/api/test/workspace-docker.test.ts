@@ -13,6 +13,13 @@ const workspace: WorkspaceLocator = {
   volumeRef: `facility-ws-volume-${suffix}`,
 };
 
+const ownedLabels = {
+  "facility.workspace.id": workspaceId,
+  "facility.workload.kind": "workspace-v2",
+};
+/** Labels of a container created by the current bootstrap. */
+const currentLabels = { ...ownedLabels, "facility.workspace.bootstrap": "2" };
+
 /**
  * A container that boots the way the workspace bootstrap does: `start` returns
  * immediately, and the readiness marker only appears after `readyAfterProbes`
@@ -34,16 +41,15 @@ function fakeDocker(options: {
     state.running = options.bootstrapExits !== true;
     state.startedAt = "2026-09-07T10:00:00.000000000Z";
   });
+  const inspect = vi.fn(async () => ({
+    Id: "container-1",
+    State: { Running: state.running, StartedAt: state.startedAt, ExitCode: 0 },
+    Config: { Labels: currentLabels },
+    Mounts: [{ Destination: "/workspace", Name: workspace.volumeRef }],
+  }));
   const container = {
     id: "container-1",
-    inspect: async () => ({
-      Id: "container-1",
-      State: { Running: state.running, StartedAt: state.startedAt, ExitCode: 0 },
-      Config: {
-        Labels: { "facility.workspace.id": workspaceId, "facility.workload.kind": "workspace-v2" },
-      },
-      Mounts: [{ Destination: "/workspace", Name: workspace.volumeRef }],
-    }),
+    inspect,
     start,
     exec: async (options: { Cmd: string[] }) => {
       probes.push(options.Cmd);
@@ -56,7 +62,7 @@ function fakeDocker(options: {
     },
   };
   const docker = { getContainer: vi.fn(() => container) } as unknown as Docker;
-  return { docker, container, start, probes };
+  return { docker, container, start, inspect, probes };
 }
 
 describe("Docker workspace readiness", () => {
@@ -94,6 +100,17 @@ describe("Docker workspace readiness", () => {
     await runtime.wake(workspace);
 
     expect(probes).toHaveLength(1);
+  });
+
+  it("inspects a running container once per wake", async () => {
+    const { docker, inspect } = fakeDocker({ running: true, readyAfterProbes: 0 });
+    const runtime = new DockerWorkspaceRuntime(docker);
+    await runtime.wake(workspace);
+    inspect.mockClear();
+
+    await runtime.wake(workspace);
+
+    expect(inspect).toHaveBeenCalledOnce();
   });
 
   it("refuses a workspace whose bootstrap exited instead of reporting it ready", async () => {
@@ -177,5 +194,109 @@ describe("Docker workspace bootstrap", () => {
     expect(daemon).toBeGreaterThan(cleanup);
     expect(lines[cleanup]).toContain("/var/run/docker");
     expect(lines[cleanup]).toContain("/var/run/docker.sock");
+  });
+
+  it("labels a new container with the bootstrap revision it was created from", async () => {
+    const { docker, created } = recordingDocker();
+
+    await new DockerWorkspaceRuntime(docker).create({
+      id: workspaceId,
+      image: "facility-runner:test",
+    });
+
+    expect(created[0]?.Labels).toEqual(currentLabels);
+  });
+});
+
+/**
+ * A container created before the bootstrap was revised. Docker stored the old
+ * script as its command, so starting it would run that script again.
+ */
+function outdatedDocker(options: { running: boolean }) {
+  const notFound = Object.assign(new Error("no such container"), { statusCode: 404 });
+  let removed = false;
+  const created: Array<Record<string, unknown>> = [];
+  const old = {
+    start: vi.fn(async () => undefined),
+    remove: vi.fn(async (_options: { force: boolean; v: boolean }) => {
+      removed = true;
+    }),
+    inspect: async () => ({
+      Id: "container-old",
+      State: {
+        Running: options.running,
+        StartedAt: "2026-09-07T09:00:00.000000000Z",
+        ExitCode: 0,
+      },
+      Config: { Labels: ownedLabels },
+      Mounts: [{ Destination: "/workspace", Name: workspace.volumeRef }],
+    }),
+    exec: async () => ({
+      start: async () => undefined,
+      inspect: async () => ({ Running: false, ExitCode: 0 }),
+    }),
+  };
+  const replacement = {
+    id: "container-new",
+    start: vi.fn(async () => undefined),
+    remove: async () => undefined,
+    inspect: async () => ({
+      Id: "container-new",
+      State: { Running: true, StartedAt: "2026-11-11T10:00:00.000000000Z", ExitCode: 0 },
+    }),
+    exec: old.exec,
+  };
+  const docker = {
+    getContainer: (name: string) => {
+      if (name === "container-new") return replacement;
+      if (name === "container-old" || !removed) return old;
+      return {
+        inspect: async () => {
+          throw notFound;
+        },
+      };
+    },
+    getImage: () => ({ inspect: async () => ({}) }),
+    getNetwork: () => ({
+      inspect: async () => {
+        throw notFound;
+      },
+    }),
+    createNetwork: async () => ({}),
+    createVolume: async () => ({}),
+    createContainer: async (definition: Record<string, unknown>) => {
+      created.push(definition);
+      return replacement;
+    },
+  } as unknown as Docker;
+  return { docker, old, replacement, created };
+}
+
+describe("Docker workspace created by an older bootstrap", () => {
+  it("is recreated from the current bootstrap instead of started, keeping its volume", async () => {
+    const { docker, old, replacement, created } = outdatedDocker({ running: false });
+
+    await expect(new DockerWorkspaceRuntime(docker).wake(workspace)).resolves.toMatchObject({
+      computeRef: "container-new",
+      state: "running",
+    });
+
+    expect(old.start).not.toHaveBeenCalled();
+    expect(old.remove).toHaveBeenCalledWith({ force: true, v: false });
+    expect(created).toHaveLength(1);
+    expect(String((created[0]?.Cmd as string[])[0])).toContain("/var/run/docker.pid");
+    expect(created[0]?.Labels).toEqual(currentLabels);
+    expect(replacement.start).toHaveBeenCalledOnce();
+  });
+
+  it("is left alone while it is running, since its bootstrap already finished", async () => {
+    const { docker, old, created } = outdatedDocker({ running: true });
+
+    await expect(new DockerWorkspaceRuntime(docker).wake(workspace)).resolves.toMatchObject({
+      computeRef: "container-old",
+    });
+
+    expect(old.remove).not.toHaveBeenCalled();
+    expect(created).toHaveLength(0);
   });
 });
