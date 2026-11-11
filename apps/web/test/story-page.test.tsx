@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { StoryWorkflowStatus } from "@facility/sdk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import StoryPage from "../app/(app)/projects/[projectId]/stories/[number]/page";
@@ -42,12 +43,48 @@ vi.mock("../lib/api", async () => {
         record("conversation", { ok: true, data: mocks.conversation }),
       workspaceStoryEnvironment: async () =>
         record("environment", { ok: true, data: mocks.environment }),
+      workspaceStoryConsultations: async () =>
+        record("consultations", { ok: true, data: { items: [], total: 0, limit: 10, offset: 0 } }),
+      storyWorkflow: async () =>
+        record("workflow", {
+          ok: true,
+          data: {
+            schemaVersion: 1,
+            orgId: "org",
+            projectId: "project",
+            storyId: "story",
+            policy: {
+              revision: 0,
+              policy: {
+                planApprovalAgents: [],
+                holdAfterFailure: false,
+                requireDeliveryAcceptance: false,
+                requirePreviewForAcceptance: false,
+              },
+            },
+            plan: { revision: 0, decisionRevision: 0, status: "none" },
+            queuedAgents: [],
+            blockedReason: null,
+            acceptance: {
+              schemaVersion: 1,
+              orgId: "org",
+              projectId: "project",
+              storyId: "story",
+              required: false,
+              status: "missing",
+              receipt: null,
+            },
+          } satisfies StoryWorkflowStatus,
+        }),
       workspaceStoryActivity: async () => record("activity", unexpected),
       workspaceStoryTimeline: async () => record("timeline", unexpected),
       workspaceStoryTurnEvent: async () => record("event", unexpected),
       storyAgents: async () => ({
         ok: true,
-        data: { agents: [{ name: "builder", enabled: true, model: "gpt-5.5", engine: "codex" }] },
+        data: {
+          agents: [{ name: "builder", enabled: true, model: "gpt-5.5", engine: "codex" }],
+          defaults: { ui: "builder", mcp: "builder", manual: "builder" },
+        },
       }),
       me: async () => ({ ok: true, data: { permissions: mocks.permissions } }),
     },
@@ -242,6 +279,32 @@ async function render() {
 }
 
 describe("story overview integration", () => {
+  it("shows actionable delivery notices without recasting them as agent errors", async () => {
+    setUp(["*"]);
+    mocks.bundle.attention = [
+      {
+        id: "delivery-notice",
+        turnId: null,
+        kind: "delivery_completion",
+        title: "Complete the source issue",
+        detail: "Review the exact source issue and explicitly request completion.",
+        status: "open",
+        resolution: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: at,
+      },
+    ];
+    const { root } = await render();
+    const attention = root.querySelector('[aria-label="Needs your attention"]');
+    expect(attention?.textContent).toContain("Complete the source issue");
+    expect(attention?.textContent).toContain(
+      "Review the exact source issue and explicitly request completion.",
+    );
+    expect(attention?.textContent).not.toContain("The run reported an error");
+    expect(attention?.textContent).not.toContain("Technical details");
+  });
+
   it("renders state, the final response first, participants, and folded evidence for a reader", async () => {
     setUp();
     const { html, root } = await render();
@@ -249,8 +312,18 @@ describe("story overview integration", () => {
     expect(root.textContent).toContain("Suspended");
     expect(root.textContent).toContain("In review");
     expect(root.querySelector('[aria-label="Needs your attention"]')).toBeNull();
-    // Only the story, its first conversation page and the environment inspection were requested.
-    expect(mocks.calls.sort()).toEqual(["conversation", "environment", "story"]);
+    // Saved workflow and consultation reads start no inference or workspace wake.
+    expect(mocks.calls.sort()).toEqual([
+      "consultations",
+      "conversation",
+      "environment",
+      "story",
+      "workflow",
+    ]);
+    expect(root.querySelector('[aria-label="Workflow status"]')?.textContent).toContain(
+      "optional for this project",
+    );
+    expect(root.querySelector("#consultation")?.textContent).toContain("No consultations saved");
 
     const history = [...root.querySelectorAll("details")].find((d) =>
       d.querySelector("summary")?.textContent?.includes("Resolved and dismissed"),
@@ -284,7 +357,9 @@ describe("story overview integration", () => {
     expect(
       root.querySelector('a[href="https://github.com/acme/app/pull/42"]')?.textContent,
     ).toContain("pull request #42");
-    expect(root.querySelector('a[href^="#"]')).toBeNull();
+    for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')) {
+      expect(root.querySelector(link.getAttribute("href") ?? "")).not.toBeNull();
+    }
     expect(root.textContent).not.toContain("suspend compute");
     expect(root.textContent).not.toContain("send a task");
     expect(root.textContent).not.toContain("open app");

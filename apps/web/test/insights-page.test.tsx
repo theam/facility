@@ -3,11 +3,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import InsightsPage from "../app/(app)/projects/[projectId]/insights/page";
 
-const mocks = vi.hoisted(() => ({ denied: false, measured: 1, failed: 2 }));
+const mocks = vi.hoisted(() => ({
+  denied: false,
+  measured: 1,
+  failed: 2,
+  budgetUnconfirmed: false,
+  budgetWritable: true,
+  identityUnavailable: false,
+}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh() {} }) }));
-vi.mock("../components/insights/budget-form", () => ({ BudgetForm: () => null }));
+vi.mock("../components/insights/budget-form", () => ({
+  BudgetForm: () => <button type="button">Save budget</button>,
+}));
 vi.mock("../lib/api", () => ({
   api: {
+    me: async () =>
+      mocks.identityUnavailable
+        ? { ok: false, message: "Identity unavailable" }
+        : {
+            ok: true,
+            data: { permissions: mocks.budgetWritable ? ["budgets:write"] : ["budgets:read"] },
+          },
     projectObservability: async () =>
       mocks.denied
         ? { ok: false, offline: false, message: "Access denied" }
@@ -51,7 +67,15 @@ vi.mock("../lib/api", () => ({
               recentAudit: [],
             },
           },
-    projectBudget: async () => ({ ok: true, data: { state: "not_configured", spent_cents: 0 } }),
+    projectBudget: async () => ({
+      ok: true,
+      data: {
+        state: mocks.budgetUnconfirmed ? "unconfirmed" : "not_configured",
+        spent_cents: 0,
+        monthly_limit_cents: 5000,
+        enabled: true,
+      },
+    }),
   },
 }));
 
@@ -62,6 +86,31 @@ async function page() {
 }
 
 describe("Insights spend rendering", () => {
+  it("shows budget editing only to a writer and retains readable policy for a viewer", async () => {
+    expect(await page()).toContain("Save budget");
+    mocks.budgetWritable = false;
+    const html = await page();
+    expect(html).not.toContain("Save budget");
+    expect(html).toContain("Monthly limit: $50.00.");
+    expect(html).toContain("Enforcement is");
+    mocks.budgetWritable = true;
+  });
+  it("hides budget mutations when identity is unavailable without discarding authorized reads", async () => {
+    mocks.identityUnavailable = true;
+    const html = await page();
+    expect(html).not.toContain("Save budget");
+    expect(html).toContain("Monthly limit: $50.00.");
+    mocks.identityUnavailable = false;
+  });
+  it("shows interrupted budget spending as a lower bound and explains the model-call block", async () => {
+    mocks.budgetUnconfirmed = true;
+    const html = await page();
+    expect(html).toContain("unconfirmed");
+    expect(html).toContain("At least");
+    expect(html).toContain("new model calls are blocked while the budget is enabled");
+    expect(html).toContain("open reservations and settled title charges");
+    mocks.budgetUnconfirmed = false;
+  });
   it("shows partial cost and the missing usage in the actual page", async () => {
     mocks.denied = false;
     mocks.measured = 1;

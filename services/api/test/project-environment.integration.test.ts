@@ -23,9 +23,11 @@ import type {
   GithubWorkspaceCredentialBroker,
   GithubWorkspaceCredentials,
 } from "../src/github/workspace-credentials.js";
+import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
 import type { AppConfig } from "../src/types.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import { WorkspacePreviewService } from "../src/workspaces/preview.js";
+import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../src/workspaces/preview-branch.js";
 import {
   ProjectEnvironmentService,
   parseProjectManifest,
@@ -146,6 +148,114 @@ environment:
   afterAll(async () => {
     await client.end();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it.each([
+    false,
+    true,
+  ])("hands a %s legacy preview back to agent branches in every repository", async (legacy) => {
+    const retained = await runtime.create({ id: newId("ws"), image: "facility-runner:test" });
+    const retainedStoryId = newId("story");
+    await db.insert(stories).values({
+      id: retainedStoryId,
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: retainedStoryId,
+      title: "Retained preview",
+      createdBy: { type: "user", id: "test" },
+    });
+    await db.insert(workspaces).values({
+      id: retained.id,
+      orgId,
+      projectId,
+      storyId: retainedStoryId,
+      provider: "fake",
+      externalRef: retained.externalRef,
+      volumeRef: retained.volumeRef,
+      state: "running",
+    });
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    const input = {
+      orgId,
+      projectId,
+      workspace: retained,
+      manifest,
+      credentials,
+      branch: "feature/retained",
+    };
+    const first = await environment.prepare(input);
+    const command = async (cwd: string, args: string[]) => {
+      const result = await runtime.exec(retained, { command: "git", args, cwd });
+      expect(result.exitCode, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const targets = [];
+    for (const repository of credentials.repositories) {
+      const cwd = `repos/${repository.owner}/${repository.name}`;
+      const head = await command(cwd, ["rev-parse", "HEAD"]);
+      targets.push({
+        repositoryId: `repo_${repository.name}`,
+        repository: `${repository.owner}/${repository.name}`,
+        pullNumber: 1,
+        headRef: "main",
+        headSha: head,
+        primary: repository.role === "primary",
+      });
+      if (legacy) {
+        await command(cwd, ["checkout", "--detach", head]);
+        await command(cwd, ["update-ref", PREVIEW_MANAGED_REF, head]);
+      }
+    }
+    if (!legacy) {
+      await new PreviewWorkspaceGitApplicator(runtime).apply({
+        workspace: retained,
+        credentials,
+        repositories: targets,
+      });
+      for (const target of targets) {
+        const cwd = `repos/${target.repository}`;
+        expect(await command(cwd, ["branch", "--show-current"])).toBe(
+          previewBranchRefs(retained.id, cwd).branch,
+        );
+      }
+      await expect(
+        environment.prepare({
+          ...input,
+          branch: previewBranchRefs(retained.id, "repos/acme/app").branch,
+        }),
+      ).rejects.toMatchObject({ code: "story_branch_reserved" });
+    }
+    await writeFile(
+      join(retained.volumeRef, "repos/acme/app/.facility-test/seed"),
+      "retained data",
+    );
+    await runtime.replaceCompute(retained);
+    Object.assign(retained, await runtime.wake(retained));
+    await environment.prepare({ ...input, previousSetupChecksum: first.setupChecksum });
+    for (const target of targets) {
+      const cwd = `repos/${target.repository}`;
+      expect(await command(cwd, ["branch", "--show-current"])).toBe("feature/retained");
+      expect(await command(cwd, ["rev-parse", "HEAD"])).toBe(target.headSha);
+    }
+    expect(await readFile(join(retained.volumeRef, "repos/acme/app/.setup-count"), "utf8")).toBe(
+      "1",
+    );
+    expect(
+      await readFile(join(retained.volumeRef, "repos/acme/app/.facility-test/seed"), "utf8"),
+    ).toBe("retained data");
+    if (!legacy) {
+      const cwd = "repos/acme/app";
+      await command(cwd, ["switch", previewBranchRefs(retained.id, cwd).branch]);
+      await writeFile(join(retained.volumeRef, cwd, "README.md"), "unreviewed preview commit");
+      await command(cwd, ["add", "README.md"]);
+      await command(cwd, ["commit", "-m", "local work"]);
+      const head = await command(cwd, ["rev-parse", "HEAD"]);
+      await expect(environment.prepare(input)).rejects.toMatchObject({
+        code: "story_preview_branch_changed",
+      });
+      expect(await command(cwd, ["rev-parse", "HEAD"])).toBe(head);
+    }
   });
 
   it("injects runtime origins before setup but publishes them only after readiness", async () => {
@@ -383,6 +493,83 @@ environment:
     expect(
       await readFile(join(workspace.volumeRef, "repos/acme/shared/README.md"), "utf8"),
     ).toContain("shared");
+
+    const repository = join(workspace.volumeRef, "repos/acme/app");
+    await writeFile(join(repository, ".facility-test/seed"), "retained-user-data");
+    await writeFile(join(repository, "preview-generation.txt"), "next generation\n");
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["add", "preview-generation.txt"],
+      cwd: "repos/acme/app",
+    });
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["commit", "-m", "test: advance preview generation"],
+      cwd: "repos/acme/app",
+    });
+    const refreshed = await environment.refreshPrepared({
+      orgId,
+      projectId,
+      workspace: locator,
+      manifest: {
+        ...manifest,
+        environment: {
+          ...manifest.environment,
+          stop: "rm -f .facility-test/status && printf stopped > .facility-test/stop",
+        },
+      },
+      credentials,
+      previousSetupChecksum: first.setupChecksum,
+      readinessTimeoutMs: 2_000,
+    });
+    expect(await readFile(join(repository, ".setup-count"), "utf8")).toBe("2");
+    expect(await readFile(join(repository, ".facility-test/seed"), "utf8")).toBe(
+      "retained-user-data",
+    );
+    expect(await readFile(join(repository, ".facility-test/stop"), "utf8")).toBe("stopped");
+    expect(refreshed.setupChecksum).not.toBe(first.setupChecksum);
+    await writeFile(
+      join(workspace.volumeRef, "repos/acme/shared/dependency.txt"),
+      "updated dependency",
+    );
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["add", "dependency.txt"],
+      cwd: "repos/acme/shared",
+    });
+    await runtime.exec(locator, {
+      command: "git",
+      args: ["commit", "-m", "test: update related dependency"],
+      cwd: "repos/acme/shared",
+    });
+    const related = await environment.refreshPrepared({
+      orgId,
+      projectId,
+      workspace: locator,
+      manifest,
+      credentials,
+      previousSetupChecksum: refreshed.setupChecksum,
+      readinessTimeoutMs: 2000,
+    });
+    expect(related.setupChecksum).not.toBe(refreshed.setupChecksum);
+    expect(await readFile(join(repository, ".setup-count"), "utf8")).toBe("3");
+    // An ordinary turn may need setup for new code, but must never reseed retained data.
+    const next = await environment.prepare({
+      orgId,
+      projectId,
+      workspace: locator,
+      manifest: { ...manifest, hash: "changed-setup-manifest" },
+      credentials,
+      branch: "facility/story-environment",
+      previousSetupChecksum: related.setupChecksum,
+      readinessTimeoutMs: 2000,
+    });
+    expect(next.setupChecksum).not.toBe(related.setupChecksum);
+    expect(await readFile(join(repository, ".setup-count"), "utf8")).toBe("4");
+
+    expect(await readFile(join(repository, ".facility-test/seed"), "utf8")).toBe(
+      "retained-user-data",
+    );
   });
 
   it("opens previews on the agent's changed workspace without checkout, setup, or reseeding", async () => {

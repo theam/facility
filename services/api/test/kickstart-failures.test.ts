@@ -1,4 +1,4 @@
-import type { FacilityDb } from "@facility/db";
+import { type FacilityDb, projects } from "@facility/db";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/errors.js";
 import type { Octokit } from "../src/github/client.js";
@@ -26,10 +26,18 @@ const installation = {
   suspendedAt: null,
 };
 
+/** The project row is always found; `row` is the installation lookup's answer. */
 function fakeDb(row: unknown = installation) {
   return {
     select: () => ({
-      from: () => ({ where: () => ({ limit: async () => (row ? [row] : []) }) }),
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () => {
+            if (table === projects) return [{ settings: {} }];
+            return row ? [row] : [];
+          },
+        }),
+      }),
     }),
   } as unknown as FacilityDb;
 }
@@ -143,6 +151,21 @@ describe("kickstart failures name the condition", () => {
       statusCode: 404,
       code: "kickstart_repository_unreachable",
       message: expect.stringContaining("panteraimperial-hub/facility-test"),
+    });
+  });
+
+  it("reports an unreadable base ref at preview, before apply is attempted", async () => {
+    const octokit = fakeOctokit({
+      getBranch: async () => {
+        throw githubError(404, "Branch not found");
+      },
+    });
+
+    await expect(
+      kickstartPreview(fakeDb(), async () => octokit, repository, {}),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "kickstart_repository_unreachable",
     });
   });
 

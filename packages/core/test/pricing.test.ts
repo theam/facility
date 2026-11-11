@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { costCents, normalizeModel } from "../src/pricing.js";
+import { costCents, normalizeModel, reservationCents } from "../src/pricing.js";
 
 describe("model pricing", () => {
   it.each([
@@ -46,5 +46,15 @@ describe("model pricing", () => {
   it("normalizes dated provider model ids and reports unknown models", () => {
     expect(normalizeModel("claude-opus-4-8-20260101")).toBe("claude-opus-4-8");
     expect(costCents({ model: "private-model", inputTokens: 1, outputTokens: 1 })).toBeNull();
+  });
+
+  it("prices a turn reservation from the same book and refuses an unknown model", () => {
+    const turn = reservationCents("claude-haiku-4-5", "turn");
+    const title = reservationCents("claude-haiku-4-5", "title");
+    expect(turn).toBeGreaterThan(0);
+    expect(title).toBeGreaterThan(0);
+    expect(title).toBeLessThan(turn ?? 0);
+    expect(reservationCents("custom", "turn")).toBe(0);
+    expect(reservationCents("private-model", "title")).toBeNull();
   });
 });
