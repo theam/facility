@@ -32,6 +32,27 @@ async function fixture() {
 }
 
 describe("WorkspaceRuntime", () => {
+  it("retiring suspended compute invalidates old commands and late stops without losing files", async () => {
+    const { runtime, workspace, created } = await fixture();
+    await runtime.exec(workspace, { command: "sh", args: ["-lc", "printf retained > local-data"] });
+    const oldWriter = { ...workspace, expectedComputeRef: created.computeRef };
+    await runtime.suspend(oldWriter);
+    expect((await runtime.wake(workspace)).computeRef).toBe(created.computeRef);
+    await runtime.retireCompute(oldWriter);
+    const replacement = await runtime.wake(workspace);
+    expect(replacement.computeRef).not.toBe(created.computeRef);
+    await expect(
+      runtime.exec(oldWriter, {
+        command: "sh",
+        args: ["-lc", "printf overwritten > local-data"],
+      }),
+    ).rejects.toMatchObject({ code: "workspace_compute_replaced" });
+    await runtime.suspend(oldWriter);
+    await runtime.retireCompute(oldWriter);
+    expect((await runtime.inspect(workspace)).state).toBe("running");
+    expect(await runtime.read(workspace, "local-data")).toBe("retained");
+  });
+
   it("preserves worktree and native engine state across suspend and compute replacement", async () => {
     const { runtime, workspace, created } = await fixture();
     const write = await runtime.exec(workspace, {

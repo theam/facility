@@ -248,6 +248,150 @@ test("runner Go binaries resolve the fixed cryptography and gRPC modules", () =>
   );
 });
 
+test("containerd rebuilds against patched compression without downgrading other tools", () => {
+  const sourceBuild = runnerDockerfile.split(" AS containerd-build\n")[1]?.split("\nFROM ")[0];
+  const replacement =
+    /go mod edit -replace=github\.com\/klauspost\/compress=github\.com\/klauspost\/compress@v1\.18\.7\s/g;
+  assert.match(sourceBuild ?? "", replacement);
+  assert.equal([...runnerDockerfile.matchAll(replacement)].length, 1);
+});
+
+test("compression audit validates effective embedded versions and fails closed on inspection errors", () => {
+  const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
+    ([loop]) => loop.includes('"github.com/klauspost/compress"'),
+  );
+  assert.ok(audit, "missing executable compression audit");
+  assert.equal(audit[1], "/out/*", "inspect every copied Go binary");
+  const binaries = [
+    "/out/dockerd",
+    "/out/docker-proxy",
+    "/out/docker",
+    "/out/containerd",
+    "/out/containerd-shim-runc-v2",
+    "/out/ctr",
+    "/out/rootlesskit",
+    "/out/docker-buildx",
+    "/out/docker-compose",
+    "/out/runc",
+    "/out/gh",
+  ];
+  // Expand the production glob deterministically without writing to host /out.
+  const loop = audit[0].replace("in /out/*;", `in ${binaries.join(" ")};`);
+  const command = `
+    go() {
+      if [ "$3" = "$AUDIT_TEST_BINARY" ]; then
+        case "$AUDIT_TEST_VARIANT" in
+          outdated) printf 'dep github.com/klauspost/compress v1.18.6\\n'; return ;;
+          stale-replacement) printf 'dep github.com/klauspost/compress v1.18.4\\n=> github.com/klauspost/compress v1.18.5\\n'; return ;;
+          substituted) printf 'dep github.com/klauspost/compress v1.18.4\\n=> example.com/fork v1.18.7\\n'; return ;;
+          malformed) printf 'dep github.com/klauspost/compress\\n'; return ;;
+          error) return 1 ;;
+          patched) printf 'dep github.com/klauspost/compress v1.18.7\\n'; return ;;
+          newer) printf 'dep github.com/klauspost/compress v1.19.1\\n'; return ;;
+          newer-replacement) printf 'dep github.com/klauspost/compress v1.18.5\\n=> github.com/klauspost/compress v1.19.1\\n'; return ;;
+          prerelease) printf 'dep github.com/klauspost/compress v1.18.7-beta\\n'; return ;;
+          unreviewed-major) printf 'dep github.com/klauspost/compress v2.0.0\\n'; return ;;
+          absent) printf 'dep example.com/unrelated v1.18.5\\n'; return ;;
+        esac
+      fi
+      printf 'dep example.com/unrelated v1.18.5\\ndep github.com/klauspost/compress v1.18.4\\n=> github.com/klauspost/compress v1.18.7\\ndep example.com/next v1.0.0\\n'
+    }
+    ${loop.replaceAll(/\\\n/g, " ")}
+  `;
+  const runAudit = (binary = "", variant = "") =>
+    spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_BINARY: binary, AUDIT_TEST_VARIANT: variant },
+    });
+  assert.equal(runAudit().status, 0);
+  for (const binary of binaries) {
+    for (const variant of ["patched", "newer", "newer-replacement", "absent"]) {
+      const result = runAudit(binary, variant);
+      assert.equal(result.status, 0, `${binary}: ${variant}: ${result.stderr}`);
+    }
+    for (const variant of [
+      "outdated",
+      "stale-replacement",
+      "substituted",
+      "malformed",
+      "prerelease",
+      "unreviewed-major",
+      "error",
+    ]) {
+      const result = runAudit(binary, variant);
+      assert.equal(result.status, 1, `${binary}: ${variant} must fail closed: ${result.stderr}`);
+    }
+  }
+});
+
+test("JOSE audit validates effective embedded versions and fails closed on inspection errors", () => {
+  const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
+    ([loop]) => loop.includes('"github.com/go-jose/go-jose/v4"'),
+  );
+  assert.ok(audit, "missing executable JOSE audit");
+  assert.equal(audit[1], "/out/*", "inspect every copied Go binary");
+  const binaries = [
+    "/out/dockerd",
+    "/out/docker-proxy",
+    "/out/docker",
+    "/out/containerd",
+    "/out/containerd-shim-runc-v2",
+    "/out/ctr",
+    "/out/rootlesskit",
+    "/out/docker-buildx",
+    "/out/docker-compose",
+    "/out/runc",
+    "/out/gh",
+  ];
+  // Expand the production glob deterministically without writing to host /out.
+  const loop = audit[0].replace("in /out/*;", `in ${binaries.join(" ")};`);
+  const command = `
+    go() {
+      if [ "$3" = "$AUDIT_TEST_BINARY" ]; then
+        case "$AUDIT_TEST_VARIANT" in
+          outdated) printf 'dep github.com/go-jose/go-jose/v4 v4.1.5\\n'; return ;;
+          stale-replacement) printf 'dep github.com/go-jose/go-jose/v4 v4.1.2\\n=> github.com/go-jose/go-jose/v4 v4.1.3\\n'; return ;;
+          substituted) printf 'dep github.com/go-jose/go-jose/v4 v4.1.2\\n=> example.com/fork v4.1.6\\n'; return ;;
+          malformed) printf 'dep github.com/go-jose/go-jose/v4\\n'; return ;;
+          error) return 1 ;;
+          patched) printf 'dep github.com/go-jose/go-jose/v4 v4.1.6\\n'; return ;;
+          newer) printf 'dep github.com/go-jose/go-jose/v4 v4.2.0\\n'; return ;;
+          newer-replacement) printf 'dep github.com/go-jose/go-jose/v4 v4.1.3\\n=> github.com/go-jose/go-jose/v4 v4.2.0\\n'; return ;;
+          prerelease) printf 'dep github.com/go-jose/go-jose/v4 v4.1.6-beta\\n'; return ;;
+          unreviewed-major) printf 'dep github.com/go-jose/go-jose/v4 v5.0.0\\n'; return ;;
+          absent) printf 'dep example.com/unrelated v4.1.3\\n'; return ;;
+        esac
+      fi
+      printf 'dep example.com/unrelated v4.1.3\\ndep github.com/go-jose/go-jose/v4 v4.1.2\\n=> github.com/go-jose/go-jose/v4 v4.1.6\\ndep example.com/next v1.0.0\\n'
+    }
+    ${loop.replaceAll(/\\\n/g, " ")}
+  `;
+  const runAudit = (binary = "", variant = "") =>
+    spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_BINARY: binary, AUDIT_TEST_VARIANT: variant },
+    });
+  assert.equal(runAudit().status, 0);
+  for (const binary of binaries) {
+    for (const variant of ["patched", "newer", "newer-replacement", "absent"]) {
+      const result = runAudit(binary, variant);
+      assert.equal(result.status, 0, `${binary}: ${variant}: ${result.stderr}`);
+    }
+    for (const variant of [
+      "outdated",
+      "stale-replacement",
+      "substituted",
+      "malformed",
+      "prerelease",
+      "unreviewed-major",
+      "error",
+    ]) {
+      const result = runAudit(binary, variant);
+      assert.equal(result.status, 1, `${binary}: ${variant} must fail closed: ${result.stderr}`);
+    }
+  }
+});
+
 test("every gRPC-bearing source build replaces the vulnerable module", () => {
   assert.doesNotMatch(runnerDockerfile, /google\.golang\.org\/grpc[^\n]*v1\.83\.1/);
   for (const stage of [
@@ -308,6 +452,47 @@ test("the executable gRPC audit accepts fixed modules and rejects unsafe binarie
   }
 });
 
+test("embedded containerd audit rejects old, missing and substituted modules in every consumer", () => {
+  const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
+    ([loop]) => loop.includes('"github.com/containerd/containerd/v2"'),
+  );
+  assert.ok(audit, "missing executable containerd audit");
+  const binaries = audit[1].split(" ");
+  assert.deepEqual(binaries, ["/out/dockerd", "/out/docker-buildx", "/out/docker-compose"]);
+  const command = `
+    go() {
+      if [ "$3" = "$AUDIT_TEST_BINARY" ]; then
+        case "$AUDIT_TEST_FAILURE" in
+          outdated) printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n'; return ;;
+          stale-replacement) printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n=> github.com/containerd/containerd/v2 v2.3.3\\n'; return ;;
+          substituted) printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n=> example.com/fork v2.3.6\\n'; return ;;
+          missing) printf 'dep example.com/unrelated v2.3.6\\n'; return ;;
+          error) return 1 ;;
+        esac
+      fi
+      printf 'dep github.com/containerd/containerd/v2 v2.3.3\\n=> github.com/containerd/containerd/v2 v2.3.6\\n'
+    }
+    ${audit[0].replaceAll(/\\\n/g, " ")}
+  `;
+  const runAudit = (binary = "", failure = "") =>
+    spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_BINARY: binary, AUDIT_TEST_FAILURE: failure },
+    });
+  const accepted = runAudit();
+  assert.equal(accepted.status, 0, accepted.stderr);
+  for (const binary of binaries) {
+    for (const failure of ["outdated", "stale-replacement", "substituted", "missing", "error"]) {
+      const rejected = runAudit(binary, failure);
+      assert.equal(
+        rejected.status,
+        1,
+        `${binary}: ${failure} must fail closed: ${rejected.stderr}`,
+      );
+    }
+  }
+});
+
 test("Vercel runner supports SDK user switching without granting node sudo privileges", () => {
   const vercelStage = runnerDockerfile
     .split("FROM runner-base AS vercel-runner")[1]
@@ -323,7 +508,7 @@ test("Vercel runner supports SDK user switching without granting node sudo privi
 });
 
 test("runner rejects Chromium packages older than the reviewed security fix", () => {
-  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=154\.0\.8037\.57-1~deb13u1/);
+  assert.match(runnerDockerfile, /ARG CHROMIUM_MIN_VERSION=156\.0\.8078\.79-1~deb13u1/);
   for (const name of ["chromium", "chromium-common"]) {
     assert.ok(
       runnerDockerfile.includes(
@@ -331,20 +516,75 @@ test("runner rejects Chromium packages older than the reviewed security fix", ()
       ),
     );
   }
+  assert.match(runnerDockerfile, /ARG EXPAT_MIN_VERSION=2\.9\.0-1~deb13u1/);
+  assert.ok(
+    runnerDockerfile.includes(
+      `dpkg --compare-versions "$(dpkg-query -W -f='\${Version}' libexpat1)" ge "$EXPAT_MIN_VERSION"`,
+    ),
+  );
 });
 
 test("image security refreshes invalidate cached distro layers and audit the cached package manager", () => {
   for (const path of ["Dockerfile", "apps/web/Dockerfile", "runner/Dockerfile"]) {
     const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-    assert.match(dockerfile, /ARG DEBIAN_SECURITY_REFRESH=20261005/);
+    assert.ok(dockerfile.includes("ARG DEBIAN_SECURITY_REFRESH=20261105"));
     assert.match(dockerfile, /test -n "\$DEBIAN_SECURITY_REFRESH"/);
   }
   assert.match(runnerDockerfile, /brace-expansion@5\.0\.12/);
-  assert.match(runnerDockerfile, /undici@6\.28\.1/);
+  assert.match(runnerDockerfile, /undici@6\.29\.1/);
   const seed = runnerDockerfile.indexOf(
     'corepack install --global --cache-only "$package_manager"',
   );
   const audit = runnerDockerfile.indexOf("node /tmp/verify-package-security.mjs");
   const freeze = runnerDockerfile.indexOf("chmod -R a-w /opt/facility-corepack");
   assert.ok(seed > 0 && audit > seed && freeze > audit);
+});
+
+test("API and web reject APT packages older than the reviewed security fix", () => {
+  for (const path of ["Dockerfile", "apps/web/Dockerfile"]) {
+    const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    assert.match(dockerfile, /ARG APT_MIN_VERSION=3\.0\.4/);
+    for (const name of ["apt", "libapt-pkg7.0"]) {
+      assert.ok(
+        dockerfile.includes(
+          `dpkg --compare-versions "$(dpkg-query -W -f='\${Version}' ${name})" ge "$APT_MIN_VERSION"`,
+        ),
+      );
+    }
+  }
+});
+
+test("runner source builds and binary audits use the reviewed x/net version", () => {
+  const replacements = [
+    ...runnerDockerfile.matchAll(/-replace=golang\.org\/x\/net=golang\.org\/x\/net@(\S+)/g),
+  ].map((match) => match[1]);
+  assert.equal(replacements.length, 8);
+  assert.ok(replacements.every((version) => version === "v0.62.0"));
+  assert.match(runnerDockerfile, /exit \(version != "v0\.62\.0"\)/);
+  assert.match(runnerDockerfile, /\$3 == "v0\.62\.0" \{ found = 1 \}/);
+});
+
+test("runner x/net audit rejects stale or substituted embedded modules", () => {
+  const audit = [...runnerDockerfile.matchAll(/for binary in ([^;]+); do[\s\S]*?\n {2}done/g)].find(
+    ([loop]) => loop.includes('pending = ($2 == "golang.org/x/net")'),
+  );
+  assert.ok(audit, "missing executable x/net audit");
+  assert.equal(audit[1], "/out/*");
+  const command = `
+    go() { printf '%s\\n' "$AUDIT_TEST_METADATA"; }
+    ${audit[0].replace("in /out/*;", "in /out/test;").replaceAll(/\\\n/g, " ")}
+  `;
+  const runAudit = (metadata) =>
+    spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: { ...process.env, AUDIT_TEST_METADATA: metadata },
+    });
+  for (const replacement of [
+    "golang.org/x/net v0.62.0",
+    "golang.org/x/net v0.60.0",
+    "example.com/fork v0.62.0",
+  ]) {
+    const result = runAudit(`dep golang.org/x/net v0.60.0\n=> ${replacement}`);
+    assert.equal(result.status, replacement === "golang.org/x/net v0.62.0" ? 0 : 1, result.stderr);
+  }
 });
