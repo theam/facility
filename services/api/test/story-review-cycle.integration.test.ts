@@ -110,7 +110,8 @@ type Scenario =
   | "no-progress"
   | "external-after-review"
   | "undeclared"
-  | "writes";
+  | "writes"
+  | "out-of-scope";
 
 describe("bounded review cycle with real storage and the existing dispatcher", () => {
   const { db, client } = createDb(databaseUrl);
@@ -287,7 +288,7 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
           impact: "The dependent read must use the published field.",
           fix: "Update the read on the existing branch.",
           disposition: resolved ? "resolved" : "open",
-          correction: "within_plan",
+          correction: scenario === "out-of-scope" ? "requires_decision" : "within_plan",
         },
       ],
       missingEvidence: scenario === "missing" ? ["A required reproduction is unavailable."] : [],
@@ -895,6 +896,47 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     });
     expect(dismissed.statusCode, dismissed.body).toBe(200);
     expect(await pendingTurns()).toMatchObject([{ agentName: "builder" }]);
+  });
+
+  it("keeps a cycle within its own project", async () => {
+    const { storyId, items } = await story("minor", true);
+    const before = await state(storyId);
+    // Another project with its own repository and pull requests numbered like these.
+    const otherProject = newId("proj");
+    const otherRepository = newId("repo");
+    await db
+      .insert(projects)
+      .values({ id: otherProject, orgId, slug: otherProject, name: "Other F11 project" });
+    await db.insert(projectRepositories).values({
+      id: otherRepository,
+      orgId,
+      projectId: otherProject,
+      owner,
+      name: "elsewhere",
+      role: "primary",
+      defaultBranch: "main",
+      installationId: installation,
+    });
+    for (const pull of items) await cycles.observePull(otherRepository, pull.number);
+    expect(await state(storyId)).toEqual(before);
+    const foreign = await app.inject({
+      url: `/v1/projects/${otherProject}/workspace-stories/${storyId}/workflow`,
+      headers: { cookie },
+    });
+    expect([403, 404]).toContain(foreign.statusCode);
+    expect(foreign.body).not.toContain(before?.candidate?.id ?? before?.id ?? storyId);
+  });
+
+  it("stops for a person instead of correcting a finding outside the approved plan", async () => {
+    const { storyId } = await story("out-of-scope");
+    await dispatch(await active(storyId));
+    expect(await state(storyId)).toMatchObject({
+      phase: "decision_required",
+      reviewsStarted: 1,
+      correctionsStarted: 0,
+      activeTurnId: null,
+      reason: expect.stringContaining("human decision or a change to the approved plan"),
+    });
   });
 
   it("starts no cycle for a Builder turn that does not declare its delivery", async () => {
