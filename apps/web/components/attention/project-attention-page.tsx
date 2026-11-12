@@ -110,11 +110,7 @@ export default async function ProjectAttentionPage({
             value={result.data.counts.plans}
             hint="pending approval"
           />
-          <KpiCard
-            label="Deliveries"
-            value={result.data.counts.deliveries}
-            hint="ready to accept"
-          />
+          <KpiCard label="Deliveries" value={result.data.counts.deliveries} hint="need review" />
           <KpiCard
             label="Other open PRs"
             value={result.data.otherPullRequests?.total ?? "—"}

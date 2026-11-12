@@ -496,7 +496,12 @@ describe("story overview integration", () => {
     expect(actions?.textContent).toContain("Send a task");
     expect(actions?.textContent).toContain("Ask without changes");
     expect(actions?.textContent).not.toContain("Open app");
-    expect(actions?.querySelector("a")).toBeNull();
+    // "Ask without changes" is the only link there: it reveals the consultation section
+    // on every click, even when the address already points to it.
+    expect(
+      [...(actions?.querySelectorAll("a") ?? [])].map((link) => link.getAttribute("href")),
+    ).toEqual(["#story-section-consultation"]);
+    expect(root.querySelector("#story-section-consultation")).not.toBeNull();
     const conversation = root.querySelector("#conversation");
     const list = conversation?.querySelector('ol[aria-label="Conversation, newest first"]');
     expect(

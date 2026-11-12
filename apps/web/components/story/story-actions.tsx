@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Field, Select, TextArea } from "@facility/ui";
+import { Button, ButtonLink, Field, Select, TextArea } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import { COMPOSE_EVENT } from "@/components/story/story-conversation";
@@ -110,14 +110,11 @@ export function StoryActions({
             </Button>
           ) : null}
           {canSend ? (
-            <Button
-              size="sm"
-              onClick={() => {
-                window.location.hash = "story-section-consultation";
-              }}
-            >
+            // A link, so the story reveals the section on every click, even when the
+            // address already points to it.
+            <ButtonLink size="sm" href="#story-section-consultation">
               Ask without changes
-            </Button>
+            </ButtonLink>
           ) : null}
           {canExecute && activeTurn ? (
             <CancelTurnButton

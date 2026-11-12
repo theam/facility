@@ -66,9 +66,9 @@ unconfirmed. Expand the pinned candidate or an individual report to inspect exac
 acceptance evidence, findings and the Reviewer's recommendation. A previous report keeps its
 own candidate and source links after a new head is recorded. Active review observations refresh
 without resetting opened reports; a failed refresh retains the last observation and explains
-the failure. Acceptance is unavailable during active correction or a decision stop, and the
-client checks the current workflow again before requesting it. The server owns all execution
-and acceptance rules. Servers without the optional review-cycle projection keep the existing
+the failure. The story does not offer acceptance during active correction or a decision stop,
+and it checks the current workflow again before requesting it. That is a check in the story
+page only: the server owns all execution and acceptance rules. Servers without the optional review-cycle projection keep the existing
 acceptance view; rendering this panel does not enable a review cycle.
 
 ## Start a story
@@ -196,8 +196,8 @@ and does not confirm a plan or accept delivery.
 When the author includes a [decision brief](../reference/decision-brief.md), review its summary,
 recommendation, decisive risk and missing evidence first. **Alternatives and sources**
 contains the optional **Summary**, **Comparison** and **Diagram** views of the same saved options.
-**Review approval** opens the existing exact-scope confirmation; **Request changes** prepares
-a separate decision. **Plan options** contains reload and proposal editing. Open a source beside a claim or
+**Approve plan rN** opens the exact-scope confirmation in place, below the plan; **Request
+changes** prepares a separate decision. **Plan options** contains reload and proposal editing. Open a source beside a claim or
 expand **Original plan** to inspect the full text, including the exact source message text when
 the plan was attributed to one. The proposer and selected execution agents are shown separately.
 Source references are author claims; opening this page does not verify them or invoke a model.
@@ -239,23 +239,28 @@ when several agents are configured for the project. Bounded reads explicitly mar
 
 This is a dated observation for one plan revision, not an execution authorization. The native
 gate still checks current policy, exact scope, permissions, budget and capacity when work starts.
-**Reload review** refreshes both the requested decision and the scope; a failed read does not keep
+On the confirmation page, **Reload review** refreshes both the requested decision and the scope;
+in place, the confirmation follows the story's own workflow reads. A failed read does not keep
 old scope claims visible and disables approval until it can be read again. If the workflow reports
 blocked recovery, approval also waits for a matching plan revision, repositories and retained
-agent configuration. Open the current plan to correct them; requesting changes remains available.
+agent configuration. Correct them in the plan, or cancel a held turn whose agent is no longer
+available from the conversation; requesting changes remains available.
 `facility_get_story_workflow` exposes the same `executionScope` data
 without starting a model, waking compute or queuing work.
 
 The conversation and its reply controls follow the plan directly. Delivery, acceptance,
 consultation and environment details remain available further down the same story.
 
-Choose **Review approval** or **Request changes** (with a reason). The next page shows the exact
-revision, text and scope before the explicit confirmation button. An approval applies to that
-revision only. A newer proposal retains the old receipt as history and awaits its own decision.
+Choose **Approve plan rN** or **Request changes** (with a reason). The confirmation opens in
+place with the exact revision and requested decision before the explicit confirmation button;
+the plan text and scope stay above it, and **Cancel** closes it without recording anything. If
+the review cannot be read in place, the story opens its confirmation page instead. An approval
+applies to that revision only. A newer proposal retains the old receipt as history and awaits its own decision.
 Concurrent edits and decisions require a fresh review; failed saves preserve the draft and reuse
 the same retry key. Open **Plan and decision history** to inspect earlier revisions and receipts.
 
-After confirmation, the receipt and **After approval** appear first. The approved plan and its
+Confirmed in place, the review closes and the plan shows the recorded decision once. On the
+confirmation page, the receipt and **After approval** appear first, and the approved plan and its
 original scope remain one expansion away. **Continue in the conversation** returns to the shared
 story without submitting another request.
 
@@ -306,8 +311,9 @@ An older worker does not implement the new admission gate.
 
 The story's **approvals and acceptance** panel separates plan approval from final delivery
 acceptance. Declare the complete required PR set and refresh its heads, then choose **Request
-delivery acceptance**. Open the returned review link, inspect every required PR and exact head,
-and explicitly choose **Accept this exact delivery**. The request expires after 15 minutes.
+delivery acceptance**. The review opens in place on the story, or through its link when it cannot
+be read there. Inspect every required PR and exact head, and explicitly choose **Accept this exact
+delivery**. The request expires after 15 minutes.
 MCP can request that same link and read its status; it cannot confirm acceptance for a person.
 
 The receipt binds the candidate, PR-set scope, plan and decision revisions, and project policy.
