@@ -16,6 +16,8 @@ export type AgentTurnRequest = {
   nativeSessionId?: string;
   timeoutMs?: number;
   maxBudgetUsd?: number;
+  /** Restricts the engine to reading: no edits, commits, pushes or other writing tools. */
+  readOnly?: boolean;
   signal?: AbortSignal;
   environment?: Record<string, string>;
   onEvent?: (event: AgentTurnEvent) => void;
@@ -190,6 +192,25 @@ done
 set -e
 exit "$status"`;
 
+/** Tools a read-only Claude Code turn may use without approval. Print mode cannot ask,
+ * so every other tool call (edits, writes, other commands, MCP writes) is denied. */
+export const CLAUDE_READ_ONLY_TOOLS = [
+  "Read",
+  "Grep",
+  "Glob",
+  "Bash(git diff:*)",
+  "Bash(git log:*)",
+  "Bash(git show:*)",
+  "Bash(git status:*)",
+  "Bash(git rev-parse:*)",
+  "Bash(git ls-files:*)",
+  "Bash(git fetch:*)",
+  "Bash(gh pr view:*)",
+  "Bash(gh pr diff:*)",
+  "Bash(gh pr checks:*)",
+  "Bash(gh run view:*)",
+];
+
 export class ClaudeCodeEngine extends CliAgentEngine {
   readonly name = "claude_code" as const;
 
@@ -200,8 +221,16 @@ export class ClaudeCodeEngine extends CliAgentEngine {
       "--output-format",
       "stream-json",
       "--verbose",
-      "--permission-mode",
-      "bypassPermissions",
+      ...(request.readOnly
+        ? [
+            "--permission-mode",
+            "default",
+            "--allowedTools",
+            CLAUDE_READ_ONLY_TOOLS.join(","),
+            "--disallowedTools",
+            "Edit,Write,NotebookEdit",
+          ]
+        : ["--permission-mode", "bypassPermissions"]),
       "--model",
       request.manifest.model,
     ];
@@ -218,7 +247,10 @@ export class CodexEngine extends CliAgentEngine {
   async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
     const shared = [
       "--json",
-      "--dangerously-bypass-approvals-and-sandbox",
+      // Read-only turns run in Codex's read-only sandbox and never ask for approval.
+      ...(request.readOnly
+        ? ["--sandbox", "read-only", "-c", 'approval_policy="never"']
+        : ["--dangerously-bypass-approvals-and-sandbox"]),
       "--model",
       request.manifest.model,
     ];

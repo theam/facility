@@ -33,6 +33,8 @@ export type StartedGitEvidence = {
   initialSha: string;
 };
 
+export type CheckoutState = { head: string; branch: string; status: string };
+
 export class TurnGitEvidenceService {
   constructor(
     private readonly db: FacilityDb,
@@ -217,6 +219,53 @@ export class TurnGitEvidenceService {
       });
       return null;
     }
+  }
+
+  /** HEAD, branch and working-tree status of each checkout, before a read-only turn. */
+  async checkouts(
+    workspace: WorkspaceLocator,
+    cwds: string[],
+    environment: Record<string, string>,
+  ) {
+    return Object.fromEntries(
+      await Promise.all(
+        cwds.map(async (cwd) => {
+          const [head, branch, status] = await Promise.all([
+            this.git(workspace, cwd, environment, ["rev-parse", "HEAD"]),
+            this.git(workspace, cwd, environment, ["branch", "--show-current"]),
+            this.git(workspace, cwd, environment, [
+              "status",
+              "--porcelain=v1",
+              "-z",
+              "--untracked-files=all",
+            ]),
+          ]);
+          return [cwd, { head, branch, status }] as const;
+        }),
+      ),
+    ) as Record<string, CheckoutState>;
+  }
+
+  /** Puts back every checkout a read-only turn changed and returns their paths. A
+   * commit, branch switch, edit or new file counts as a change. */
+  async restoreCheckouts(
+    workspace: WorkspaceLocator,
+    before: Record<string, CheckoutState>,
+    environment: Record<string, string>,
+  ) {
+    const after = await this.checkouts(workspace, Object.keys(before), environment);
+    const changed = Object.keys(before).filter(
+      (cwd) => JSON.stringify(before[cwd]) !== JSON.stringify(after[cwd]),
+    );
+    for (const cwd of changed) {
+      const state = before[cwd];
+      if (!state) continue;
+      if (state.branch)
+        await this.git(workspace, cwd, environment, ["checkout", "--force", state.branch]);
+      await this.git(workspace, cwd, environment, ["reset", "--hard", state.head]);
+      await this.git(workspace, cwd, environment, ["clean", "-fd"]);
+    }
+    return changed;
   }
 
   private async git(

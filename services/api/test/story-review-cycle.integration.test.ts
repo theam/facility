@@ -36,14 +36,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService } from "../src/agents/catalog.js";
 import { buildApp, mintSessionCookie } from "../src/app.js";
 import type { GithubClientFactory, Octokit } from "../src/github/client.js";
-import type { ConsultationCompletion } from "../src/stories/consultation-provider.js";
 import { StoryReviewCycles } from "../src/stories/review-cycle.js";
-import { ReviewCycleExecutor } from "../src/stories/review-cycle-executor.js";
 import { REVIEW_TRIGGER } from "../src/stories/review-cycle-rules.js";
 import { ReviewCycleSource } from "../src/stories/review-cycle-source.js";
 import { lockWorkflowStory } from "../src/stories/workflow-policy.js";
 import { createStoryDomain } from "../src/story-domain.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
+import type { AgentTurnRequest, AgentTurnResult } from "../src/turns/engines.js";
 import type { AppConfig } from "../src/types.js";
 import { recoverInterruptedTurns } from "../src/worker.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
@@ -109,7 +108,8 @@ type Scenario =
   | "failed-fix"
   | "no-progress"
   | "external-after-review"
-  | "undeclared";
+  | "undeclared"
+  | "writes";
 
 describe("bounded review cycle with real storage and the existing dispatcher", () => {
   const { db, client } = createDb(databaseUrl);
@@ -206,71 +206,80 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     throw new Error("Forbidden operation in the GitHub review fake");
   });
   const githubFactory: GithubClientFactory = async () => ({ request }) as unknown as Octokit;
-  const inference = vi.fn(
-    async (
-      input: Parameters<NonNullable<Parameters<typeof createStoryDomain>[0]["reviewInference"]>>[0],
-    ): Promise<ConsultationCompletion> => {
-      expect(input.purpose).toBe("delivery_review");
-      expect(input.prompt).not.toContain("synthetic-maintainer-secret");
-      const payload = JSON.parse(input.prompt.split("\n\n").at(-1) ?? "") as {
-        story: { externalId: string };
-        candidate: ReviewCandidate;
-        previous?: DeliveryReviewResult;
-        diffs: unknown[];
-      };
-      expect(payload.diffs).toHaveLength(2);
-      const scenario = scenarios.get(payload.story.externalId);
-      const candidate = payload.candidate;
-      const consumer = candidate.pullRequests.find((pull) => pull.repository.endsWith("/consumer"));
-      if (!consumer) throw new Error("Consumer PR missing");
-      const resolved = scenario === "fixed" && !!payload.previous;
-      const result: DeliveryReviewResult = {
-        candidateId: scenario === "invalid" ? "0".repeat(64) : candidate.id,
-        reviewedPulls: candidate.pullRequests.map(({ repository, number, baseSha, headSha }) => ({
-          repository,
-          number,
-          baseSha,
-          headSha,
-        })),
-        acceptance: [
-          {
-            id: "consumer-contract",
-            criterion: "The downstream consumer can read the delivered field.",
-            state: scenario === "missing" ? "unverified" : "verified",
-            evidence: "Compared API export and the consumer read.",
-          },
-        ],
-        findings: [
-          {
-            id: "consumer-name",
-            priority: scenario === "minor" ? "P3" : "P2",
-            category: scenario === "minor" ? "suggestion" : "correctness",
-            requirement: "consumer-contract",
-            repository: consumer.repository,
-            number: consumer.number,
-            path: "consumer.ts",
-            line: 1,
-            evidence: "Exact downstream read on the registered consumer commit.",
-            impact: "The dependent read must use the published field.",
-            fix: "Update the read on the existing branch.",
-            disposition: resolved ? "resolved" : "open",
-            correction: "within_plan",
-          },
-        ],
-        missingEvidence: scenario === "missing" ? ["A required reproduction is unavailable."] : [],
-      };
-      if (scenario === "external-after-review") {
-        const pull = pulls.get(consumer.number);
-        if (pull) pull.head = external;
-      }
-      return {
-        model: input.model,
-        text: JSON.stringify(result),
-        outcome: "completed" as const,
-        usage: { inputTokens: 4_000, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      };
-    },
-  );
+  // The native Reviewer turn: a read-only Claude Code run in the story workspace.
+  const section = (prompt: string, heading: string) => {
+    const parts = prompt.split("\n\n");
+    const index = parts.findIndex((part) => part.startsWith(heading));
+    return index < 0 ? undefined : parts[index + 1];
+  };
+  const inference = vi.fn(async (run: AgentTurnRequest): Promise<AgentTurnResult> => {
+    expect(run.readOnly).toBe(true);
+    expect(run.nativeSessionId).toBeUndefined();
+    expect(run.prompt).not.toContain("synthetic-maintainer-secret");
+    expect(run.environment?.GH_TOKEN).toBeUndefined();
+    const git = workspaceGit.get(run.workspace.id);
+    if (!git) throw new Error("Missing Reviewer workspace");
+    const scenario = scenarios.get(git.storyId);
+    // A Reviewer that ignores its read-only tools and commits in the checkout.
+    if (scenario === "writes") git.head = "9".repeat(40);
+    const candidate = JSON.parse(section(run.prompt, "### Candidate") ?? "") as ReviewCandidate;
+    const previousText = section(run.prompt, "### Previous review result");
+    const payload = {
+      previous: previousText ? (JSON.parse(previousText) as DeliveryReviewResult) : undefined,
+    };
+    const consumer = candidate.pullRequests.find((pull) => pull.repository.endsWith("/consumer"));
+    if (!consumer) throw new Error("Consumer PR missing");
+    const resolved = scenario === "fixed" && !!payload.previous;
+    const result: DeliveryReviewResult = {
+      candidateId: scenario === "invalid" ? "0".repeat(64) : candidate.id,
+      reviewedPulls: candidate.pullRequests.map(({ repository, number, baseSha, headSha }) => ({
+        repository,
+        number,
+        baseSha,
+        headSha,
+      })),
+      acceptance: [
+        {
+          id: "consumer-contract",
+          criterion: "The downstream consumer can read the delivered field.",
+          state: scenario === "missing" ? "unverified" : "verified",
+          evidence: "Compared API export and the consumer read.",
+        },
+      ],
+      findings: [
+        {
+          id: "consumer-name",
+          priority: scenario === "minor" ? "P3" : "P2",
+          category: scenario === "minor" ? "suggestion" : "correctness",
+          requirement: "consumer-contract",
+          repository: consumer.repository,
+          number: consumer.number,
+          path: "consumer.ts",
+          line: 1,
+          evidence: "Exact downstream read on the registered consumer commit.",
+          impact: "The dependent read must use the published field.",
+          fix: "Update the read on the existing branch.",
+          disposition: resolved ? "resolved" : "open",
+          correction: "within_plan",
+        },
+      ],
+      missingEvidence: scenario === "missing" ? ["A required reproduction is unavailable."] : [],
+    };
+    if (scenario === "external-after-review") {
+      const pull = pulls.get(consumer.number);
+      if (pull) pull.head = external;
+    }
+    return {
+      nativeSessionId: `review-${run.turnId}`,
+      progress: [],
+      events: [],
+      durationMs: 10,
+      exitCode: 0,
+      stderr: "",
+      output: `Reviewed both pull requests.\n<facility-review>${JSON.stringify(result)}</facility-review>`,
+      usage: { inputTokens: 4_000, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    };
+  });
 
   async function post(
     url: string,
@@ -501,13 +510,6 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     domain.catalog = catalog;
     source = new ReviewCycleSource(db, githubFactory);
     cycles = new StoryReviewCycles(db, domain.stories, catalog, source, enqueue);
-    const executor = new ReviewCycleExecutor(
-      db,
-      source,
-      async () => "synthetic-inference-key",
-      undefined,
-      inference,
-    );
     dispatcher = new TurnDispatcher(
       db,
       domain.stories,
@@ -519,7 +521,7 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       domain.evidence,
       domain.costs,
       undefined,
-      { cycles, executor },
+      { cycles },
     );
     domain.dispatcher = dispatcher;
     domain.reviewCycles = cycles;
@@ -558,6 +560,9 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     });
     vi.spyOn(runtime, "exec").mockImplementation(async (workspace, command) => {
       const git = workspaceGit.get(workspace.id);
+      // Interrupted-turn recovery stops the native engine process; none is running here.
+      if (git && command.command === "node")
+        return { exitCode: 0, stderr: "", durationMs: 1, stdout: "absent" };
       if (!git || command.command !== "git") throw new Error("Unexpected workspace command");
       const operation = command.args?.[0];
       return {
@@ -567,6 +572,7 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
         stdout: operation === "rev-parse" ? git.head : operation === "branch" ? git.branch : "",
       };
     });
+    vi.spyOn(domain.engines.get("claude_code"), "run").mockImplementation(inference);
     vi.spyOn(domain.engines.get("codex"), "run").mockImplementation(async (run) => {
       const git = workspaceGit.get(run.workspace.id);
       if (!git) throw new Error("Missing Builder workspace");
@@ -663,12 +669,14 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     ]);
     const turnId = await active(storyId);
     const previous = inference.mock.calls.length;
-    const previousCredentials = vi.mocked(domain.credentials.issue).mock.calls.length;
-    const previousWorkspace = vi.mocked(domain.runtime.exec).mock.calls.length;
     await Promise.all([dispatch(turnId), dispatch(turnId)]);
     expect(inference.mock.calls).toHaveLength(previous + 1);
-    expect(domain.credentials.issue).toHaveBeenCalledTimes(previousCredentials);
-    expect(domain.runtime.exec).toHaveBeenCalledTimes(previousWorkspace);
+    // The Reviewer worked with a read-only GitHub token.
+    expect(vi.mocked(domain.credentials.issue).mock.calls.at(-1)).toEqual([
+      orgId,
+      projectId,
+      { readOnly: true },
+    ]);
     const api = await state(storyId);
     expect(api).toMatchObject({ phase: "human_review", reviewsStarted: 1, correctionsStarted: 0 });
     expect(api?.reviews[0]?.candidate.pullRequests).toHaveLength(2);
@@ -753,6 +761,24 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       reviewsStarted: 1,
       correctionsStarted: 1,
     });
+  });
+
+  it("discards a Reviewer's change to the workspace and stops for a person", async () => {
+    const { storyId } = await story("writes");
+    const reviewed = (await state(storyId))?.candidate?.pullRequests.find((pull) => pull.primary);
+    const exec = vi.mocked(domain.runtime.exec);
+    const before = exec.mock.calls.length;
+    await dispatch(await active(storyId));
+    expect(await state(storyId)).toMatchObject({
+      phase: "decision_required",
+      reviewsStarted: 1,
+      reason: expect.stringContaining("changed the workspace"),
+    });
+    const restored = exec.mock.calls
+      .slice(before)
+      .map(([, command]) => command.args?.join(" "))
+      .filter((args) => args?.startsWith("reset --hard"));
+    expect(restored).toContain(`reset --hard ${reviewed?.headSha}`);
   });
 
   it("starts no cycle for a Builder turn that does not declare its delivery", async () => {
@@ -1010,13 +1036,17 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     const turnId = await active(storyId);
     const entered = latch();
     const release = latch();
-    inference.mockImplementationOnce(async (input) => {
+    inference.mockImplementationOnce(async (run) => {
       entered.resolve();
       await release.promise;
       return {
-        model: input.model,
-        outcome: "incomplete",
-        text: "",
+        nativeSessionId: `review-${run.turnId}`,
+        progress: [],
+        events: [],
+        durationMs: 10,
+        exitCode: 0,
+        stderr: "",
+        output: "",
         usage: { inputTokens: 100, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
       };
     });

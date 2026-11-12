@@ -324,9 +324,6 @@ export function WorkflowPolicy({
                   {review.policy.reviewCycle.requiredChecks.map((check) => check.name).join(", ")}.
                 </>
               ) : null}
-              {review.policy.reviewCycle.syntheticTest ? (
-                <> Isolated synthetic verification configured.</>
-              ) : null}
             </p>
           ) : (
             <p className="text-(--mut)">Automatic delivery review is off.</p>

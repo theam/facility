@@ -30,6 +30,7 @@ import {
   reviewCatalogProblem,
   reviewCorrectionPrompt,
   reviewDecision,
+  reviewTurnInstructions,
 } from "./review-cycle-rules.js";
 import {
   assertDeliveryUnchanged,
@@ -378,6 +379,23 @@ export class StoryReviewCycles {
       if (error instanceof ReviewCycleStop) return false;
       throw error;
     }
+  }
+
+  /** The review contract a native Reviewer turn receives for the pinned candidate. */
+  async reviewContract(cycle: ReviewCycle) {
+    const candidate = cycle.data.status.candidate;
+    const context = await readWorkflowPlan(this.db, cycle);
+    if (!candidate || !context.plan || !context.decision)
+      throw new ReviewCycleStop("The approved plan or the pinned candidate is unavailable.");
+    return reviewTurnInstructions({
+      candidate,
+      plan: {
+        revision: context.plan.revision,
+        decisionRevision: context.decision.decisionRevision,
+        markdown: context.plan.markdown,
+      },
+      previous: cycle.data.status.reviews.at(-1)?.result,
+    });
   }
 
   /** Before the admission lock: the catalog and the live candidate evidence. */

@@ -5,6 +5,7 @@ import { parseAgentManifest } from "@facility/agents";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AgentEngineError,
+  CLAUDE_READ_ONLY_TOOLS,
   ClaudeCodeEngine,
   ClaudeEventParser,
   CodexEngine,
@@ -212,6 +213,57 @@ describe("native agent engines", () => {
     ]);
     expect(runtime.command?.args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(runtime.command?.args).toEqual(expect.arrayContaining(["codex-thread", "continue"]));
+  });
+
+  it("restricts read-only turns to reading tools and Codex's read-only sandbox", async () => {
+    const claudeOutput = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      session_id: "claude-review",
+      result: "reviewed",
+    })}\n`;
+    const claudeRuntime = new EngineRuntime({
+      exitCode: 0,
+      stdout: claudeOutput,
+      stderr: "",
+      durationMs: 5,
+    });
+    await new ClaudeCodeEngine(claudeRuntime).run({
+      turnId: "turn_review",
+      manifest: manifest("claude_code"),
+      workspace,
+      prompt: "review",
+      cwd: "repos/app",
+      readOnly: true,
+    });
+    const claudeArgs = claudeRuntime.command?.args ?? [];
+    expect(claudeArgs).not.toContain("bypassPermissions");
+    expect(claudeArgs).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
+    const allowed = claudeArgs[claudeArgs.indexOf("--allowedTools") + 1] ?? "";
+    expect(allowed.split(",")).toEqual(CLAUDE_READ_ONLY_TOOLS);
+    expect(allowed).not.toMatch(/Edit|Write|git push|git commit|gh api/);
+    expect(claudeArgs[claudeArgs.indexOf("--disallowedTools") + 1]).toBe("Edit,Write,NotebookEdit");
+
+    const codexOutput = `${JSON.stringify({ type: "thread.started", thread_id: "codex-review" })}\n`;
+    const codexRuntime = new EngineRuntime({
+      exitCode: 0,
+      stdout: codexOutput,
+      stderr: "",
+      durationMs: 5,
+    });
+    await new CodexEngine(codexRuntime)
+      .run({
+        turnId: "turn_review",
+        manifest: manifest("codex"),
+        workspace,
+        prompt: "review",
+        cwd: "repos/app",
+        readOnly: true,
+      })
+      .catch(() => undefined);
+    const codexArgs = codexRuntime.command?.args ?? [];
+    expect(codexArgs).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(codexArgs).toEqual(expect.arrayContaining(["--sandbox", "read-only"]));
   });
 
   it("rejects malformed engine output and non-zero exits", async () => {

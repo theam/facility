@@ -16,10 +16,6 @@ export const MAX_CORRECTIONS = 1;
 export const REVIEW_TRIGGER = "review_cycle";
 export const REVIEW_ACTOR = { type: "system", id: "delivery-review-cycle" } as const;
 
-export function isIsolatedReview(turn: { triggerType: string; triggerKey: string | null }) {
-  return turn.triggerType === REVIEW_TRIGGER && turn.triggerKey?.endsWith(":review") === true;
-}
-
 export class ReviewCycleStop extends Error {}
 
 /** GitHub evidence could not be read for a reason that may clear on its own. The
@@ -89,6 +85,45 @@ export function declaresRegisteredDelivery(
   );
 }
 
+/** The structured result: one <facility-review> block in a readable final response,
+ * or a response that is only the JSON object. */
+export function reviewResultJson(output: string) {
+  const blocks = [...output.matchAll(/<facility-review>([\s\S]*?)<\/facility-review>/g)];
+  if (blocks.length > 1) return null;
+  return (blocks[0]?.[1] ?? output).trim();
+}
+
+/** What a native, read-only Reviewer turn receives on top of its own prompt. */
+export function reviewTurnInstructions(input: {
+  candidate: ReviewCandidate;
+  plan: { revision: number; decisionRevision: number; markdown: string };
+  previous?: DeliveryReviewResult;
+}) {
+  const repositories = input.candidate.pullRequests.map((pull) => ({
+    repository: pull.repository,
+    number: pull.number,
+    url: pull.url,
+    baseSha: pull.baseSha,
+    headSha: pull.headSha,
+    checkout: `repos/${pull.repository}`,
+  }));
+  return [
+    "## Automatic delivery review",
+    "You are the read-only Reviewer of this story's delivery. You cannot edit files, commit, push, deploy, comment or approve; Facility rejects any change you make to a checkout and stops the cycle. Facility publishes your result on each pull request for you.",
+    "Inspect the code itself: in each checkout run `git diff <baseSha>...<headSha>` and `git log`, read the surrounding code, consumers and tests beyond the diff, and use `gh pr view`, `gh pr diff` and `gh pr checks` for the pull request and its CI. Fetch a missing commit with `git fetch origin <sha>`.",
+    "Review all required PRs as one delivery against the approved plan. Account for each acceptance criterion with a stable criterion ID, and use it as a finding's requirement when it is violated. Trace consumers, security boundaries, existing data and regressions; report missing essential evidence.",
+    "Use open for new or persisting findings. In round 2 include every previous finding by ID and use resolved only with evidence on the new heads. Use P2 with category suggestion for non-blocking feedback. Use requires_decision for a fix outside the approved scope or a decision the Builder cannot make.",
+    "Report CI and anything you reproduced as observations bound to the candidate; distinguish static reading from reproduced behaviour.",
+    "End your final response with exactly one <facility-review> block containing one JSON object that follows this schema. Copy candidate.id and each required repository, PR number, baseSha and headSha into reviewedPulls.",
+    JSON.stringify(z.toJSONSchema(DeliveryReviewResultSchema)),
+    "### Candidate",
+    JSON.stringify({ id: input.candidate.id, pullRequests: repositories }),
+    `### Approved plan r${input.plan.revision} (decision ${input.plan.decisionRevision})`,
+    input.plan.markdown,
+    ...(input.previous ? ["### Previous review result", JSON.stringify(input.previous)] : []),
+  ].join("\n\n");
+}
+
 export function blocksDelivery(finding: ReviewFinding) {
   return (
     finding.disposition === "open" &&
@@ -107,8 +142,9 @@ export function readReviewResult(
     new ReviewCycleStop("The Reviewer did not report complete evidence for the exact candidate.");
   let result: DeliveryReviewResult;
   try {
-    if (output.length > 32_768) throw invalid();
-    result = DeliveryReviewResultSchema.parse(JSON.parse(output));
+    const json = reviewResultJson(output);
+    if (!json || json.length > 32_768) throw invalid();
+    result = DeliveryReviewResultSchema.parse(JSON.parse(json));
   } catch {
     throw invalid();
   }

@@ -12,13 +12,6 @@ const PositiveInteger = z.number().int().positive();
 const Text = z.string().trim().min(1).max(1_000);
 const Agent = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
 
-export const ReviewSourceSchema = z
-  .object({
-    repository: Repository,
-    path: ConsultationPath,
-    revision: z.enum(["base", "head"]).optional(),
-  })
-  .strict();
 export const ReviewCyclePolicySchema = z
   .object({
     builderAgent: Agent,
@@ -32,22 +25,6 @@ export const ReviewCyclePolicySchema = z
     requiredChecks: z
       .array(z.object({ repository: Repository, name: z.string().min(1).max(100) }).strict())
       .max(40)
-      .optional(),
-    sources: z.array(ReviewSourceSchema).max(12).optional(),
-    syntheticTest: z
-      .object({
-        argv: z
-          .array(
-            z
-              .string()
-              .min(1)
-              .max(250)
-              .refine((text) => !text.includes("\0")),
-          )
-          .min(1)
-          .max(16),
-      })
-      .strict()
       .optional(),
   })
   .strict()

@@ -4,18 +4,16 @@ import {
   type ReviewFinding,
   StoryWorkflowPolicySchema,
 } from "@facility/core";
-import type Docker from "dockerode";
 import { describe, expect, it, vi } from "vitest";
-import { callConsultationProvider } from "../src/stories/consultation-provider.js";
 import {
   blocksDelivery,
   checkReviewBudget,
   deliveryHeadsFromOutput,
   readReviewResult,
   reviewDecision,
+  reviewResultJson,
   transientGithubFailure,
 } from "../src/stories/review-cycle-rules.js";
-import { dockerReviewSandbox } from "../src/workspaces/review-sandbox.js";
 
 const candidate: ReviewCandidate = {
   id: "c".repeat(64),
@@ -162,78 +160,17 @@ describe("bounded review contract", () => {
   });
 });
 
-describe("isolated review execution", () => {
-  it("sends a text-only provider request without tools or a workspace capability", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async (_, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body.tools).toEqual([]);
-      expect(body.system).toMatch(/no tools or ability to change files/);
-      expect(body).not.toHaveProperty("workspace");
-      return Response.json({
-        type: "message",
-        role: "assistant",
-        model: "claude-sonnet-5",
-        stop_reason: "end_turn",
-        content: [{ type: "text", text: "{}" }],
-        usage: { input_tokens: 50, output_tokens: 10 },
-      });
-    });
-    await expect(
-      callConsultationProvider(
-        {
-          provider: "anthropic",
-          model: "claude-sonnet-5",
-          apiKey: "synthetic-fixture-key",
-          prompt: "Verify the synthetic result.",
-          purpose: "delivery_review",
-        },
-        fetch,
+describe("native read-only review contract", () => {
+  it("reads one structured block from a readable final response", () => {
+    expect(reviewResultJson('Summary first.\n<facility-review>{"a":1}</facility-review>')).toBe(
+      '{"a":1}',
+    );
+    expect(reviewResultJson('{"a":1}')).toBe('{"a":1}');
+    expect(
+      reviewResultJson(
+        "<facility-review>{}</facility-review><facility-review>{}</facility-review>",
       ),
-    ).resolves.toMatchObject({ outcome: "completed" });
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-
-  it("passes only pinned files and a fixed command to a disposable networkless container", async () => {
-    const container = {
-      start: vi.fn(async () => undefined),
-      wait: vi.fn(async () => ({ StatusCode: 0 })),
-      logs: vi.fn(async () =>
-        Buffer.from('facility-review-result:{"exitCode":0,"output":"verified"}'),
-      ),
-      kill: vi.fn(async () => undefined),
-      remove: vi.fn(async () => undefined),
-    };
-    const createContainer = vi.fn(async (_options: Docker.ContainerCreateOptions) => container);
-    const run = dockerReviewSandbox("fixture-node-image", { createContainer } as unknown as Docker);
-    const argv = ["node", "example/app/check.js"];
-    const files = [{ path: "example/app/check.js", text: "process.exit(0);" }];
-    await expect(run(argv, files, AbortSignal.timeout(1_000))).resolves.toEqual({
-      exitCode: 0,
-      output: "verified",
-    });
-    const [options] = createContainer.mock.calls[0] ?? [];
-    if (!options) throw new Error("The sandbox did not create a container");
-    expect(options).toMatchObject({
-      Entrypoint: ["node", "-e"],
-      User: "65534:65534",
-      NetworkDisabled: true,
-      Env: ["HOME=/tmp"],
-      HostConfig: {
-        NetworkMode: "none",
-        ReadonlyRootfs: true,
-        CapDrop: ["ALL"],
-        SecurityOpt: ["no-new-privileges:true"],
-      },
-    });
-    expect(options.HostConfig?.Mounts).toBeUndefined();
-    expect(options.HostConfig?.Binds).toBeUndefined();
-    expect(options.HostConfig?.Privileged).toBeUndefined();
-    expect(JSON.parse(options.Cmd?.[1] ?? "")).toEqual({ argv, files });
-    expect(container.remove).toHaveBeenCalledOnce();
-    await expect(
-      run(argv, [{ path: "large.js", text: "a".repeat(70_000) }], AbortSignal.timeout(1_000)),
-    ).rejects.toThrow(/limit/);
-    expect(createContainer).toHaveBeenCalledOnce();
+    ).toBeNull();
   });
 });
 

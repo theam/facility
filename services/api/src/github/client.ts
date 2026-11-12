@@ -43,9 +43,22 @@ export type Octokit = {
 };
 
 export type GithubClientFactory = (installationId: number) => Promise<Octokit>;
+/** Installation permissions a read-only turn receives: it can read code, pull requests,
+ * issues and CI, and cannot push, merge, comment, review or change settings. */
+export const GITHUB_READ_ONLY_PERMISSIONS = {
+  contents: "read",
+  pull_requests: "read",
+  issues: "read",
+  checks: "read",
+  statuses: "read",
+  metadata: "read",
+} as const;
+
 export type GithubMaintainerTokenFactory = (input: {
   installationId: number;
   repositories: string[];
+  /** Narrows the token below the installation's permissions; omitted, it keeps them all. */
+  permissions?: Record<string, "read" | "write">;
 }) => Promise<{
   token: string;
   expiresAt: string;
@@ -88,10 +101,10 @@ export function createGithubMaintainerTokenFactory(
         })
       ).data,
   });
-  return async ({ installationId, repositories }) => {
+  return async ({ installationId, repositories, permissions }) => {
     const response = await app.octokit.request(
       "POST /app/installations/{installation_id}/access_tokens",
-      { installation_id: installationId, repositories },
+      { installation_id: installationId, repositories, ...(permissions ? { permissions } : {}) },
     );
     const token = response.data.token;
     const expiresAt = response.data.expires_at;

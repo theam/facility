@@ -40,7 +40,7 @@ import type {
 import { reconcileTurnBranch } from "./branch.js";
 import { type InputFileReference, validateInputFileReferences } from "./input-files.js";
 import { isGithubIssueStory } from "./phase.js";
-import { isIsolatedReview, REVIEW_TRIGGER } from "./review-cycle-rules.js";
+import { REVIEW_TRIGGER } from "./review-cycle-rules.js";
 import {
   REVIEW_DECISION_ATTENTION,
   reviewHoldsQueue,
@@ -757,7 +757,7 @@ export class StoryWorkspaceService {
           .orderBy(desc(workspaces.createdAt))
           .limit(1)
       )[0];
-      if (workspace?.externalRef && !isIsolatedReview(turn)) {
+      if (workspace?.externalRef) {
         processCleanup = await stopInterruptedEngineProcess(
           this.runtime,
           locatorFromRow(workspace),
@@ -851,7 +851,7 @@ export class StoryWorkspaceService {
           .orderBy(desc(workspaces.createdAt))
           .limit(1)
       )[0];
-      if (workspace?.externalRef && !isIsolatedReview(recovered)) {
+      if (workspace?.externalRef) {
         if (recovered.mayHaveSpent) {
           const measured = await readUsageJournal(
             this.runtime,
@@ -894,8 +894,7 @@ export class StoryWorkspaceService {
   /** Retry accounting without waking compute or rerunning a provider call. */
   async reconcileInterruptedUsage(input: { orgId: string; projectId: string; turnId: string }) {
     const turn = await scopedTurn(this.db, input.orgId, input.projectId, input.turnId);
-    if (!["succeeded", "failed", "canceled"].includes(turn.state) || isIsolatedReview(turn))
-      return false;
+    if (!["succeeded", "failed", "canceled"].includes(turn.state)) return false;
     const settled = await this.db
       .select({ priced: turnUsage.priced })
       .from(turnUsage)
