@@ -475,6 +475,15 @@ export function StoryPlanPanel({
           setInlineReview(null);
           router.refresh();
         }}
+        onConfirmed={() => {
+          setInlineReview(null);
+          setNotice(
+            inlineReview.request.intent === "approve"
+              ? `Approval recorded for plan r${inlineReview.request.planRevision}.`
+              : `Requested changes recorded for plan r${inlineReview.request.planRevision}. Continue in the conversation to refine it.`,
+          );
+          router.refresh();
+        }}
       />
     ) : canWrite && current?.plan && (!editing || selection) ? (
       <div className="flex flex-col gap-3">

@@ -27,7 +27,8 @@ export function StoryWorkflowPanel({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState<DeliveryAcceptanceRequest | null>(null);
-  const [inlineReview, setInlineReview] = useState<DeliveryAcceptanceReview | null>(null);
+  const [inlineReview, setInlineReview] = useState<DeliveryAcceptanceReview | null>(null),
+    [notice, setNotice] = useState<string | null>(null);
   const working = useRef(false),
     retry = useRef<{ candidate: string; key: string } | null>(null);
   const path = `/v1/projects/${encodeURIComponent(initial.projectId)}/workspace-stories/${encodeURIComponent(initial.storyId)}`;
@@ -78,6 +79,7 @@ export function StoryWorkflowPanel({
     working.current = true;
     setBusy(true);
     setError(null);
+    setNotice(null);
     const delivery = await clientApi<StoryDelivery>("GET", `${path}/delivery`);
     if (
       !delivery.ok ||
@@ -198,6 +200,11 @@ export function StoryWorkflowPanel({
           {error}
         </p>
       ) : null}
+      {notice ? (
+        <p role="status" className="text-sm text-(--ok)">
+          {notice}
+        </p>
+      ) : null}
       {inlineReview ? (
         <DeliveryAcceptanceConfirmation
           key={inlineReview.request.id}
@@ -206,6 +213,14 @@ export function StoryWorkflowPanel({
           onClose={() => {
             setInlineReview(null);
             setRequest(null);
+            router.refresh();
+          }}
+          onConfirmed={() => {
+            setInlineReview(null);
+            setRequest(null);
+            setNotice(
+              "Acceptance recorded. Merging and completing the story remain separate actions.",
+            );
             router.refresh();
           }}
         />

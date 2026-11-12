@@ -49,7 +49,7 @@ function required<T>(value: T | null | undefined): T {
 }
 
 describe("delivery acceptance on the story", () => {
-  it("opens the confirmation in place with the review's proof and keeps the link as fallback", async () => {
+  it("confirms delivery acceptance in place with the review's proof and closes once recorded", async () => {
     const request = {
       id: "acceptance-request",
       status: "pending" as const,
@@ -93,6 +93,8 @@ describe("delivery acceptance on the story", () => {
       if (init?.method === "POST" && target.endsWith("/delivery-acceptance"))
         return Response.json(request);
       if (target.endsWith("/delivery-acceptance/acceptance-request")) return Response.json(review);
+      if (init?.method === "POST" && target.endsWith("/acceptance-request/confirm"))
+        return Response.json({ status: "current", receipt: null });
       throw new Error(`unexpected ${target}`);
     });
     await render(workflowFixture());
@@ -107,6 +109,17 @@ describe("delivery acceptance on the story", () => {
     await act(async () => cancel?.click());
     expect(container.querySelector('[aria-label="Confirm delivery acceptance"]')).toBeNull();
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/confirm"))).toBe(false);
+    await act(async () => required(acceptanceButton()).click());
+    const reopened = container.querySelector('[aria-label="Confirm delivery acceptance"]');
+    const accept = [...(reopened?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === "Accept this exact delivery",
+    );
+    await act(async () => accept?.click());
+    const call = fetch.mock.calls.find(([url]) => String(url).endsWith("/confirm"));
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ proof: review.proof });
+    expect(container.querySelector('[aria-label="Confirm delivery acceptance"]')).toBeNull();
+    expect(container.textContent).toContain("Acceptance recorded.");
+    expect(navigation.refresh).toHaveBeenCalled();
   });
 });
 

@@ -328,6 +328,28 @@ describe("revision-bound plan UI", () => {
     expect(container.querySelector('[aria-label="Confirm plan decision"]')).toBeNull();
     expect(button("Approve plan r1")).toBeDefined();
   });
+  it("closes the inline confirmation once recorded and leaves the outcome to the plan", async () => {
+    const detail = review();
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (request?.method === "POST" && target.endsWith("/confirm")) return Response.json({});
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`)) return Response.json(detail);
+      return Response.json(workflowFixture());
+    });
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    const inline = container.querySelector('[aria-label="Confirm plan decision"]');
+    const confirm = [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === "Approve plan r1",
+    );
+    await act(async () => confirm?.click());
+    expect(container.querySelector('[aria-label="Confirm plan decision"]')).toBeNull();
+    expect(container.textContent).toContain("Approval recorded for plan r1.");
+    expect(container.textContent).not.toContain("Decision recorded");
+    expect(navigation.refresh).toHaveBeenCalled();
+  });
   it("requests only the exact linked current revision with the existing decision boundary", async () => {
     fetch.mockResolvedValue(Response.json({ request: { id: "exact-request" } }));
     const selected = plan(3);

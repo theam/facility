@@ -14,7 +14,8 @@ import { formatTime } from "@/lib/story-presentation";
  * Confirms one requested plan decision with its single-use proof. The same
  * component serves the confirmation page that request links (including MCP
  * requests) open, and the inline step on the story, where `compact` hides the
- * plan and scope already shown above it.
+ * plan and scope already shown above it and `onConfirmed` hands the recorded
+ * decision back so the plan itself shows its outcome once.
  */
 export function PlanConfirmation({
   initial,
@@ -22,12 +23,14 @@ export function PlanConfirmation({
   initialWorkflowError,
   compact = false,
   onClose,
+  onConfirmed,
 }: {
   initial: PlanDecisionReview;
   initialWorkflow?: StoryWorkflowStatus;
   initialWorkflowError?: string;
   compact?: boolean;
   onClose?: () => void;
+  onConfirmed?: () => void;
 }) {
   const [review, setReview] = useState(initial),
     [error, setError] = useState<string | null>(null);
@@ -107,6 +110,10 @@ export function PlanConfirmation({
     setBusy(false);
     if (!result.ok) {
       setError(result.message);
+      return;
+    }
+    if (onConfirmed) {
+      onConfirmed();
       return;
     }
     setReceipt(

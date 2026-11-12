@@ -61,10 +61,8 @@ async function render(owner = "person-a", story = "story-a", catalog = agents) {
         projectId="project-a"
         draftOwnerId={owner}
         story={{ ...baseStory, id: story }}
-        workspace={null}
         agents={catalog}
         canExecute
-        canWrite={false}
         activeTurn={null}
         waitingAgent={null}
         artifacts={[]}

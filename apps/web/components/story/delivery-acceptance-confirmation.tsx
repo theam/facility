@@ -10,16 +10,19 @@ import { formatTime } from "@/lib/story-presentation";
 /**
  * Confirms one delivery acceptance request with its single-use proof. The same
  * component serves the confirmation page that request links (including MCP
- * requests) open, and the inline step on the story (`compact`).
+ * requests) open, and the inline step on the story (`compact`), where
+ * `onConfirmed` hands the result back so the story shows the receipt once.
  */
 export function DeliveryAcceptanceConfirmation({
   initial,
   compact = false,
   onClose,
+  onConfirmed,
 }: {
   initial: DeliveryAcceptanceReview;
   compact?: boolean;
   onClose?: () => void;
+  onConfirmed?: () => void;
 }) {
   const [review, setReview] = useState(initial),
     [receipt, setReceipt] = useState(initial.receipt);
@@ -84,6 +87,10 @@ export function DeliveryAcceptanceConfirmation({
     setBusy(false);
     if (!result.ok) {
       setError(result.message);
+      return;
+    }
+    if (onConfirmed) {
+      onConfirmed();
       return;
     }
     setReceipt(result.data.receipt);
