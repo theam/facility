@@ -10,12 +10,7 @@ export function HairlineGrid({
   cols = "sm:grid-cols-2 lg:grid-cols-3",
   ...props
 }: HTMLAttributes<HTMLDivElement> & { cols?: string }) {
-  return (
-    <div
-      className={cx("grid gap-3", cols, className)}
-      {...props}
-    />
-  );
+  return <div className={cx("grid gap-3", cols, className)} {...props} />;
 }
 
 export function Cell({
