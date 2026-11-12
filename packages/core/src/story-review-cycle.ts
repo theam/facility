@@ -17,7 +17,6 @@ export const ReviewCyclePolicySchema = z
     builderAgent: Agent,
     reviewerAgent: Agent,
     timeoutMinutes: z.number().int().min(1).max(120),
-    maxCostCents: z.number().int().min(1).max(10_000),
     requiredPullLabel: z
       .string()
       .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$/)
@@ -143,7 +142,6 @@ export const ReviewCycleStatusSchema = z.object({
   reviewsStarted: z.number().int().min(0).max(2),
   correctionsStarted: z.number().int().min(0).max(1),
   deadline: z.string(),
-  maxCostCents: z.number(),
   costCents: z.number().nonnegative().nullable(),
   reason: z.string().nullable(),
   activeTurnId: z.string().nullable(),

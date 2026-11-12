@@ -18069,11 +18069,6 @@
                               "minimum": 1,
                               "maximum": 120
                             },
-                            "maxCostCents": {
-                              "type": "integer",
-                              "minimum": 1,
-                              "maximum": 10000
-                            },
                             "requiredPullLabel": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
@@ -18106,8 +18101,7 @@
                           "required": [
                             "builderAgent",
                             "reviewerAgent",
-                            "timeoutMinutes",
-                            "maxCostCents"
+                            "timeoutMinutes"
                           ],
                           "additionalProperties": false
                         }
@@ -18282,11 +18276,6 @@
                             "minimum": 1,
                             "maximum": 120
                           },
-                          "maxCostCents": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10000
-                          },
                           "requiredPullLabel": {
                             "type": "string",
                             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
@@ -18319,8 +18308,7 @@
                         "required": [
                           "builderAgent",
                           "reviewerAgent",
-                          "timeoutMinutes",
-                          "maxCostCents"
+                          "timeoutMinutes"
                         ],
                         "additionalProperties": false
                       }
@@ -18418,11 +18406,6 @@
                               "minimum": 1,
                               "maximum": 120
                             },
-                            "maxCostCents": {
-                              "type": "integer",
-                              "minimum": 1,
-                              "maximum": 10000
-                            },
                             "requiredPullLabel": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
@@ -18455,8 +18438,7 @@
                           "required": [
                             "builderAgent",
                             "reviewerAgent",
-                            "timeoutMinutes",
-                            "maxCostCents"
+                            "timeoutMinutes"
                           ],
                           "additionalProperties": false
                         }
@@ -18646,11 +18628,6 @@
                             "minimum": 1,
                             "maximum": 120
                           },
-                          "maxCostCents": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 10000
-                          },
                           "requiredPullLabel": {
                             "type": "string",
                             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
@@ -18683,8 +18660,7 @@
                         "required": [
                           "builderAgent",
                           "reviewerAgent",
-                          "timeoutMinutes",
-                          "maxCostCents"
+                          "timeoutMinutes"
                         ],
                         "additionalProperties": false
                       }
@@ -18799,11 +18775,6 @@
                               "minimum": 1,
                               "maximum": 120
                             },
-                            "maxCostCents": {
-                              "type": "integer",
-                              "minimum": 1,
-                              "maximum": 10000
-                            },
                             "requiredPullLabel": {
                               "type": "string",
                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
@@ -18836,8 +18807,7 @@
                           "required": [
                             "builderAgent",
                             "reviewerAgent",
-                            "timeoutMinutes",
-                            "maxCostCents"
+                            "timeoutMinutes"
                           ],
                           "additionalProperties": false
                         }
@@ -19047,11 +19017,6 @@
                                   "minimum": 1,
                                   "maximum": 120
                                 },
-                                "maxCostCents": {
-                                  "type": "integer",
-                                  "minimum": 1,
-                                  "maximum": 10000
-                                },
                                 "requiredPullLabel": {
                                   "type": "string",
                                   "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
@@ -19084,8 +19049,7 @@
                               "required": [
                                 "builderAgent",
                                 "reviewerAgent",
-                                "timeoutMinutes",
-                                "maxCostCents"
+                                "timeoutMinutes"
                               ],
                               "additionalProperties": false
                             }
@@ -19182,9 +19146,6 @@
                         },
                         "deadline": {
                           "type": "string"
-                        },
-                        "maxCostCents": {
-                          "type": "number"
                         },
                         "costCents": {
                           "nullable": true,
@@ -19953,7 +19914,6 @@
                         "reviewsStarted",
                         "correctionsStarted",
                         "deadline",
-                        "maxCostCents",
                         "costCents",
                         "reason",
                         "activeTurnId",

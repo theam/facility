@@ -132,7 +132,6 @@ export async function seedReviewCycle(
       reviewerAgent: policy.reviewerAgent,
       reviewsStarted: 0,
       correctionsStarted: 0,
-      maxCostCents: policy.maxCostCents,
       costCents: 0,
       reason: "Checking the registered delivery and its evidence.",
       activeTurnId: null,

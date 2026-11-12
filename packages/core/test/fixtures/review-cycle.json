@@ -6,7 +6,6 @@
   "reviewsStarted": 1,
   "correctionsStarted": 0,
   "deadline": "2026-11-05T11:00:00Z",
-  "maxCostCents": 120,
   "costCents": null,
   "reason": "The permissions change exceeds the approved plan.",
   "activeTurnId": null,

@@ -111,8 +111,7 @@ export function ReviewCycleDetails({ cycle }: { cycle: ReviewCycle }) {
       </p>
       <p className="break-words text-(--mut)">
         Cost {cycle.costCents === null ? "unconfirmed" : `${cycle.costCents.toFixed(2)} cents`} ·
-        limit {cycle.maxCostCents} cents · deadline{" "}
-        <time dateTime={cycle.deadline}>{cycle.deadline}</time>
+        deadline <time dateTime={cycle.deadline}>{cycle.deadline}</time>
       </p>
       {cycle.phase === "decision_required" ? (
         <p className="text-(--mut)">

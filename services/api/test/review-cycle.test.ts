@@ -7,7 +7,6 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   blocksDelivery,
-  checkReviewBudget,
   deliveryHeadsFromOutput,
   readReviewResult,
   reviewDecision,
@@ -83,7 +82,6 @@ describe("bounded review contract", () => {
       builderAgent: "builder",
       reviewerAgent: "pr-reviewer",
       timeoutMinutes: 30,
-      maxCostCents: 100,
     };
     expect(StoryWorkflowPolicySchema.safeParse({ reviewCycle }).success).toBe(false);
     expect(
@@ -150,13 +148,6 @@ describe("bounded review contract", () => {
       report,
     );
     expect(reviewDecision(resolved, 2).phase).toBe("human_review");
-  });
-
-  it("rejects an unknown or unaffordable reservation", () => {
-    expect(() => checkReviewBudget(1, 2, 3)).not.toThrow();
-    expect(() => checkReviewBudget(1.1, 2, 3)).toThrow(/cost limit/);
-    expect(() => checkReviewBudget(null, 2, 3)).toThrow(/unconfirmed/);
-    expect(() => checkReviewBudget(0, null, 3)).toThrow(/unconfirmed/);
   });
 });
 

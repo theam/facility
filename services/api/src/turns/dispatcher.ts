@@ -25,6 +25,7 @@ import {
   REVIEW_TRIGGER,
   ReviewCycleStop,
   ReviewEvidenceUnavailable,
+  storyDeliversThroughCycle,
 } from "../stories/review-cycle-rules.js";
 import { type ReviewCycle, reviewHoldsQueue } from "../stories/review-cycle-state.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
@@ -456,10 +457,6 @@ export class TurnDispatcher {
           reviewInstruction,
         cwd: prepared.primaryCwd,
         nativeSessionId: resumedSessionId,
-        maxBudgetUsd:
-          cycle && manifest.engine === "claude_code" && cycle.data.status.costCents !== null
-            ? (cycle.data.policy.maxCostCents - cycle.data.status.costCents) / 100
-            : undefined,
         // The Reviewer keeps its engine credentials and the read-only GitHub token,
         // never the project's other secrets (deployment and service credentials).
         environment: reviewing
@@ -768,10 +765,23 @@ export class TurnDispatcher {
           if (
             policy.reviewCycle &&
             [policy.reviewCycle.reviewerAgent, "address-review"].includes(queued.agentName)
-          )
-            throw new ReviewCycleStop(
-              "This project assigns automatic review and correction to the delivery cycle.",
-            );
+          ) {
+            const [story] = await tx
+              .select({ provider: stories.provider, externalId: stories.externalId })
+              .from(stories)
+              .where(
+                and(
+                  eq(stories.orgId, scope.orgId),
+                  eq(stories.projectId, scope.projectId),
+                  eq(stories.id, scope.storyId),
+                ),
+              )
+              .limit(1);
+            if (!story || storyDeliversThroughCycle(story))
+              throw new ReviewCycleStop(
+                "This project reviews and corrects its stories' pull requests in the delivery cycle.",
+              );
+          }
         }
         let reviewCycle: ReviewCycle | undefined;
         if (queued.triggerType === REVIEW_TRIGGER) {

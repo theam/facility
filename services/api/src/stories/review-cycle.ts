@@ -1,5 +1,4 @@
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
-import { reservationCents } from "@facility/core";
 import {
   agentManifests,
   attentionItems,
@@ -18,7 +17,6 @@ import type { AgentCatalogService } from "../agents/catalog.js";
 import { reconciliationPage } from "../reconciliation.js";
 import { underDeadline } from "./consultation-sources.js";
 import {
-  checkReviewBudget,
   deliveryHeadsFromOutput,
   MAX_CORRECTIONS,
   MAX_REVIEWS,
@@ -275,7 +273,6 @@ export class StoryReviewCycles {
             throw new ReviewCycleStop(
               "The candidate or its required evidence changed during the cycle.",
             );
-          checkReviewBudget(status.costCents, 0, cycle.data.policy.maxCostCents);
           const decision = reviewDecision(report.result, status.reviewsStarted);
           if (decision.phase !== "correction") {
             await finishReviewCycle(tx, cycle, decision.phase, decision.reason);
@@ -403,11 +400,6 @@ export class StoryReviewCycles {
     if (!cycle.data.status.candidate)
       throw new ReviewCycleStop("The review cycle has no verified candidate.");
     await assertDeliveryUnchanged(tx, cycle, cycle.data.status.candidate);
-    checkReviewBudget(
-      await this.spent(tx, cycle),
-      reservationCents(turn.model, "turn"),
-      cycle.data.policy.maxCostCents,
-    );
     return cycle;
   }
 

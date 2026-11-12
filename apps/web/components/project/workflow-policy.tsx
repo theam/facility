@@ -201,8 +201,6 @@ export function WorkflowPolicy({
                     builderAgent,
                     reviewerAgent,
                     timeoutMinutes: 120,
-                    // Enough for two reviews and a correction with current models.
-                    maxCostCents: 2_000,
                   },
                 });
             }}
@@ -269,32 +267,10 @@ export function WorkflowPolicy({
                   }
                 />
               </Field>
-              <Field
-                label="Cost limit (USD)"
-                hint="For the cycle's own turns: reviews and the correction."
-              >
-                <TextInput
-                  type="number"
-                  min={0.01}
-                  max={100}
-                  step={1}
-                  value={cycle.maxCostCents / 100}
-                  onChange={(event) =>
-                    setPolicy({
-                      ...policy,
-                      reviewCycle: {
-                        ...cycle,
-                        maxCostCents: Math.round(Number(event.target.value) * 100),
-                      },
-                    })
-                  }
-                />
-              </Field>
             </div>
             <p className="text-[13px] text-(--mut)">
-              A turn starts only if a full turn still fits in the limit. Claude Code stops when it
-              reaches the limit; Codex reports its cost when the turn ends, so the last Codex turn
-              can go over it. The cycle then stops for a person.
+              The cycle runs at most two reviews and one correction within this time. Each of its
+              turns counts against the project budget like any other agent turn.
             </p>
           </div>
         ) : null}
@@ -317,8 +293,7 @@ export function WorkflowPolicy({
           {review.policy.reviewCycle ? (
             <p className="text-(--mut)">
               {review.policy.reviewCycle.builderAgent} → {review.policy.reviewCycle.reviewerAgent}.
-              Up to {review.policy.reviewCycle.timeoutMinutes} minutes and $
-              {(review.policy.reviewCycle.maxCostCents / 100).toFixed(2)}.
+              Up to {review.policy.reviewCycle.timeoutMinutes} minutes.
               {review.policy.reviewCycle.requiredPullLabel ? (
                 <>
                   {" "}

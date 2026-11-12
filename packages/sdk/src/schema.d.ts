@@ -9200,7 +9200,6 @@ export interface operations {
                                 builderAgent: string;
                                 reviewerAgent: string;
                                 timeoutMinutes: number;
-                                maxCostCents: number;
                                 requiredPullLabel?: string;
                                 requiredChecks?: {
                                     repository: string;
@@ -9314,7 +9313,6 @@ export interface operations {
                             builderAgent: string;
                             reviewerAgent: string;
                             timeoutMinutes: number;
-                            maxCostCents: number;
                             requiredPullLabel?: string;
                             requiredChecks?: {
                                 repository: string;
@@ -9348,7 +9346,6 @@ export interface operations {
                                 builderAgent: string;
                                 reviewerAgent: string;
                                 timeoutMinutes: number;
-                                maxCostCents: number;
                                 requiredPullLabel?: string;
                                 requiredChecks?: {
                                     repository: string;
@@ -9466,7 +9463,6 @@ export interface operations {
                             builderAgent: string;
                             reviewerAgent: string;
                             timeoutMinutes: number;
-                            maxCostCents: number;
                             requiredPullLabel?: string;
                             requiredChecks?: {
                                 repository: string;
@@ -9504,7 +9500,6 @@ export interface operations {
                                 builderAgent: string;
                                 reviewerAgent: string;
                                 timeoutMinutes: number;
-                                maxCostCents: number;
                                 requiredPullLabel?: string;
                                 requiredChecks?: {
                                     repository: string;
@@ -9628,7 +9623,6 @@ export interface operations {
                                     builderAgent: string;
                                     reviewerAgent: string;
                                     timeoutMinutes: number;
-                                    maxCostCents: number;
                                     requiredPullLabel?: string;
                                     requiredChecks?: {
                                         repository: string;
@@ -9654,7 +9648,6 @@ export interface operations {
                             reviewsStarted: number;
                             correctionsStarted: number;
                             deadline: string;
-                            maxCostCents: number;
                             costCents: number | null;
                             reason: string | null;
                             activeTurnId: string | null;

@@ -88,7 +88,7 @@ describe("interactive workflow controls", () => {
     expect(container.textContent).toContain("must confirm changes in Facility");
     expect(fetcher).not.toHaveBeenCalled();
   });
-  it("turns on the review cycle with limits that fit a correction and sends the cost in cents", async () => {
+  it("turns on the review cycle with a time limit that fits its turns and no cycle-specific budget", async () => {
     const agents: StoryAgent[] = ["builder", "pr-reviewer"].map((name) => ({
       name,
       description: "Fixture",
@@ -126,16 +126,8 @@ describe("interactive workflow controls", () => {
       ?.querySelector("input");
     if (!toggle) throw Error("Missing automatic review toggle");
     await act(async () => toggle.click());
-    const cost = [...container.querySelectorAll("label")]
-      .find((label) => label.textContent?.includes("Cost limit (USD)"))
-      ?.querySelector("input");
-    expect(cost?.value).toBe("20");
-    expect(container.textContent).toContain("the last Codex turn can go over it");
-    await act(async () => {
-      if (!cost) return;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(cost, "35");
-      cost.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    expect(container.textContent).not.toContain("Cost limit");
+    expect(container.textContent).toContain("counts against the project budget");
     await click("Review changes");
     expect(calls[0]).toMatchObject({
       policy: {
@@ -143,11 +135,11 @@ describe("interactive workflow controls", () => {
           builderAgent: "builder",
           reviewerAgent: "pr-reviewer",
           timeoutMinutes: 120,
-          maxCostCents: 3_500,
         },
       },
     });
-    expect(container.textContent).toContain("$35.00");
+    expect(calls[0]?.policy).not.toHaveProperty("reviewCycle.maxCostCents");
+    expect(container.textContent).toContain("Up to 120 minutes.");
   });
   it("requires an explicit policy review and preserves its confirmation key after an acknowledgement failure", async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];

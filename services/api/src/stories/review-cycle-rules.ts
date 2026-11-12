@@ -18,6 +18,13 @@ export const REVIEW_ACTOR = { type: "system", id: "delivery-review-cycle" } as c
 
 export class ReviewCycleStop extends Error {}
 
+/** Facility work stories (from the UI, MCP, an issue or a schedule) deliver through the
+ * review cycle. A story a GitHub trigger opened for someone else's pull request does not:
+ * that PR keeps the Reviewer's own GitHub review, with no Builder to correct it. */
+export function storyDeliversThroughCycle(story: { provider: string; externalId: string }) {
+  return !(story.provider === "github" && story.externalId.startsWith("pull-request:"));
+}
+
 /** GitHub evidence could not be read for a reason that may clear on its own. The
  * cycle keeps waiting and retries until its deadline instead of stopping. */
 export class ReviewEvidenceUnavailable extends Error {
@@ -252,17 +259,6 @@ export function reviewDecision(result: DeliveryReviewResult, reviewsStarted: num
       reason: "A blocker needs a human decision or a change to the approved plan.",
     } as const;
   return { phase: "correction", findings: blocking } as const;
-}
-
-export function checkReviewBudget(
-  spentCents: number | null,
-  estimate: number | null,
-  limit: number,
-) {
-  if (spentCents === null || estimate === null)
-    throw new ReviewCycleStop("Cost or pricing is unconfirmed. A human decision is required.");
-  if (spentCents + estimate > limit)
-    throw new ReviewCycleStop("The review cycle reached its cost limit.");
 }
 
 export function reviewCorrectionPrompt(candidate: ReviewCandidate, findings: ReviewFinding[]) {

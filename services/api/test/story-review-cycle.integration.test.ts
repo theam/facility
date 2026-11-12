@@ -155,7 +155,6 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       builderAgent: "builder",
       reviewerAgent: "pr-reviewer",
       timeoutMinutes: 10,
-      maxCostCents: 200,
     },
   };
   const policyPath = `/v1/projects/${projectId}/workflow-policy`;
@@ -1017,25 +1016,7 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     });
   });
 
-  it("stops on the cycle and project budget gates without starting an unaffordable turn", async () => {
-    const first = await story("minor");
-    const [row] = await db
-      .select()
-      .from(storyReviewCycles)
-      .where(eq(storyReviewCycles.storyId, first.storyId));
-    if (!row) throw new Error("Cycle not found");
-    const data = row.data as { policy: { maxCostCents: number } };
-    data.policy.maxCostCents = 1;
-    await db
-      .update(storyReviewCycles)
-      .set({ data })
-      .where(eq(storyReviewCycles.storyId, first.storyId));
-    await dispatch(await active(first.storyId));
-    expect(await state(first.storyId)).toMatchObject({
-      phase: "decision_required",
-      reviewsStarted: 0,
-      reason: expect.stringContaining("cost limit"),
-    });
+  it("stops on the project budget gate without starting an unaffordable turn", async () => {
     const monthly = await story("minor");
     await db
       .insert(projectBudgets)
