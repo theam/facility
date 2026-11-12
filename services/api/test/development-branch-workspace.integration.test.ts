@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { newId } from "@facility/core";
 import { createDb, migrate, orgs, projects, stories, workspaces } from "@facility/db";
 import Docker from "dockerode";
+import { eq } from "drizzle-orm";
 import { expect, it } from "vitest";
 import type { GithubWorkspaceCredentials } from "../src/github/workspace-credentials.js";
 import { PreviewWorkspaceGitApplicator } from "../src/stories/preview-convergence-executor.js";
+import { StoryWorkspaceService } from "../src/stories/service.js";
 import { DockerWorkspaceRuntime } from "../src/workspaces/docker.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import { previewBranchRefs } from "../src/workspaces/preview-branch.js";
@@ -56,7 +58,8 @@ it("creates work from development and retains commits and dirty files after the 
       orgId,
       projectId,
       storyId,
-      provider: "fake",
+      provider: runtime.provider,
+      environment: { image: workspace.image },
       externalRef: workspace.externalRef,
       volumeRef: workspace.volumeRef,
       state: "running",
@@ -108,6 +111,10 @@ it("creates work from development and retains commits and dirty files after the 
     await runtime.replaceCompute(workspace);
     const resumed = await runtime.wake(workspace);
     Object.assign(workspace, resumed);
+    await db
+      .update(workspaces)
+      .set({ externalRef: resumed.externalRef, volumeRef: resumed.volumeRef })
+      .where(eq(workspaces.id, workspaceId));
     await service.prepare(input);
     expect(await command("git rev-parse HEAD", "repos/acme/app")).toBe(head);
     expect(await command("git branch --show-current", "repos/acme/app")).toBe("feature/story");
@@ -157,6 +164,24 @@ it("creates work from development and retains commits and dirty files after the 
     expect(await command("cat dirty.txt", "repos/acme/app")).toBe("dirty");
     expect(await command("cat retained-data.txt", "repos/acme/app")).toBe("retained");
     expect(await command(`git rev-parse ${preview.ref}`, "repos/acme/app")).toBe(candidate);
+    await db
+      .update(workspaces)
+      .set({ externalRef: workspace.externalRef, volumeRef: workspace.volumeRef })
+      .where(eq(workspaces.id, workspaceId));
+    const lifecycle = new StoryWorkspaceService(db, runtime);
+    const deleted = await lifecycle.deleteWorkspace({
+      orgId,
+      projectId,
+      storyId,
+      actor: { type: "system", id: "test" },
+      confirm: true,
+    });
+    expect(deleted.story.deletedAt).toBeInstanceOf(Date);
+    expect(deleted.workspace?.state).toBe("destroyed");
+    expect((await runtime.inspect(workspace)).state).toBe("destroyed");
+    await expect(lifecycle.restore(orgId, projectId, storyId)).rejects.toMatchObject({
+      code: "story_workspace_deleted",
+    });
   } finally {
     await runtime.destroy(workspace);
     await client.end();

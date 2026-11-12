@@ -273,6 +273,14 @@ describe("durable story preview convergence", () => {
   it("queues a new story message until the preview writer releases the workspace", async () => {
     const now = new Date();
     const { scope } = await fixture(now);
+    const workspaceId = newId("ws");
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      ...scope,
+      provider: "fake",
+      volumeRef: `fake://${workspaceId}`,
+      state: "running",
+    });
     const preview = new StoryPreviewConvergenceService(db, async () => undefined);
     await preview.observe(scope, now);
     const claim = await preview.claim(scope, now);
