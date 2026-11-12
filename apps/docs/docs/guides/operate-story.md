@@ -64,7 +64,8 @@ When the workflow response includes a recorded review cycle, the story leads wit
 configured Builder and Reviewer, reason, rounds and cost/time limits. Unknown cost stays
 unconfirmed. Expand the pinned candidate or an individual report to inspect exact heads,
 acceptance evidence, findings and the Reviewer's recommendation. A previous report keeps its
-own candidate and source links after a new head is recorded. Active review observations refresh
+own candidate and source links after a new head is recorded. Each report links to the comment
+review Facility left on each pull request, or says why GitHub refused it. Active review observations refresh
 without resetting opened reports; a failed refresh retains the last observation and explains
 the failure. The story does not offer acceptance during active correction or a decision stop,
 and it checks the current workflow again before requesting it. That is a check in the story
