@@ -251,9 +251,13 @@ test("runner Go binaries resolve the fixed cryptography and gRPC modules", () =>
 test("containerd rebuilds against patched compression without downgrading other tools", () => {
   const sourceBuild = runnerDockerfile.split(" AS containerd-build\n")[1]?.split("\nFROM ")[0];
   const replacement =
-    /go mod edit -replace=github\.com\/klauspost\/compress=github\.com\/klauspost\/compress@v1\.18\.7\s/g;
+    /go mod edit -replace=github\.com\/klauspost\/compress=github\.com\/klauspost\/compress@v1\.20\.2\s/g;
   assert.match(sourceBuild ?? "", replacement);
-  assert.equal([...runnerDockerfile.matchAll(replacement)].length, 1);
+  // Every Go source build that pins x/net also pins patched compression.
+  assert.equal(
+    [...runnerDockerfile.matchAll(replacement)].length,
+    [...runnerDockerfile.matchAll(/-replace=golang\.org\/x\/net=/g)].length,
+  );
 });
 
 test("compression audit validates effective embedded versions and fails closed on inspection errors", () => {
@@ -281,20 +285,20 @@ test("compression audit validates effective embedded versions and fails closed o
     go() {
       if [ "$3" = "$AUDIT_TEST_BINARY" ]; then
         case "$AUDIT_TEST_VARIANT" in
-          outdated) printf 'dep github.com/klauspost/compress v1.18.6\\n'; return ;;
-          stale-replacement) printf 'dep github.com/klauspost/compress v1.18.4\\n=> github.com/klauspost/compress v1.18.5\\n'; return ;;
-          substituted) printf 'dep github.com/klauspost/compress v1.18.4\\n=> example.com/fork v1.18.7\\n'; return ;;
+          outdated) printf 'dep github.com/klauspost/compress v1.19.1\\n'; return ;;
+          stale-replacement) printf 'dep github.com/klauspost/compress v1.18.4\\n=> github.com/klauspost/compress v1.18.7\\n'; return ;;
+          substituted) printf 'dep github.com/klauspost/compress v1.18.4\\n=> example.com/fork v1.20.2\\n'; return ;;
           malformed) printf 'dep github.com/klauspost/compress\\n'; return ;;
           error) return 1 ;;
-          patched) printf 'dep github.com/klauspost/compress v1.18.7\\n'; return ;;
-          newer) printf 'dep github.com/klauspost/compress v1.19.1\\n'; return ;;
-          newer-replacement) printf 'dep github.com/klauspost/compress v1.18.5\\n=> github.com/klauspost/compress v1.19.1\\n'; return ;;
-          prerelease) printf 'dep github.com/klauspost/compress v1.18.7-beta\\n'; return ;;
+          patched) printf 'dep github.com/klauspost/compress v1.20.2\\n'; return ;;
+          newer) printf 'dep github.com/klauspost/compress v1.21.0\\n'; return ;;
+          newer-replacement) printf 'dep github.com/klauspost/compress v1.18.5\\n=> github.com/klauspost/compress v1.21.0\\n'; return ;;
+          prerelease) printf 'dep github.com/klauspost/compress v1.20.2-beta\\n'; return ;;
           unreviewed-major) printf 'dep github.com/klauspost/compress v2.0.0\\n'; return ;;
           absent) printf 'dep example.com/unrelated v1.18.5\\n'; return ;;
         esac
       fi
-      printf 'dep example.com/unrelated v1.18.5\\ndep github.com/klauspost/compress v1.18.4\\n=> github.com/klauspost/compress v1.18.7\\ndep example.com/next v1.0.0\\n'
+      printf 'dep example.com/unrelated v1.18.5\\ndep github.com/klauspost/compress v1.18.4\\n=> github.com/klauspost/compress v1.20.2\\ndep example.com/next v1.0.0\\n'
     }
     ${loop.replaceAll(/\\\n/g, " ")}
   `;
@@ -527,7 +531,7 @@ test("runner rejects Chromium packages older than the reviewed security fix", ()
 test("image security refreshes invalidate cached distro layers and audit the cached package manager", () => {
   for (const path of ["Dockerfile", "apps/web/Dockerfile", "runner/Dockerfile"]) {
     const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-    assert.ok(dockerfile.includes("ARG DEBIAN_SECURITY_REFRESH=20261105"));
+    assert.ok(dockerfile.includes("ARG DEBIAN_SECURITY_REFRESH=20261112"));
     assert.match(dockerfile, /test -n "\$DEBIAN_SECURITY_REFRESH"/);
   }
   assert.match(runnerDockerfile, /brace-expansion@5\.0\.12/);
@@ -544,6 +548,12 @@ test("API and web reject APT packages older than the reviewed security fix", () 
   for (const path of ["Dockerfile", "apps/web/Dockerfile"]) {
     const dockerfile = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
     assert.match(dockerfile, /ARG APT_MIN_VERSION=3\.0\.4/);
+    assert.ok(dockerfile.includes("ARG ZLIB_MIN_VERSION=1:1.3.dfsg+really1.3.1-1+deb13u1"));
+    assert.ok(
+      dockerfile.includes(
+        `dpkg --compare-versions "$(dpkg-query -W -f='\${Version}' zlib1g)" ge "$ZLIB_MIN_VERSION"`,
+      ),
+    );
     for (const name of ["apt", "libapt-pkg7.0"]) {
       assert.ok(
         dockerfile.includes(
