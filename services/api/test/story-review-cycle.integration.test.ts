@@ -161,6 +161,15 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
   const policyPath = `/v1/projects/${projectId}/workflow-policy`;
   const path = (storyId: string) => `/v1/projects/${projectId}/workspace-stories/${storyId}`;
   const enqueue = vi.fn(async (_queue: string, _input: Record<string, unknown>) => null);
+  // Reviews Facility leaves on the fixture pull requests.
+  const publishedReviews: Array<{
+    repo: string;
+    pull: number;
+    commit_id: string;
+    event: string;
+    body: string;
+    html_url: string;
+  }> = [];
   // Simulated GitHub conditions for the pull reads the cycle makes.
   const github: { down?: boolean; hold?: { entered: () => void; released: Promise<void> } } = {};
   const request = vi.fn(async (route: string, args: Record<string, unknown>) => {
@@ -202,6 +211,24 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
           files: [{ ...file, status: "modified", additions: 1, deletions: 1 }],
         },
       };
+    }
+    if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews")
+      return {
+        data: publishedReviews.filter(
+          (review) => review.repo === args.repo && review.pull === Number(args.pull_number),
+        ),
+      };
+    if (route === "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews") {
+      const review = {
+        repo: String(args.repo),
+        pull: Number(args.pull_number),
+        commit_id: String(args.commit_id),
+        event: String(args.event),
+        body: String(args.body),
+        html_url: `https://github.com/${owner}/${args.repo}/pull/${args.pull_number}#review-${publishedReviews.length + 1}`,
+      };
+      publishedReviews.push(review);
+      return { data: review };
     }
     throw new Error("Forbidden operation in the GitHub review fake");
   });
@@ -679,6 +706,42 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     ]);
     const api = await state(storyId);
     expect(api).toMatchObject({ phase: "human_review", reviewsStarted: 1, correctionsStarted: 0 });
+    // Facility left the report on each pull request as a comment review of the exact head.
+    const ours = () =>
+      publishedReviews.filter((review) => items.some((pull) => pull.number === review.pull));
+    expect(ours()).toHaveLength(2);
+    for (const pull of items)
+      expect(ours().find((review) => review.pull === pull.number)).toMatchObject({
+        event: "COMMENT",
+        commit_id: pull.head,
+        body: expect.stringContaining("Facility automatic review"),
+      });
+    expect(api?.reviews[0]?.publication).toEqual(
+      items.map((pull) =>
+        expect.objectContaining({
+          number: pull.number,
+          state: "published",
+          url: expect.any(String),
+        }),
+      ),
+    );
+    // A retry that lost the record finds its marker on GitHub instead of posting again.
+    const [stored] = await db
+      .select()
+      .from(storyReviewCycles)
+      .where(eq(storyReviewCycles.storyId, storyId));
+    if (!stored) throw new Error("Missing review cycle");
+    const unrecorded = structuredClone(stored.data) as {
+      status: { reviews: Array<{ publication?: unknown }> };
+    };
+    delete unrecorded.status.reviews[0]?.publication;
+    await db
+      .update(storyReviewCycles)
+      .set({ data: unrecorded as typeof stored.data })
+      .where(eq(storyReviewCycles.storyId, storyId));
+    await cycles.reconcile(scope(storyId));
+    expect(ours()).toHaveLength(2);
+    expect((await state(storyId))?.reviews[0]?.publication).toHaveLength(2);
     expect(api?.reviews[0]?.candidate.pullRequests).toHaveLength(2);
     const response = await mcp.callTool({
       name: "facility_get_story_workflow",

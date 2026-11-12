@@ -157,6 +157,19 @@ export const ReviewCycleStatusSchema = z.object({
         planRevision: z.number(),
         candidate: ReviewCandidateSchema,
         result: DeliveryReviewResultSchema,
+        /** The review Facility left on each pull request for this report. */
+        publication: z
+          .array(
+            z.object({
+              repository: Repository,
+              number: PositiveInteger,
+              state: z.enum(["published", "failed"]),
+              url: z.url().optional(),
+              reason: z.string().max(500).optional(),
+            }),
+          )
+          .max(50)
+          .optional(),
       }),
     )
     .max(2),

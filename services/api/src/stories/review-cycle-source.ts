@@ -161,6 +161,42 @@ export class ReviewCycleSource {
     };
   }
 
+  /** Leaves Facility's comment review on the exact reviewed head, once per marker. */
+  async publishReview(
+    scope: WorkflowScope,
+    pull: Pull,
+    body: string,
+    marker: string,
+    signal: AbortSignal,
+  ) {
+    const repository = await this.files.identity(scope, pull.repositoryId);
+    if (pull.repository.toLowerCase() !== `${repository.owner}/${repository.name}`.toLowerCase())
+      throw new ReviewCycleStop("A connected repository changed during review.");
+    const client = await this.factory(repository.installationNumber);
+    if (!client.request) throw new ReviewCycleStop("GitHub is unavailable for this repository.");
+    const args = {
+      owner: repository.owner,
+      repo: repository.name,
+      pull_number: pull.number,
+      request: { signal, timeout: 10_000 },
+    };
+    const existing = (
+      await client.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+        ...args,
+        per_page: 100,
+      })
+    ).data as Array<{ body?: string | null; html_url?: string }>;
+    const found = existing.find((review) => review.body?.includes(marker));
+    if (found) return found.html_url ?? pull.url;
+    const created = await client.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+      ...args,
+      commit_id: pull.headSha,
+      event: "COMMENT",
+      body,
+    });
+    return (created.data as { html_url?: string }).html_url ?? pull.url;
+  }
+
   async diff(scope: WorkflowScope, pull: Pull, signal: AbortSignal) {
     const comparison = GithubCompare.safeParse(
       await this.get(undefined, scope, pull, { from: pull.baseSha, to: pull.headSha }, signal),

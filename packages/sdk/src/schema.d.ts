@@ -72,23 +72,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/dev-login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get dev login */
-        get: operations["getAuthDevLogin"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -1976,98 +1959,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description The request is invalid. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication is required or invalid. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The authenticated principal lacks the required permission. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The resource was not found or is outside the principal scope. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The request conflicts with current resource state. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The request rate limit was exceeded. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description An unexpected server error occurred. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description A required service is unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    getAuthDevLogin: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Default Response */
-            302: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
             };
             /** @description The request is invalid. */
             400: {
@@ -9315,15 +9206,6 @@ export interface operations {
                                     repository: string;
                                     name: string;
                                 }[];
-                                sources?: {
-                                    repository: string;
-                                    path: string;
-                                    /** @enum {string} */
-                                    revision?: "base" | "head";
-                                }[];
-                                syntheticTest?: {
-                                    argv: string[];
-                                };
                             };
                         };
                     };
@@ -9438,15 +9320,6 @@ export interface operations {
                                 repository: string;
                                 name: string;
                             }[];
-                            sources?: {
-                                repository: string;
-                                path: string;
-                                /** @enum {string} */
-                                revision?: "base" | "head";
-                            }[];
-                            syntheticTest?: {
-                                argv: string[];
-                            };
                         };
                     };
                     idempotency_key: string;
@@ -9481,15 +9354,6 @@ export interface operations {
                                     repository: string;
                                     name: string;
                                 }[];
-                                sources?: {
-                                    repository: string;
-                                    path: string;
-                                    /** @enum {string} */
-                                    revision?: "base" | "head";
-                                }[];
-                                syntheticTest?: {
-                                    argv: string[];
-                                };
                             };
                         };
                         nonce: string;
@@ -9608,15 +9472,6 @@ export interface operations {
                                 repository: string;
                                 name: string;
                             }[];
-                            sources?: {
-                                repository: string;
-                                path: string;
-                                /** @enum {string} */
-                                revision?: "base" | "head";
-                            }[];
-                            syntheticTest?: {
-                                argv: string[];
-                            };
                         };
                     };
                     nonce: string;
@@ -9655,15 +9510,6 @@ export interface operations {
                                     repository: string;
                                     name: string;
                                 }[];
-                                sources?: {
-                                    repository: string;
-                                    path: string;
-                                    /** @enum {string} */
-                                    revision?: "base" | "head";
-                                }[];
-                                syntheticTest?: {
-                                    argv: string[];
-                                };
                             };
                         };
                     };
@@ -9788,15 +9634,6 @@ export interface operations {
                                         repository: string;
                                         name: string;
                                     }[];
-                                    sources?: {
-                                        repository: string;
-                                        path: string;
-                                        /** @enum {string} */
-                                        revision?: "base" | "head";
-                                    }[];
-                                    syntheticTest?: {
-                                        argv: string[];
-                                    };
                                 };
                             };
                         };
@@ -9952,6 +9789,15 @@ export interface operations {
                                     }[];
                                     missingEvidence: string[];
                                 };
+                                publication?: {
+                                    repository: string;
+                                    number: number;
+                                    /** @enum {string} */
+                                    state: "published" | "failed";
+                                    /** Format: uri */
+                                    url?: string;
+                                    reason?: string;
+                                }[];
                             }[];
                         };
                         execution?: {
@@ -10039,152 +9885,6 @@ export interface operations {
                                 /** @enum {string} */
                                 method: "interactive_session";
                             } | null;
-                        };
-                        reviewCycle?: {
-                            id: string;
-                            /** @enum {string} */
-                            phase: "waiting_for_evidence" | "review" | "correction" | "human_review" | "decision_required";
-                            builderAgent: string;
-                            reviewerAgent: string;
-                            reviewsStarted: number;
-                            correctionsStarted: number;
-                            deadline: string;
-                            maxCostCents: number;
-                            costCents: number | null;
-                            reason: string | null;
-                            activeTurnId: string | null;
-                            candidate: {
-                                id: string;
-                                deliveryRevision: string;
-                                scopeRevision: number;
-                                pullRequests: {
-                                    repository: string;
-                                    number: number;
-                                    headSha: string;
-                                    baseSha: string;
-                                    repositoryId: string;
-                                    primary: boolean;
-                                    headRef: string;
-                                    baseRef: string;
-                                    /** Format: uri */
-                                    url: string;
-                                    changedFiles: number;
-                                    checks: {
-                                        headSha: string | null;
-                                        /** @enum {string} */
-                                        state: "pending" | "success" | "failure" | "unobserved";
-                                        observedAt: string | null;
-                                        runs: {
-                                            id: string;
-                                            name: string;
-                                            status: string;
-                                            conclusion: string | null;
-                                            observedAt: string;
-                                        }[];
-                                    };
-                                }[];
-                                preview: {
-                                    generation: string;
-                                    observedAt: string;
-                                    sources?: {
-                                        repository: string;
-                                        headSha: string;
-                                        submodules: {
-                                            repository: string;
-                                            path: string;
-                                            pinnedSha: string;
-                                            headSha: string;
-                                        }[];
-                                    }[];
-                                } | null;
-                            } | null;
-                            reviews: {
-                                turnId: string;
-                                reviewerManifestHash: string;
-                                policyRevision: number;
-                                planRevision: number;
-                                candidate: {
-                                    id: string;
-                                    deliveryRevision: string;
-                                    scopeRevision: number;
-                                    pullRequests: {
-                                        repository: string;
-                                        number: number;
-                                        headSha: string;
-                                        baseSha: string;
-                                        repositoryId: string;
-                                        primary: boolean;
-                                        headRef: string;
-                                        baseRef: string;
-                                        /** Format: uri */
-                                        url: string;
-                                        changedFiles: number;
-                                        checks: {
-                                            headSha: string | null;
-                                            /** @enum {string} */
-                                            state: "pending" | "success" | "failure" | "unobserved";
-                                            observedAt: string | null;
-                                            runs: {
-                                                id: string;
-                                                name: string;
-                                                status: string;
-                                                conclusion: string | null;
-                                                observedAt: string;
-                                            }[];
-                                        };
-                                    }[];
-                                    preview: {
-                                        generation: string;
-                                        observedAt: string;
-                                        sources?: {
-                                            repository: string;
-                                            headSha: string;
-                                            submodules: {
-                                                repository: string;
-                                                path: string;
-                                                pinnedSha: string;
-                                                headSha: string;
-                                            }[];
-                                        }[];
-                                    } | null;
-                                };
-                                result: {
-                                    candidateId: string;
-                                    reviewedPulls: {
-                                        repository: string;
-                                        number: number;
-                                        headSha: string;
-                                        baseSha: string;
-                                    }[];
-                                    acceptance: {
-                                        id: string;
-                                        criterion: string;
-                                        /** @enum {string} */
-                                        state: "verified" | "violated" | "unverified";
-                                        evidence: string;
-                                    }[];
-                                    findings: {
-                                        repository: string;
-                                        number: number;
-                                        id: string;
-                                        /** @enum {string} */
-                                        priority: "P0" | "P1" | "P2" | "P3";
-                                        /** @enum {string} */
-                                        category: "acceptance" | "correctness" | "security" | "data" | "suggestion";
-                                        requirement: string;
-                                        path: string;
-                                        line: number;
-                                        evidence: string;
-                                        impact: string;
-                                        fix: string;
-                                        /** @enum {string} */
-                                        disposition: "open" | "resolved";
-                                        /** @enum {string} */
-                                        correction: "within_plan" | "requires_decision";
-                                    }[];
-                                    missingEvidence: string[];
-                                };
-                            }[];
                         };
                     };
                 };

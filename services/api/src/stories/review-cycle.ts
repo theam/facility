@@ -28,6 +28,8 @@ import {
   ReviewEvidenceUnavailable,
   readReviewResult,
   reviewCatalogProblem,
+  reviewComment,
+  reviewCommentMarker,
   reviewCorrectionPrompt,
   reviewDecision,
   reviewTurnInstructions,
@@ -82,7 +84,61 @@ export class StoryReviewCycles {
     // read under the lock only if the cycle has not moved meanwhile. A transition
     // that needs fresh evidence (a finished correction) runs another pass.
     for (let pass = 0; pass < 3; pass++) {
-      if ((await this.reconcilePass(scope)) === "done") return;
+      if ((await this.reconcilePass(scope)) === "done") break;
+    }
+    await this.publishReviews(scope).catch(() => {
+      console.warn(
+        JSON.stringify({ event: "review_cycle.publication_deferred", storyId: scope.storyId }),
+      );
+    });
+  }
+
+  /** Leaves each recorded report on its pull requests as a comment review, outside the
+   * story lock, then records where it went (or why GitHub refused it) on the report. */
+  private async publishReviews(scope: WorkflowScope) {
+    const cycle = await latestReviewCycle(this.db, scope);
+    if (!cycle) return;
+    for (const [index, report] of cycle.data.status.reviews.entries()) {
+      if (report.publication) continue;
+      const publication = await Promise.all(
+        report.candidate.pullRequests.map(async (pull) => {
+          try {
+            const url = await this.source.publishReview(
+              cycle,
+              pull,
+              reviewComment(report, pull, index + 1),
+              reviewCommentMarker(report.turnId, pull),
+              AbortSignal.timeout(15_000),
+            );
+            return {
+              repository: pull.repository,
+              number: pull.number,
+              state: "published" as const,
+              url,
+            };
+          } catch (error) {
+            return {
+              repository: pull.repository,
+              number: pull.number,
+              state: "failed" as const,
+              reason:
+                error instanceof ReviewCycleStop
+                  ? error.message
+                  : "GitHub did not accept the review.",
+            };
+          }
+        }),
+      );
+      await this.db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as FacilityDb;
+        await lockWorkflowStory(tx, scope);
+        const latest = await latestReviewCycle(tx, scope);
+        if (latest?.originTurnId !== cycle.originTurnId) return;
+        const stored = latest.data.status.reviews.find((item) => item.turnId === report.turnId);
+        if (!stored || stored.publication) return;
+        stored.publication = publication;
+        await saveReviewCycle(tx, latest);
+      });
     }
   }
 
@@ -349,7 +405,7 @@ export class StoryReviewCycles {
     await assertDeliveryUnchanged(tx, cycle, cycle.data.status.candidate);
     checkReviewBudget(
       await this.spent(tx, cycle),
-      reservationCents(turn.model, reviewer ? "consultation" : "turn"),
+      reservationCents(turn.model, "turn"),
       cycle.data.policy.maxCostCents,
     );
     return cycle;

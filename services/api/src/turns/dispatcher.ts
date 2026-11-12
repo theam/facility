@@ -18,7 +18,6 @@ import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
-import { ConsultationProviderError } from "../stories/consultation-provider.js";
 import { type InputFileReference, validateInputFileReferences } from "../stories/input-files.js";
 import type { StoryReviewCycles } from "../stories/review-cycle.js";
 import {
@@ -893,7 +892,6 @@ export class TurnDispatcher {
           storyId: claimed.storyId,
           turnId: claimed.id,
           model: claimed.model,
-          isolatedReview: reviewCycle?.phase === "review",
         });
         if (reviewCycle) await this.review?.cycles.recordStart(tx, reviewCycle, claimed.id);
         return { kind: "running" as const, turn: claimed, reservationId, reviewCycle };

@@ -155,6 +155,32 @@ describe("recorded review cycle", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("links each review Facility left on GitHub and says when one was not published", async () => {
+    const cycle = reviewCycleFixture();
+    required(cycle.reviews[0]).publication = [
+      {
+        repository: "example/api",
+        number: 8,
+        state: "published",
+        url: "https://github.com/example/api/pull/8#review-1",
+      },
+      {
+        repository: "example/app",
+        number: 7,
+        state: "failed",
+        reason: "GitHub did not accept the review.",
+      },
+    ];
+    await render({ ...workflowFixture(), reviewCycle: cycle }, false);
+    expect(
+      container.querySelector('a[href="https://github.com/example/api/pull/8#review-1"]')
+        ?.textContent,
+    ).toContain("Review on example/api #8");
+    expect(container.textContent).toContain(
+      "Not published on example/app #7: GitHub did not accept the review.",
+    );
+  });
+
   it("keeps a previous report tied to its own head after a new candidate is recorded", async () => {
     const cycle = reviewCycleFixture();
     const oldHead = required(required(cycle.reviews[0]).candidate.pullRequests[1]).headSha;

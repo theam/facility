@@ -124,6 +124,43 @@ export function reviewTurnInstructions(input: {
   ].join("\n\n");
 }
 
+/** Identifies Facility's review of one pull request for one report, so a retry never posts twice. */
+export function reviewCommentMarker(turnId: string, pull: { repository: string; number: number }) {
+  return `<!-- facility-review ${turnId} ${pull.repository.toLowerCase()}#${pull.number} -->`;
+}
+
+/** The review Facility leaves on one pull request: a comment, never an approval. */
+export function reviewComment(
+  report: { turnId: string; candidate: ReviewCandidate; result: DeliveryReviewResult },
+  pull: { repository: string; number: number; headSha: string },
+  round: number,
+) {
+  const findings = report.result.findings.filter(
+    (finding) =>
+      finding.repository.toLowerCase() === pull.repository.toLowerCase() &&
+      finding.number === pull.number,
+  );
+  const blocking = findings.filter(blocksDelivery);
+  const line = (finding: ReviewFinding) =>
+    `- **${finding.priority} · ${finding.category}** \`${finding.path}:${finding.line}\` (${finding.disposition}): ${finding.impact}\n  Evidence: ${finding.evidence}\n  Fix: ${finding.fix}`;
+  return [
+    reviewCommentMarker(report.turnId, pull),
+    `**Facility automatic review** · round ${round} · head \`${pull.headSha.slice(0, 12)}\` · candidate \`${report.candidate.id.slice(0, 12)}\``,
+    blocking.length
+      ? `${blocking.length} blocking finding${blocking.length === 1 ? "" : "s"} in this pull request.`
+      : "No blocking findings in this pull request.",
+    ...(findings.length ? ["### Findings", ...findings.map(line)] : []),
+    "### Acceptance",
+    ...report.result.acceptance.map(
+      (criterion) => `- ${criterion.state} · ${criterion.criterion}: ${criterion.evidence}`,
+    ),
+    ...(report.result.missingEvidence.length
+      ? ["### Missing evidence", ...report.result.missingEvidence.map((item) => `- ${item}`)]
+      : []),
+    "_The Reviewer ran read-only. This review does not approve or merge; acceptance stays with a person in Facility._",
+  ].join("\n\n");
+}
+
 export function blocksDelivery(finding: ReviewFinding) {
   return (
     finding.disposition === "open" &&
