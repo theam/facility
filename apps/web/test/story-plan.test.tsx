@@ -328,6 +328,19 @@ describe("revision-bound plan UI", () => {
     expect(container.querySelector('[aria-label="Confirm plan decision"]')).toBeNull();
     expect(button("Approve plan r1")).toBeDefined();
   });
+  it("offers approval again for an approved plan only when recovery needs it", async () => {
+    const approved = snapshot(1);
+    approved.state = { ...approved.state, status: "approved", decisionRevision: 1 };
+    const approveButton = () =>
+      [...container.querySelectorAll("button")].find(
+        (node) => node.textContent === "Approve plan r1",
+      );
+    await render(approved);
+    expect(approveButton()).toBeUndefined();
+    expect(button("Request changes")).toBeDefined();
+    await render(approved, true, agents, { blockedReason: "A current approval is required." });
+    expect(approveButton()).toBeDefined();
+  });
   it("closes the inline confirmation once recorded and leaves the outcome to the plan", async () => {
     const detail = review();
     fetch.mockImplementation(async (url: string, request?: { method?: string }) => {

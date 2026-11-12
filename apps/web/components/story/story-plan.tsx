@@ -488,17 +488,19 @@ export function StoryPlanPanel({
     ) : canWrite && current?.plan && (!editing || selection) ? (
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={busy}
-            onClick={() => {
-              setReason("");
-              void mutate("approve");
-            }}
-          >
-            Approve plan r{current.state.revision}
-          </Button>
+          {current.state.status !== "approved" || blockedReason ? (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => {
+                setReason("");
+                void mutate("approve");
+              }}
+            >
+              Approve plan r{current.state.revision}
+            </Button>
+          ) : null}
           <Button size="sm" disabled={busy} onClick={() => setRejecting((value) => !value)}>
             Request changes
           </Button>
