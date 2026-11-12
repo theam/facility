@@ -13,7 +13,7 @@ server. Authorization-server metadata remains available at `/.well-known/oauth-a
 and `/.well-known/openid-configuration`; all three discovery endpoints are public. MCP tool requests
 still require a valid bearer token.
 
-The server exposes forty-seven task-oriented tools:
+The server exposes forty-eight task-oriented tools:
 
 | Tool | Result |
 |---|---|
@@ -47,7 +47,8 @@ The server exposes forty-seven task-oriented tools:
 | `facility_prepare_consultation_handoff` | Return editable implementation context from a completed result; does not queue work. |
 | `facility_start_story` | Idempotently create or resume a story and queue its first message. The title and agent are optional. |
 | `facility_send_message` | Append a message and queue the selected agent. |
-| `facility_get_conversation` | Read the shared ordered conversation. |
+| `facility_get_story_activity` | Read one run’s recorded activity with stable forward or backward sequence cursors. |
+| `facility_get_conversation` | Read the shared ordered conversation, or an exact source message and earlier context with `messageId`. |
 | `facility_prepare_file_upload` | Reserve private story input storage and return a short-lived binary HTTP upload grant; does not run an agent. |
 | `facility_list_input_files` | Read private input metadata without waking compute. |
 | `facility_remove_input_file` | Delete an input file and release its reservation; optionally resume compute explicitly. |
@@ -61,7 +62,8 @@ The server exposes forty-seven task-oriented tools:
 | `facility_get_budget` | Read the current monthly budget and amount spent. |
 | `facility_set_budget` | Enable, change, or disable the project's monthly budget. |
 | `facility_get_observability` | Read project health, usage, workspace, GitHub, and audit summaries. |
-| `facility_list_backlog` | Read the unified backlog with phases, activity, assignees, search, filters, and pagination. |
+| `facility_list_backlog` | Read the unified backlog with phases, work groups and complete counts, pending messages, current queued-turn workflow assessment, assignees, search, filters, and pagination. Use `group` and `sort: activity` for the Stories view. |
+| `facility_list_attention_stories` | Read plans, notices and delivery sets by story, plus every other observed open PR with an independent `pullOffset`. Shared snapshot, complete filtered counts, exact revisions, observed acceptance and preview. Project budget requires budgets:read; read-only. |
 | `facility_list_attention` | Read what is waiting on a person, newest first, with the action each notice accepts; filter by status, kind, and text. |
 | `facility_sync_github` | Reconcile the project's GitHub mirror immediately. |
 
@@ -154,6 +156,33 @@ Deletion is deliberately separate and permanent:
 ```
 
 `facility_get_conversation` uses `after` and `limit` as a stable message-sequence cursor.
+Supply `messageId` to read an exact message and earlier context, newest first,
+with the same resolved author and run metadata used by the UI. The response
+includes `focus: { messageId, seq }`; `messages` is the bounded contiguous window
+and `related` supplies earlier context for its runs. A source read cannot be
+combined with nonzero `after` (or the HTTP `before` cursor). Missing or foreign
+messages return an error and never fall back to recent responses. The operation
+requires `projects:read` and does not start work or wake compute.
+`facility_get_story_activity` takes `projectId`, `storyId`, `turnId`, `limit` (1–50),
+and optionally one sequence cursor. Default and `before` pages have `order: "desc"`.
+Use `after: 0` to start at the oldest readable event, or `after` with the newest
+consumed sequence to poll new activity. These pages have `order: "asc"`; follow
+`next_cursor` as `after` while `has_more` so a burst cannot be skipped. A mixed
+cursor is rejected. Empty pages do not advance the consumed sequence. This is
+one database-only read shared with the UI, scoped to the organization, project,
+story and turn. It starts no agent, inference or workspace operation.
+To inspect an original payload, set `eventSeq` without `before` or `after`.
+This reads one full stored event from the same source as **Load the full stored
+event** in the UI. Missing events and a turn from another story are errors.
+
+Story responses include `progress.observedAt` and `progress.latest` (null when no
+work event is recorded). The latest item carries its turn and the same bounded
+activity projection. Stream fragments, workspace health samples and successful
+credential renewals do not replace the latest work event; maintenance remains
+available in the run history. A recorded message or command is evidence of that
+event, not proof of a completed delivery or an explanation of current capacity.
+Older servers omit `progress`; clients must not treat that as no activity.
+
 `facility_get_environment` uses the same fields for ordered workspace events and returns
 `next_cursor` and `has_more`. Story and environment responses include typed attention, available
 next operations, active-compute status, retained-storage status, provider usage, and an explicit
@@ -178,6 +207,11 @@ without a known price are rejected while budget enforcement is enabled.
 Use `facility_get_plan` with `projectId` and `storyId` to read `state.revision` and
 `state.decisionRevision`. Optional `beforeRevision`, `beforeDecisionRevision` and `limit`
 page history; `revision` reads one immutable earlier plan. Reads use the database only.
+
+Complete plans also expose the optional `decisionBrief` projection described in
+[author decision briefs](decision-brief.md). Its summary, recommendation, options, risk and
+sources come from that exact plan's Markdown. They are author statements, not verified evidence
+or authority. Missing or malformed briefs preserve the original plan; reads never generate one.
 
 `facility_propose_plan` accepts `expectedRevision`, exact `markdown` (at most 100,000 characters),
 `repositories` (connected `owner/name` values), `agents` (configured names), optional
@@ -248,6 +282,12 @@ no delivery and creates no native turn. A consulted answer is not implementation
 Read `facility_get_delivery` with `projectId`, `storyId` and `includeAvailable: true` to inspect
 the current `scope.revision` and find PRs already in this project's GitHub mirror. Optional `q`,
 `limit` and `offset` page the available PRs. Reading does not synchronize GitHub or wake compute.
+
+The optional `decisionBrief` projection contains the latest indexed [author delivery
+brief](decision-brief.md#delivery-decisions), its exact original message and its binding to
+all required and optional PR heads. Attention exposes the same projection. An available
+brief verifies that binding; the author's recommendation is not human acceptance or proof
+that checks passed. Historical, unverifiable and invalid briefs remain explicitly identified.
 
 Declare the full set explicitly, using the revision you just read:
 

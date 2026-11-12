@@ -187,6 +187,22 @@ describe("turn activity presentation", () => {
   });
 
   it("describes Facility lifecycle events", () => {
+    expect(
+      presentTurnEvent(event("turn.workflow_held", { reason: "Approval required" })),
+    ).toMatchObject({
+      kind: "lifecycle",
+      title: "Workflow held this run",
+      text: "Approval required",
+    });
+    expect(
+      presentTurnEvent(
+        event("turn.deferred", { reason: "github_rate_limit", retryAfter: "2026-11-05T10:00:00Z" }),
+      ),
+    ).toMatchObject({
+      kind: "lifecycle",
+      title: "Run deferred",
+      text: "github_rate_limit · Retry after 2026-11-05T10:00:00Z",
+    });
     expect(presentTurnEvent(event("turn.started", {}))).toMatchObject({
       kind: "lifecycle",
       title: "Run started",

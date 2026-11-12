@@ -277,6 +277,11 @@ export function presentMessage(message: Pick<StoryMessage, "body">) {
   }
 }
 
+/** These recorded decisions are not failed turns that can be retried. */
+export function isReviewNotice(kind: string) {
+  return kind === "review_cycle_ready" || kind === "review_cycle_decision";
+}
+
 export function errorSummary(detail: string | null) {
   if (!detail) return "The agent could not complete this run. Review the details before retrying.";
   if (/401|unauthorized/i.test(detail))

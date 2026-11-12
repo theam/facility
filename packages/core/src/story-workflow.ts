@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PlanActorSchema } from "./story-plans.js";
+import { ReviewCycleStatusSchema } from "./story-review-cycle.js";
 
 const Revision = z.number().int().min(0).max(2_147_483_646);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -133,6 +134,17 @@ export const DeliveryAcceptanceReviewSchema = z.object({
   proof: z.string().nullable(),
   receipt: DeliveryAcceptanceReceiptSchema.nullable(),
 });
+export const PlanExecutionObservationSchema = z.object({
+  turnId: z.string(),
+  agentName: z.string(),
+  engine: z.string(),
+  model: z.string(),
+  manifestHash: z.string(),
+  state: z.enum(["queued", "running", "succeeded", "failed", "canceled"]),
+  authorizedAt: z.string(),
+  startedAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+});
 export const StoryWorkflowStatusSchema = z.object({
   schemaVersion: z.literal(1),
   orgId: z.string(),
@@ -146,6 +158,50 @@ export const StoryWorkflowStatusSchema = z.object({
   }),
   queuedAgents: z.array(z.string()).max(50),
   blockedReason: z.string().nullable(),
+  reviewCycle: ReviewCycleStatusSchema.optional(),
+  execution: z
+    .object({
+      observedAt: z.string(),
+      decision: z
+        .object({
+          id: z.string(),
+          decisionRevision: Revision,
+          planRevision: Revision,
+          planDigest: z.string(),
+        })
+        .nullable(),
+      turns: z.array(PlanExecutionObservationSchema).max(10),
+      hasMore: z.boolean(),
+      unavailable: z.boolean(),
+    })
+    .optional(),
+  executionScope: z
+    .object({
+      observedAt: z.string(),
+      planRevision: Revision,
+      repositories: z.object({
+        matches: z.boolean(),
+        connectedCount: z.number().int().nonnegative(),
+        missing: z.array(z.string()),
+        removed: z.array(z.string()),
+      }),
+      queuedWork: z
+        .array(
+          z.object({
+            turnId: z.string(),
+            agentName: z.string(),
+            engine: z.string(),
+            model: z.string(),
+            manifestHash: z.string(),
+            createdAt: z.string(),
+            configuration: z.enum(["current", "changed", "unavailable"]),
+            planAgent: z.enum(["current", "missing", "changed"]),
+          }),
+        )
+        .max(50),
+      hasMore: z.boolean(),
+    })
+    .optional(),
   acceptance: StoryDeliveryAcceptanceSchema,
 });
 export type StoryWorkflowPolicy = z.infer<typeof StoryWorkflowPolicySchema>;
@@ -155,3 +211,4 @@ export type StoryDeliveryAcceptance = z.infer<typeof StoryDeliveryAcceptanceSche
 export type DeliveryAcceptanceReceipt = z.infer<typeof DeliveryAcceptanceReceiptSchema>;
 export type DeliveryAcceptanceRequest = z.infer<typeof DeliveryAcceptanceRequestSchema>;
 export type StoryWorkflowStatus = z.infer<typeof StoryWorkflowStatusSchema>;
+export type PlanExecutionObservation = z.infer<typeof PlanExecutionObservationSchema>;

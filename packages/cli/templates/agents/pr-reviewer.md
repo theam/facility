@@ -39,6 +39,15 @@ capability. Review behavior does not create a separate read-only permission prof
 <output_contract>
 Lead with findings ordered by severity. Follow with open questions and a short verification summary.
 Keep summaries secondary to actionable findings and never invent a result.
+When findings require a human decision about objective, risk, cost or commitment, add a
+`facility-decision` brief following the [author brief contract](https://github.com/theam/facility/blob/main/apps/docs/docs/reference/decision-brief.md).
+Link exact heads and findings, explain alternatives and consequences, and distinguish your
+recommendation from verified results. The brief does not approve delivery, change policy or start
+another correction round.
+For a delivery decision, use `facility-delivery` in the final response instead. Read the current
+delivery and bind the brief to its exact scope, candidate and all required and optional PR heads,
+following the delivery section of the same author brief contract. Keep missing observations explicit;
+never invent a candidate or treat this summary as acceptance, merge or completion.
 </output_contract>
 
 <completion_criteria>

@@ -112,16 +112,48 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story",
     permission: "projects:read",
     description:
-      "Get a story's status, workspace, turns, branch, pull request, artifacts, attention, and ordered evidence timeline. Needs projects:read.",
+      "Get a story's status, workspace, turns, branch, pull request, artifacts, attention, latest recorded work activity and ordered evidence timeline. Maintenance health checks are excluded from the progress summary, not from the full run history. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}`,
   },
   {
+    name: "facility_get_story_activity",
+    permission: "projects:read",
+    description:
+      "Read stored activity for one story run, with bounded summaries and sequence cursors. Default and before pages are newest first; after pages are oldest first so polling cannot skip a burst. Pass next_cursor in the same direction while has_more. Use only one cursor. Supply eventSeq alone to inspect one full stored event instead of a page. Reads do not wake a workspace, call a model or start work. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      storyId,
+      turnId: z.string().min(1),
+      eventSeq: z.number().int().safe().min(0).optional(),
+      before: z.number().int().safe().min(0).optional(),
+      after: z.number().int().safe().min(0).optional(),
+      limit: z.number().int().min(1).max(50).default(10),
+    },
+    method: "GET",
+    path: (args) => {
+      if (args.eventSeq !== undefined && (args.before !== undefined || args.after !== undefined))
+        throw new Error("Choose one stored event or an activity page, not both");
+      const base = `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/turns/${part(args.turnId)}`;
+      return args.eventSeq === undefined
+        ? `${base}/activity`
+        : `${base}/events/${part(args.eventSeq)}`;
+    },
+    query: (args) =>
+      args.eventSeq === undefined
+        ? {
+            before: numberValue(args.before),
+            after: numberValue(args.after),
+            limit: Number(args.limit ?? 10),
+          }
+        : {},
+  },
+  {
     name: "facility_get_delivery",
     permission: "projects:read",
     description:
-      "Read the story's declared delivery PR set, exact observed heads, current or older CI/reviews and partial merges. Reads never start agents, refresh GitHub or wake workspaces. Needs projects:read.",
+      "Read the story's declared delivery PR set, exact observed heads, current or older CI/reviews and partial merges. Includes the latest recorded author brief, its source message and whether it still matches every required and optional head. Reading or changing presentation never starts agents, refreshes GitHub or wakes workspaces. Needs projects:read.",
     inputSchema: {
       projectId,
       storyId,
@@ -313,7 +345,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_story_workflow",
     permission: "projects:read",
     description:
-      "Read current plan approval, held native agents and exact delivery acceptance as separate states. Approval can release queued agents under project policy. Needs projects:read.",
+      "Read plan approval, retained turn scope, execution recorded under the exact decision, and delivery acceptance as separate states. execution reports observed turn states linked by admission evidence, never inferred from approval alone; older decisions stay historical. Scope checks are dated observations, not execution authorization. Reading starts no work. Needs projects:read.",
     inputSchema: { projectId, storyId },
     method: "GET",
     path: (args) =>
@@ -359,7 +391,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_plan",
     permission: "projects:read",
     description:
-      "Read the current immutable plan, exact repository/agent scope, decision receipts and paged history. Set revision to inspect an earlier plan. Database-only: no agent, GitHub refresh or workspace activity. Needs projects:read.",
+      "Read the current immutable plan, author decision brief when present, exact repository/agent scope, decision receipts and paged history. A brief contains author statements, not verified evidence or authority. Set revision to inspect an earlier plan. Database-only: no model, agent, GitHub refresh or workspace activity. Needs projects:read.",
     inputSchema: {
       projectId,
       storyId,
@@ -595,17 +627,22 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_conversation",
     permission: "projects:read",
     description:
-      "Read ordered messages from a story's persistent conversation. Needs projects:read.",
+      "Read ordered messages from a story's persistent conversation. With messageId, read that exact message and earlier context, newest-first, with resolved authors and run metadata. Cannot combine messageId with a nonzero after cursor. A missing or foreign message is an error, never a fallback to recent messages. Needs projects:read.",
     inputSchema: {
       projectId,
       storyId,
       after: z.number().int().min(0).default(0),
+      messageId: z.string().min(1).max(200).optional(),
       limit: z.number().int().min(1).max(200).default(50),
     },
     method: "GET",
     path: (args) =>
       `/v1/projects/${part(args.projectId)}/workspace-stories/${part(args.storyId)}/conversation`,
-    query: (args) => ({ after: Number(args.after ?? 0), limit: Number(args.limit ?? 50) }),
+    query: (args) => ({
+      after: Number(args.after ?? 0),
+      limit: Number(args.limit ?? 50),
+      ...(args.messageId ? { messageId: stringValue(args.messageId) } : {}),
+    }),
   },
   {
     name: "facility_prepare_file_upload",
@@ -746,10 +783,11 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_list_backlog",
     permission: "projects:read",
     description:
-      "Read the unified project backlog: mirrored GitHub issues not yet started, stories in progress, blocked, in review, done, or archived, each with its phase, agent activity, assignees, and links. Supports search, phase, label, assignee, and repository filters with pagination. Needs projects:read.",
+      "Read the unified project backlog: mirrored GitHub issues not yet started, stories in progress, blocked, in review, done, or archived, each with its phase, agent activity, assignees, and links. Includes shared tracking groups, complete group counts within the phase/search filters, pending messages and current queued-turn workflow checks. Worker capacity remains unavailable. Supports search, group, phase, label, assignee, and repository filters with pagination. Needs projects:read.",
     inputSchema: {
       projectId,
       q: z.string().max(200).optional().describe("Ticket number or words to search for."),
+      group: z.enum(["review", "in_progress", "waiting", "backlog", "done", "archived"]).optional(),
       phase: z
         .array(
           z.enum([
@@ -770,8 +808,13 @@ export const toolDefinitions: ToolDefinition[] = [
         .array(z.string().min(1).max(200))
         .optional()
         .describe("unassigned, me, user:<id>, or github:<login>."),
-      repository: z.array(z.string().min(1).max(200)).optional(),
-      sort: z.enum(["priority", "updated", "created"]).default("priority"),
+      repository: z
+        .array(z.string().min(1).max(200))
+        .optional()
+        .describe(
+          "Canonical project repository IDs or current owner/name; matches source and registered delivery PRs, including optional PRs and manual stories.",
+        ),
+      sort: z.enum(["priority", "updated", "created", "activity"]).default("priority"),
       limit: z.number().int().min(1).max(100).default(50),
       offset: z.number().int().min(0).default(0),
     },
@@ -779,6 +822,7 @@ export const toolDefinitions: ToolDefinition[] = [
     path: (args) => `/v1/projects/${part(args.projectId)}/backlog`,
     query: (args) => ({
       q: stringValue(args.q),
+      group: stringValue(args.group),
       phase: listValue(args.phase),
       label: listValue(args.label),
       assignee: listValue(args.assignee),
@@ -816,6 +860,40 @@ export const toolDefinitions: ToolDefinition[] = [
       q: stringValue(args.q),
       limit: Number(args.limit ?? 25),
       offset: Number(args.offset ?? 0),
+    }),
+  },
+  {
+    name: "facility_list_attention_stories",
+    permission: "projects:read",
+    description:
+      "Read pending plans, notices and delivery sets by story, plus all other observed open PRs. Whole stories and otherPullRequests have independent offsets in the same snapshot; counts cover each complete filtered population. Plans carry exact revision/digest and the author brief; deliveries show candidate, current-head checks, preview and observed acceptance. Eligibility does not grant authority or mean CI passed. Budget needs budgets:read. Read-only; no agent, wake or confirmation request. Needs projects:read.",
+    inputSchema: {
+      projectId,
+      category: z.enum(["all", "plans", "notices", "deliveries", "pulls"]).default("all"),
+      q: z
+        .string()
+        .max(200)
+        .optional()
+        .describe(
+          "Text in story titles, open notices, PR titles or repository references; keeps the whole matching story. The pulls category selects only other open PRs.",
+        ),
+      limit: z.number().int().min(1).max(25).default(10),
+      offset: z.number().int().min(0).default(0),
+      pullOffset: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe("Independent offset for otherPullRequests; limit applies to each list."),
+    },
+    method: "GET",
+    path: (args) => `/v1/projects/${part(args.projectId)}/attention/stories`,
+    query: (args) => ({
+      category: stringValue(args.category),
+      q: stringValue(args.q),
+      limit: Number(args.limit ?? 10),
+      offset: Number(args.offset ?? 0),
+      pullOffset: Number(args.pullOffset ?? 0),
     }),
   },
   {

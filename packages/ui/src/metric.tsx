@@ -28,7 +28,7 @@ export function Metric({
       : tone === "bad"
         ? "text-(--bad)"
         : tone === "agent"
-          ? "text-(--accent)"
+          ? "text-(--accent-ink)"
           : tone === "human"
             ? "text-(--human)"
             : "text-(--ink)";

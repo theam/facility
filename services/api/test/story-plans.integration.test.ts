@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   generateApiKey,
   newId,
@@ -40,6 +41,14 @@ import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
+const briefFixture = JSON.parse(
+  readFileSync(
+    new URL("../../../packages/core/test/fixtures/decision-brief.json", import.meta.url),
+    "utf8",
+  ),
+);
+const briefPlan = (value: unknown = briefFixture) =>
+  `# Complete plan\n\n\`\`\`facility-decision\n${JSON.stringify(value)}\n\`\`\`\n\nOriginal implementation and verification details.`;
 const signing = await generateKeyPair("ES256", { extractable: true });
 const jwk = {
   ...(await exportJWK(signing.privateKey)),
@@ -424,7 +433,7 @@ describe("revision-bound story plans and interactive confirmation API", () => {
     const id = await story(),
       conversationId = newId("sess"),
       messageId = newId("msg");
-    const markdown = "  ## Plan\n\nReview the exact original text.\n";
+    const markdown = `  ## Plan\n\nReview the exact original text.\n${briefPlan()}`;
     await db
       .insert(storyConversations)
       .values({ id: conversationId, orgId, projectId, storyId: id });
@@ -450,6 +459,7 @@ describe("revision-bound story plans and interactive confirmation API", () => {
     expect(value.state).toEqual({ revision: 1, decisionRevision: 0, status: "proposed" });
     expect(value.plan).toMatchObject({
       markdown,
+      decisionBrief: { status: "available", brief: briefFixture },
       digest: expect.stringMatching(/^[a-f0-9]{64}$/),
       proposedBy: { type: "service" },
       source: { messageId, role: "agent" },
@@ -475,6 +485,53 @@ describe("revision-bound story plans and interactive confirmation API", () => {
     expect(
       (await post(path(other), { ...proposal(), source_message_id: messageId })).statusCode,
     ).toBe(404);
+  });
+  it("binds a brief to the same immutable revision across reads and confirmation without changing authority", async () => {
+    const id = await story();
+    const markdown = briefPlan();
+    const created = await post(path(id), proposal(0, markdown));
+    expect(created.statusCode).toBe(200);
+    const first = created.json<StoryPlans>().plan;
+    const requestId = await request(id);
+    const confirmation = await review(id, requestId);
+    expect(confirmation.plan.decisionBrief).toEqual({ status: "available", brief: briefFixture });
+    expect(confirmation.plan.digest).toBe(first?.digest);
+    const calls = loadCatalog.mock.calls.length;
+    const readOnly = await app.inject({
+      url: `${path(id)}/revisions/1`,
+      headers: headers("viewer"),
+    });
+    expect(readOnly.statusCode).toBe(200);
+    expect(readOnly.json()).toMatchObject({ markdown, decisionBrief: first?.decisionBrief });
+    expect(loadCatalog).toHaveBeenCalledTimes(calls);
+    for (const name of ["otherProject", "tenant"]) {
+      expect(
+        (await app.inject({ url: `${path(id)}/revisions/1`, headers: headers(name) })).statusCode,
+      ).toBe(404);
+    }
+    const changed = briefPlan({
+      ...briefFixture,
+      summary: { text: "Revise the approach", evidenceIds: [] },
+    });
+    expect((await post(path(id), proposal(1, changed))).statusCode).toBe(200);
+    const latest = await read(id);
+    expect(latest.plan?.digest).not.toBe(first?.digest);
+    expect(latest.history.items[0]).not.toHaveProperty("decisionBrief");
+    const previous = await review(id, requestId);
+    expect(previous.request.status).toBe("superseded");
+    expect(previous.plan.decisionBrief).toEqual(first?.decisionBrief);
+    expect(previous.plan.markdown).toBe(markdown);
+    expect((await confirm(id, requestId, requiredProof(confirmation))).statusCode).toBe(409);
+    const invalid = await post(
+      path(id),
+      proposal(2, briefPlan({ ...briefFixture, approved: true })),
+    );
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.json().plan.decisionBrief).toEqual({
+      status: "invalid",
+      reason: "invalid_fields",
+    });
+    expect(invalid.json().state.status).toBe("proposed");
   });
   it("rejects foreign repositories and missing/disabled agents, and never treats unavailable catalog refresh as fresh", async () => {
     const id = await story();
