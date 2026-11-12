@@ -22,7 +22,7 @@ export default async function ProjectsPage() {
           </p>
         </div>
         <ButtonLink href="/projects/new" variant="primary">
-          connect project
+          Connect project
         </ButtonLink>
       </div>
 

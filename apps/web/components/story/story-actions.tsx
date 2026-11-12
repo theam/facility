@@ -433,11 +433,11 @@ export function StoryComposer({
               form.current?.querySelector("textarea")?.focus();
             }}
           >
-            discard draft
+            Discard draft
           </Button>
           {onCancel ? (
             <Button type="button" size="sm" onClick={onCancel} disabled={pending}>
-              close
+              Close
             </Button>
           ) : null}
           <Button
@@ -453,7 +453,7 @@ export function StoryComposer({
               !message.trim()
             }
           >
-            {pending ? "queueing…" : "send to agent"}
+            {pending ? "Queueing…" : "Send to agent"}
           </Button>
         </div>
       </div>

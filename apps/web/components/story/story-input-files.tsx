@@ -481,7 +481,7 @@ export function StoryInputFiles({
               disabled={disabled || busy}
               onClick={() => void remove(file)}
             >
-              delete file
+              Delete file
             </Button>
           </li>
         ))}

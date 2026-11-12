@@ -146,7 +146,7 @@ export function MembersList({
             variant="primary"
             disabled={busy !== null || !email.trim()}
           >
-            {busy === "invite" ? "inviting…" : "invite"}
+            {busy === "invite" ? "Inviting…" : "Invite"}
           </Button>
         </form>
       ) : null}

@@ -114,7 +114,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
           </Select>
         </Field>
         <Button type="submit" variant="primary" disabled={busy || !name || !roleId}>
-          {busy ? "issuing…" : "issue key"}
+          {busy ? "Issuing…" : "Issue key"}
         </Button>
       </form>
       {notice ? (
@@ -151,7 +151,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
                     disabled={revokingId !== null}
                     className="text-[12px] font-medium text-(--bad) disabled:opacity-50"
                   >
-                    {revokingId === k.id ? "revoking…" : "confirm"}
+                    {revokingId === k.id ? "Revoking…" : "Confirm"}
                   </button>
                   <button
                     type="button"

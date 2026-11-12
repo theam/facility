@@ -84,7 +84,7 @@ export function DevelopmentBranch({
       {canWrite && (
         <div>
           <Button size="sm" disabled={pending || value.trim() === saved} onClick={save}>
-            {pending ? "saving…" : "save development branch"}
+            {pending ? "Saving…" : "Save development branch"}
           </Button>
         </div>
       )}

@@ -83,7 +83,7 @@ export function WorkspaceVariables({
         </h3>
         <div className="flex gap-2">
           <Button size="sm" onClick={load} disabled={pending}>
-            reload
+            Reload
           </Button>
           <Button
             size="sm"
@@ -94,7 +94,7 @@ export function WorkspaceVariables({
             }}
             disabled={pending}
           >
-            close
+            Close
           </Button>
         </div>
       </div>
@@ -186,7 +186,7 @@ export function WorkspaceVariables({
               />
             </Field>
             <Button type="submit" disabled={pending || !name} variant="primary" tone="agent">
-              {pending ? "saving…" : "save variable"}
+              {pending ? "Saving…" : "Save variable"}
             </Button>
           </form>
           <details>
@@ -215,7 +215,7 @@ export function WorkspaceVariables({
                   : "Use this workspace’s database and service addresses."}
               </p>
               <Button type="submit" disabled={pending || !dotenv.trim()}>
-                import variables
+                Import variables
               </Button>
             </form>
           </details>

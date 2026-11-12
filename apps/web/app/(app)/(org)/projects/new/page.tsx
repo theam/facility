@@ -509,7 +509,7 @@ export default function KickstartPage() {
                 disabled={!source || !name.trim() || busy}
                 onClick={() => void loadPreview()}
               >
-                {phase === "previewing" ? "reading repository…" : "preview kickstart"}
+                {phase === "previewing" ? "Reading repository…" : "Preview kickstart"}
               </Button>
               {source ? (
                 <span className="font-mono text-[11.5px] text-(--mut)">{sourceLabel(source)}</span>
@@ -548,7 +548,7 @@ export default function KickstartPage() {
               </div>
               <div className="flex gap-3">
                 <Button type="button" variant="outline" onClick={() => setPhase("pick")}>
-                  back
+                  Back
                 </Button>
                 <Button
                   type="button"
@@ -557,7 +557,7 @@ export default function KickstartPage() {
                   onClick={() => void discardDraft()}
                   title="Deletes the draft project created for this preview"
                 >
-                  discard draft
+                  Discard draft
                 </Button>
                 <Button
                   type="button"
@@ -566,7 +566,7 @@ export default function KickstartPage() {
                   disabled={busy || !preview?.files.length || !environmentValid}
                   onClick={() => void openPr()}
                 >
-                  {phase === "opening" ? "opening PR…" : "open kickstart PR"}
+                  {phase === "opening" ? "Opening PR…" : "Open kickstart PR"}
                 </Button>
               </div>
             </div>
