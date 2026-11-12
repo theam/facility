@@ -103,6 +103,7 @@ describe("delivery acceptance on the story", () => {
     expect(inline?.textContent).toContain("example/app #7");
     expect(inline?.textContent).toContain("Accept this exact delivery");
     expect(container.textContent).not.toContain("Review and confirm this delivery");
+    expect(acceptanceButton()).toBeUndefined();
     const cancel = [...(inline?.querySelectorAll("button") ?? [])].find(
       (node) => node.textContent === "Cancel",
     );

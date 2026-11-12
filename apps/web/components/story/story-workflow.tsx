@@ -241,7 +241,7 @@ export function StoryWorkflowPanel({
           before requesting acceptance.
         </p>
       ) : null}
-      {canWrite && candidateReady && status.acceptance.status !== "current" ? (
+      {canWrite && candidateReady && !inlineReview && status.acceptance.status !== "current" ? (
         <div>
           <Button disabled={busy || cycleBlocksAcceptance} onClick={() => void requestReview()}>
             {busy ? "Preparing review…" : "Request delivery acceptance"}
