@@ -48,6 +48,68 @@ function required<T>(value: T | null | undefined): T {
   return value;
 }
 
+describe("delivery acceptance on the story", () => {
+  it("opens the confirmation in place with the review's proof and keeps the link as fallback", async () => {
+    const request = {
+      id: "acceptance-request",
+      status: "pending" as const,
+      requestedBy: { type: "user" as const, id: "person", name: "Ada" },
+      requestedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      confirmationUrl:
+        "https://facility.test/projects/project/stories/story/delivery-acceptance/acceptance-request",
+      snapshot: {
+        candidateRevision: "a".repeat(64),
+        scopeRevision: 1,
+        planRevision: 1,
+        planDigest: "d".repeat(64),
+        decisionRevision: 1,
+        policyRevision: 1,
+        acceptanceRevision: 0,
+        previewGeneration: null,
+        pullRequests: [
+          {
+            repository: "example/app",
+            number: 7,
+            headSha: "b".repeat(40),
+            url: "https://github.com/example/app/pull/7",
+          },
+        ],
+      },
+    };
+    const review = {
+      schemaVersion: 1,
+      orgId: "org-a",
+      projectId: "project",
+      storyId: "story",
+      proof: "p".repeat(43),
+      receipt: null,
+      request,
+    };
+    fetch.mockImplementation(async (url: string, init?: { method?: string }) => {
+      const target = String(url);
+      if (target.endsWith("/delivery")) return Response.json(deliveryFixture());
+      if (target.endsWith("/workflow")) return Response.json(workflowFixture());
+      if (init?.method === "POST" && target.endsWith("/delivery-acceptance"))
+        return Response.json(request);
+      if (target.endsWith("/delivery-acceptance/acceptance-request")) return Response.json(review);
+      throw new Error(`unexpected ${target}`);
+    });
+    await render(workflowFixture());
+    await act(async () => required(acceptanceButton()).click());
+    const inline = container.querySelector('[aria-label="Confirm delivery acceptance"]');
+    expect(inline?.textContent).toContain("example/app #7");
+    expect(inline?.textContent).toContain("Accept this exact delivery");
+    expect(container.textContent).not.toContain("Review and confirm this delivery");
+    const cancel = [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === "Cancel",
+    );
+    await act(async () => cancel?.click());
+    expect(container.querySelector('[aria-label="Confirm delivery acceptance"]')).toBeNull();
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/confirm"))).toBe(false);
+  });
+});
+
 describe("recorded review cycle", () => {
   it("shows reason, configured roles and exact evidence and leaves acceptance to the person at a decision stop", async () => {
     await render();

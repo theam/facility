@@ -296,6 +296,38 @@ describe("revision-bound plan UI", () => {
     expect(container.textContent).not.toContain("Approve plan r3");
     expect(fetch).not.toHaveBeenCalled();
   });
+  it("confirms a requested approval in place with the review's single-use proof", async () => {
+    const detail = review();
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (request?.method === "POST" && target.endsWith("/confirm"))
+        return Response.json(
+          { error: { message: "Stop after recording the call" } },
+          { status: 409 },
+        );
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`)) return Response.json(detail);
+      return Response.json(workflowFixture());
+    });
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    expect(navigation.push).not.toHaveBeenCalled();
+    const inline = container.querySelector('[aria-label="Confirm plan decision"]');
+    expect(inline?.textContent).toContain("Confirm plan approval");
+    expect(inline?.textContent).toContain("Requested decision");
+    expect(inline?.querySelector('[aria-label="Execution scope"]')).toBeNull();
+    const confirm = [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === "Approve plan r1",
+    );
+    await act(async () => confirm?.click());
+    const call = fetch.mock.calls.find(([url]) => String(url).endsWith("/confirm"));
+    expect(JSON.parse(call?.[1]?.body as string)).toMatchObject({ proof: detail.proof });
+    expect(container.textContent).toContain("Stop after recording the call");
+    await click("Cancel");
+    expect(container.querySelector('[aria-label="Confirm plan decision"]')).toBeNull();
+    expect(button("Approve plan r1")).toBeDefined();
+  });
   it("requests only the exact linked current revision with the existing decision boundary", async () => {
     fetch.mockResolvedValue(Response.json({ request: { id: "exact-request" } }));
     const selected = plan(3);

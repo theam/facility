@@ -10,14 +10,24 @@ import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { formatTime } from "@/lib/story-presentation";
 
+/**
+ * Confirms one requested plan decision with its single-use proof. The same
+ * component serves the confirmation page that request links (including MCP
+ * requests) open, and the inline step on the story, where `compact` hides the
+ * plan and scope already shown above it.
+ */
 export function PlanConfirmation({
   initial,
   initialWorkflow,
   initialWorkflowError,
+  compact = false,
+  onClose,
 }: {
   initial: PlanDecisionReview;
   initialWorkflow?: StoryWorkflowStatus;
   initialWorkflowError?: string;
+  compact?: boolean;
+  onClose?: () => void;
 }) {
   const [review, setReview] = useState(initial),
     [error, setError] = useState<string | null>(null);
@@ -124,11 +134,15 @@ export function PlanConfirmation({
   return (
     <section
       aria-label="Confirm plan decision"
-      className="rounded-lg flex min-w-0 flex-col gap-5 border border-(--line) p-4 sm:p-6"
+      className={
+        compact
+          ? "flex min-w-0 flex-col gap-4 rounded-lg border border-(--human)/30 bg-[#fffaeb] p-4"
+          : "flex min-w-0 flex-col gap-5 rounded-lg border border-(--line) p-4 sm:p-6"
+      }
     >
       <header className="flex flex-col gap-2">
-        <Eyebrow>plan decision</Eyebrow>
-        <h1 className="text-[24px] font-semibold">
+        {compact ? null : <Eyebrow>plan decision</Eyebrow>}
+        <h1 className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}>
           {receipt
             ? "Decision recorded"
             : approval
@@ -185,7 +199,7 @@ export function PlanConfirmation({
           on recovery.
         </p>
       ) : null}
-      {receipt ? (
+      {compact ? null : receipt ? (
         <details className="min-w-0">
           <summary className="cursor-pointer text-sm">
             Plan r{review.plan.revision} and original scope
@@ -204,7 +218,9 @@ export function PlanConfirmation({
           location={{ projectId: review.projectId, storyId: review.storyId }}
         />
       )}
-      {!receipt ? <PlanExecutionScope scope={scope} planRevision={review.plan.revision} /> : null}
+      {!receipt && !compact ? (
+        <PlanExecutionScope scope={scope} planRevision={review.plan.revision} />
+      ) : null}
       <div className="flex flex-col gap-2 border-y border-(--line) py-4 text-sm">
         <p>
           <strong>Requested decision:</strong> {approval ? "Approve" : "Request changes to"} plan r
@@ -257,12 +273,23 @@ export function PlanConfirmation({
                 : `Confirm changes to plan r${review.plan.revision}`}
           </Button>
         ) : null}
-        <Button size="sm" disabled={busy} onClick={() => void reload()}>
-          {busy ? "Loading…" : "Reload review"}
-        </Button>
-        <Link href={`${storyPath}#story-plan`} className="text-[13px] underline underline-offset-4">
-          Open current plan
-        </Link>
+        {compact ? (
+          <Button size="sm" disabled={busy} onClick={onClose}>
+            {receipt ? "Done" : "Cancel"}
+          </Button>
+        ) : (
+          <>
+            <Button size="sm" disabled={busy} onClick={() => void reload()}>
+              {busy ? "Loading…" : "Reload review"}
+            </Button>
+            <Link
+              href={`${storyPath}#story-plan`}
+              className="text-[13px] underline underline-offset-4"
+            >
+              Open current plan
+            </Link>
+          </>
+        )}
       </div>
     </section>
   );

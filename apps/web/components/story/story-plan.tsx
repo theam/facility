@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  PlanDecisionReview,
   StoryAgent,
   StoryPlan,
   StoryPlanRepositories,
@@ -11,6 +12,7 @@ import { Button, buttonClassName, Field, TextArea, TextInput } from "@facility/u
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { PlanConfirmation } from "@/components/story/plan-confirmation";
 import { PlanContent } from "@/components/story/plan-content";
 import { PlanExecutionOutcome } from "@/components/story/plan-execution-outcome";
 import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
@@ -89,6 +91,7 @@ export function StoryPlanPanel({
     [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false),
     [reason, setReason] = useState("");
+  const [inlineReview, setInlineReview] = useState<PlanDecisionReview | null>(null);
   const [historyPages, setHistoryPages] = useState<StoryPlans["history"] | null>(null),
     [decisionPages, setDecisionPages] = useState<StoryPlans["decisions"] | null>(null);
   const [historical, setHistorical] = useState<StoryPlan | null>(null);
@@ -372,7 +375,20 @@ export function StoryPlanPanel({
         setError(result.message);
         return;
       }
-      router.push(`${storyPath}/plan/decisions/${encodeURIComponent(result.data.request.id)}`);
+      // Confirm in place with the same review and single-use proof the confirmation
+      // page uses; fall back to that page when the review cannot be read here.
+      const requestId = result.data.request.id;
+      const review = await clientApi<PlanDecisionReview>(
+        "GET",
+        `${path}/decisions/${encodeURIComponent(requestId)}`,
+      );
+      if (n !== sequence.current) return;
+      if (review.ok && review.data?.plan && review.data?.request?.id === requestId) {
+        setRejecting(false);
+        setInlineReview(review.data);
+        return;
+      }
+      router.push(`${storyPath}/plan/decisions/${encodeURIComponent(requestId)}`);
     }
   }
   async function showRevision(revision: number) {
@@ -449,7 +465,18 @@ export function StoryPlanPanel({
       </section>
     );
   const decisionActions =
-    canWrite && current?.plan && (!editing || selection) ? (
+    canWrite && current?.plan && (!editing || selection) && inlineReview ? (
+      <PlanConfirmation
+        key={inlineReview.request.id}
+        compact
+        initial={inlineReview}
+        initialWorkflow={workflow}
+        onClose={() => {
+          setInlineReview(null);
+          router.refresh();
+        }}
+      />
+    ) : canWrite && current?.plan && (!editing || selection) ? (
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap gap-2">
           <Button

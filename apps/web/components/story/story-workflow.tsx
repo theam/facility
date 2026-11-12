@@ -1,11 +1,17 @@
 "use client";
 
-import type { DeliveryAcceptanceRequest, StoryDelivery, StoryWorkflowStatus } from "@facility/sdk";
+import type {
+  DeliveryAcceptanceRequest,
+  DeliveryAcceptanceReview,
+  StoryDelivery,
+  StoryWorkflowStatus,
+} from "@facility/sdk";
 import { Button, Eyebrow } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { clientApi } from "@/lib/client-api";
+import { DeliveryAcceptanceConfirmation } from "./delivery-acceptance-confirmation";
 import { ReviewCycleDetails, reviewCycleBlocksAcceptance } from "./review-cycle-details";
 
 export function StoryWorkflowPanel({
@@ -21,6 +27,7 @@ export function StoryWorkflowPanel({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState<DeliveryAcceptanceRequest | null>(null);
+  const [inlineReview, setInlineReview] = useState<DeliveryAcceptanceReview | null>(null);
   const working = useRef(false),
     retry = useRef<{ candidate: string; key: string } | null>(null);
   const path = `/v1/projects/${encodeURIComponent(initial.projectId)}/workspace-stories/${encodeURIComponent(initial.storyId)}`;
@@ -131,13 +138,23 @@ export function StoryWorkflowPanel({
         idempotency_key: retry.current.key,
       },
     );
-    working.current = false;
-    setBusy(false);
     if (!result.ok) {
+      working.current = false;
+      setBusy(false);
       setError(result.message);
       return;
     }
     setRequest(result.data);
+    // Confirm in place with the same review and single-use proof the confirmation
+    // page uses; the link below stays as the fallback when it cannot be read here.
+    const review = await clientApi<DeliveryAcceptanceReview>(
+      "GET",
+      `${path}/delivery-acceptance/${encodeURIComponent(result.data.id)}`,
+    );
+    working.current = false;
+    setBusy(false);
+    if (review.ok && review.data?.request?.id === result.data.id && review.data.request.snapshot)
+      setInlineReview(review.data);
   }
   return (
     <section aria-label="Workflow status" className="flex min-w-0 flex-col gap-3">
@@ -181,7 +198,18 @@ export function StoryWorkflowPanel({
           {error}
         </p>
       ) : null}
-      {request ? (
+      {inlineReview ? (
+        <DeliveryAcceptanceConfirmation
+          key={inlineReview.request.id}
+          compact
+          initial={inlineReview}
+          onClose={() => {
+            setInlineReview(null);
+            setRequest(null);
+            router.refresh();
+          }}
+        />
+      ) : request ? (
         <Link
           className="w-fit max-w-full break-words text-sm underline"
           href={request.confirmationUrl}
