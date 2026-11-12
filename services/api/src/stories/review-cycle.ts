@@ -25,12 +25,18 @@ import {
   REVIEW_ACTOR,
   REVIEW_TRIGGER,
   ReviewCycleStop,
+  ReviewEvidenceUnavailable,
   readReviewResult,
   reviewCatalogProblem,
   reviewCorrectionPrompt,
   reviewDecision,
 } from "./review-cycle-rules.js";
-import { captureReviewCandidate, type ReviewCycleSource } from "./review-cycle-source.js";
+import {
+  assertDeliveryUnchanged,
+  type CandidateEvidence,
+  captureReviewCandidate,
+  type ReviewCycleSource,
+} from "./review-cycle-source.js";
 import {
   ACTIVE_REVIEW_PHASES,
   finishReviewCycle,
@@ -59,126 +65,195 @@ export class StoryReviewCycles {
       this.catalog.refreshSnapshot(scope.orgId, scope.projectId),
       AbortSignal.timeout(10_000),
     ).catch(() => null);
+    if (!snapshot)
+      throw new ReviewEvidenceUnavailable(
+        "The canonical agent catalog could not be read from GitHub. Facility retries until the cycle deadline.",
+      );
     const cycle = await latestReviewCycle(this.db, scope);
-    if (!cycle || !snapshot?.repositoryId)
+    if (!cycle || !snapshot.repositoryId)
       throw new ReviewCycleStop("The current canonical agent catalog could not be verified.");
     const problem = reviewCatalogProblem(cycle.data.policy, snapshot.manifests);
     if (problem) throw new ReviewCycleStop(problem);
   }
 
   async reconcile(scope: WorkflowScope) {
+    // Each pass reads GitHub without holding the story lock, then applies what it
+    // read under the lock only if the cycle has not moved meanwhile. A transition
+    // that needs fresh evidence (a finished correction) runs another pass.
+    for (let pass = 0; pass < 3; pass++) {
+      if ((await this.reconcilePass(scope)) === "done") return;
+    }
+  }
+
+  private async reconcilePass(scope: WorkflowScope): Promise<"done" | "again"> {
     const current = await latestReviewCycle(this.db, scope);
-    if (!current || !isReviewActive(current.phase)) return;
+    if (!current || !isReviewActive(current.phase)) return "done";
     const currentTurn = current.data.status.activeTurnId
       ? await this.turn(this.db, scope, current.data.status.activeTurnId)
       : undefined;
-    if (currentTurn?.state === "queued" || currentTurn?.state === "running") return;
+    if (currentTurn?.state === "queued" || currentTurn?.state === "running") return "done";
     let catalogError: ReviewCycleStop | undefined;
+    let unavailable: ReviewEvidenceUnavailable | undefined;
     try {
       await this.refresh(scope);
     } catch (error) {
-      if (!(error instanceof ReviewCycleStop)) throw error;
-      catalogError = error;
+      if (error instanceof ReviewEvidenceUnavailable) unavailable = error;
+      else if (error instanceof ReviewCycleStop) catalogError = error;
+      else throw error;
     }
-    const queued = await this.db.transaction(async (rawTx) => {
-      const tx = rawTx as unknown as FacilityDb;
-      await lockWorkflowStory(tx, scope);
-      const cycle = await latestReviewCycle(tx, scope);
-      if (!cycle || cycle.originTurnId !== current.originTurnId || !isReviewActive(cycle.phase))
-        return;
-      const turn = cycle.data.status.activeTurnId
-        ? await this.turn(tx, scope, cycle.data.status.activeTurnId)
-        : undefined;
-      if (turn?.state === "queued" || turn?.state === "running") return;
+    let observed: CandidateEvidence | ReviewCycleStop | undefined;
+    // The evidence is read for a copy that authority() completes (it records the
+    // Reviewer version the candidate id includes); the lock checks the same version.
+    let evidenceCycle: ReviewCycle | undefined;
+    const needsEvidence =
+      current.phase === "waiting_for_evidence" ||
+      (current.phase === "review" && currentTurn?.state === "succeeded");
+    if (needsEvidence && !catalogError && !unavailable) {
       try {
-        const { status } = cycle.data;
-        status.costCents = await this.spent(tx, cycle);
-        if (catalogError) throw catalogError;
-        if (status.activeTurnId && turn?.state !== "succeeded")
-          throw new ReviewCycleStop(
-            turn?.error?.slice(0, 1_000) || "A cycle turn failed or was canceled.",
-          );
-        const context = await this.authority(tx, cycle);
-        const signal = this.evidenceSignal(cycle);
-        if (cycle.phase === "correction" && turn) {
-          cycle.data.expectedHeads = deliveryHeadsFromOutput(await this.output(tx, scope, turn.id));
-          cycle.data.lastBuilderTurnId = turn.id;
-          status.activeTurnId = null;
-          cycle.phase = "waiting_for_evidence";
-        }
-        if (cycle.phase === "waiting_for_evidence") {
-          const snapshot = await captureReviewCandidate(
-            tx,
-            this.source,
-            cycle,
-            context.requirePreview,
-            signal,
-          );
-          if (snapshot.candidate) status.candidate = snapshot.candidate;
-          if (snapshot.state === "waiting") {
-            status.reason = snapshot.reason;
-            await saveReviewCycle(tx, cycle);
-            return;
-          }
-          return await this.queue(
-            tx,
-            cycle,
-            context.reviewer,
-            "review",
-            "Review the complete candidate " +
-              snapshot.candidate.id +
-              " against the approved plan and return the structured result.",
-          );
-        }
-        if (cycle.phase !== "review" || !turn || !status.candidate)
-          throw new ReviewCycleStop("The cycle cannot identify its completed review turn.");
-        let report = status.reviews.find((item) => item.turnId === turn.id);
-        if (!report) {
-          report = {
-            turnId: turn.id,
-            candidate: status.candidate,
-            reviewerManifestHash: turn.manifestHash,
-            policyRevision: cycle.data.authorization.policyRevision,
-            planRevision: cycle.data.authorization.planRevision,
-            result: readReviewResult(
-              await this.output(tx, scope, turn.id),
-              status.candidate,
-              status.reviews.at(-1)?.result,
-            ),
-          };
-          status.reviews.push(report);
-        }
-        await this.assertCandidate(tx, cycle, context.requirePreview, signal);
-        checkReviewBudget(status.costCents, 0, cycle.data.policy.maxCostCents);
-        const decision = reviewDecision(report.result, status.reviewsStarted);
-        if (decision.phase !== "correction") {
-          await finishReviewCycle(tx, cycle, decision.phase, decision.reason);
-          return;
-        }
-        await this.requireBuilderSession(tx, cycle);
-        return await this.queue(
-          tx,
-          cycle,
-          context.builder,
-          "correction",
-          reviewCorrectionPrompt(status.candidate, decision.findings),
+        evidenceCycle = structuredClone(current);
+        const context = await this.authority(this.db, evidenceCycle);
+        observed = await captureReviewCandidate(
+          this.db,
+          this.source,
+          evidenceCycle,
+          context.requirePreview,
+          this.evidenceSignal(current),
         );
       } catch (error) {
-        if (!(error instanceof ReviewCycleStop)) throw error;
-        await finishReviewCycle(tx, cycle, "decision_required", error.message);
+        if (error instanceof ReviewEvidenceUnavailable) unavailable = error;
+        else if (error instanceof ReviewCycleStop) observed = error;
+        else throw error;
       }
-    });
-    if (queued)
+    }
+    const result = await this.db.transaction(
+      async (rawTx): Promise<{ next: "done" | "again"; queued?: Turn }> => {
+        const tx = rawTx as unknown as FacilityDb;
+        await lockWorkflowStory(tx, scope);
+        const cycle = await latestReviewCycle(tx, scope);
+        if (!cycle || cycle.originTurnId !== current.originTurnId || !isReviewActive(cycle.phase))
+          return { next: "done" };
+        // The evidence above was read for the cycle as it was; if it moved, read again.
+        if (
+          JSON.stringify([cycle.phase, cycle.data]) !==
+          JSON.stringify([current.phase, current.data])
+        )
+          return { next: "again" };
+        const turn = cycle.data.status.activeTurnId
+          ? await this.turn(tx, scope, cycle.data.status.activeTurnId)
+          : undefined;
+        if (turn?.state === "queued" || turn?.state === "running") return { next: "done" };
+        try {
+          const { status } = cycle.data;
+          status.costCents = await this.spent(tx, cycle);
+          if (catalogError) throw catalogError;
+          if (status.activeTurnId && turn?.state !== "succeeded")
+            throw new ReviewCycleStop(
+              turn?.error?.slice(0, 1_000) || "A cycle turn failed or was canceled.",
+            );
+          // Stops a cycle past its deadline, so unavailable evidence is retried only until then.
+          const context = await this.authority(tx, cycle);
+          if (
+            evidenceCycle &&
+            evidenceCycle.data.reviewerManifestHash !== cycle.data.reviewerManifestHash
+          )
+            return { next: "again" };
+          if (cycle.phase === "correction" && turn) {
+            cycle.data.expectedHeads = deliveryHeadsFromOutput(
+              await this.output(tx, scope, turn.id),
+            );
+            cycle.data.lastBuilderTurnId = turn.id;
+            status.activeTurnId = null;
+            status.reason = "Checking the corrected delivery and its evidence.";
+            await saveReviewCycle(tx, cycle, "waiting_for_evidence");
+            return { next: "again" };
+          }
+          if (unavailable) {
+            status.reason = unavailable.message;
+            await saveReviewCycle(tx, cycle);
+            return { next: "done" };
+          }
+          if (observed instanceof ReviewCycleStop) throw observed;
+          if (!observed)
+            throw new ReviewCycleStop("The cycle could not read its delivery evidence.");
+          await assertDeliveryUnchanged(tx, cycle, observed.candidate);
+          if (cycle.phase === "waiting_for_evidence") {
+            if (observed.candidate) status.candidate = observed.candidate;
+            if (observed.state === "waiting") {
+              status.reason = observed.reason;
+              await saveReviewCycle(tx, cycle);
+              return { next: "done" };
+            }
+            return {
+              next: "done",
+              queued: await this.queue(
+                tx,
+                cycle,
+                context.reviewer,
+                "review",
+                "Review the complete candidate " +
+                  observed.candidate.id +
+                  " against the approved plan and return the structured result.",
+              ),
+            };
+          }
+          if (cycle.phase !== "review" || !turn || !status.candidate)
+            throw new ReviewCycleStop("The cycle cannot identify its completed review turn.");
+          let report = status.reviews.find((item) => item.turnId === turn.id);
+          if (!report) {
+            report = {
+              turnId: turn.id,
+              candidate: status.candidate,
+              reviewerManifestHash: turn.manifestHash,
+              policyRevision: cycle.data.authorization.policyRevision,
+              planRevision: cycle.data.authorization.planRevision,
+              result: readReviewResult(
+                await this.output(tx, scope, turn.id),
+                status.candidate,
+                status.reviews.at(-1)?.result,
+              ),
+            };
+            status.reviews.push(report);
+          }
+          if (observed.state !== "ready" || observed.candidate.id !== status.candidate.id)
+            throw new ReviewCycleStop(
+              "The candidate or its required evidence changed during the cycle.",
+            );
+          checkReviewBudget(status.costCents, 0, cycle.data.policy.maxCostCents);
+          const decision = reviewDecision(report.result, status.reviewsStarted);
+          if (decision.phase !== "correction") {
+            await finishReviewCycle(tx, cycle, decision.phase, decision.reason);
+            return { next: "done" };
+          }
+          await this.requireBuilderSession(tx, cycle);
+          return {
+            next: "done",
+            queued: await this.queue(
+              tx,
+              cycle,
+              context.builder,
+              "correction",
+              reviewCorrectionPrompt(status.candidate, decision.findings),
+            ),
+          };
+        } catch (error) {
+          if (!(error instanceof ReviewCycleStop)) throw error;
+          await finishReviewCycle(tx, cycle, "decision_required", error.message);
+          return { next: "done" };
+        }
+      },
+    );
+    if (result.queued) {
+      const turnId = result.queued.id;
       await this.enqueue("turns.dispatch", {
         orgId: scope.orgId,
         projectId: scope.projectId,
-        turnId: queued.id,
+        turnId,
       }).catch(() => {
         // The existing durable turn sweep republishes the committed queued turn.
-        console.warn(
-          JSON.stringify({ event: "review_cycle.queue_publication_deferred", turnId: queued.id }),
-        );
+        console.warn(JSON.stringify({ event: "review_cycle.queue_publication_deferred", turnId }));
       });
+    }
+    return result.next;
   }
 
   async observePull(repositoryId: string, pullNumber: number) {
@@ -266,7 +341,11 @@ export class StoryReviewCycles {
     )
       throw new ReviewCycleStop("The cycle reached its automatic turn limit.");
     if (!reviewer) await this.requireBuilderSession(tx, cycle);
-    await this.assertCandidate(tx, cycle, context.requirePreview, this.evidenceSignal(cycle));
+    // Live GitHub evidence was checked before this lock (prepareAdmission) and is
+    // checked again before execution; here only the stored delivery is compared.
+    if (!cycle.data.status.candidate)
+      throw new ReviewCycleStop("The review cycle has no verified candidate.");
+    await assertDeliveryUnchanged(tx, cycle, cycle.data.status.candidate);
     checkReviewBudget(
       await this.spent(tx, cycle),
       reservationCents(turn.model, reviewer ? "consultation" : "turn"),
@@ -301,10 +380,33 @@ export class StoryReviewCycles {
     }
   }
 
+  /** Before the admission lock: the catalog and the live candidate evidence. */
+  async prepareAdmission(scope: WorkflowScope) {
+    const cycle = await latestReviewCycle(this.db, scope);
+    if (!cycle || !isReviewActive(cycle.phase)) return;
+    // Unavailable evidence is retried only until the deadline.
+    if (cycle.deadline <= new Date())
+      throw new ReviewCycleStop("The review cycle reached its time limit.");
+    await this.refresh(scope);
+    const { policy } = await readWorkflowPolicy(this.db, cycle);
+    await this.assertCandidate(
+      this.db,
+      cycle,
+      policy.requirePreviewForAcceptance,
+      this.evidenceSignal(cycle),
+    );
+  }
+
   async revalidateBeforeExecution(cycle: ReviewCycle, signal: AbortSignal) {
-    await this.refresh(cycle);
-    const context = await this.authority(this.db, cycle);
-    await this.assertCandidate(this.db, cycle, context.requirePreview, signal);
+    try {
+      await this.refresh(cycle);
+      const context = await this.authority(this.db, cycle);
+      await this.assertCandidate(this.db, cycle, context.requirePreview, signal);
+    } catch (error) {
+      // The turn is already claimed; evidence that disappears now stops the cycle.
+      if (error instanceof ReviewEvidenceUnavailable) throw new ReviewCycleStop(error.message);
+      throw error;
+    }
   }
 
   private async queue(

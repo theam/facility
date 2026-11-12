@@ -27,6 +27,7 @@ import {
   REVIEW_DELIVERY_INSTRUCTIONS,
   REVIEW_TRIGGER,
   ReviewCycleStop,
+  ReviewEvidenceUnavailable,
 } from "../stories/review-cycle-rules.js";
 import { type ReviewCycle, reviewHoldsQueue } from "../stories/review-cycle-state.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
@@ -781,8 +782,26 @@ export class TurnDispatcher {
       const initial = this.review
         ? await this.turn(input.orgId, input.projectId, input.turnId)
         : undefined;
-      if (initial?.triggerType === REVIEW_TRIGGER && initial.state === "queued")
-        await this.review?.cycles.refresh({ ...input, storyId: initial.storyId });
+      if (initial?.triggerType === REVIEW_TRIGGER && initial.state === "queued") {
+        try {
+          await this.review?.cycles.prepareAdmission({ ...input, storyId: initial.storyId });
+        } catch (error) {
+          if (!(error instanceof ReviewEvidenceUnavailable)) throw error;
+          // GitHub may recover: keep the turn queued and let the sweep retry it.
+          await this.db
+            .update(turns)
+            .set({ retryAfter: new Date(Date.now() + 60_000), updatedAt: new Date() })
+            .where(
+              and(
+                eq(turns.orgId, input.orgId),
+                eq(turns.projectId, input.projectId),
+                eq(turns.id, input.turnId),
+                eq(turns.state, "queued"),
+              ),
+            );
+          return { kind: "held", code: "review_evidence_unavailable", error: error.message };
+        }
+      }
       const admitted = await this.db.transaction(async (rawTx) => {
         const tx = rawTx as unknown as FacilityDb;
         const [existing] = await tx

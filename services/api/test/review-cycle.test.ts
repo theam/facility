@@ -13,6 +13,7 @@ import {
   deliveryHeadsFromOutput,
   readReviewResult,
   reviewDecision,
+  transientGithubFailure,
 } from "../src/stories/review-cycle-rules.js";
 import { dockerReviewSandbox } from "../src/workspaces/review-sandbox.js";
 
@@ -233,5 +234,32 @@ describe("isolated review execution", () => {
       run(argv, [{ path: "large.js", text: "a".repeat(70_000) }], AbortSignal.timeout(1_000)),
     ).rejects.toThrow(/limit/);
     expect(createContainer).toHaveBeenCalledOnce();
+  });
+});
+
+describe("temporary GitHub failures", () => {
+  const failure = (status: number, extra: Record<string, unknown> = {}) =>
+    Object.assign(new Error("GitHub request failed"), { status, ...extra });
+  it("retries outages, timeouts and rate limits but not missing or invalid evidence", () => {
+    expect(transientGithubFailure(failure(503))).toBe(true);
+    expect(transientGithubFailure(failure(429))).toBe(true);
+    expect(
+      transientGithubFailure(
+        failure(403, { response: { headers: { "x-ratelimit-remaining": "0" } } }),
+      ),
+    ).toBe(true);
+    expect(transientGithubFailure(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe(
+      true,
+    );
+    expect(transientGithubFailure(Object.assign(new Error("late"), { name: "TimeoutError" }))).toBe(
+      true,
+    );
+    expect(transientGithubFailure(Object.assign(new Error("deadline"), { statusCode: 503 }))).toBe(
+      true,
+    );
+    expect(transientGithubFailure(failure(404))).toBe(false);
+    expect(transientGithubFailure(failure(403))).toBe(false);
+    expect(transientGithubFailure(failure(422))).toBe(false);
+    expect(transientGithubFailure(new Error("unexpected shape"))).toBe(false);
   });
 });

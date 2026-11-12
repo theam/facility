@@ -22,6 +22,40 @@ export function isIsolatedReview(turn: { triggerType: string; triggerKey: string
 
 export class ReviewCycleStop extends Error {}
 
+/** GitHub evidence could not be read for a reason that may clear on its own. The
+ * cycle keeps waiting and retries until its deadline instead of stopping. */
+export class ReviewEvidenceUnavailable extends Error {
+  constructor(
+    message = "GitHub evidence is temporarily unavailable. Facility retries until the cycle deadline.",
+  ) {
+    super(message);
+  }
+}
+
+/** Network failures, timeouts, server errors and rate limits; not missing or invalid evidence. */
+export function transientGithubFailure(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  const code = (error as { code?: unknown }).code;
+  if (
+    typeof code === "string" &&
+    /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|UND_ERR_)/.test(code)
+  )
+    return true;
+  // Octokit reports HTTP and network failures as `status`; Facility deadlines as `statusCode`.
+  const { status, statusCode } = error as { status?: unknown; statusCode?: unknown };
+  const http = typeof status === "number" ? status : statusCode;
+  if (typeof http !== "number") return false;
+  if (http >= 500 || http === 429) return true;
+  if (http !== 403) return false;
+  const headers = (error as { response?: { headers?: Record<string, unknown> } }).response?.headers;
+  return (
+    headers?.["x-ratelimit-remaining"] === "0" ||
+    headers?.["retry-after"] !== undefined ||
+    /rate limit/i.test(error.message)
+  );
+}
+
 export function reviewPullKey(pull: { repository: string; number: number }) {
   return JSON.stringify([pull.repository.toLowerCase(), pull.number]);
 }

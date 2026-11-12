@@ -22,7 +22,9 @@ import { deliveryCandidate } from "./delivery-projection.js";
 import {
   declaresRegisteredDelivery,
   ReviewCycleStop,
+  ReviewEvidenceUnavailable,
   reviewPullKey,
+  transientGithubFailure,
 } from "./review-cycle-rules.js";
 import type { ReviewCycle } from "./review-cycle-state.js";
 import { type WorkflowScope, workflowDigest } from "./workflow-policy.js";
@@ -82,6 +84,7 @@ export class ReviewCycleSource {
       return await underDeadline(this.getConnected(db, scope, pull, query, signal), signal);
     } catch (error) {
       if (error instanceof ReviewCycleStop) throw error;
+      if (transientGithubFailure(error)) throw new ReviewEvidenceUnavailable();
       throw new ReviewCycleStop("Required GitHub evidence could not be verified.");
     }
   }
@@ -204,9 +207,24 @@ export class ReviewCycleSource {
   }
 }
 
-type CandidateEvidence =
+export type CandidateEvidence =
   | { state: "waiting"; reason: string; candidate?: ReviewCandidate }
   | { state: "ready"; candidate: ReviewCandidate };
+
+/** Under the story lock: the registered delivery is still the one the evidence read
+ * outside the lock describes. GitHub is not called here. */
+export async function assertDeliveryUnchanged(
+  db: FacilityDb,
+  scope: WorkflowScope,
+  candidate: ReviewCandidate | null | undefined,
+) {
+  if (!candidate) return;
+  // The candidate pins live heads, which the stored mirror may not show yet; the
+  // registered scope is what must not change between the read and the lock.
+  const delivery = await readStoryDelivery(db, scope);
+  if (delivery.scope.revision !== candidate.scopeRevision)
+    throw new ReviewCycleStop("The registered delivery scope changed during the cycle.");
+}
 
 function assertCompleteRegister(delivery: StoryDelivery, heads: PublishedReviewHead[] | null) {
   if (!declaresRegisteredDelivery(delivery, heads))

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { parseAgentManifest } from "@facility/agents";
 import {
   type DeliveryReviewResult,
@@ -40,6 +41,7 @@ import { StoryReviewCycles } from "../src/stories/review-cycle.js";
 import { ReviewCycleExecutor } from "../src/stories/review-cycle-executor.js";
 import { REVIEW_TRIGGER } from "../src/stories/review-cycle-rules.js";
 import { ReviewCycleSource } from "../src/stories/review-cycle-source.js";
+import { lockWorkflowStory } from "../src/stories/workflow-policy.js";
 import { createStoryDomain } from "../src/story-domain.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
 import type { AppConfig } from "../src/types.js";
@@ -159,8 +161,15 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
   const policyPath = `/v1/projects/${projectId}/workflow-policy`;
   const path = (storyId: string) => `/v1/projects/${projectId}/workspace-stories/${storyId}`;
   const enqueue = vi.fn(async (_queue: string, _input: Record<string, unknown>) => null);
+  // Simulated GitHub conditions for the pull reads the cycle makes.
+  const github: { down?: boolean; hold?: { entered: () => void; released: Promise<void> } } = {};
   const request = vi.fn(async (route: string, args: Record<string, unknown>) => {
     if (route.startsWith("GET ") && route.endsWith("/pulls/{pull_number}")) {
+      if (github.down) throw Object.assign(new Error("Service unavailable"), { status: 503 });
+      if (github.hold) {
+        github.hold.entered();
+        await github.hold.released;
+      }
       const pull = pulls.get(Number(args.pull_number));
       if (!pull || args.repo !== pull.repo || args.owner !== owner)
         throw new Error("wrong repository");
@@ -752,6 +761,81 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     expect(
       await db.select().from(storyReviewCycles).where(eq(storyReviewCycles.storyId, storyId)),
     ).toHaveLength(0);
+  });
+
+  it("keeps waiting while GitHub evidence is temporarily unavailable, until the deadline", async () => {
+    const { storyId, items } = await story("minor", true);
+    for (const pull of items) await mirror(pull);
+    github.down = true;
+    try {
+      await cycles.reconcile(scope(storyId));
+      expect(await state(storyId)).toMatchObject({
+        phase: "waiting_for_evidence",
+        reviewsStarted: 0,
+        reason: expect.stringContaining("temporarily unavailable"),
+      });
+      github.down = false;
+      await cycles.reconcile(scope(storyId));
+      const turnId = await active(storyId);
+      expect(await state(storyId)).toMatchObject({ phase: "review", reviewsStarted: 0 });
+      // Admission keeps the turn queued for a retry instead of stopping the cycle.
+      github.down = true;
+      expect(await dispatch(turnId)).toMatchObject({
+        claimed: false,
+        state: "held",
+        code: "review_evidence_unavailable",
+      });
+      const [held] = await db.select().from(turns).where(eq(turns.id, turnId));
+      expect(held?.state).toBe("queued");
+      expect(held?.retryAfter?.getTime()).toBeGreaterThan(Date.now());
+      expect(await state(storyId)).toMatchObject({ phase: "review", reviewsStarted: 0 });
+      // Past the deadline the cycle stops for a person.
+      await db
+        .update(storyReviewCycles)
+        .set({ deadline: new Date(Date.now() - 1_000) })
+        .where(eq(storyReviewCycles.storyId, storyId));
+      await db.update(turns).set({ retryAfter: null }).where(eq(turns.id, turnId));
+      await dispatch(turnId);
+      expect(await state(storyId)).toMatchObject({
+        phase: "decision_required",
+        reason: expect.stringContaining("time limit"),
+      });
+    } finally {
+      github.down = false;
+    }
+  });
+
+  it("reads GitHub evidence without holding the story lock", async () => {
+    const { storyId, items } = await story("minor", true);
+    for (const pull of items) await mirror(pull);
+    let entered = () => {};
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release = () => {};
+    github.hold = {
+      entered: () => entered(),
+      released: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    const reconciling = cycles.reconcile(scope(storyId));
+    try {
+      await inFlight;
+      const lock = await Promise.race([
+        db.transaction(async (tx) => {
+          await lockWorkflowStory(tx as unknown as typeof db, scope(storyId));
+          return "acquired" as const;
+        }),
+        sleep(3_000).then(() => "blocked" as const),
+      ]);
+      expect(lock).toBe("acquired");
+    } finally {
+      github.hold = undefined;
+      release();
+      await reconciling;
+    }
+    expect(await state(storyId)).toMatchObject({ phase: "review" });
   });
 
   it("denies external heads and bases before inference", async () => {
