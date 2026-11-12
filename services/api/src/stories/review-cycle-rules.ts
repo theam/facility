@@ -7,6 +7,7 @@ import {
   type ReviewCandidate,
   type ReviewCyclePolicy,
   type ReviewFinding,
+  type StoryDelivery,
 } from "@facility/core";
 import { z } from "zod";
 
@@ -37,6 +38,21 @@ export function deliveryHeadsFromOutput(output: string): PublishedReviewHead[] |
   } catch {
     return null;
   }
+}
+
+/** The Builder's published heads name exactly the registered, complete set of required PRs. */
+export function declaresRegisteredDelivery(
+  delivery: StoryDelivery,
+  heads: PublishedReviewHead[] | null,
+): heads is PublishedReviewHead[] {
+  const required = delivery.pullRequests.filter((pull) => pull.required);
+  return (
+    !!heads &&
+    delivery.scope.declaredComplete &&
+    delivery.scope.origin === "registered" &&
+    required.length === heads.length &&
+    required.every((pull) => heads.some((head) => reviewPullKey(head) === reviewPullKey(pull)))
+  );
 }
 
 export function blocksDelivery(finding: ReviewFinding) {

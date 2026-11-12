@@ -14,8 +14,14 @@ import {
 } from "@facility/db";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { z } from "zod";
+import { readStoryDelivery } from "./delivery.js";
 import { appendStoryEvidence } from "./evidence.js";
-import { deliveryHeadsFromOutput, REVIEW_ACTOR, REVIEW_TRIGGER } from "./review-cycle-rules.js";
+import {
+  declaresRegisteredDelivery,
+  deliveryHeadsFromOutput,
+  REVIEW_ACTOR,
+  REVIEW_TRIGGER,
+} from "./review-cycle-rules.js";
 import { type PlanExecutionAuthorization, readPlanExecutionReceipt } from "./workflow-execution.js";
 import { readWorkflowPolicy, type WorkflowScope } from "./workflow-policy.js";
 
@@ -100,6 +106,10 @@ export async function seedReviewCycle(
   if (!policy || turn.agentName !== policy.builderAgent) return;
   const authorization = await readPlanExecutionReceipt(tx, scope, turn.id);
   if (!authorization || authorization.policyRevision !== state.revision) return;
+  // Only a Builder turn that declares the complete registered delivery starts a
+  // cycle; other Builder turns (questions, partial work) leave the story as it is.
+  const expectedHeads = deliveryHeadsFromOutput(output);
+  if (!declaresRegisteredDelivery(await readStoryDelivery(tx, scope), expectedHeads)) return;
   const previous = await latestReviewCycle(tx, scope);
   // An automatic replay cannot start a fresh cycle. A new human Builder turn
   // needs a newer approved plan decision, even if it uses the same plan text.
@@ -114,7 +124,7 @@ export async function seedReviewCycle(
     policy,
     authorization,
     reviewerManifestHash: null,
-    expectedHeads: deliveryHeadsFromOutput(output),
+    expectedHeads,
     lastBuilderTurnId: turn.id,
     turnIds: [],
     status: {

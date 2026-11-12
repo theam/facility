@@ -19,7 +19,11 @@ import { isSafeGitBranch } from "../workspaces/git-branch.js";
 import { GithubConsultationSources, underDeadline } from "./consultation-sources.js";
 import { readStoryDelivery } from "./delivery.js";
 import { deliveryCandidate } from "./delivery-projection.js";
-import { ReviewCycleStop, reviewPullKey } from "./review-cycle-rules.js";
+import {
+  declaresRegisteredDelivery,
+  ReviewCycleStop,
+  reviewPullKey,
+} from "./review-cycle-rules.js";
 import type { ReviewCycle } from "./review-cycle-state.js";
 import { type WorkflowScope, workflowDigest } from "./workflow-policy.js";
 
@@ -205,17 +209,11 @@ type CandidateEvidence =
   | { state: "ready"; candidate: ReviewCandidate };
 
 function assertCompleteRegister(delivery: StoryDelivery, heads: PublishedReviewHead[] | null) {
-  const required = delivery.pullRequests.filter((pull) => pull.required);
-  if (
-    !delivery.scope.declaredComplete ||
-    delivery.scope.origin !== "registered" ||
-    required.length !== heads?.length ||
-    required.some((pull) => !heads.some((head) => reviewPullKey(head) === reviewPullKey(pull)))
-  )
+  if (!declaresRegisteredDelivery(delivery, heads))
     throw new ReviewCycleStop(
       "Register the complete delivery and verify the Builder's exact published heads.",
     );
-  return required;
+  return delivery.pullRequests.filter((pull) => pull.required);
 }
 
 export async function captureReviewCandidate(

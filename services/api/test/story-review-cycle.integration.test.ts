@@ -106,7 +106,8 @@ type Scenario =
   | "missing"
   | "failed-fix"
   | "no-progress"
-  | "external-after-review";
+  | "external-after-review"
+  | "undeclared";
 
 describe("bounded review cycle with real storage and the existing dispatcher", () => {
   const { db, client } = createDb(databaseUrl);
@@ -588,7 +589,10 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
         durationMs: 10,
         exitCode: 0,
         stderr: "",
-        output: `<facility-delivery-heads>${JSON.stringify(heads)}</facility-delivery-heads>`,
+        output:
+          scenario === "undeclared"
+            ? "Implemented part of the plan; the delivery is not ready yet."
+            : `<facility-delivery-heads>${JSON.stringify(heads)}</facility-delivery-heads>`,
         usage: { inputTokens: 800, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0 },
       };
     });
@@ -740,6 +744,14 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       reviewsStarted: 1,
       correctionsStarted: 1,
     });
+  });
+
+  it("starts no cycle for a Builder turn that does not declare its delivery", async () => {
+    const { storyId } = await story("undeclared");
+    expect(await state(storyId)).toBeUndefined();
+    expect(
+      await db.select().from(storyReviewCycles).where(eq(storyReviewCycles.storyId, storyId)),
+    ).toHaveLength(0);
   });
 
   it("denies external heads and bases before inference", async () => {
