@@ -36,6 +36,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService } from "../src/agents/catalog.js";
 import { buildApp, mintSessionCookie } from "../src/app.js";
 import type { GithubClientFactory, Octokit } from "../src/github/client.js";
+import { readProjectDeliveryReviews } from "../src/insights/project-delivery-reviews.js";
 import { StoryReviewCycles } from "../src/stories/review-cycle.js";
 import { REVIEW_TRIGGER } from "../src/stories/review-cycle-rules.js";
 import { ReviewCycleSource } from "../src/stories/review-cycle-source.js";
@@ -684,6 +685,13 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       },
     });
     expect(requestAcceptance.statusCode).toBe(409);
+    // Attention and the backlog read the same rule: not ready while the cycle works.
+    const projected = async () =>
+      (await readProjectDeliveryReviews(db, { orgId, projectId }, new Date())).stories.get(storyId);
+    expect(await projected()).toMatchObject({
+      acceptanceReady: false,
+      blocked: { code: "workflow_review_in_progress" },
+    });
     for (const pull of items) await mirror(pull);
     const restarted = new StoryReviewCycles(db, domain.stories, catalog, source, enqueue);
     const [primary] = items;
@@ -705,6 +713,7 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     ]);
     const api = await state(storyId);
     expect(api).toMatchObject({ phase: "human_review", reviewsStarted: 1, correctionsStarted: 0 });
+    expect((await projected())?.blocked?.code).not.toBe("workflow_review_in_progress");
     // Facility left the report on each pull request as a comment review of the exact head.
     const ours = () =>
       publishedReviews.filter((review) => items.some((pull) => pull.number === review.pull));

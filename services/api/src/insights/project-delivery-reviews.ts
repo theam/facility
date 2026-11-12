@@ -12,8 +12,10 @@ import {
   storyPlanRevisions,
   storyPlanStates,
   storyPreviewConvergences,
+  storyReviewCycles,
+  turns,
 } from "@facility/db";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { observeUserAuthorities } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import {
@@ -27,6 +29,7 @@ import {
   type MirroredDeliveryPull,
 } from "../stories/delivery-projection.js";
 import { planState } from "../stories/plan-state.js";
+import { ACTIVE_REVIEW_PHASES } from "../stories/review-cycle-state.js";
 import { workflowPolicyFromSettings } from "../stories/workflow-policy.js";
 
 type Scope = { orgId: string; projectId: string };
@@ -219,6 +222,34 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
     [...new Set(receipts.map((receipt) => receipt.confirmedBy.id))],
     ["projects:write"],
   );
+  // While the review cycle's Builder or Reviewer works on a delivery, it is not ready to accept.
+  const builder = policy?.policy.reviewCycle?.builderAgent;
+  const [activeCycles, working] = policy?.policy.reviewCycle
+    ? await Promise.all([
+        db
+          .select({ storyId: storyReviewCycles.storyId })
+          .from(storyReviewCycles)
+          .where(
+            and(
+              eq(storyReviewCycles.orgId, scope.orgId),
+              eq(storyReviewCycles.projectId, scope.projectId),
+              inArray(storyReviewCycles.phase, [...ACTIVE_REVIEW_PHASES]),
+            ),
+          ),
+        db
+          .select({ storyId: turns.storyId })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, scope.orgId),
+              eq(turns.projectId, scope.projectId),
+              eq(turns.agentName, builder ?? ""),
+              inArray(turns.state, ["queued", "running"]),
+            ),
+          ),
+      ])
+    : [[], []];
+  const reviewing = new Set([...activeCycles, ...working].map((row) => row.storyId));
   const declarationByStory = new Map(declarations.map((row) => [row.storyId, row]));
   const planByStory = new Map(planRows.map((row) => [row.state.storyId, row]));
   const receiptByStory = new Map(receipts.map((row) => [row.storyId, row]));
@@ -292,6 +323,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
             digest: plan?.digest ?? null,
           },
           preview,
+          reviewInProgress: reviewing.has(story.id),
         }
       : null;
     let current = false;

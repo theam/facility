@@ -118,6 +118,7 @@ async function candidateSnapshot(
   requireReadyPreview: boolean,
 ): Promise<DeliveryAcceptanceSnapshot> {
   const policy = await readWorkflowPolicy(db, scope);
+  let reviewInProgress = false;
   if (requireReadyPreview) {
     const cycle = await latestReviewCycle(db, scope);
     const builder = policy.policy.reviewCycle?.builderAgent;
@@ -136,12 +137,7 @@ async function candidateSnapshot(
           )
           .limit(1)
       : [];
-    if (building || (cycle && isReviewActive(cycle.phase)))
-      throw new ApiError(
-        409,
-        "workflow_review_in_progress",
-        "Wait for the Builder and review cycle to reach a human decision before accepting delivery",
-      );
+    reviewInProgress = !!building || (!!cycle && isReviewActive(cycle.phase));
   }
   const delivery = await readStoryDelivery(db, scope);
   const plan = await readWorkflowPlan(db, scope);
@@ -166,6 +162,7 @@ async function candidateSnapshot(
       delivery,
       plan: { state: plan.state, digest: plan.plan?.digest ?? null },
       preview: preview ?? null,
+      reviewInProgress,
     },
     acceptanceRevision,
     requireReadyPreview,
