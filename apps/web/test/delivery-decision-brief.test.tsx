@@ -3,14 +3,14 @@ import type { StoryDelivery } from "@facility/sdk";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import fixtureData from "../../../packages/core/test/fixtures/delivery-decision-brief.json";
 import { DeliveryDecisionBrief } from "../components/story/delivery-decision-brief";
+import { coreFixture } from "./fixtures/core";
 
 type Projection = NonNullable<StoryDelivery["decisionBrief"]>;
-const fixture = fixtureData as {
+const fixture = coreFixture<{
   subject: Extract<Projection, { status: "available" }>["subject"];
   brief: Extract<Projection, { status: "available" }>["brief"];
-};
+}>("delivery-decision-brief.json");
 
 const source = {
   messageId: "msg-review",

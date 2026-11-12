@@ -3,8 +3,11 @@ import type { StoryPlan } from "@facility/sdk";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import brief from "../../../packages/core/test/fixtures/decision-brief.json";
 import { PlanContent } from "../components/story/plan-content";
+import { coreFixture } from "./fixtures/core";
+
+type Brief = Extract<NonNullable<StoryPlan["decisionBrief"]>, { status: "available" }>["brief"];
+const brief = coreFixture<Brief>("decision-brief.json");
 
 function plan(): StoryPlan {
   return {
