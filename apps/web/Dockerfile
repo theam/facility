@@ -1,7 +1,7 @@
 # Facility web (Next.js standalone). Built once; FACILITY_API_URL is supplied
 # when the container starts so the same artifact works in every installation.
 #   docker build -f apps/web/Dockerfile -t facility/web .
-FROM node:24.22.2-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS base
+FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 ARG DEBIAN_SECURITY_REFRESH=20261112
 ARG APT_MIN_VERSION=3.0.4
