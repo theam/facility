@@ -333,8 +333,8 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     const saved = await app.inject({ url: policyPath, headers: { cookie } });
     expect(saved.statusCode, saved.body).toBe(200);
     const expected_revision = saved.json().revision;
-    const review = await post(policyPath + "/review", { expected_revision, policy: next });
-    await post(policyPath + "/confirm", {
+    const review = await post(`${policyPath}/review`, { expected_revision, policy: next });
+    await post(`${policyPath}/confirm`, {
       expected_revision,
       policy: review.policy,
       proof: review.proof,

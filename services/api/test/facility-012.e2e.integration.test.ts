@@ -394,7 +394,7 @@ environment:
     const agents = mcpData(
       await mcp.callTool({ name: "facility_list_agents", arguments: { projectId } }),
     ) as { agents: Array<{ name: string; hash: string; model: string }> };
-    expect(agents.agents).toHaveLength(6);
+    expect(agents.agents).toHaveLength(5);
     expect(agents.agents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
