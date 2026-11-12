@@ -506,12 +506,15 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
           attentionId,
           actor: principalActor(actor),
         };
+        if (action === "retry")
+          return storyResponse(await translate(() => domain.stories.retryAttention(input)));
+        await translate(() => domain.stories.dismissAttention(input));
+        // Dismissing a review stop releases messages the cycle held, as any finished turn would.
+        await domain.dispatcher
+          .activateQueuedStorySuccessor({ orgId: actor.orgId, projectId, storyId })
+          .catch(() => undefined);
         return storyResponse(
-          await translate(() =>
-            action === "retry"
-              ? domain.stories.retryAttention(input)
-              : domain.stories.dismissAttention(input),
-          ),
+          await translate(() => domain.stories.get(actor.orgId, projectId, storyId)),
         );
       },
     );

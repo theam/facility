@@ -844,6 +844,51 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     expect(restored).toContain(`reset --hard ${reviewed?.headSha}`);
   });
 
+  it("releases a message the cycle held once a person dismisses its stop", async () => {
+    const { storyId, items } = await story("minor", true);
+    // A message sent while the cycle waits for evidence is held without a turn.
+    const { turn: held } = await domain.stories.queueMessage({
+      ...scope(storyId),
+      body: "Also update the changelog.",
+      dedupeKey: `held-${storyId}`,
+      agent: builder,
+      actor: user,
+      trigger: { type: "ui" },
+    });
+    expect(held).toBeUndefined();
+    await db
+      .update(storyReviewCycles)
+      .set({ deadline: new Date(Date.now() - 1_000) })
+      .where(eq(storyReviewCycles.storyId, storyId));
+    for (const pull of items) await mirror(pull);
+    await cycles.reconcile(scope(storyId));
+    expect(await state(storyId)).toMatchObject({ phase: "decision_required" });
+    const [stop] = await db
+      .select()
+      .from(attentionItems)
+      .where(
+        and(
+          eq(attentionItems.storyId, storyId),
+          eq(attentionItems.kind, "review_cycle_decision"),
+          eq(attentionItems.status, "open"),
+        ),
+      );
+    if (!stop) throw new Error("The stop did not ask for a decision");
+    const pendingTurns = async () =>
+      db
+        .select()
+        .from(turns)
+        .where(and(eq(turns.storyId, storyId), eq(turns.state, "queued")));
+    expect(await pendingTurns()).toHaveLength(0);
+    const dismissed = await app.inject({
+      method: "POST",
+      url: `${path(storyId)}/attention/${stop.id}/dismiss`,
+      headers: { cookie, "idempotency-key": `dismiss-${stop.id}` },
+    });
+    expect(dismissed.statusCode, dismissed.body).toBe(200);
+    expect(await pendingTurns()).toMatchObject([{ agentName: "builder" }]);
+  });
+
   it("starts no cycle for a Builder turn that does not declare its delivery", async () => {
     const { storyId } = await story("undeclared");
     expect(await state(storyId)).toBeUndefined();
