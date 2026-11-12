@@ -31,10 +31,10 @@ export function requestCompose(agent?: string) {
 
 /**
  * The shared conversation as exchanges: each human request with the run and
- * the final response it produced, oldest first so the latest sits next to the
- * composer. The first page is server-rendered; older pages load above on
- * request. New exchanges that arrive while the reader is away are announced
- * instead of pushed into view.
+ * the final response it produced, newest first so the latest sits under the
+ * actions. The first page is server-rendered; older pages load below on
+ * request. New exchanges that arrive while the reader is further down are
+ * announced instead of pushed into view.
  */
 export function StoryConversation({
   projectId,
@@ -83,12 +83,10 @@ export function StoryConversation({
     const incoming = mergeMessages(initial.messages, initial.related);
     const keys = new Set(shownRef.current.map(exchangeKey));
     const fresh = incoming.filter((message) => !keys.has(exchangeKey(message)));
-    // Oldest first: a reader is away when the latest exchange is out of view.
+    // Newest first: a reader is away when they have scrolled past the top.
     const away =
       paged.current ||
-      (list.current
-        ? list.current.getBoundingClientRect().bottom > window.innerHeight + 240
-        : false);
+      (container.current ? container.current.getBoundingClientRect().top < -240 : false);
     if (fresh.length > 0 && away) {
       const updates = incoming.filter((message) => keys.has(exchangeKey(message)));
       setPending((held) => mergeMessages(held, fresh));
@@ -144,18 +142,31 @@ export function StoryConversation({
           </Link>
         </div>
       ) : null}
-      <LoadMore
-        state={floor.state}
-        label="Older messages"
-        endLabel={exchanges.length > 0 ? "Beginning of the conversation." : ""}
-        error={error}
-        onLoad={() => void loadOlder()}
-      />
+      {pendingCount > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[4px] bg-(--bg-subtle) px-4 py-3">
+          <p role="status" className="text-[13px]">
+            {pendingCount === 1 ? "1 new exchange" : `${pendingCount} new exchanges`} arrived while
+            you were reading.
+          </p>
+          <Button
+            size="sm"
+            variant="primary"
+            tone="agent"
+            onClick={() => {
+              setShown((current) => mergeMessages(current, pending));
+              setPending([]);
+              container.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+            }}
+          >
+            Show latest
+          </Button>
+        </div>
+      ) : null}
       {exchanges.length === 0 ? (
         <p className="py-4 text-sm text-(--dim)">No messages yet.</p>
       ) : (
-        <ol ref={list} className="flex flex-col" aria-label="Conversation, oldest first">
-          {[...exchanges].reverse().map((exchange) => (
+        <ol ref={list} className="flex flex-col" aria-label="Conversation, newest first">
+          {exchanges.map((exchange) => (
             <li key={exchange.key}>
               <ExchangeCard
                 exchange={exchange}
@@ -170,29 +181,13 @@ export function StoryConversation({
           ))}
         </ol>
       )}
-      {pendingCount > 0 ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[4px] bg-(--bg-subtle) px-4 py-3">
-          <p role="status" className="text-[13px]">
-            {pendingCount === 1 ? "1 new exchange" : `${pendingCount} new exchanges`} arrived while
-            you were reading.
-          </p>
-          <Button
-            size="sm"
-            variant="primary"
-            tone="agent"
-            onClick={() => {
-              setShown((current) => mergeMessages(current, pending));
-              setPending([]);
-              list.current?.lastElementChild?.scrollIntoView?.({
-                block: "end",
-                behavior: "smooth",
-              });
-            }}
-          >
-            Show latest
-          </Button>
-        </div>
-      ) : null}
+      <LoadMore
+        state={floor.state}
+        label="Older messages"
+        endLabel={exchanges.length > 0 ? "Beginning of the conversation." : ""}
+        error={error}
+        onLoad={() => void loadOlder()}
+      />
     </div>
   );
 }

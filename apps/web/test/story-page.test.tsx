@@ -459,8 +459,8 @@ describe("story overview integration", () => {
     expect(timeline?.open).toBe(false);
     expect(timeline?.querySelector("ol")).toBeNull();
 
-    // Shown oldest first, next to the composer; each request pairs with its response.
-    const exchanges = [...root.querySelectorAll("article")].reverse();
+    // The newest exchange comes first and pairs the request with its response.
+    const exchanges = [...root.querySelectorAll("article")];
     expect(exchanges[0]?.textContent).toContain("Ada Lovelace");
     expect(exchanges[0]?.textContent).toContain("Please add the feature");
     expect(exchanges[0]?.textContent).toContain("The feature ships in the pull request.");
@@ -495,9 +495,18 @@ describe("story overview integration", () => {
     const actions = root.querySelector('[aria-label="Story actions"]');
     expect(actions?.textContent).toContain("Send a task");
     expect(actions?.textContent).toContain("Ask without changes");
-    expect(actions?.textContent).toContain("Open app ↗");
-    expect(actions?.textContent).toContain("More");
+    expect(actions?.textContent).not.toContain("Open app");
     expect(actions?.querySelector("a")).toBeNull();
+    const conversation = root.querySelector("#conversation");
+    const list = conversation?.querySelector('ol[aria-label="Conversation, newest first"]');
+    expect(
+      ((actions as Node).compareDocumentPosition(list as Node) ?? 0) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const environment = root.querySelector('[aria-label="Environment actions"]');
+    expect(environment?.closest("header")).not.toBeNull();
+    expect(environment?.textContent).toContain("Open app ↗");
+    expect(environment?.textContent).toContain("More");
     expect(actions?.textContent).not.toContain("Cancel turn");
     expect(root.querySelector("#story-composer")).toBeNull();
     expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("Send a task");

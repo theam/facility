@@ -16,6 +16,7 @@ import { StoryProgress } from "@/components/story/story-progress";
 import { StorySections } from "@/components/story/story-sections";
 import { StoryTimeline } from "@/components/story/story-timeline";
 import { StoryWorkflowPanel } from "@/components/story/story-workflow";
+import { WorkspaceControls } from "@/components/story/workspace-story-controls";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api, type StoryEnvironment } from "@/lib/api";
 import { titleStatus } from "@/lib/backlog-presentation";
@@ -158,9 +159,22 @@ export default async function StoryPage({
             </>
           ) : null}
         </p>
-        <h1 className="text-[clamp(22px,2.6vw,28px)] font-semibold leading-tight tracking-tight">
-          {story.title}
-        </h1>
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <h1 className="min-w-0 text-[clamp(22px,2.6vw,28px)] font-semibold leading-tight tracking-tight">
+            {story.title}
+          </h1>
+          <section aria-label="Environment actions" className="shrink-0">
+            <WorkspaceControls
+              projectId={projectId}
+              story={story}
+              workspace={bundle.workspace}
+              canExecute={canExecute}
+              canPreview={canExecute || can(permissions, "previews:read")}
+              canWrite={canWrite}
+              computeState={currentEnvironment?.inspection.state}
+            />
+          </section>
+        </div>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-(--mut)">
           <StatusDot tone={activity.active ? "agent" : "machine"} pulse={activity.active} />
           <span className="text-(--ink)">{activity.label}</span>
@@ -270,7 +284,26 @@ export default async function StoryPage({
             id="conversation"
             className={`${cardClassName} scroll-mt-6 flex flex-col gap-4 px-5 py-5 sm:px-6`}
           >
-            <h2 className="text-[15px] font-semibold">Conversation</h2>
+            <StoryActions
+              key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
+              projectId={projectId}
+              draftOwnerId={
+                me.ok && me.data.principal?.type === "user"
+                  ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
+                  : undefined
+              }
+              story={story}
+              workspace={bundle.workspace}
+              agents={agentRows}
+              canExecute={canExecute}
+              canPreview={canExecute || can(permissions, "previews:read")}
+              canWrite={canWrite}
+              computeState={currentEnvironment?.inspection.state}
+              activeTurn={activeTurn}
+              waitingAgent={waitingAgent}
+              artifacts={bundle.artifacts}
+              title="Conversation"
+            />
             {canExecute && !agents.ok ? (
               <ErrorNotice message={`Couldn't load .agents — ${agents.message}`} />
             ) : null}
@@ -307,25 +340,6 @@ export default async function StoryPage({
                 canProposePlan={!selection && canWrite && story.deletedAt === null}
               />
             )}
-            <StoryActions
-              key={JSON.stringify([me.ok ? me.data.principal?.id : null, projectId, story.id])}
-              projectId={projectId}
-              draftOwnerId={
-                me.ok && me.data.principal?.type === "user"
-                  ? `${me.data.principal.orgId}:${me.data.principal.userId ?? me.data.principal.id}`
-                  : undefined
-              }
-              story={story}
-              workspace={bundle.workspace}
-              agents={agentRows}
-              canExecute={canExecute}
-              canPreview={canExecute || can(permissions, "previews:read")}
-              canWrite={canWrite}
-              computeState={currentEnvironment?.inspection.state}
-              activeTurn={activeTurn}
-              waitingAgent={waitingAgent}
-              artifacts={bundle.artifacts}
-            />
           </section>
         }
         sections={[

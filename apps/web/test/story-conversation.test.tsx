@@ -91,7 +91,7 @@ function exchangeTexts() {
 }
 
 describe("story conversation paging", () => {
-  it("reads oldest first, with older pages above and the latest exchange last", async () => {
+  it("reads newest first, with the latest exchange on top and older pages below", async () => {
     const latest = exchange(5, "turn-c");
     const earlier = exchange(3, "turn-b");
     await act(async () =>
@@ -109,12 +109,12 @@ describe("story conversation paging", () => {
         />,
       ),
     );
-    const list = container.querySelector('ol[aria-label="Conversation, oldest first"]');
+    const list = container.querySelector('ol[aria-label="Conversation, newest first"]');
     expect(list).not.toBeNull();
-    expect(exchangeTexts()[0]).toContain("Response 4");
-    expect(exchangeTexts().at(-1)).toContain("Response 6");
+    expect(exchangeTexts()[0]).toContain("Response 6");
+    expect(exchangeTexts().at(-1)).toContain("Response 4");
     expect(
-      button("Older messages").compareDocumentPosition(list as Node) &
+      (list as Node).compareDocumentPosition(button("Older messages")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
@@ -209,7 +209,7 @@ describe("story conversation paging", () => {
       ),
     );
     expect(exchangeTexts()).toHaveLength(2);
-    expect(exchangeTexts().reverse()[0]).toContain("Response 6");
+    expect(exchangeTexts()[0]).toContain("Response 6");
     expect(button("Older messages")).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
 
@@ -220,8 +220,8 @@ describe("story conversation paging", () => {
       "/conversation?order=desc&limit=10&before=4",
     );
     expect(exchangeTexts()).toHaveLength(3);
-    expect(exchangeTexts().reverse()[2]).toContain("Request 1");
-    expect(exchangeTexts().reverse()[2]).toContain("Response 2");
+    expect(exchangeTexts()[2]).toContain("Request 1");
+    expect(exchangeTexts()[2]).toContain("Response 2");
 
     await act(async () => button("Older messages").click());
     await settle();
@@ -290,9 +290,9 @@ describe("story conversation paging", () => {
     expect(container.querySelector("[role='status']")?.textContent).toContain("1 new exchange");
     await act(async () => button("Show latest").click());
     expect(exchangeTexts()).toHaveLength(3);
-    expect(exchangeTexts().reverse()[0]).toContain("Running");
-    expect(exchangeTexts().reverse()[0]).toContain("Cancel turn");
-    expect(exchangeTexts().reverse()[0]).not.toContain("Response");
+    expect(exchangeTexts()[0]).toContain("Running");
+    expect(exchangeTexts()[0]).toContain("Cancel turn");
+    expect(exchangeTexts()[0]).not.toContain("Response");
 
     // A refresh that completes the run updates the exchange in place.
     const completed = exchange(5, "turn-c");
@@ -300,8 +300,8 @@ describe("story conversation paging", () => {
       page([completed.response, completed.request, latest.response, latest.request], [], 2),
     );
     expect(exchangeTexts()).toHaveLength(3);
-    expect(exchangeTexts().reverse()[0]).toContain("Completed");
-    expect(exchangeTexts().reverse()[0]).toContain("Response 6");
+    expect(exchangeTexts()[0]).toContain("Completed");
+    expect(exchangeTexts()[0]).toContain("Response 6");
     expect(container.querySelector("[role='status']")).toBeNull();
   });
 
@@ -330,8 +330,7 @@ describe("story conversation paging", () => {
         />,
       ),
     );
-    // Shown oldest first; read newest first to compare.
-    const texts = exchangeTexts().reverse();
+    const texts = exchangeTexts();
     expect(texts[0]).toContain("Queued");
     expect(texts[1]).toContain("Queued");
     expect(texts[2]).toContain("Failed");

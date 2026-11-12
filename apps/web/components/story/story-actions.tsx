@@ -4,11 +4,7 @@ import { Button, Field, Select, TextArea } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import { COMPOSE_EVENT } from "@/components/story/story-conversation";
-import {
-  CancelTurnButton,
-  storyPath,
-  WorkspaceControls,
-} from "@/components/story/workspace-story-controls";
+import { CancelTurnButton, storyPath } from "@/components/story/workspace-story-controls";
 import type { StoryAgent, StoryWorkspace, WorkspaceStory, WorkspaceStoryBundle } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import {
@@ -34,16 +30,15 @@ type Artifact = WorkspaceStoryBundle["artifacts"][number];
 export function StoryActions({
   projectId,
   story,
-  workspace,
   agents,
   canExecute,
-  canPreview = canExecute,
   canWrite,
   computeState,
   activeTurn,
   waitingAgent,
   artifacts,
   draftOwnerId,
+  title,
 }: {
   projectId: string;
   story: WorkspaceStory;
@@ -57,6 +52,8 @@ export function StoryActions({
   waitingAgent: string | null;
   artifacts: Artifact[];
   draftOwnerId?: string;
+  /** Heading shown at the left of the action row, such as "Conversation". */
+  title?: string;
 }) {
   const enabled = agents.filter((candidate) => candidate.enabled);
   const canSend = canExecute && story.deletedAt === null;
@@ -90,58 +87,52 @@ export function StoryActions({
 
   return (
     <div className="flex flex-col gap-3">
-      <section
-        ref={actionBar}
-        className="flex flex-wrap items-center gap-2"
-        aria-label="Story actions"
-      >
-        {canSend ? (
-          <Button
-            variant="primary"
-            tone="agent"
-            size="sm"
-            aria-expanded={open}
-            aria-controls={panelId}
-            onClick={() => {
-              if (open) close();
-              else {
-                setOpen(true);
-                setHasOpened(true);
-                setFocusRequest((request) => request + 1);
-              }
-            }}
-          >
-            {waitingAgent ? `Reply to ${waitingAgent}` : "Send a task"}
-          </Button>
-        ) : null}
-        {canSend ? (
-          <Button
-            size="sm"
-            onClick={() => {
-              window.location.hash = "story-section-consultation";
-            }}
-          >
-            Ask without changes
-          </Button>
-        ) : null}
-        {canExecute && activeTurn ? (
-          <CancelTurnButton
-            projectId={projectId}
-            storyId={story.id}
-            turnId={activeTurn.id}
-            inline
-          />
-        ) : null}
-        <WorkspaceControls
-          projectId={projectId}
-          story={story}
-          workspace={workspace}
-          canExecute={canExecute}
-          canPreview={canPreview}
-          canWrite={canWrite}
-          computeState={computeState}
-        />
-      </section>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {title ? <h2 className="text-[15px] font-semibold">{title}</h2> : null}
+        <section
+          ref={actionBar}
+          className="flex flex-wrap items-center gap-2"
+          aria-label="Story actions"
+        >
+          {canSend ? (
+            <Button
+              variant="primary"
+              tone="agent"
+              size="sm"
+              aria-expanded={open}
+              aria-controls={panelId}
+              onClick={() => {
+                if (open) close();
+                else {
+                  setOpen(true);
+                  setHasOpened(true);
+                  setFocusRequest((request) => request + 1);
+                }
+              }}
+            >
+              {waitingAgent ? `Reply to ${waitingAgent}` : "Send a task"}
+            </Button>
+          ) : null}
+          {canSend ? (
+            <Button
+              size="sm"
+              onClick={() => {
+                window.location.hash = "story-section-consultation";
+              }}
+            >
+              Ask without changes
+            </Button>
+          ) : null}
+          {canExecute && activeTurn ? (
+            <CancelTurnButton
+              projectId={projectId}
+              storyId={story.id}
+              turnId={activeTurn.id}
+              inline
+            />
+          ) : null}
+        </section>
+      </div>
       {results.length > 0 ? (
         <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-(--mut)">
           <span>Results:</span>
