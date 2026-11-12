@@ -48,7 +48,7 @@ export function DeliveryReview({ delivery, storyUrl }: { delivery: Delivery; sto
         </h3>
         <Link
           href={`${storyUrl}#story-delivery`}
-          className="inline-flex min-h-11 items-center border border-(--line) px-3 text-(--ink) hover:bg-(--card)"
+          className="rounded-md inline-flex min-h-11 items-center border border-(--line) px-3 text-(--ink) hover:bg-(--card)"
         >
           Review delivery
         </Link>
@@ -89,7 +89,7 @@ export function DeliveryReview({ delivery, storyUrl }: { delivery: Delivery; sto
           return (
             <li
               key={`${pull.repository}:${pull.number}`}
-              className="min-w-0 border border-(--line) bg-(--card) p-3"
+              className="rounded-lg min-w-0 border border-(--line) bg-(--card) p-3"
             >
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 {url ? (

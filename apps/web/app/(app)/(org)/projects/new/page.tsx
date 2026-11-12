@@ -337,7 +337,7 @@ export default function KickstartPage() {
       </div>
 
       {error ? (
-        <div className="border border-(--bad) bg-(--bg-subtle) p-4 text-sm leading-relaxed text-(--bad)">
+        <div className="rounded-lg border border-(--bad) bg-(--bg-subtle) p-4 text-sm leading-relaxed text-(--bad)">
           {error}
         </div>
       ) : null}
@@ -362,7 +362,7 @@ export default function KickstartPage() {
                 {installations === null ? (
                   <p className="text-sm text-(--dim)">Loading installations…</p>
                 ) : installations.length === 0 ? (
-                  <div className="border border-(--line) bg-(--bg-subtle) p-5 text-sm leading-relaxed text-(--mut)">
+                  <div className="rounded-lg border border-(--line) bg-(--bg-subtle) p-5 text-sm leading-relaxed text-(--mut)">
                     {installationsError
                       ? `Repo discovery isn't available (${installationsError}). Use "type owner/name".`
                       : 'No GitHub App installation is visible yet. Install the Facility GitHub App on your org, then reload — or use "type owner/name".'}
@@ -390,7 +390,7 @@ export default function KickstartPage() {
                       placeholder="find repository…"
                       aria-label="Find repository"
                     />
-                    <div className="flex max-h-[340px] flex-col overflow-y-auto border border-(--line)">
+                    <div className="rounded-lg flex max-h-[340px] flex-col overflow-y-auto border border-(--line)">
                       {reposLoading ? (
                         <p className="px-5 py-4 text-sm text-(--dim)">Reading repositories…</p>
                       ) : filteredRepos.length === 0 ? (
@@ -521,7 +521,7 @@ export default function KickstartPage() {
             </div>
           </div>
 
-          <aside className="flex h-fit flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-5">
+          <aside className="rounded-lg flex h-fit flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-5">
             <Eyebrow>what kickstart does</Eyebrow>
             <p className="text-sm leading-relaxed text-(--mut)">
               Facility reads the repository and opens one PR with the persistent environment
@@ -539,7 +539,7 @@ export default function KickstartPage() {
       {phase === "preview" || phase === "opening" ? (
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="flex min-w-0 flex-col gap-5">
-            <div className="flex flex-col gap-3 border border-(--line) bg-(--bg-subtle) p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="rounded-lg flex flex-col gap-3 border border-(--line) bg-(--bg-subtle) p-5 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <Eyebrow>preview</Eyebrow>
                 <p className="mt-2 break-all font-mono text-[15px] text-(--ink)">
@@ -594,7 +594,7 @@ export default function KickstartPage() {
                   </Cell>
                 </HairlineGrid>
 
-                <div className="grid gap-4 border border-(--line) bg-(--bg-subtle) p-5 sm:grid-cols-2">
+                <div className="rounded-lg grid gap-4 border border-(--line) bg-(--bg-subtle) p-5 sm:grid-cols-2">
                   <Field
                     label="setup command"
                     hint="Optional. Runs when the environment definition changes."
@@ -639,7 +639,7 @@ export default function KickstartPage() {
                   ) : null}
                 </div>
 
-                <div className="flex max-h-[420px] flex-col overflow-y-auto border border-(--line)">
+                <div className="rounded-lg flex max-h-[420px] flex-col overflow-y-auto border border-(--line)">
                   {preview.files.map((file) => (
                     <div
                       key={`${file.path}:${file.sha256}`}
@@ -666,7 +666,7 @@ export default function KickstartPage() {
             ) : null}
           </div>
 
-          <aside className="flex h-fit flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-5">
+          <aside className="rounded-lg flex h-fit flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-5">
             <Eyebrow>detected</Eyebrow>
             <KeyValue label="workspace" value="persistent until explicitly deleted" />
             <KeyValue label="access" value="full workspace + GitHub maintainer" />
@@ -678,7 +678,7 @@ export default function KickstartPage() {
 
       {phase === "done" ? (
         <div className="flex max-w-2xl flex-col gap-5">
-          <div className="flex flex-col gap-4 border border-(--ok) bg-(--bg-subtle) p-6">
+          <div className="rounded-lg flex flex-col gap-4 border border-(--ok) bg-(--bg-subtle) p-6">
             <div className="flex items-center gap-3">
               <StatusDot tone="ok" />
               <span className="text-[12.5px] font-medium text-(--ok)">kickstart PR opened</span>
@@ -696,7 +696,7 @@ export default function KickstartPage() {
               <KeyValue label="branch" value={result?.branch ?? "facility/kickstart"} />
             )}
           </div>
-          <div className="flex flex-col gap-3 border border-(--line) p-6">
+          <div className="rounded-lg flex flex-col gap-3 border border-(--line) p-6">
             <Eyebrow>next</Eyebrow>
             <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm leading-relaxed text-(--mut)">
               <li>Review and merge the kickstart PR to enable persistent story workspaces.</li>

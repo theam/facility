@@ -331,7 +331,10 @@ export function StoryInputFiles({
     }
   }
   return (
-    <section aria-label="Story input files" className="grid gap-3 border border-(--line) p-3">
+    <section
+      aria-label="Story input files"
+      className="rounded-lg grid gap-3 border border-(--line) p-3"
+    >
       <p className="text-[12px]">
         {attempt ? "Choose the original file to continue. " : "Choose files to upload. "}
         Up to {sizeLabel(maxBytes)} each; {maxFiles} per message.

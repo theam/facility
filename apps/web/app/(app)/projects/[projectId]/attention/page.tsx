@@ -1,4 +1,4 @@
-import { cx, Eyebrow } from "@facility/ui";
+import { buttonClassName, cardClassName, cx } from "@facility/ui";
 import Link from "next/link";
 import { AttentionRow } from "@/components/attention/attention-row";
 import { ErrorNotice, Offline } from "@/components/offline";
@@ -48,14 +48,14 @@ export default async function ProjectAttentionPage({
   const lastPage = Math.max(1, Math.ceil(total / ATTENTION_PAGE_SIZE));
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6">
       <LiveRefresh seconds={15} />
       <header className="flex flex-col gap-1.5">
         <Link href={base} className="w-fit text-[12px] text-(--mut) hover:text-(--ink)">
           ← Attention
         </Link>
-        <Eyebrow>project history</Eyebrow>
-        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Notices</h1>
+        <p className="eyebrow">Project history</p>
+        <h1 className="text-[26px] font-semibold tracking-tight">Notices</h1>
         {page ? <p className="text-[12.5px] text-(--mut)">{headerLine(page, search)}</p> : null}
         <p className="text-sm text-(--mut)">
           Questions, failures and resolved notices. Plans and delivery reviews are grouped in
@@ -87,12 +87,9 @@ export default async function ProjectAttentionPage({
               name="q"
               defaultValue={search.q}
               placeholder="Search notices and stories"
-              className="h-9 w-full min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-72"
+              className="h-9 w-full min-w-0 rounded-md border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-72"
             />
-            <button
-              type="submit"
-              className="h-9 border border-(--line) px-3 text-[12px] text-(--mut) hover:text-(--ink)"
-            >
+            <button type="submit" className={buttonClassName()}>
               Search
             </button>
             {isFiltered(search) ? (
@@ -115,7 +112,7 @@ export default async function ProjectAttentionPage({
           <EmptyState projectId={projectId} search={search} total={total} />
         ) : (
           <>
-            <div className="flex flex-col border-b border-(--line)">
+            <div className={`${cardClassName} flex flex-col overflow-hidden px-5 sm:px-6`}>
               {entries.map((entry) => (
                 <AttentionRow
                   key={entry.key}
@@ -137,7 +134,7 @@ export default async function ProjectAttentionPage({
                 {search.page > 1 ? (
                   <Link
                     href={attentionHref(projectId, search, { page: search.page - 1 })}
-                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className={buttonClassName()}
                   >
                     ← Newer
                   </Link>
@@ -148,7 +145,7 @@ export default async function ProjectAttentionPage({
                 {search.page < lastPage ? (
                   <Link
                     href={attentionHref(projectId, search, { page: search.page + 1 })}
-                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className={buttonClassName()}
                   >
                     Older →
                   </Link>
@@ -254,10 +251,10 @@ function KindChips({
 
 function chipClass(selected: boolean) {
   return cx(
-    "inline-flex h-8 items-center gap-1.5 border px-2.5 text-[12px] transition-colors",
+    "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-medium transition-colors",
     selected
-      ? "border-(--line-strong) text-(--ink)"
-      : "border-(--line) text-(--mut) hover:text-(--ink)",
+      ? "border-(--ink) bg-(--ink) text-white"
+      : "border-(--line) bg-(--bg-subtle) text-(--mut) hover:text-(--ink)",
   );
 }
 
@@ -274,7 +271,7 @@ function EmptyState({
   // pages still hold some.
   if (total > 0) {
     return (
-      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+      <div className="flex flex-col items-start gap-3 rounded-xl border border-(--line) bg-(--bg-subtle) p-8 text-sm text-(--dim)">
         <p>No notices left on this page.</p>
         <Link
           href={attentionHref(projectId, search, { page: 1 })}
@@ -287,7 +284,7 @@ function EmptyState({
   }
   if (isFiltered(search)) {
     return (
-      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+      <div className="flex flex-col items-start gap-3 rounded-xl border border-(--line) bg-(--bg-subtle) p-8 text-sm text-(--dim)">
         <p>Nothing matches these filters.</p>
         <Link
           href={attentionHref(projectId, search, { q: "", kind: [], page: 1 })}
@@ -299,7 +296,7 @@ function EmptyState({
     );
   }
   return (
-    <p className="border border-(--line) p-8 text-sm leading-relaxed text-(--dim)">
+    <p className="rounded-xl border border-(--line) bg-(--bg-subtle) p-8 text-sm leading-relaxed text-(--dim)">
       {search.status === "open"
         ? "No open notices. When an agent asks a question or a run fails, it appears here with the action that handles it."
         : "No resolved notices yet. Answered, retried and dismissed notices are kept here."}

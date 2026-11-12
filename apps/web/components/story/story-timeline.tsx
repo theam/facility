@@ -61,7 +61,7 @@ export function StoryTimeline({ projectId, storyId }: { projectId: string; story
         {entries.length === 0 && state === "end" ? (
           <p className="text-[12px] text-(--dim)">No evidence has been recorded yet.</p>
         ) : entries.length > 0 ? (
-          <ol className="flex flex-col border border-(--line)">
+          <ol className="rounded-lg flex flex-col border border-(--line)">
             {entries.map((entry) => (
               <li
                 key={entry.id}

@@ -554,7 +554,7 @@ export function StoryPlanPanel({
           ref={sourceNotice}
           tabIndex={-1}
           role="status"
-          className="flex flex-col gap-3 border border-(--human)/60 p-3"
+          className="rounded-lg flex flex-col gap-3 border border-(--human)/60 p-3"
         >
           <p>
             {editing
@@ -669,7 +669,7 @@ export function StoryPlanPanel({
           >
             <textarea
               ref={textarea}
-              className="min-h-48 w-full border border-(--line) bg-(--bg-subtle) px-3 py-2 text-[14px] leading-relaxed"
+              className="rounded-lg min-h-48 w-full border border-(--line) bg-(--bg-subtle) px-3 py-2 text-[14px] leading-relaxed"
               rows={9}
               value={markdown}
               maxLength={100_000}
@@ -887,7 +887,7 @@ export function StoryPlanPanel({
               </Button>
             ) : null}
             {historical ? (
-              <div className="flex min-w-0 flex-col gap-3 border border-(--line) p-3">
+              <div className="rounded-lg flex min-w-0 flex-col gap-3 border border-(--line) p-3">
                 <p className="font-medium">Historical plan · r{historical.revision}</p>
                 <Link
                   href={storyReviewHref(projectId, storyId, {

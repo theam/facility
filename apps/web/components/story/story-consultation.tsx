@@ -421,7 +421,7 @@ export function StoryConsultationPanel({
           {draft.sources.map((source, index) => (
             <div
               key={source.rowId}
-              className="flex min-w-0 flex-col gap-3 border border-(--line) p-3"
+              className="rounded-lg flex min-w-0 flex-col gap-3 border border-(--line) p-3"
             >
               <div className="flex flex-wrap items-end gap-3">
                 <Field

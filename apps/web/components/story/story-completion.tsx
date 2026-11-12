@@ -267,7 +267,7 @@ export function StoryCompletionPanel({
       ) : null}
 
       {current.integration.summary ? (
-        <div className="mt-4 border border-(--line) bg-(--bg-subtle) p-3 text-sm">
+        <div className="rounded-lg mt-4 border border-(--line) bg-(--bg-subtle) p-3 text-sm">
           <p>{current.integration.summary}</p>
           <p className="mt-1 text-xs text-(--dim)">
             {current.integration.recordedAt
@@ -291,7 +291,7 @@ export function StoryCompletionPanel({
       ) : null}
 
       {current.integration.errorCode || current.completion.errorCode ? (
-        <p className="mt-4 border border-(--bad)/50 bg-(--bg-subtle) p-3 text-sm text-(--bad)">
+        <p className="rounded-lg mt-4 border border-(--bad)/50 bg-(--bg-subtle) p-3 text-sm text-(--bad)">
           {current.integration.errorCode ?? current.completion.errorCode}
         </p>
       ) : null}
@@ -305,7 +305,7 @@ export function StoryCompletionPanel({
               onChange={(event) => setSummary(event.target.value)}
               rows={3}
               maxLength={2_000}
-              className="w-full border border-(--line) bg-(--bg) p-2 text-sm text-(--ink)"
+              className="rounded-lg w-full border border-(--line) bg-(--bg) p-2 text-sm text-(--ink)"
             />
           </label>
           <label className="grid gap-1 text-xs text-(--mut)">
@@ -315,7 +315,7 @@ export function StoryCompletionPanel({
               onChange={(event) => setEvidenceUrl(event.target.value)}
               type="url"
               maxLength={2_000}
-              className="w-full border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink)"
+              className="rounded-md w-full border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink)"
             />
           </label>
           <div className="flex flex-wrap gap-2">
@@ -349,7 +349,7 @@ export function StoryCompletionPanel({
                 onChange={(event) =>
                   setPolicy({ ...policy, mode: event.target.value as typeof policyMode })
                 }
-                className="border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink)"
+                className="rounded-md border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink)"
               >
                 <option value="none">No integration gate</option>
                 <option value="manual">Manual result</option>
@@ -363,7 +363,7 @@ export function StoryCompletionPanel({
                 onChange={(event) => setPolicy({ ...policy, repository: event.target.value })}
                 disabled={policyMode !== "repository_dispatch"}
                 placeholder="owner/repository"
-                className="min-w-0 border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink) disabled:opacity-50"
+                className="rounded-md min-w-0 border border-(--line) bg-(--bg) px-2 py-1.5 text-sm text-(--ink) disabled:opacity-50"
               />
             </label>
             <Button

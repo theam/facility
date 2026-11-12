@@ -80,7 +80,7 @@ export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryA
   return (
     <section
       aria-label="Confirm delivery acceptance"
-      className="flex min-w-0 flex-col gap-5 border border-(--line) p-4 sm:p-6"
+      className="rounded-lg flex min-w-0 flex-col gap-5 border border-(--line) p-4 sm:p-6"
     >
       <header className="flex flex-col gap-2">
         <Eyebrow>delivery acceptance</Eyebrow>

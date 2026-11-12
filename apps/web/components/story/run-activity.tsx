@@ -257,7 +257,7 @@ function RunActivityView({
         {items.length === 0 && state === "end" ? (
           <p className="text-sm text-(--mut)">No activity was recorded for this run.</p>
         ) : (
-          <ol className="flex flex-col border border-(--line)">
+          <ol className="rounded-lg flex flex-col border border-(--line)">
             {items.map((item) => (
               <ActivityRow
                 key={item.seq}
@@ -362,7 +362,7 @@ function ActivityRow({
           </div>
         ) : null}
         {raw ? (
-          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all border border-(--line) bg-(--bg-subtle) p-3 font-mono text-[10.5px] leading-relaxed text-(--mut)">
+          <pre className="rounded-md mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all border border-(--line) bg-(--bg-subtle) p-3 font-mono text-[10.5px] leading-relaxed text-(--mut)">
             {JSON.stringify(raw.data, null, 2)}
           </pre>
         ) : null}

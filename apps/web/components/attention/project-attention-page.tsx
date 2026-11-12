@@ -301,7 +301,7 @@ export default async function ProjectAttentionPage({
                 type="search"
                 name="q"
                 defaultValue={q}
-                className="min-h-11 min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
+                className="rounded-md min-h-11 min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
               />
             </label>
             <label className="flex flex-col gap-2 text-sm" htmlFor="review-category">
@@ -310,7 +310,7 @@ export default async function ProjectAttentionPage({
                 id="review-category"
                 name="category"
                 defaultValue={query.category}
-                className="min-h-11 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
+                className="rounded-md min-h-11 border border-(--line) bg-(--bg-subtle) px-3 text-(--ink)"
               >
                 <option value="all">All</option>
                 <option value="plans">Plans</option>

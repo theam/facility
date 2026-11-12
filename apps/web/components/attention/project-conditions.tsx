@@ -35,7 +35,7 @@ export function ProjectConditions({
   return (
     <section
       aria-label={blocked || policyBlocked ? "Project blockers" : "Budget warning"}
-      className="flex flex-col gap-3 border border-(--line-strong) bg-(--bg-subtle) p-5"
+      className="rounded-lg flex flex-col gap-3 border border-(--line-strong) bg-(--bg-subtle) p-5"
     >
       <h2 className="font-semibold">
         {blocked || policyBlocked ? "Now · project limits" : "For the next review · budget"}

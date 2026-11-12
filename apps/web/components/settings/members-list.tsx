@@ -63,7 +63,7 @@ export function MembersList({
       {members.length === 0 ? (
         <p className="text-sm text-(--dim)">No members yet.</p>
       ) : (
-        <div className="flex flex-col border border-(--line)">
+        <div className="rounded-lg flex flex-col border border-(--line)">
           {members.map((m) => (
             <div
               key={m.userId}

@@ -188,7 +188,7 @@ export function StoryDeliveryPanel({
             canWrite ? (
               <a
                 href="#story-section-workflow"
-                className="inline-flex min-h-11 w-fit items-center border border-(--info) px-4 font-medium text-(--info)"
+                className="rounded-md inline-flex min-h-11 w-fit items-center border border-(--info) px-4 font-medium text-(--info)"
               >
                 Review acceptance →
               </a>

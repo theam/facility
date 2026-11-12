@@ -74,7 +74,7 @@ export function AgentLine({
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       <span
-        className="inline-flex size-7 shrink-0 items-center justify-center border border-(--accent)/60 bg-(--card) p-0.5"
+        className="rounded-md inline-flex size-7 shrink-0 items-center justify-center border border-(--accent)/60 bg-(--card) p-0.5"
         aria-hidden="true"
       >
         {engine?.brand ? (

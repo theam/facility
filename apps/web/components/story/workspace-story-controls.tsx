@@ -179,7 +179,7 @@ export function WorkspaceControls({
                 <div className="flex flex-wrap gap-2">{maintenance}</div>
               ) : null}
               {canDelete ? (
-                <details className="border border-(--bad)/40 p-4">
+                <details className="rounded-lg border border-(--bad)/40 p-4">
                   <summary className="cursor-pointer text-[12px] font-medium text-(--bad)">
                     Permanently delete workspace
                   </summary>

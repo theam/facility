@@ -77,7 +77,7 @@ export function StoryPreviewConvergencePanel({
           : "Facility keeps one desired generation and publishes it only after repository checks, rebuild, and readiness succeed."}
       </p>
       {current.error ? (
-        <div className="mt-3 border border-(--bad)/50 bg-(--bg-subtle) p-3 text-sm">
+        <div className="rounded-lg mt-3 border border-(--bad)/50 bg-(--bg-subtle) p-3 text-sm">
           <p className="font-medium">{current.error.message}</p>
           <p className="mt-1 text-xs text-(--dim)">
             {current.error.code}

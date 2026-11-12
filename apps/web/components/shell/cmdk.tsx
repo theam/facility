@@ -129,7 +129,7 @@ export function CommandPalette({
       aria-modal="true"
       aria-label="Command palette"
     >
-      <div className="w-full max-w-lg border border-(--line) bg-(--bg)">
+      <div className="rounded-lg w-full max-w-lg border border-(--line) bg-(--bg)">
         <input
           ref={inputRef}
           value={query}
