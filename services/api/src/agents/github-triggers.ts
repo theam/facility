@@ -11,6 +11,7 @@ import {
 import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
+import { storyRepositoryScope } from "../stories/branch.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import {
   type ProjectManifestSource,
@@ -119,6 +120,7 @@ export class GithubAgentTriggerService {
           id: projects.id,
           orgId: projects.orgId,
           repositoryId: projectRepositories.id,
+          repositoryRole: projectRepositories.role,
           installationId: projectRepositories.installationId,
         })
         .from(projectRepositories)
@@ -143,8 +145,9 @@ export class GithubAgentTriggerService {
     )[0];
     if (!project) return { matched: 0, queued: 0, merged: 0 };
 
+    const repositoryRef = { id: project.repositoryId, role: project.repositoryRole };
     if (isMergedPullRequest(event)) {
-      const merged = await this.markMerged(project.id, project.repositoryId, event);
+      const merged = await this.markMerged(project.id, repositoryRef, event);
       return { matched: 0, queued: 0, merged };
     }
 
@@ -154,7 +157,7 @@ export class GithubAgentTriggerService {
     const linkedStory = await this.findLinkedStory(
       event.orgId,
       project.id,
-      project.repositoryId,
+      repositoryRef,
       eventIdentity.pullRequestNumber,
       safeEventBranch,
     );
@@ -248,7 +251,8 @@ export class GithubAgentTriggerService {
       const result = await this.storiesService.start({
         orgId: event.orgId,
         projectId: project.id,
-        repositoryId: project.repositoryId,
+        // A linked story keeps its own identity, including a repository it never had.
+        repositoryId: linkedStory ? (linkedStory.repositoryId ?? undefined) : project.repositoryId,
         provider: identity.provider,
         externalId: identity.externalId,
         title: identity.title,
@@ -291,7 +295,11 @@ export class GithubAgentTriggerService {
     return { matched: 0, queued: 0, merged: 0 };
   }
 
-  private async markMerged(projectId: string, repositoryId: string, event: GithubEvent) {
+  private async markMerged(
+    projectId: string,
+    repository: { id: string; role: string },
+    event: GithubEvent,
+  ) {
     const pullRequest = object(event.payload.pull_request);
     const number = numberValue(pullRequest.number);
     const branch = string(object(pullRequest.head).ref);
@@ -299,7 +307,7 @@ export class GithubAgentTriggerService {
     const story = await this.findLinkedStory(
       event.orgId,
       projectId,
-      repositoryId,
+      repository,
       number,
       safeBranch(branch),
     );
@@ -318,7 +326,7 @@ export class GithubAgentTriggerService {
   private async findLinkedStory(
     orgId: string,
     projectId: string,
-    repositoryId: string,
+    repository: { id: string; role: string },
     pullRequestNumber?: number,
     branch?: string,
   ) {
@@ -331,7 +339,7 @@ export class GithubAgentTriggerService {
             and(
               eq(stories.orgId, orgId),
               eq(stories.projectId, projectId),
-              eq(stories.repositoryId, repositoryId),
+              storyRepositoryScope(repository),
               eq(stories.pullRequestNumber, pullRequestNumber),
               isNull(stories.deletedAt),
             ),
@@ -350,7 +358,7 @@ export class GithubAgentTriggerService {
           and(
             eq(stories.orgId, orgId),
             eq(stories.projectId, projectId),
-            eq(stories.repositoryId, repositoryId),
+            storyRepositoryScope(repository),
             eq(stories.branch, branch),
             isNull(stories.pullRequestNumber),
             isNull(stories.deletedAt),
