@@ -1,7 +1,7 @@
 "use client";
 
 import type { StoryAgent, StoryWorkflowPolicyState, WorkflowPolicyReview } from "@facility/sdk";
-import { Button, cardClassName, Eyebrow } from "@facility/ui";
+import { Button, cardClassName, Eyebrow, Field, Select, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { clientApi } from "@/lib/client-api";
@@ -200,8 +200,9 @@ export function WorkflowPolicy({
                   reviewCycle: {
                     builderAgent,
                     reviewerAgent,
-                    timeoutMinutes: 30,
-                    maxCostCents: 200,
+                    timeoutMinutes: 120,
+                    // Enough for two reviews and a correction with current models.
+                    maxCostCents: 2_000,
                   },
                 });
             }}
@@ -211,83 +212,90 @@ export function WorkflowPolicy({
           </span>
         </label>
         {cycle ? (
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="grid gap-1">
-              <label htmlFor="review-cycle-builder">Builder</label>
-              <select
-                id="review-cycle-builder"
-                className="border border-(--line) p-1"
-                value={cycle.builderAgent}
-                onChange={(event) => {
-                  const builderAgent = event.target.value;
-                  setPolicy({
-                    ...policy,
-                    reviewCycle: { ...cycle, builderAgent },
-                    planApprovalAgents: [
-                      ...new Set([...policy.planApprovalAgents, builderAgent]),
-                    ].sort(),
-                  });
-                }}
+          <div className="flex flex-col gap-3">
+            <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+              <Field label="Builder">
+                <Select
+                  value={cycle.builderAgent}
+                  onChange={(event) => {
+                    const builderAgent = event.target.value;
+                    setPolicy({
+                      ...policy,
+                      reviewCycle: { ...cycle, builderAgent },
+                      planApprovalAgents: [
+                        ...new Set([...policy.planApprovalAgents, builderAgent]),
+                      ].sort(),
+                    });
+                  }}
+                >
+                  {names.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Reviewer" hint="Runs read-only; Facility posts its review on the PRs.">
+                <Select
+                  value={cycle.reviewerAgent}
+                  onChange={(event) =>
+                    setPolicy({
+                      ...policy,
+                      reviewCycle: { ...cycle, reviewerAgent: event.target.value },
+                    })
+                  }
+                >
+                  {[...new Set([...names, cycle.reviewerAgent])].map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                label="Time limit (minutes)"
+                hint="Covers waiting for CI and every cycle turn."
               >
-                {names.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="grid gap-1">
-              <label htmlFor="review-cycle-reviewer">Reviewer</label>
-              <select
-                id="review-cycle-reviewer"
-                className="border border-(--line) p-1"
-                value={cycle.reviewerAgent}
-                onChange={(event) =>
-                  setPolicy({
-                    ...policy,
-                    reviewCycle: { ...cycle, reviewerAgent: event.target.value },
-                  })
-                }
+                <TextInput
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={cycle.timeoutMinutes}
+                  onChange={(event) =>
+                    setPolicy({
+                      ...policy,
+                      reviewCycle: { ...cycle, timeoutMinutes: Number(event.target.value) },
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                label="Cost limit (USD)"
+                hint="For the cycle's own turns: reviews and the correction."
               >
-                {[...new Set([...names, cycle.reviewerAgent])].map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                <TextInput
+                  type="number"
+                  min={0.01}
+                  max={100}
+                  step={1}
+                  value={cycle.maxCostCents / 100}
+                  onChange={(event) =>
+                    setPolicy({
+                      ...policy,
+                      reviewCycle: {
+                        ...cycle,
+                        maxCostCents: Math.round(Number(event.target.value) * 100),
+                      },
+                    })
+                  }
+                />
+              </Field>
             </div>
-            <label className="grid gap-1">
-              Time limit (minutes)
-              <input
-                className="w-24 border border-(--line) p-1"
-                type="number"
-                min={1}
-                max={120}
-                value={cycle.timeoutMinutes}
-                onChange={(event) =>
-                  setPolicy({
-                    ...policy,
-                    reviewCycle: { ...cycle, timeoutMinutes: Number(event.target.value) },
-                  })
-                }
-              />
-            </label>
-            <label className="grid gap-1">
-              Cost limit (cents)
-              <input
-                className="w-24 border border-(--line) p-1"
-                type="number"
-                min={1}
-                max={10000}
-                value={cycle.maxCostCents}
-                onChange={(event) =>
-                  setPolicy({
-                    ...policy,
-                    reviewCycle: { ...cycle, maxCostCents: Number(event.target.value) },
-                  })
-                }
-              />
-            </label>
+            <p className="text-[13px] text-(--mut)">
+              A turn starts only if a full turn still fits in the limit. Claude Code stops when it
+              reaches the limit; Codex reports its cost when the turn ends, so the last Codex turn
+              can go over it. The cycle then stops for a person.
+            </p>
           </div>
         ) : null}
       </fieldset>
@@ -309,8 +317,8 @@ export function WorkflowPolicy({
           {review.policy.reviewCycle ? (
             <p className="text-(--mut)">
               {review.policy.reviewCycle.builderAgent} → {review.policy.reviewCycle.reviewerAgent}.
-              Up to {review.policy.reviewCycle.timeoutMinutes} minutes and{" "}
-              {review.policy.reviewCycle.maxCostCents} cents.
+              Up to {review.policy.reviewCycle.timeoutMinutes} minutes and $
+              {(review.policy.reviewCycle.maxCostCents / 100).toFixed(2)}.
               {review.policy.reviewCycle.requiredPullLabel ? (
                 <>
                   {" "}
