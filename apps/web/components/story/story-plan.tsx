@@ -55,6 +55,7 @@ export function StoryPlanPanel({
   queuedAgents = [],
   blockedReason,
   workflow,
+  workflowError,
   catalogError,
   canWrite,
   userId,
@@ -69,6 +70,8 @@ export function StoryPlanPanel({
   queuedAgents?: string[];
   blockedReason?: string | null;
   workflow?: StoryWorkflowStatus;
+  /** Why the workflow could not be read; inline approval then waits like the confirmation page. */
+  workflowError?: string;
   catalogError?: string;
   canWrite: boolean;
   userId?: string;
@@ -92,6 +95,11 @@ export function StoryPlanPanel({
   const [rejecting, setRejecting] = useState(false),
     [reason, setReason] = useState("");
   const [inlineReview, setInlineReview] = useState<PlanDecisionReview | null>(null);
+  // Closing the inline confirmation returns focus to the decision buttons, or to the
+  // recorded outcome, instead of dropping it to the page.
+  const decisionButtons = useRef<HTMLDivElement>(null),
+    noticeLine = useRef<HTMLParagraphElement>(null),
+    focusAfterReview = useRef<"buttons" | "notice" | null>(null);
   const [historyPages, setHistoryPages] = useState<StoryPlans["history"] | null>(null),
     [decisionPages, setDecisionPages] = useState<StoryPlans["decisions"] | null>(null);
   const [historical, setHistorical] = useState<StoryPlan | null>(null);
@@ -118,6 +126,15 @@ export function StoryPlanPanel({
   useEffect(() => {
     if (initial) setCurrent((old) => newer(old, initial));
   }, [initial]);
+  useEffect(() => {
+    if (inlineReview || !focusAfterReview.current) return;
+    const target =
+      focusAfterReview.current === "notice"
+        ? noticeLine.current
+        : decisionButtons.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    focusAfterReview.current = null;
+    target?.focus();
+  }, [inlineReview]);
   useEffect(() => {
     if (!current) return;
     if (current.state.revision > observedHeads.current.revision)
@@ -369,12 +386,15 @@ export function StoryPlanPanel({
         idempotency_key: key,
       });
       if (n !== sequence.current) return;
-      busyRef.current = false;
-      setBusy(false);
       if (!result.ok) {
+        busyRef.current = false;
+        setBusy(false);
         setError(result.message);
         return;
       }
+      // The request exists now. A later click asks for a fresh one instead of
+      // replaying this request after it expires.
+      retry.current = null;
       // Confirm in place with the same review and single-use proof the confirmation
       // page uses; fall back to that page when the review cannot be read here.
       const requestId = result.data.request.id;
@@ -383,6 +403,8 @@ export function StoryPlanPanel({
         `${path}/decisions/${encodeURIComponent(requestId)}`,
       );
       if (n !== sequence.current) return;
+      busyRef.current = false;
+      setBusy(false);
       if (review.ok && review.data?.plan && review.data?.request?.id === requestId) {
         setRejecting(false);
         setInlineReview(review.data);
@@ -471,11 +493,14 @@ export function StoryPlanPanel({
         compact
         initial={inlineReview}
         initialWorkflow={workflow}
+        initialWorkflowError={workflowError}
         onClose={() => {
+          focusAfterReview.current = "buttons";
           setInlineReview(null);
           router.refresh();
         }}
         onConfirmed={() => {
+          focusAfterReview.current = "notice";
           setInlineReview(null);
           setNotice(
             inlineReview.request.intent === "approve"
@@ -487,7 +512,7 @@ export function StoryPlanPanel({
       />
     ) : canWrite && current?.plan && (!editing || selection) ? (
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap gap-2">
+        <div ref={decisionButtons} className="flex flex-wrap gap-2">
           {current.state.status !== "approved" || blockedReason ? (
             <Button
               size="sm"
@@ -561,7 +586,7 @@ export function StoryPlanPanel({
         </p>
       ) : null}
       {notice ? (
-        <p role="status" className="text-sm text-(--mut)">
+        <p ref={noticeLine} tabIndex={-1} role="status" className="text-sm text-(--mut)">
           {notice}
         </p>
       ) : null}

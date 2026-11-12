@@ -104,13 +104,25 @@ describe("delivery acceptance on the story", () => {
     expect(inline?.textContent).toContain("Accept this exact delivery");
     expect(container.textContent).not.toContain("Review and confirm this delivery");
     expect(acceptanceButton()).toBeUndefined();
+    // Focus follows the review in, and comes back to the button that opened it.
+    expect(document.activeElement).toBe(inline?.querySelector("h3"));
+    expect(inline?.querySelector("h1")).toBeNull();
     const cancel = [...(inline?.querySelectorAll("button") ?? [])].find(
       (node) => node.textContent === "Cancel",
     );
     await act(async () => cancel?.click());
     expect(container.querySelector('[aria-label="Confirm delivery acceptance"]')).toBeNull();
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/confirm"))).toBe(false);
+    expect(document.activeElement).toBe(acceptanceButton());
     await act(async () => required(acceptanceButton()).click());
+    const requests = fetch.mock.calls
+      .filter(
+        ([url, init]) => init?.method === "POST" && String(url).endsWith("/delivery-acceptance"),
+      )
+      .map(([, init]) => JSON.parse(String(init?.body)).idempotency_key);
+    // A cancelled review is not replayed: the second click asks for a fresh request.
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).not.toBe(requests[0]);
     const reopened = container.querySelector('[aria-label="Confirm delivery acceptance"]');
     const accept = [...(reopened?.querySelectorAll("button") ?? [])].find(
       (node) => node.textContent === "Accept this exact delivery",
@@ -120,6 +132,7 @@ describe("delivery acceptance on the story", () => {
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ proof: review.proof });
     expect(container.querySelector('[aria-label="Confirm delivery acceptance"]')).toBeNull();
     expect(container.textContent).toContain("Acceptance recorded.");
+    expect(document.activeElement?.textContent).toContain("Acceptance recorded.");
     expect(navigation.refresh).toHaveBeenCalled();
   });
 });

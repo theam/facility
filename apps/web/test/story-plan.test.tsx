@@ -148,6 +148,8 @@ async function render(
     queuedAgents?: string[];
     blockedReason?: string;
     selection?: PlanSelection;
+    workflow?: StoryWorkflowStatus;
+    workflowError?: string;
   } = {},
 ) {
   await act(async () =>
@@ -161,6 +163,8 @@ async function render(
         defaultAgent={defaults.defaultAgent ?? "planner"}
         queuedAgents={defaults.queuedAgents}
         blockedReason={defaults.blockedReason}
+        workflow={defaults.workflow}
+        workflowError={defaults.workflowError}
         canWrite={canWrite}
         userId="person-a"
       />,
@@ -362,6 +366,90 @@ describe("revision-bound plan UI", () => {
     expect(container.textContent).toContain("Approval recorded for plan r1.");
     expect(container.textContent).not.toContain("Decision recorded");
     expect(navigation.refresh).toHaveBeenCalled();
+  });
+  function inlineDecisions(detail = review()) {
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (request?.method === "POST" && target.endsWith("/confirm")) return Response.json({});
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`)) return Response.json(detail);
+      return Response.json(workflowFixture());
+    });
+  }
+  function inlineButton(text: string) {
+    const inline = container.querySelector('[aria-label="Confirm plan decision"]');
+    return [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === text,
+    );
+  }
+  it("holds an inline approval to the confirmation page's scope checks and follows the story's workflow", async () => {
+    inlineDecisions();
+    await render(snapshot(1), true, agents, { workflowError: "Workflow read failed" });
+    await click("Approve plan r1");
+    expect(inlineButton("Approve plan r1")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Reload the execution scope before approving");
+    const blocked: StoryWorkflowStatus = {
+      ...workflowFixture(),
+      blockedReason: "Review the plan before recovery",
+      executionScope: {
+        observedAt: at,
+        planRevision: 1,
+        repositories: { matches: false, connectedCount: 2, missing: ["example/api"], removed: [] },
+        queuedWork: [],
+        hasMore: false,
+      },
+    };
+    // The story refreshes its workflow while the review stays open.
+    await render(snapshot(1), true, agents, { workflow: blocked });
+    expect(inlineButton("Approve plan r1")?.disabled).toBe(true);
+    expect(container.textContent).toContain("cancel the held turn in the conversation");
+    await render(snapshot(1), true, agents, { workflow: workflowFixture() });
+    expect(inlineButton("Approve plan r1")?.disabled).toBe(false);
+  });
+  it("asks for a fresh decision request after a review is cancelled instead of replaying it", async () => {
+    inlineDecisions();
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    await click("Cancel");
+    await click("Approve plan r1");
+    const requests = writes().filter(([url]) => String(url).endsWith("/plan/decisions"));
+    expect(requests).toHaveLength(2);
+    expect(body(1).idempotency_key).not.toBe(body(0).idempotency_key);
+  });
+  it("moves focus into the inline review and back to the decision or its outcome", async () => {
+    inlineDecisions();
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    const heading = container.querySelector('[aria-label="Confirm plan decision"] h3');
+    expect(heading?.textContent).toBe("Confirm plan approval");
+    expect(document.activeElement).toBe(heading);
+    expect(container.querySelector('[aria-label="Confirm plan decision"] h1')).toBeNull();
+    await click("Cancel");
+    expect(document.activeElement).toBe(button("Approve plan r1"));
+    await click("Approve plan r1");
+    await act(async () => inlineButton("Approve plan r1")?.click());
+    expect(document.activeElement?.textContent).toBe("Approval recorded for plan r1.");
+  });
+  it("stays busy until the requested review is read, so a reload cannot drop it", async () => {
+    const detail = review();
+    let release: (value: Response) => void = () => undefined;
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`))
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      return Response.json(snapshot(1));
+    });
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    expect(button("Loading…").disabled).toBe(true);
+    await act(async () => release(Response.json(detail)));
+    expect(container.querySelector('[aria-label="Confirm plan decision"]')).not.toBeNull();
+    expect(button("Reload plan").disabled).toBe(false);
   });
   it("requests only the exact linked current revision with the existing decision boundary", async () => {
     fetch.mockResolvedValue(Response.json({ request: { id: "exact-request" } }));
@@ -869,7 +957,9 @@ describe("interactive confirmation UI", () => {
       ),
     );
     expect(button("Approve plan r1").disabled).toBe(true);
-    expect(container.textContent).toContain("correct the scope or agent configuration");
+    expect(container.textContent).toContain(
+      "Correct the scope or agent configuration, or cancel the held turn",
+    );
     await click("Approve plan r1");
     expect(fetch).not.toHaveBeenCalled();
     value.request.intent = "reject";

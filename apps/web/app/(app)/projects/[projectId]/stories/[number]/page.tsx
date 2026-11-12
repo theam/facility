@@ -358,6 +358,7 @@ export default async function StoryPage({
                 }
                 blockedReason={workflow.ok ? workflow.data.blockedReason : undefined}
                 workflow={workflow.ok ? workflow.data : undefined}
+                workflowError={workflow.ok ? undefined : workflow.message}
                 catalogError={agents.ok ? undefined : agents.message}
                 canWrite={canWrite && story.deletedAt === null}
                 userId={me.ok ? (me.data.principal?.userId ?? me.data.principal?.id) : undefined}

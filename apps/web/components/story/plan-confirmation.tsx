@@ -34,8 +34,13 @@ export function PlanConfirmation({
 }) {
   const [review, setReview] = useState(initial),
     [error, setError] = useState<string | null>(null);
-  const [workflow, setWorkflow] = useState(initialWorkflow),
-    [scopeError, setScopeError] = useState(initialWorkflowError);
+  const [observedWorkflow, setWorkflow] = useState(initialWorkflow),
+    [observedScopeError, setScopeError] = useState(initialWorkflowError);
+  // Inline, the story keeps its workflow current while the review is open: follow it
+  // rather than the copy taken on opening, so a changed scope blocks approval here too.
+  const workflow = compact ? initialWorkflow : observedWorkflow;
+  const scopeError = compact ? initialWorkflowError : observedScopeError;
+  const heading = useRef<HTMLHeadingElement>(null);
   const scope = workflow?.executionScope;
   const needsRecovery = !!workflow?.blockedReason;
   const inspectedWork = useRef(!initial.decision ? initialWorkflow?.executionScope : undefined);
@@ -59,6 +64,11 @@ export function PlanConfirmation({
     },
     [],
   );
+  // Opening in place replaces the button that was clicked; move focus to the review.
+  useEffect(() => {
+    if (compact) heading.current?.focus();
+  }, [compact]);
+  const Heading = compact ? "h3" : "h1";
   async function reload() {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -135,7 +145,7 @@ export function PlanConfirmation({
                 scope.queuedWork.some(
                   (turn) => turn.configuration !== "current" || turn.planAgent !== "current",
                 ))
-            ? "Open the current plan and correct the scope or agent configuration before approving recovery."
+            ? "Correct the scope or agent configuration, or cancel the held turn in the conversation, before approving recovery."
             : null
       : null;
   return (
@@ -149,13 +159,17 @@ export function PlanConfirmation({
     >
       <header className="flex flex-col gap-2">
         {compact ? null : <Eyebrow>plan decision</Eyebrow>}
-        <h1 className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}>
+        <Heading
+          ref={heading}
+          tabIndex={-1}
+          className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}
+        >
           {receipt
             ? "Decision recorded"
             : approval
               ? "Confirm plan approval"
               : "Confirm requested changes"}
-        </h1>
+        </Heading>
         <p className="text-sm text-(--mut)">
           {receipt ? (
             receipt.intent === "approve" ? (

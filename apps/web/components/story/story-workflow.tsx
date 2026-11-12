@@ -31,6 +31,20 @@ export function StoryWorkflowPanel({
     [notice, setNotice] = useState<string | null>(null);
   const working = useRef(false),
     retry = useRef<{ candidate: string; key: string } | null>(null);
+  // Closing the inline review returns focus to the request button or to the recorded
+  // outcome instead of dropping it to the page.
+  const requestButton = useRef<HTMLDivElement>(null),
+    noticeLine = useRef<HTMLParagraphElement>(null),
+    focusAfterReview = useRef<"request" | "notice" | null>(null);
+  useEffect(() => {
+    if (inlineReview || !focusAfterReview.current) return;
+    const target =
+      focusAfterReview.current === "notice"
+        ? noticeLine.current
+        : requestButton.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    focusAfterReview.current = null;
+    target?.focus();
+  }, [inlineReview]);
   const path = `/v1/projects/${encodeURIComponent(initial.projectId)}/workspace-stories/${encodeURIComponent(initial.storyId)}`;
   const [observation, setObservation] = useState<{
     source: StoryWorkflowStatus;
@@ -146,6 +160,9 @@ export function StoryWorkflowPanel({
       setError(result.message);
       return;
     }
+    // The request exists now. A later click asks for a fresh one instead of replaying
+    // this request after it expires.
+    retry.current = null;
     setRequest(result.data);
     // Confirm in place with the same review and single-use proof the confirmation
     // page uses; the link below stays as the fallback when it cannot be read here.
@@ -201,7 +218,7 @@ export function StoryWorkflowPanel({
         </p>
       ) : null}
       {notice ? (
-        <p role="status" className="text-sm text-(--ok)">
+        <p ref={noticeLine} tabIndex={-1} role="status" className="text-sm text-(--ok)">
           {notice}
         </p>
       ) : null}
@@ -211,11 +228,13 @@ export function StoryWorkflowPanel({
           compact
           initial={inlineReview}
           onClose={() => {
+            focusAfterReview.current = "request";
             setInlineReview(null);
             setRequest(null);
             router.refresh();
           }}
           onConfirmed={() => {
+            focusAfterReview.current = "notice";
             setInlineReview(null);
             setRequest(null);
             setNotice(
@@ -242,7 +261,7 @@ export function StoryWorkflowPanel({
         </p>
       ) : null}
       {canWrite && candidateReady && !inlineReview && status.acceptance.status !== "current" ? (
-        <div>
+        <div ref={requestButton}>
           <Button disabled={busy || cycleBlocksAcceptance} onClick={() => void requestReview()}>
             {busy ? "Preparing review…" : "Request delivery acceptance"}
           </Button>

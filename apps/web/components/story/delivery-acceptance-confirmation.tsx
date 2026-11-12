@@ -31,7 +31,8 @@ export function DeliveryAcceptanceConfirmation({
   const [expired, setExpired] = useState(() => Date.parse(initial.request.expiresAt) <= Date.now());
   const working = useRef(false),
     retry = useRef<{ proof: string; key: string } | null>(null),
-    sequence = useRef(0);
+    sequence = useRef(0),
+    heading = useRef<HTMLHeadingElement>(null);
   const storyPath = `/projects/${encodeURIComponent(initial.projectId)}/stories/${encodeURIComponent(initial.storyId)}`;
   const path = `/v1/projects/${encodeURIComponent(initial.projectId)}/workspace-stories/${encodeURIComponent(initial.storyId)}/delivery-acceptance/${encodeURIComponent(initial.request.id)}`;
   useEffect(() => {
@@ -46,6 +47,11 @@ export function DeliveryAcceptanceConfirmation({
     },
     [],
   );
+  // Opening in place replaces the button that was clicked; move focus to the review.
+  useEffect(() => {
+    if (compact) heading.current?.focus();
+  }, [compact]);
+  const Heading = compact ? "h3" : "h1";
   async function reload() {
     if (working.current) return;
     working.current = true;
@@ -108,9 +114,13 @@ export function DeliveryAcceptanceConfirmation({
     >
       <header className="flex flex-col gap-2">
         {compact ? null : <Eyebrow>delivery acceptance</Eyebrow>}
-        <h1 className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}>
+        <Heading
+          ref={heading}
+          tabIndex={-1}
+          className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}
+        >
           {receipt ? "Acceptance recorded" : "Review this exact delivery"}
-        </h1>
+        </Heading>
         <p className="text-sm text-(--mut)">
           Confirm only after reviewing the required PR heads below
           {candidate.planRevision ? ` and plan r${candidate.planRevision}` : ""}. New heads or
