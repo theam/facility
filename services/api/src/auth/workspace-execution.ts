@@ -44,36 +44,62 @@ export async function authorizePrincipal(
   required: readonly string[],
   errorCode = "execution_authorization_revoked",
 ) {
-  if (actor.type === "user") {
-    const [row] = await userAuthorityRows(db, scope.orgId, [actor.id]).limit(1).for("share");
-    if (row && required.every((permission) => can(row.grants, permission))) return;
-  } else {
-    const [row] = await db
-      .select({ key: apiKeys, grants: roles.permissions })
-      .from(apiKeys)
-      .innerJoin(roles, eq(roles.id, apiKeys.roleId))
-      .where(
-        and(
-          eq(apiKeys.orgId, scope.orgId),
-          eq(apiKeys.id, actor.id),
-          isNull(apiKeys.revokedAt),
-          or(isNull(roles.orgId), eq(roles.orgId, scope.orgId)),
-        ),
-      )
-      .limit(1)
-      .for("share");
-    if (
-      row &&
-      required.every((permission) => can(row.grants, permission)) &&
-      ((row.key.scopeType === "project" && row.key.projectId === scope.projectId) ||
-        (row.key.scopeType === "org" && row.key.projectId === null))
-    )
-      return;
-  }
-  throw new ApiError(
+  if (await principalHolds(db, scope, actor, required, true)) return;
+  throw revoked(errorCode);
+}
+
+/** The same check as authorizePrincipal without its row locks. Snapshot evidence
+ * for read-only projections, never authorization for a write. */
+export async function observePrincipal(
+  db: FacilityDb,
+  scope: { orgId: string; projectId: string },
+  actor: { type: "user" | "key"; id: string },
+  required: readonly string[],
+  errorCode = "execution_authorization_revoked",
+) {
+  if (await principalHolds(db, scope, actor, required, false)) return;
+  throw revoked(errorCode);
+}
+
+function revoked(errorCode: string) {
+  return new ApiError(
     403,
     errorCode,
     "The authorizer no longer has permission to perform this action",
+  );
+}
+
+async function principalHolds(
+  db: FacilityDb,
+  scope: { orgId: string; projectId: string },
+  actor: { type: "user" | "key"; id: string },
+  required: readonly string[],
+  lock: boolean,
+) {
+  if (actor.type === "user") {
+    const query = userAuthorityRows(db, scope.orgId, [actor.id]).limit(1);
+    const [row] = lock ? await query.for("share") : await query;
+    return !!row && required.every((permission) => can(row.grants, permission));
+  }
+  const query = db
+    .select({ key: apiKeys, grants: roles.permissions })
+    .from(apiKeys)
+    .innerJoin(roles, eq(roles.id, apiKeys.roleId))
+    .where(
+      and(
+        eq(apiKeys.orgId, scope.orgId),
+        eq(apiKeys.id, actor.id),
+        isNull(apiKeys.revokedAt),
+        or(isNull(roles.orgId), eq(roles.orgId, scope.orgId)),
+      ),
+    )
+    .limit(1);
+  const [row] = lock ? await query.for("share") : await query;
+  return (
+    !!row &&
+    required.every((permission) => can(row.grants, permission)) &&
+    ((row.key.scopeType === "project" && row.key.projectId === scope.projectId) ||
+      (row.key.scopeType === "org" && row.key.projectId === null))
   );
 }
 

@@ -16,7 +16,7 @@ import {
   matchesPlanRepositoryScope,
   repositoryScopeDifference,
 } from "./plan-scope.js";
-import { authorizePlanExecution, readWorkflowPlan } from "./workflow-execution.js";
+import { observePlanExecutionGate, readWorkflowPlan } from "./workflow-execution.js";
 import {
   readWorkflowPolicy,
   type WorkflowProjectScope,
@@ -79,7 +79,7 @@ export async function readStoryWorkflow(
           break;
         }
         try {
-          await authorizePlanExecution(tx, scope, retained.data, turn.createdBy, turn.id);
+          await observePlanExecutionGate(tx, scope, retained.data, turn.createdBy, turn.id);
         } catch (error) {
           if (!(error instanceof ApiError)) throw error;
           blockedReason = error.message;

@@ -15,7 +15,7 @@ import {
   readProjectDeliveryReviews,
 } from "../insights/project-delivery-reviews.js";
 import type { BacklogItem } from "./backlog.js";
-import { authorizePlanExecution } from "./workflow-execution.js";
+import { observePlanExecutionGate } from "./workflow-execution.js";
 
 export const TRACKING_GROUPS = [
   "review",
@@ -173,8 +173,9 @@ export async function trackBacklog(
   });
 }
 
-/** Recheck only this page's retained queued turns using the dispatcher's own gate.
- * No reservation, enqueue, provider inspection or mutation occurs here. */
+/** Recheck only this page's retained queued turns with the dispatcher's checks,
+ * read without its row locks. No reservation, enqueue, provider inspection or
+ * mutation occurs here. */
 export async function observeBacklogWaits(
   db: FacilityDb,
   orgId: string,
@@ -213,7 +214,7 @@ export async function observeBacklogWaits(
       continue;
     }
     try {
-      await authorizePlanExecution(
+      await observePlanExecutionGate(
         db,
         { orgId, projectId, storyId: turn.storyId },
         manifest.data,

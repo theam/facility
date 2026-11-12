@@ -28,14 +28,17 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService } from "../src/agents/catalog.js";
 import { buildApp, mintSessionCookie } from "../src/app.js";
+import { ApiError } from "../src/errors.js";
 import {
   authorizePlanExecution,
+  observePlanExecutionGate,
   planExecutionStillAuthorized,
   recordPlanExecution,
 } from "../src/stories/workflow-execution.js";
 import { createStoryDomain, type StoryDomain } from "../src/story-domain.js";
 import type { AppConfig } from "../src/types.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import { readDuringUncommittedWrite } from "./fixtures/uncommitted-write.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
@@ -607,6 +610,20 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
           queuedWork: [{ turnId, planAgent: "current", configuration: "current" }],
         },
       });
+      // Status reads observe the dispatcher's gate without its row locks, so an
+      // uncommitted configuration change neither blocks nor fails them.
+      expect(
+        await readDuringUncommittedWrite(
+          databaseUrl,
+          (sql) =>
+            sql`update agent_manifests set manifest = manifest
+              where org_id = ${orgId} and project_id = ${projectId} and name = 'planner'`,
+          read,
+        ),
+      ).toMatchObject({
+        settled: "read",
+        value: { blockedReason: expect.stringContaining("approve") },
+      });
       await db
         .update(agentManifests)
         .set({ manifest: { ...planner, hash: "c".repeat(64) } })
@@ -827,6 +844,37 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       },
       executionScope: { queuedWork: [{ turnId }] },
     });
+    // The lock-free observation must reach the dispatcher's own outcome.
+    const manifest = builder;
+    async function gateOutcome(gate: typeof authorizePlanExecution) {
+      try {
+        return { authorization: await gate(db, scope, manifest, { type: "user", id: userId }) };
+      } catch (error) {
+        if (error instanceof ApiError) return { code: error.code };
+        throw error;
+      }
+    }
+    async function observationMatchesGate() {
+      const observation = await gateOutcome(observePlanExecutionGate);
+      expect(observation).toEqual(await gateOutcome(authorizePlanExecution));
+      return observation;
+    }
+    expect(
+      await readDuringUncommittedWrite(
+        databaseUrl,
+        async (sql) => {
+          await sql`update agent_manifests set manifest = manifest
+            where org_id = ${orgId} and project_id = ${projectId} and name = 'builder'`;
+          await sql`update project_repositories set name = name
+            where org_id = ${orgId} and project_id = ${projectId}`;
+          await sql`update users set name = name where id in (${otherUserId}, ${userId})`;
+        },
+        observed,
+      ),
+    ).toMatchObject({ settled: "read", value: { plan: { status: "approved" } } });
+    expect(await observationMatchesGate()).toMatchObject({
+      authorization: { planRevision: 1, authorizerId: otherUserId },
+    });
     const authorization = await authorizePlanExecution(db, scope, builder, {
       type: "user",
       id: userId,
@@ -897,6 +945,7 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     await db.update(users).set({ status: "inactive" }).where(eq(users.id, otherUserId));
     try {
       expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
+      expect(await observationMatchesGate()).toEqual({ code: "workflow_plan_authorizer_revoked" });
     } finally {
       await db.update(users).set({ status: "active" }).where(eq(users.id, otherUserId));
     }
@@ -913,6 +962,9 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     });
     try {
       expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
+      expect(await observationMatchesGate()).toEqual({
+        code: "workflow_plan_repository_scope_changed",
+      });
     } finally {
       await db.delete(projectRepositories).where(eq(projectRepositories.id, extraRepo));
     }
@@ -922,6 +974,9 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       .where(eq(agentManifests.projectId, projectId));
     try {
       expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
+      expect(await observationMatchesGate()).toEqual({
+        code: "workflow_agent_configuration_changed",
+      });
     } finally {
       await db
         .update(agentManifests)

@@ -32,6 +32,7 @@ import type {
   ProjectManifest,
   ProjectManifestSource,
 } from "../src/workspaces/project-environment.js";
+import { readDuringUncommittedWrite } from "./fixtures/uncommitted-write.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
@@ -595,6 +596,17 @@ describe("backlog and story creation routes", async () => {
           detail: "Review and approve the current plan before this agent starts",
         },
       });
+      // The backlog observes the dispatcher's gate without its row locks, so an
+      // uncommitted agent configuration change neither blocks nor fails the read.
+      expect(
+        await readDuringUncommittedWrite(
+          databaseUrl,
+          (sql) =>
+            sql`update agent_manifests set manifest = manifest
+              where project_id = ${projectId} and name = 'builder'`,
+          read,
+        ),
+      ).toMatchObject({ settled: "read", value: { wait: { kind: "workflow" } } });
     } finally {
       await db
         .update(projects)
