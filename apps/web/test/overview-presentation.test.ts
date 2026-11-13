@@ -281,6 +281,29 @@ describe("latest attention", () => {
       detail: null,
     });
   });
+
+  it("explains a turn that went over its per-turn limit in the notice's own words", () => {
+    const detail =
+      "This turn cost $4.00, more than the project's per-turn limit of $3.00. Facility did not retry it.";
+    const entry = attentionNotice(
+      {
+        ...notice("over", "2026-11-13T09:00:00Z", {
+          kind: "turn_limit_exceeded",
+          title: "builder went over the per-turn limit",
+          detail,
+        }),
+        action: null,
+      },
+      "p1",
+    );
+    expect(entry).toMatchObject({
+      tone: "bad",
+      title: "Agent turn went over its limit",
+      summary: detail,
+      detail: null,
+    });
+    expect(entry.summary).not.toContain("before retrying");
+  });
 });
 
 describe("review and result labels", () => {

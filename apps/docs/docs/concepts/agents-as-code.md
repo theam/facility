@@ -123,7 +123,7 @@ cycle held. A fresh cycle needs a new approved plan decision and a new human Bui
 
 The cycle runs at most two reviews and one correction within its time limit, which covers
 waiting for CI and every cycle turn. It has no budget of its own: each of its turns counts
-against the project budget like any other agent turn. Acceptance stays unavailable, in the story,
+against the project budget and its per-turn limit like any other agent turn. Acceptance stays unavailable, in the story,
 Attention and the backlog, while the cycle's Builder or Reviewer is working. The story workflow
 panel and `facility_get_story_workflow` show the same phase, rounds, reports and pending decision.
 

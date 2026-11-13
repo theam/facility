@@ -132,7 +132,9 @@ Code and Codex communicate with the model service you configure for the engine. 
 and credentials that fit your infrastructure requirements.
 
 Project budgets reserve a priced estimate before a turn or title-generation call. Measured
-usage replaces the hold afterwards; an individual call can exceed its estimate. Interrupted
+usage replaces the hold afterwards; an individual call can exceed its estimate. An optional
+per-turn limit caps every native agent turn as well: Claude Code stops at it, while Codex, which
+reports usage only when a turn ends, can exceed it by at most the turn that is running. Interrupted
 worker usage is recovered from retained per-turn journals where possible. Missing or incomplete
 usage pauses new model calls while budget enforcement is enabled; see the
 [deployment FAQ](apps/docs/docs/faq.md#does-a-project-budget-delete-or-stop-a-workspace).

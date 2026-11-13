@@ -10,7 +10,7 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
-import { type CostBudgetService, monthWindow } from "./costs.js";
+import { type CostBudgetService, monthWindow, TURN_LIMIT_ATTENTION } from "./costs.js";
 
 // The overview is the operator's entry point. It reads persisted control-plane
 // state only: it never inspects a workspace provider, so opening it cannot wake
@@ -459,6 +459,8 @@ export function attentionAction(item: { kind: string; turnId: string | null }) {
   // The review-cycle owner requires a human decision, never a failed-turn retry.
   if (item.kind === "review_cycle_ready" || item.kind === "review_cycle_decision")
     return "dismiss" as const;
+  // The turn already ran and was billed; running it again would spend again.
+  if (item.kind === TURN_LIMIT_ATTENTION) return "dismiss" as const;
   if (item.turnId) return "retry" as const;
   return "dismiss" as const;
 }

@@ -27,6 +27,7 @@ import {
   errorSummary,
   formatTime,
   isReviewNotice,
+  isTurnLimitNotice,
   phaseLabel,
   safeExternalUrl,
   storyActivity,
@@ -206,7 +207,9 @@ export default async function StoryPage({
             const deliveryNotice = ["delivery_integration", "delivery_completion"].includes(
               item.kind,
             );
-            const failure = !reviewNotice && !deliveryNotice && item.kind !== "agent_waiting";
+            const limitNotice = isTurnLimitNotice(item.kind);
+            const failure =
+              !reviewNotice && !deliveryNotice && !limitNotice && item.kind !== "agent_waiting";
             return (
               <div
                 key={item.id}
@@ -214,7 +217,7 @@ export default async function StoryPage({
               >
                 <span
                   aria-hidden="true"
-                  className={`mt-2 size-2 shrink-0 rounded-full ${failure ? "bg-(--bad)" : "bg-(--human)"}`}
+                  className={`mt-2 size-2 shrink-0 rounded-full ${failure || limitNotice ? "bg-(--bad)" : "bg-(--human)"}`}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">{item.title}</p>

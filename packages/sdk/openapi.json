@@ -6686,6 +6686,10 @@
                       "nullable": true,
                       "type": "number"
                     },
+                    "turn_limit_cents": {
+                      "nullable": true,
+                      "type": "number"
+                    },
                     "warning_percent": {
                       "nullable": true,
                       "type": "number"
@@ -6731,6 +6735,7 @@
                     "id",
                     "enabled",
                     "monthly_limit_cents",
+                    "turn_limit_cents",
                     "warning_percent",
                     "window_start",
                     "window_end",
@@ -6854,6 +6859,12 @@
                     "minimum": 0,
                     "maximum": 2000000000
                   },
+                  "turn_limit_cents": {
+                    "nullable": true,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2000000000
+                  },
                   "warning_percent": {
                     "default": 80,
                     "type": "integer",
@@ -6912,6 +6923,10 @@
                       "nullable": true,
                       "type": "number"
                     },
+                    "turn_limit_cents": {
+                      "nullable": true,
+                      "type": "number"
+                    },
                     "warning_percent": {
                       "nullable": true,
                       "type": "number"
@@ -6957,6 +6972,7 @@
                     "id",
                     "enabled",
                     "monthly_limit_cents",
+                    "turn_limit_cents",
                     "warning_percent",
                     "window_start",
                     "window_end",
@@ -7220,6 +7236,10 @@
                           "nullable": true,
                           "type": "number"
                         },
+                        "turnLimitCents": {
+                          "nullable": true,
+                          "type": "number"
+                        },
                         "warningPercent": {
                           "nullable": true,
                           "type": "number"
@@ -7265,6 +7285,7 @@
                         "id",
                         "enabled",
                         "monthlyLimitCents",
+                        "turnLimitCents",
                         "warningPercent",
                         "windowStart",
                         "windowEnd",

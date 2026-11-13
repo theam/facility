@@ -26,6 +26,15 @@ export type BudgetState = {
   state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
 };
 
+/** A finished turn cost more than its per-turn limit; dismiss-only, never retried. */
+export const TURN_LIMIT_ATTENTION = "turn_limit_exceeded";
+
+export type TurnReservation = {
+  reservationId: string | null;
+  /** The per-turn limit this turn was admitted under; null when none applies. */
+  turnLimitCents: number | null;
+};
+
 export class CostBudgetService {
   private readonly apiCalls: ModelCallLedger;
   constructor(private readonly db: FacilityDb) {
@@ -64,17 +73,18 @@ export class CostBudgetService {
   /**
    * Hold this turn's estimate inside the claim transaction. The budget row lock
    * serializes admissions, so two workers cannot both pass a limit that fits one hold.
-   * Returns the reservation id, or null when the project is not enforcing a budget
-   * or the priced estimate is zero.
+   * The estimate must also fit the project's per-turn limit, which is returned so
+   * the engine can be held to it. The reservation id is null when the project is
+   * not enforcing a budget or the priced estimate is zero.
    */
   async reserveTurn(
     tx: FacilityDb,
     input: { orgId: string; projectId: string; storyId: string; turnId: string; model: string },
     now = new Date(),
-  ) {
+  ): Promise<TurnReservation> {
     const budget = await lockBudget(tx, input.orgId, input.projectId);
     await releaseOpenTurnReservation(tx, input);
-    if (!budget?.enabled) return null;
+    if (!budget?.enabled) return { reservationId: null, turnLimitCents: null };
     if (await hasUnconfirmedUsage(tx, input.orgId, input.projectId)) {
       throw new BudgetPolicyError(
         "budget_usage_unconfirmed",
@@ -88,9 +98,16 @@ export class CostBudgetService {
         `Model ${input.model} has no price entry, so the project budget cannot safely account for this turn`,
       );
     }
+    const turnLimitCents = budget.turnLimitCents ?? null;
+    if (!turnLimitFits(estimate, turnLimitCents)) {
+      throw new BudgetPolicyError(
+        "budget_turn_limit_exceeded",
+        `A ${input.model} turn is estimated at ${estimate.toFixed(2)} cents, more than the project's per-turn limit of ${turnLimitCents} cents`,
+      );
+    }
     const committed = await committedCents(tx, input.orgId, input.projectId, now);
     assertRoom(committed, estimate, budget.monthlyLimitCents, "turn");
-    if (estimate === 0) return null;
+    if (estimate === 0) return { reservationId: null, turnLimitCents };
     const id = newId("evt");
     await tx.insert(budgetReservations).values({
       id,
@@ -103,7 +120,7 @@ export class CostBudgetService {
       model: input.model,
       reservedCents: estimate,
     });
-    return id;
+    return { reservationId: id, turnLimitCents };
   }
 
   reserveTitle(
@@ -371,6 +388,27 @@ function finiteNonNegative(value: number | undefined) {
  */
 export function reservationFits(committed: number, estimate: number, limit: number) {
   return committed < limit && committed + estimate <= limit;
+}
+
+/**
+ * A turn fits the per-turn limit when its priced estimate does not exceed it.
+ * The limit bounds what a single turn may cost, independent of monthly spend.
+ */
+export function turnLimitFits(estimate: number, turnLimitCents: number | null) {
+  return turnLimitCents === null || estimate <= turnLimitCents;
+}
+
+/** True when a turn's measured cost went over the per-turn limit it was admitted under. */
+export function turnLimitOverrun(
+  costCents: number | null | undefined,
+  turnLimitCents: number | null,
+) {
+  return (
+    turnLimitCents !== null &&
+    typeof costCents === "number" &&
+    Number.isFinite(costCents) &&
+    costCents > turnLimitCents
+  );
 }
 
 function exhaustedMessage(committed: number, limit: number) {

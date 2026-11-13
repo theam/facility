@@ -2,6 +2,7 @@ export class BudgetPolicyError extends Error {
   constructor(
     readonly code:
       | "budget_exceeded"
+      | "budget_turn_limit_exceeded"
       | "budget_model_unpriced"
       | "budget_usage_unconfirmed"
       | "budget_reservation_not_found"

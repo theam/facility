@@ -138,6 +138,15 @@ function describe(
       };
     case "turn.failed":
       return { kind: "error", title: "Run failed", text: text(data.error) };
+    case "turn.limit_exceeded":
+      return {
+        kind: "error",
+        title: "Run went over the per-turn limit",
+        text:
+          typeof data.costCents === "number" && typeof data.turnLimitCents === "number"
+            ? `Cost $${(data.costCents / 100).toFixed(2)} of a $${(data.turnLimitCents / 100).toFixed(2)} limit`
+            : null,
+      };
     case "turn.canceled":
       return { kind: "lifecycle", title: "Run canceled", text: null };
     case "turn.cancel_requested":

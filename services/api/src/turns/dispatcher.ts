@@ -17,7 +17,7 @@ import { ApiError } from "../errors.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import { WorkspaceCredentialRenewal } from "../github/workspace-credential-renewal.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
-import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
+import { BudgetPolicyError, CostBudgetService, turnLimitOverrun } from "../insights/costs.js";
 import { type InputFileReference, validateInputFileReferences } from "../stories/input-files.js";
 import type { StoryReviewCycles } from "../stories/review-cycle.js";
 import {
@@ -87,6 +87,8 @@ export class TurnDispatcher {
     }
     const turn = admission.turn;
     const cycle = admission.reviewCycle;
+    // The per-turn limit the turn was admitted under, fixed for the whole turn.
+    const turnLimitCents = admission.turnLimitCents;
     // The automatic Reviewer runs as a native turn restricted to reading.
     const reviewing = cycle?.phase === "review";
     const credentialOptions = reviewing ? { readOnly: true } : {};
@@ -457,6 +459,9 @@ export class TurnDispatcher {
           reviewInstruction,
         cwd: prepared.primaryCwd,
         nativeSessionId: resumedSessionId,
+        // Claude Code stops the turn at this amount. Codex reports usage only when a
+        // turn ends, so it cannot be stopped and an overrun is reported afterwards.
+        maxBudgetUsd: turnLimitCents === null ? undefined : turnLimitCents / 100,
         // The Reviewer keeps its engine credentials and the read-only GitHub token,
         // never the project's other secrets (deployment and service credentials).
         environment: reviewing
@@ -508,7 +513,7 @@ export class TurnDispatcher {
       gitEvidenceCompleted = true;
       if (cycle) cancellation.signal.throwIfAborted();
       const outcome = agentOutcome(result.output);
-      await this.costs.record({
+      const bill = await this.costs.record({
         orgId: input.orgId,
         projectId: input.projectId,
         storyId: story.id,
@@ -572,6 +577,13 @@ export class TurnDispatcher {
           });
         }
       }
+      if (turnLimitOverrun(bill?.costCents, turnLimitCents))
+        await this.reportTurnLimitOverrun(
+          eventBase,
+          { agentName: manifest.name, engine: manifest.engine },
+          bill?.costCents,
+          turnLimitCents,
+        );
       await appendTurnEvent(this.db, {
         ...eventBase,
         type: "turn.succeeded",
@@ -603,7 +615,7 @@ export class TurnDispatcher {
           engineStarted && this.runtime && currentWorkspace
             ? await readUsageJournal(this.runtime, currentWorkspace, turn.id, turn.engine)
             : undefined;
-        await this.costs.record({
+        const bill = await this.costs.record({
           ...input,
           storyId: turn.storyId,
           agentName: turn.agentName,
@@ -620,6 +632,11 @@ export class TurnDispatcher {
         // If accounting fails, retain the hold and let recovery reconcile it.
         // Never admit a successor between releasing a hold and booking its bill.
         reservationSettled = true;
+        // A turn the engine stopped at the limit already fails with that reason.
+        const stoppedAtLimit =
+          error instanceof AgentEngineError && error.code === "agent_turn_limit_reached";
+        if (!stoppedAtLimit && turnLimitOverrun(bill?.costCents, turnLimitCents))
+          await this.reportTurnLimitOverrun(eventBase, turn, bill?.costCents, turnLimitCents);
       }
       if (await this.isCanceled(input.orgId, input.projectId, input.turnId)) {
         await appendTurnEvent(this.db, {
@@ -698,6 +715,7 @@ export class TurnDispatcher {
         kind: "running";
         turn: typeof turns.$inferSelect;
         reservationId: string | null;
+        turnLimitCents: number | null;
         reviewCycle?: ReviewCycle;
       }
   > {
@@ -896,7 +914,7 @@ export class TurnDispatcher {
               eq(attentionItems.status, "open"),
             ),
           );
-        const reservationId = await this.costs.reserveTurn(tx, {
+        const reservation = await this.costs.reserveTurn(tx, {
           orgId: input.orgId,
           projectId: input.projectId,
           storyId: claimed.storyId,
@@ -904,7 +922,13 @@ export class TurnDispatcher {
           model: claimed.model,
         });
         if (reviewCycle) await this.review?.cycles.recordStart(tx, reviewCycle, claimed.id);
-        return { kind: "running" as const, turn: claimed, reservationId, reviewCycle };
+        return {
+          kind: "running" as const,
+          turn: claimed,
+          reservationId: reservation.reservationId,
+          turnLimitCents: reservation.turnLimitCents,
+          reviewCycle,
+        };
       });
       if (!admitted) {
         const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
@@ -932,6 +956,33 @@ export class TurnDispatcher {
       }
       return { kind: "denied", error: error.message };
     }
+  }
+
+  /**
+   * Record a turn that cost more than its per-turn limit and ask a person to look.
+   * The turn is never retried for this: its work and bill are already final.
+   * Reporting is best effort so it cannot change the turn's own outcome.
+   */
+  private async reportTurnLimitOverrun(
+    scope: { orgId: string; projectId: string; storyId: string; turnId: string },
+    agent: { agentName: string; engine: string },
+    costCents: number | null | undefined,
+    turnLimitCents: number | null,
+  ) {
+    if (typeof costCents !== "number" || turnLimitCents === null) return;
+    await this.storiesService
+      .reportTurnLimitOverrun({
+        ...scope,
+        agentName: agent.agentName,
+        engine: agent.engine,
+        costCents,
+        turnLimitCents,
+      })
+      .catch(() => {
+        console.warn(
+          JSON.stringify({ event: "turn.limit_overrun_report_failed", turnId: scope.turnId }),
+        );
+      });
   }
 
   private async isCanceled(orgId: string, projectId: string, turnId: string) {

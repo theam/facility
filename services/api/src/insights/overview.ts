@@ -339,6 +339,7 @@ function presentBudget(state: Awaited<ReturnType<CostBudgetService["budgetState"
     id: state.budget?.id ?? null,
     enabled: state.budget?.enabled ?? false,
     monthlyLimitCents: state.budget?.monthlyLimitCents ?? null,
+    turnLimitCents: state.budget?.turnLimitCents ?? null,
     warningPercent: state.budget?.warningPercent ?? null,
     windowStart: state.windowStart,
     windowEnd: state.windowEnd,

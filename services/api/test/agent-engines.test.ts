@@ -215,6 +215,84 @@ describe("native agent engines", () => {
     expect(runtime.command?.args).toEqual(expect.arrayContaining(["codex-thread", "continue"]));
   });
 
+  it("fails a Claude Code turn stopped at its per-turn limit and keeps the reported cost", async () => {
+    // Recorded from Claude Code print mode with --max-budget-usd: exit status 1, no stderr.
+    const stdout = `${[
+      JSON.stringify({ type: "system", subtype: "init", session_id: "claude-limited" }),
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_budget_usd",
+        is_error: true,
+        session_id: "claude-limited",
+        total_cost_usd: 0.6275,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        errors: ["Reached maximum budget ($0.6)"],
+      }),
+    ].join("\n")}\n`;
+    const runtime = new EngineRuntime({ exitCode: 1, stdout, stderr: "", durationMs: 9 });
+    const stopped = new ClaudeCodeEngine(runtime).run({
+      turnId: "turn_limited",
+      manifest: manifest("claude_code"),
+      workspace,
+      prompt: "continue",
+      cwd: "repos/app",
+      maxBudgetUsd: 0.6,
+    });
+    await expect(stopped).rejects.toMatchObject({
+      code: "agent_turn_limit_reached",
+      message: expect.stringContaining("per-turn limit of $0.60"),
+      details: {
+        engine: "claude_code",
+        exitCode: 1,
+        usage: { inputTokens: 0, outputTokens: 0, reportedCostCents: expect.closeTo(62.75, 6) },
+      },
+    });
+    expect(runtime.command?.args).toEqual(expect.arrayContaining(["--max-budget-usd", "0.600000"]));
+
+    // An ordinary engine failure keeps its own code.
+    const failed = new EngineRuntime({
+      exitCode: 1,
+      stdout: `${JSON.stringify({ type: "result", subtype: "error_during_execution" })}\n`,
+      stderr: "boom",
+      durationMs: 3,
+    });
+    await expect(
+      new ClaudeCodeEngine(failed).run({
+        turnId: "turn_failed",
+        manifest: manifest("claude_code"),
+        workspace,
+        prompt: "continue",
+        cwd: "repos/app",
+        maxBudgetUsd: 0.6,
+      }),
+    ).rejects.toMatchObject({ code: "agent_engine_failed", message: "boom" });
+  });
+
+  it("never passes a per-turn limit to Codex, which cannot stop mid-turn", async () => {
+    const stdout = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "codex-limited" }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 2, output_tokens: 3 } }),
+    ].join("\n")}\n`;
+    const runtime = new EngineRuntime({ exitCode: 0, stdout, stderr: "", durationMs: 4 });
+    await expect(
+      new CodexEngine(runtime).run({
+        turnId: "turn_codex_limited",
+        manifest: manifest("codex"),
+        workspace,
+        prompt: "continue",
+        cwd: "repos/app",
+        maxBudgetUsd: 0.01,
+      }),
+    ).resolves.toMatchObject({ nativeSessionId: "codex-limited" });
+    expect(runtime.command?.args).not.toContain("--max-budget-usd");
+    expect(runtime.command?.args?.join(" ")).not.toMatch(/budget/i);
+  });
+
   it("restricts read-only turns to reading tools and Codex's read-only sandbox", async () => {
     const claudeOutput = `${JSON.stringify({
       type: "result",

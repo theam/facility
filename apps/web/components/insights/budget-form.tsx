@@ -10,6 +10,9 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
   const [limit, setLimit] = useState(
     budget.monthly_limit_cents === null ? "" : String(budget.monthly_limit_cents / 100),
   );
+  const [turnLimit, setTurnLimit] = useState(
+    budget.turn_limit_cents === null ? "" : String(budget.turn_limit_cents / 100),
+  );
   const [warning, setWarning] = useState(String(budget.warning_percent ?? 80));
   const [enabled, setEnabled] = useState(budget.id ? budget.enabled : true);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -19,6 +22,8 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
     event.preventDefault();
     const amount = Number(limit);
     const warningPercent = Number(warning);
+    // An empty per-turn field means no per-turn limit.
+    const turnLimitCents = turnLimit.trim() === "" ? null : Math.round(Number(turnLimit) * 100);
     if (
       !Number.isFinite(amount) ||
       amount < 0 ||
@@ -28,6 +33,11 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
     ) {
       setState("error");
       setMessage("Enter a non-negative monthly limit and a whole warning percentage.");
+      return;
+    }
+    if (turnLimitCents !== null && (!Number.isFinite(turnLimitCents) || turnLimitCents < 1)) {
+      setState("error");
+      setMessage("Enter a per-turn limit of at least $0.01, or leave it empty for none.");
       return;
     }
     setState("saving");
@@ -40,6 +50,7 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
       },
       body: JSON.stringify({
         monthly_limit_cents: Math.round(amount * 100),
+        turn_limit_cents: turnLimitCents,
         warning_percent: warningPercent,
         enabled,
       }),
@@ -71,6 +82,14 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
           required
         />
       </Field>
+      <Field label="Per-turn limit (USD)" hint="Optional. Empty means no per-turn limit.">
+        <TextInput
+          inputMode="decimal"
+          value={turnLimit}
+          onChange={(event) => setTurnLimit(event.target.value)}
+          placeholder="5.00"
+        />
+      </Field>
       <Field label="Warn at (%)">
         <TextInput
           inputMode="numeric"
@@ -79,14 +98,14 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
           required
         />
       </Field>
-      <div className="flex flex-col justify-end gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 sm:col-span-3">
         <label className="flex items-center gap-2 text-[12px] text-(--mut)">
           <input
             type="checkbox"
             checked={enabled}
             onChange={(event) => setEnabled(event.target.checked)}
           />
-          Enforce for new turns
+          Enforce both limits for new turns
         </label>
         <Button type="submit" disabled={state === "saving"}>
           {state === "saving" ? "Saving…" : "Save budget"}

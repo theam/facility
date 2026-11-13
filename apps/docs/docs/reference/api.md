@@ -207,7 +207,7 @@ configuration writer. Omit `reviewCycle` to leave automatic review off. When con
 object takes `builderAgent`, `reviewerAgent` and `timeoutMinutes` from 1 to 120. Optional
 `requiredPullLabel` must be present on every required PR. `requiredChecks` contains up to 40
 entries with `repository` and check `name`. The cycle has no budget of its own: each of its
-turns counts against the project budget like any other agent turn.
+turns counts against the project budget and its per-turn limit like any other agent turn.
 
 GET `/v1/projects/:projectId/workspace-stories/:storyId/workflow` and
 `facility_get_story_workflow` expose the same optional cycle, including waiting, review,
@@ -238,6 +238,13 @@ in another client.
 - `/v1/projects/:projectId/budget` reads or updates the monthly project budget. Its committed amount
   includes measured turn usage, open reservations and settled title charges; a reservation is an
   estimate, not a provider invoice or a hard limit on an already running call.
+  `turn_limit_cents` is the optional per-turn limit for every native agent turn, a positive
+  integer or `null` for none. Omitting it from a PATCH keeps the current value; `null` removes it.
+  While the budget is enabled, a turn whose estimate exceeds it fails before the engine starts
+  with code `budget_turn_limit_exceeded`. Claude Code is stopped at the limit; a Codex turn,
+  which reports usage only when it ends, can exceed it by at most that turn and then opens a
+  `turn_limit_exceeded` notice that cannot be retried. Writing it needs `budgets:write`, like the
+  rest of the budget.
   The costs and observability usage series describe native agent turns; title API calls have
   a separate durable ledger and contribute to the monthly budget, without creating synthetic turns.
 - `/v1/projects/:projectId/overview` returns the operator entry point: running and queued turns,

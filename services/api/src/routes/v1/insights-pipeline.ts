@@ -15,6 +15,11 @@ const CostsQuery = z.object({
 });
 const BudgetBody = z.object({
   monthly_limit_cents: z.number().int().min(0).max(2_000_000_000),
+  /**
+   * Most one agent turn may cost while the budget is enforced. Omit it to keep the
+   * current value; null removes the per-turn limit.
+   */
+  turn_limit_cents: z.number().int().min(1).max(2_000_000_000).nullable().optional(),
   warning_percent: z.number().int().min(1).max(100).default(80),
   enabled: z.boolean().default(true),
 });
@@ -23,6 +28,7 @@ const BudgetResponse = z.object({
   id: z.string().nullable(),
   enabled: z.boolean(),
   monthly_limit_cents: z.number().nullable(),
+  turn_limit_cents: z.number().nullable(),
   warning_percent: z.number().nullable(),
   window_start: DateValue,
   window_end: DateValue,
@@ -96,6 +102,7 @@ const ObservabilityResponse = z.object({
     id: z.string().nullable(),
     enabled: z.boolean(),
     monthlyLimitCents: z.number().nullable(),
+    turnLimitCents: z.number().nullable(),
     warningPercent: z.number().nullable(),
     windowStart: DateValue,
     windowEnd: DateValue,
@@ -217,6 +224,7 @@ export async function registerInsightsPipelineRoutes(
           orgId: actor.orgId,
           projectId,
           monthlyLimitCents: body.monthly_limit_cents,
+          turnLimitCents: body.turn_limit_cents ?? null,
           warningPercent: body.warning_percent,
           enabled: body.enabled,
           updatedBy: actor.id,
@@ -225,6 +233,10 @@ export async function registerInsightsPipelineRoutes(
           target: projectBudgets.projectId,
           set: {
             monthlyLimitCents: body.monthly_limit_cents,
+            // Older clients do not send the field; leave a configured limit in place.
+            ...(body.turn_limit_cents === undefined
+              ? {}
+              : { turnLimitCents: body.turn_limit_cents }),
             warningPercent: body.warning_percent,
             enabled: body.enabled,
             updatedBy: actor.id,
@@ -305,6 +317,7 @@ function presentBudget(
     id: state.budget?.id ?? null,
     enabled: state.budget?.enabled ?? false,
     monthly_limit_cents: state.budget?.monthlyLimitCents ?? null,
+    turn_limit_cents: state.budget?.turnLimitCents ?? null,
     warning_percent: state.budget?.warningPercent ?? null,
     window_start: state.windowStart,
     window_end: state.windowEnd,

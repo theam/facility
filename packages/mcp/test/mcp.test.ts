@@ -574,6 +574,62 @@ describe("@facility/mcp 0.12", () => {
     await server.close();
   });
 
+  test("sets, keeps and clears the per-turn limit with the monthly budget", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { state: "ok" };
+      },
+    });
+    const budget = { projectId: "proj_1", monthlyLimitCents: 50_000 };
+    await client.callTool({
+      name: "facility_set_budget",
+      arguments: { ...budget, turnLimitCents: 500, idempotencyKey: "budget-1" },
+    });
+    await client.callTool({
+      name: "facility_set_budget",
+      arguments: { ...budget, idempotencyKey: "budget-2" },
+    });
+    await client.callTool({
+      name: "facility_set_budget",
+      arguments: { ...budget, turnLimitCents: null, idempotencyKey: "budget-3" },
+    });
+    for (const turnLimitCents of [0, 1.5, "500"]) {
+      const invalid = await client.callTool({
+        name: "facility_set_budget",
+        arguments: { ...budget, turnLimitCents, idempotencyKey: "budget-invalid" },
+      });
+      expect(invalid.isError).toBe(true);
+    }
+    const body = (turnLimitCents?: number | null) => ({
+      monthly_limit_cents: 50_000,
+      turn_limit_cents: turnLimitCents,
+      warning_percent: 80,
+      enabled: true,
+    });
+    expect(calls).toEqual([
+      [
+        "PATCH",
+        "/v1/projects/proj_1/budget",
+        { query: undefined, body: body(500), idempotencyKey: "budget-1" },
+      ],
+      // Omitted: the API keeps the configured limit.
+      [
+        "PATCH",
+        "/v1/projects/proj_1/budget",
+        { query: undefined, body: body(undefined), idempotencyKey: "budget-2" },
+      ],
+      [
+        "PATCH",
+        "/v1/projects/proj_1/budget",
+        { query: undefined, body: body(null), idempotencyKey: "budget-3" },
+      ],
+    ]);
+    await client.close();
+    await server.close();
+  });
+
   test("reads what is waiting on a person with the same filters as the web page", async () => {
     const calls: unknown[][] = [];
     const { client, server } = await connect({
