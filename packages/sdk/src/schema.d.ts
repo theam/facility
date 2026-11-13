@@ -72,23 +72,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/auth/dev-login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get dev login */
-        get: operations["getAuthDevLogin"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -1976,98 +1959,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description The request is invalid. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication is required or invalid. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The authenticated principal lacks the required permission. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The resource was not found or is outside the principal scope. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The request conflicts with current resource state. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description The request rate limit was exceeded. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description An unexpected server error occurred. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description A required service is unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    getAuthDevLogin: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Default Response */
-            302: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
             };
             /** @description The request is invalid. */
             400: {
@@ -9305,6 +9196,16 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                            };
                         };
                     };
                 };
@@ -9408,6 +9309,16 @@ export interface operations {
                         requireDeliveryAcceptance?: boolean;
                         /** @default false */
                         requirePreviewForAcceptance?: boolean;
+                        reviewCycle?: {
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            timeoutMinutes: number;
+                            requiredPullLabel?: string;
+                            requiredChecks?: {
+                                repository: string;
+                                name: string;
+                            }[];
+                        };
                     };
                     idempotency_key: string;
                 };
@@ -9431,6 +9342,16 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                            };
                         };
                         nonce: string;
                         /** Format: date-time */
@@ -9538,6 +9459,16 @@ export interface operations {
                         requireDeliveryAcceptance?: boolean;
                         /** @default false */
                         requirePreviewForAcceptance?: boolean;
+                        reviewCycle?: {
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            timeoutMinutes: number;
+                            requiredPullLabel?: string;
+                            requiredChecks?: {
+                                repository: string;
+                                name: string;
+                            }[];
+                        };
                     };
                     nonce: string;
                     /** Format: date-time */
@@ -9565,6 +9496,16 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                            };
                         };
                     };
                 };
@@ -9678,6 +9619,16 @@ export interface operations {
                                 requireDeliveryAcceptance: boolean;
                                 /** @default false */
                                 requirePreviewForAcceptance: boolean;
+                                reviewCycle?: {
+                                    builderAgent: string;
+                                    reviewerAgent: string;
+                                    timeoutMinutes: number;
+                                    requiredPullLabel?: string;
+                                    requiredChecks?: {
+                                        repository: string;
+                                        name: string;
+                                    }[];
+                                };
                             };
                         };
                         plan: {
@@ -9697,7 +9648,6 @@ export interface operations {
                             reviewsStarted: number;
                             correctionsStarted: number;
                             deadline: string;
-                            maxCostCents: number;
                             costCents: number | null;
                             reason: string | null;
                             activeTurnId: string | null;
@@ -9832,6 +9782,15 @@ export interface operations {
                                     }[];
                                     missingEvidence: string[];
                                 };
+                                publication?: {
+                                    repository: string;
+                                    number: number;
+                                    /** @enum {string} */
+                                    state: "published" | "failed";
+                                    /** Format: uri */
+                                    url?: string;
+                                    reason?: string;
+                                }[];
                             }[];
                         };
                         execution?: {

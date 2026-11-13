@@ -9,6 +9,7 @@ import {
 } from "@facility/db";
 import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { ApiError } from "../errors.js";
+import { readStoryDelivery } from "./delivery.js";
 import { readDeliveryAcceptance } from "./delivery-acceptance.js";
 import { observePlanExecution } from "./plan-execution-observation.js";
 import {
@@ -16,6 +17,7 @@ import {
   matchesPlanRepositoryScope,
   repositoryScopeDifference,
 } from "./plan-scope.js";
+import { latestReviewCycle, projectReviewCycle } from "./review-cycle-state.js";
 import { observePlanExecutionGate, readWorkflowPlan } from "./workflow-execution.js";
 import {
   readWorkflowPolicy,
@@ -33,6 +35,21 @@ export async function readStoryWorkflow(
       const policy = await readWorkflowPolicy(tx, scope);
       const plan = await readWorkflowPlan(tx, scope);
       const acceptance = await readDeliveryAcceptance(tx, scope);
+      const cycle = await latestReviewCycle(tx, scope);
+      const reviewCycle = cycle ? projectReviewCycle(cycle) : undefined;
+      if (cycle?.phase === "human_review" && reviewCycle?.candidate) {
+        const current = await readStoryDelivery(tx, scope);
+        if (
+          current.candidate.revision !== reviewCycle.candidate.deliveryRevision ||
+          policy.revision !== cycle.data.authorization.policyRevision ||
+          plan.state.revision !== cycle.data.authorization.planRevision ||
+          plan.state.decisionRevision !== cycle.data.authorization.decisionRevision
+        ) {
+          reviewCycle.phase = "decision_required";
+          reviewCycle.reason =
+            "The candidate or authorization changed after the recorded review. Review the current delivery before accepting it.";
+        }
+      }
       const queuePage = await tx
         .select()
         .from(turns)
@@ -194,6 +211,7 @@ export async function readStoryWorkflow(
           }),
           hasMore: queuePage.length > queued.length,
         },
+        ...(reviewCycle ? { reviewCycle } : {}),
       };
     },
     { isolationLevel: "repeatable read" },

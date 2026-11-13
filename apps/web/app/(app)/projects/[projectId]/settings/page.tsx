@@ -166,10 +166,10 @@ export default async function ProjectSettingsPage({
       <section className="flex flex-col gap-3">
         <Eyebrow>access model</Eyebrow>
         <p className="text-sm leading-relaxed text-(--mut)">
-          Every configured agent gets the same full shell, network, Docker, browser and GitHub App
-          installation access. Workflow policies can require plan approval before native execution;
-          they do not narrow an agent’s tools or repository access. GitHub branch protection and
-          pull-request review remain the merge boundary.
+          Native turns get the same full shell, network, Docker, browser and GitHub App installation
+          access. Workflow policies can require plan approval before native execution; they do not
+          narrow an agent’s tools or repository access. GitHub branch protection and pull-request
+          review remain the merge boundary.
         </p>
       </section>
     </div>

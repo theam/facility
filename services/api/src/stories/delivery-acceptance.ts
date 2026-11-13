@@ -8,6 +8,7 @@ import {
   type StoryDeliveryAcceptance,
 } from "@facility/core";
 import {
+  attentionItems,
   type FacilityDb,
   githubPullRequests,
   stories,
@@ -15,8 +16,9 @@ import {
   storyDeliveryAcceptances,
   storyDeliveryPullRequests,
   storyPreviewConvergences,
+  turns,
 } from "@facility/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { z } from "zod";
 import { authorizePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
@@ -24,6 +26,11 @@ import { readStoryDelivery } from "./delivery.js";
 import { acceptanceSnapshot, sameAcceptedCandidate } from "./delivery-acceptance-snapshot.js";
 import { appendStoryEvidence } from "./evidence.js";
 import type { InteractivePlanActor } from "./plan-confirmation.js";
+import {
+  isReviewActive,
+  latestReviewCycle,
+  REVIEW_DECISION_ATTENTION,
+} from "./review-cycle-state.js";
 import {
   verifyWorkflowConfirmationProof,
   WORKFLOW_CONFIRMATION_TTL_MS,
@@ -111,6 +118,27 @@ async function candidateSnapshot(
   requireReadyPreview: boolean,
 ): Promise<DeliveryAcceptanceSnapshot> {
   const policy = await readWorkflowPolicy(db, scope);
+  let reviewInProgress = false;
+  if (requireReadyPreview) {
+    const cycle = await latestReviewCycle(db, scope);
+    const builder = policy.policy.reviewCycle?.builderAgent;
+    const [building] = builder
+      ? await db
+          .select({ id: turns.id })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, scope.orgId),
+              eq(turns.projectId, scope.projectId),
+              eq(turns.storyId, scope.storyId),
+              eq(turns.agentName, builder),
+              inArray(turns.state, ["queued", "running"]),
+            ),
+          )
+          .limit(1)
+      : [];
+    reviewInProgress = !!building || (!!cycle && isReviewActive(cycle.phase));
+  }
   const delivery = await readStoryDelivery(db, scope);
   const plan = await readWorkflowPlan(db, scope);
   const [preview] =
@@ -134,6 +162,7 @@ async function candidateSnapshot(
       delivery,
       plan: { state: plan.state, digest: plan.plan?.digest ?? null },
       preview: preview ?? null,
+      reviewInProgress,
     },
     acceptanceRevision,
     requireReadyPreview,
@@ -390,6 +419,24 @@ export async function confirmDeliveryAcceptance(
       confirmedBy: { type: "user", id: actor.id, name: actor.name },
       confirmedAt: now,
     });
+    await tx
+      .update(attentionItems)
+      .set({
+        status: "resolved",
+        resolution: "delivery_accepted",
+        resolvedAt: now,
+        updatedAt: now,
+        resolvedBy: { type: "user", id: actor.id },
+      })
+      .where(
+        and(
+          eq(attentionItems.orgId, scope.orgId),
+          eq(attentionItems.projectId, scope.projectId),
+          eq(attentionItems.storyId, scope.storyId),
+          eq(attentionItems.status, "open"),
+          inArray(attentionItems.kind, [...REVIEW_DECISION_ATTENTION]),
+        ),
+      );
     await appendStoryEvidence(tx, {
       ...scope,
       source: "facility",

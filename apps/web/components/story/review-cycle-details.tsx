@@ -111,8 +111,7 @@ export function ReviewCycleDetails({ cycle }: { cycle: ReviewCycle }) {
       </p>
       <p className="break-words text-(--mut)">
         Cost {cycle.costCents === null ? "unconfirmed" : `${cycle.costCents.toFixed(2)} cents`} ·
-        limit {cycle.maxCostCents} cents · deadline{" "}
-        <time dateTime={cycle.deadline}>{cycle.deadline}</time>
+        deadline <time dateTime={cycle.deadline}>{cycle.deadline}</time>
       </p>
       {cycle.phase === "decision_required" ? (
         <p className="text-(--mut)">
@@ -141,7 +140,15 @@ export function ReviewCycleDetails({ cycle }: { cycle: ReviewCycle }) {
       )}
       {cycle.reviews.map(
         (
-          { turnId, result, candidate, planRevision, policyRevision, reviewerManifestHash },
+          {
+            turnId,
+            result,
+            candidate,
+            planRevision,
+            policyRevision,
+            reviewerManifestHash,
+            publication,
+          },
           index,
         ) => (
           <details key={turnId} className="min-w-0 break-words">
@@ -156,6 +163,29 @@ export function ReviewCycleDetails({ cycle }: { cycle: ReviewCycle }) {
                   : "Previous candidate · historical report"}{" "}
                 · plan r{planRevision} · policy r{policyRevision}
               </p>
+              {publication?.length ? (
+                <ul aria-label="Reviews on GitHub" className="flex flex-wrap gap-x-4 gap-y-1">
+                  {publication.map((item) => (
+                    <li key={`${item.repository}#${item.number}`}>
+                      {item.state === "published" && item.url ? (
+                        <a
+                          className="text-(--info) underline underline-offset-4"
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Review on {item.repository} #{item.number} ↗
+                        </a>
+                      ) : (
+                        <span className="text-(--human)">
+                          Not published on {item.repository} #{item.number}
+                          {item.reason ? `: ${item.reason}` : ""}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <ul aria-label="Acceptance evidence" className="space-y-3">
                 {result.acceptance.map((criterion) => (
                   <li key={criterion.id}>

@@ -17,15 +17,23 @@ export type AcceptanceObservation = {
     desiredGeneration: string | null;
     deployedGeneration: string | null;
   } | null;
+  /** The review cycle's Builder or Reviewer is still working on this delivery. */
+  reviewInProgress?: boolean;
 };
 
 /** Shared eligibility and binding. Reading this result never creates a request
  * or authorizes a person; confirmation still rechecks under the existing locks. */
 export function acceptanceSnapshot(
-  { policy, delivery, plan, preview }: AcceptanceObservation,
+  { policy, delivery, plan, preview, reviewInProgress }: AcceptanceObservation,
   acceptanceRevision: number,
   requireReadyPreview: boolean,
 ): DeliveryAcceptanceSnapshot {
+  if (requireReadyPreview && reviewInProgress)
+    throw new ApiError(
+      409,
+      "workflow_review_in_progress",
+      "Wait for the Builder and review cycle to reach a human decision before accepting delivery",
+    );
   if (delivery.candidate.state !== "recorded" || !delivery.candidate.revision)
     throw new ApiError(
       409,

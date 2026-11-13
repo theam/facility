@@ -21,6 +21,8 @@ import {
   retirePreviewWriter,
   StoryPreviewConvergenceExecutor,
 } from "./stories/preview-convergence-executor.js";
+import { StoryReviewCycles } from "./stories/review-cycle.js";
+import { ReviewCycleSource } from "./stories/review-cycle-source.js";
 import { StoryWorkspaceService } from "./stories/service.js";
 import { StoryTitleService, titleCredentials } from "./stories/titles.js";
 import { TurnDispatcher } from "./turns/dispatcher.js";
@@ -49,6 +51,7 @@ export type StoryDomain = {
   variables: WorkspaceVariablesService;
   engines: AgentEngineRegistry;
   dispatcher: TurnDispatcher;
+  reviewCycles: StoryReviewCycles;
   previews: WorkspacePreviewService;
   scheduler: AgentScheduler;
   githubTriggers: GithubAgentTriggerService;
@@ -118,6 +121,14 @@ export function createStoryDomain(input: {
       onResume: (scope) => previewConvergence.resume(scope),
     },
   );
+  const reviewSource = new ReviewCycleSource(input.db, githubFactory);
+  const reviewCycles = new StoryReviewCycles(
+    input.db,
+    stories,
+    catalog,
+    reviewSource,
+    input.enqueue,
+  );
   const completion = new StoryCompletionService(input.db, githubFactory, stories, input.enqueue);
   const mirror = new GithubMirrorService(
     input.db,
@@ -126,6 +137,7 @@ export function createStoryDomain(input: {
     async (repositoryId, pullNumber) => {
       await previewConvergence.observePull(repositoryId, pullNumber);
       await completion.observePull(repositoryId, pullNumber);
+      await reviewCycles.observePull(repositoryId, pullNumber);
     },
   );
   const engines = new AgentEngineRegistry([
@@ -157,6 +169,7 @@ export function createStoryDomain(input: {
     evidence,
     costs,
     runtime,
+    { cycles: reviewCycles },
   );
   const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
     input.db,
@@ -207,6 +220,7 @@ export function createStoryDomain(input: {
     variables,
     engines,
     dispatcher,
+    reviewCycles,
     previews,
     scheduler,
     githubTriggers,

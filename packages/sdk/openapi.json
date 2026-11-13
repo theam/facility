@@ -549,106 +549,6 @@
         "security": []
       }
     },
-    "/auth/dev-login": {
-      "get": {
-        "responses": {
-          "302": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "400": {
-            "description": "The request is invalid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication is required or invalid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The authenticated principal lacks the required permission.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The resource was not found or is outside the principal scope.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The request conflicts with current resource state.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "The request rate limit was exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "An unexpected server error occurred.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "A required service is unavailable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "operationId": "getAuthDevLogin",
-        "summary": "Get dev login",
-        "tags": [
-          "Authentication"
-        ],
-        "security": []
-      }
-    },
     "/auth/login": {
       "get": {
         "parameters": [
@@ -18152,6 +18052,58 @@
                         "requirePreviewForAcceptance": {
                           "default": false,
                           "type": "boolean"
+                        },
+                        "reviewCycle": {
+                          "type": "object",
+                          "properties": {
+                            "builderAgent": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                            },
+                            "reviewerAgent": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                            },
+                            "timeoutMinutes": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 120
+                            },
+                            "requiredPullLabel": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+                            },
+                            "requiredChecks": {
+                              "maxItems": 40,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "repository": {
+                                    "type": "string",
+                                    "maxLength": 200,
+                                    "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                },
+                                "required": [
+                                  "repository",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "builderAgent",
+                            "reviewerAgent",
+                            "timeoutMinutes"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -18307,6 +18259,58 @@
                       "requirePreviewForAcceptance": {
                         "default": false,
                         "type": "boolean"
+                      },
+                      "reviewCycle": {
+                        "type": "object",
+                        "properties": {
+                          "builderAgent": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                          },
+                          "reviewerAgent": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                          },
+                          "timeoutMinutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 120
+                          },
+                          "requiredPullLabel": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+                          },
+                          "requiredChecks": {
+                            "maxItems": 40,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "repository": {
+                                  "type": "string",
+                                  "maxLength": 200,
+                                  "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 100
+                                }
+                              },
+                              "required": [
+                                "repository",
+                                "name"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "builderAgent",
+                          "reviewerAgent",
+                          "timeoutMinutes"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "additionalProperties": false
@@ -18385,6 +18389,58 @@
                         "requirePreviewForAcceptance": {
                           "default": false,
                           "type": "boolean"
+                        },
+                        "reviewCycle": {
+                          "type": "object",
+                          "properties": {
+                            "builderAgent": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                            },
+                            "reviewerAgent": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                            },
+                            "timeoutMinutes": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 120
+                            },
+                            "requiredPullLabel": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+                            },
+                            "requiredChecks": {
+                              "maxItems": 40,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "repository": {
+                                    "type": "string",
+                                    "maxLength": 200,
+                                    "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                },
+                                "required": [
+                                  "repository",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "builderAgent",
+                            "reviewerAgent",
+                            "timeoutMinutes"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -18555,6 +18611,58 @@
                       "requirePreviewForAcceptance": {
                         "default": false,
                         "type": "boolean"
+                      },
+                      "reviewCycle": {
+                        "type": "object",
+                        "properties": {
+                          "builderAgent": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                          },
+                          "reviewerAgent": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                          },
+                          "timeoutMinutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 120
+                          },
+                          "requiredPullLabel": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+                          },
+                          "requiredChecks": {
+                            "maxItems": 40,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "repository": {
+                                  "type": "string",
+                                  "maxLength": 200,
+                                  "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 100
+                                }
+                              },
+                              "required": [
+                                "repository",
+                                "name"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "builderAgent",
+                          "reviewerAgent",
+                          "timeoutMinutes"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "additionalProperties": false
@@ -18650,6 +18758,58 @@
                         "requirePreviewForAcceptance": {
                           "default": false,
                           "type": "boolean"
+                        },
+                        "reviewCycle": {
+                          "type": "object",
+                          "properties": {
+                            "builderAgent": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                            },
+                            "reviewerAgent": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                            },
+                            "timeoutMinutes": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 120
+                            },
+                            "requiredPullLabel": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+                            },
+                            "requiredChecks": {
+                              "maxItems": 40,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "repository": {
+                                    "type": "string",
+                                    "maxLength": 200,
+                                    "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  }
+                                },
+                                "required": [
+                                  "repository",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "builderAgent",
+                            "reviewerAgent",
+                            "timeoutMinutes"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -18840,6 +19000,58 @@
                             "requirePreviewForAcceptance": {
                               "default": false,
                               "type": "boolean"
+                            },
+                            "reviewCycle": {
+                              "type": "object",
+                              "properties": {
+                                "builderAgent": {
+                                  "type": "string",
+                                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                                },
+                                "reviewerAgent": {
+                                  "type": "string",
+                                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                                },
+                                "timeoutMinutes": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 120
+                                },
+                                "requiredPullLabel": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+                                },
+                                "requiredChecks": {
+                                  "maxItems": 40,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "repository": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                      },
+                                      "name": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 100
+                                      }
+                                    },
+                                    "required": [
+                                      "repository",
+                                      "name"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "builderAgent",
+                                "reviewerAgent",
+                                "timeoutMinutes"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [
@@ -18934,9 +19146,6 @@
                         },
                         "deadline": {
                           "type": "string"
-                        },
-                        "maxCostCents": {
-                          "type": "number"
                         },
                         "costCents": {
                           "nullable": true,
@@ -19642,6 +19851,47 @@
                                   "missingEvidence"
                                 ],
                                 "additionalProperties": false
+                              },
+                              "publication": {
+                                "maxItems": 50,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "repository": {
+                                      "type": "string",
+                                      "maxLength": 200,
+                                      "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+                                    },
+                                    "number": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "exclusiveMinimum": true,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "state": {
+                                      "type": "string",
+                                      "enum": [
+                                        "published",
+                                        "failed"
+                                      ]
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 500
+                                    }
+                                  },
+                                  "required": [
+                                    "repository",
+                                    "number",
+                                    "state"
+                                  ],
+                                  "additionalProperties": false
+                                }
                               }
                             },
                             "required": [
@@ -19664,7 +19914,6 @@
                         "reviewsStarted",
                         "correctionsStarted",
                         "deadline",
-                        "maxCostCents",
                         "costCents",
                         "reason",
                         "activeTurnId",

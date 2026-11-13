@@ -40,6 +40,12 @@ import type {
 import { reconcileTurnBranch } from "./branch.js";
 import { type InputFileReference, validateInputFileReferences } from "./input-files.js";
 import { isGithubIssueStory } from "./phase.js";
+import { REVIEW_TRIGGER } from "./review-cycle-rules.js";
+import {
+  REVIEW_DECISION_ATTENTION,
+  reviewHoldsQueue,
+  seedReviewCycle,
+} from "./review-cycle-state.js";
 import { authorizePlanExecution } from "./workflow-execution.js";
 import { lockWorkflowExecution, lockWorkflowProject } from "./workflow-policy.js";
 
@@ -118,6 +124,22 @@ export class StoryServiceError extends Error {
     this.name = "StoryServiceError";
   }
 }
+
+type QueuedMessageInput = {
+  attachmentIds?: string[];
+  orgId: string;
+  projectId: string;
+  storyId: string;
+  body: string;
+  dedupeKey: string;
+  agent: AgentManifest;
+  actor: StoryActor;
+  trigger: {
+    type: "manual" | "mcp" | "ui" | "github" | "schedule" | typeof REVIEW_TRIGGER;
+    key?: string;
+    scheduledFor?: Date;
+  };
+};
 
 export class StoryWorkspaceService {
   constructor(
@@ -334,21 +356,23 @@ export class StoryWorkspaceService {
     return { ...(await this.get(input.orgId, input.projectId, aggregate.story.id)), queued };
   }
 
-  async queueMessage(input: {
-    attachmentIds?: string[];
-    orgId: string;
-    projectId: string;
-    storyId: string;
-    body: string;
-    dedupeKey: string;
-    agent: AgentManifest;
-    actor: StoryActor;
-    trigger: {
-      type: "manual" | "mcp" | "ui" | "github" | "schedule";
-      key?: string;
-      scheduledFor?: Date;
-    };
-  }) {
+  async queueMessage(input: QueuedMessageInput) {
+    if (input.trigger.type === REVIEW_TRIGGER)
+      throw new StoryServiceError("message_invalid", "Use an explicit agent trigger", 400);
+    const queued = await this.db.transaction((rawTx) =>
+      this.storeMessage(rawTx as unknown as FacilityDb, input, false),
+    );
+    if (!queued)
+      throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
+    if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
+    return queued;
+  }
+
+  async queueReviewTurn(tx: FacilityDb, input: QueuedMessageInput) {
+    return (await this.storeMessage(tx, input, true))?.turn;
+  }
+
+  private async storeMessage(tx: FacilityDb, input: QueuedMessageInput, reviewHandoff: boolean) {
     if (!input.body.trim()) {
       throw new StoryServiceError("message_invalid", "message must not be empty", 400);
     }
@@ -360,121 +384,119 @@ export class StoryWorkspaceService {
       );
     }
 
-    const queued = await this.db.transaction(async (rawTx) => {
-      const tx = rawTx as unknown as FacilityDb;
-      await lockStory(tx, input.orgId, input.projectId, input.storyId);
-      const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
-      if (story.deletedAt) {
-        throw new StoryServiceError("story_workspace_deleted", "story workspace was deleted");
-      }
-      const conversation = (
-        await tx
-          .select()
-          .from(storyConversations)
-          .where(
-            and(
-              eq(storyConversations.orgId, input.orgId),
-              eq(storyConversations.projectId, input.projectId),
-              eq(storyConversations.storyId, input.storyId),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!conversation)
-        throw new StoryServiceError("conversation_not_found", "story conversation not found", 404);
+    await lockStory(tx, input.orgId, input.projectId, input.storyId);
+    const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
+    if (story.deletedAt) {
+      throw new StoryServiceError("story_workspace_deleted", "story workspace was deleted");
+    }
+    const conversation = (
+      await tx
+        .select()
+        .from(storyConversations)
+        .where(
+          and(
+            eq(storyConversations.orgId, input.orgId),
+            eq(storyConversations.projectId, input.projectId),
+            eq(storyConversations.storyId, input.storyId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!conversation)
+      throw new StoryServiceError("conversation_not_found", "story conversation not found", 404);
 
-      const duplicate = (
-        await tx
-          .select()
-          .from(storyMessages)
-          .where(
-            and(
-              eq(storyMessages.conversationId, conversation.id),
-              eq(storyMessages.dedupeKey, input.dedupeKey),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (duplicate) {
-        const turn = duplicate.turnId
-          ? (await tx.select().from(turns).where(eq(turns.id, duplicate.turnId)).limit(1))[0]
-          : undefined;
-        return { message: duplicate, turn, queued: !turn, created: false };
-      }
+    const duplicate = (
+      await tx
+        .select()
+        .from(storyMessages)
+        .where(
+          and(
+            eq(storyMessages.conversationId, conversation.id),
+            eq(storyMessages.dedupeKey, input.dedupeKey),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (duplicate) {
+      const turn = duplicate.turnId
+        ? (await tx.select().from(turns).where(eq(turns.id, duplicate.turnId)).limit(1))[0]
+        : undefined;
+      return { message: duplicate, turn, queued: !turn, created: false };
+    }
 
-      const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
+    const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
 
-      const activeTurn = (
+    const activeTurn = (
+      await tx
+        .select()
+        .from(turns)
+        .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
+        .limit(1)
+    )[0];
+    const activePreview = await activePreviewWriter(tx, input);
+    if (reviewHandoff && (activeTurn || activePreview)) return undefined;
+    const reviewHeld =
+      !reviewHandoff && (await reviewHoldsQueue(tx, input, input.actor.type === "user"));
+    await recordParticipation(tx, story, input.actor);
+    const sequence = await allocateMessageSequence(tx, conversation.id);
+    let turn: typeof turns.$inferSelect | undefined;
+    if (!activeTurn && !activePreview && !reviewHeld) {
+      turn = (
         await tx
-          .select()
-          .from(turns)
-          .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
-          .limit(1)
-      )[0];
-      const activePreview = await activePreviewWriter(tx, input);
-      await recordParticipation(tx, story, input.actor);
-      const sequence = await allocateMessageSequence(tx, conversation.id);
-      let turn: typeof turns.$inferSelect | undefined;
-      if (!activeTurn && !activePreview) {
-        turn = (
-          await tx
-            .insert(turns)
-            .values({
-              id: newId("turn"),
-              orgId: input.orgId,
-              projectId: input.projectId,
-              storyId: input.storyId,
-              conversationId: conversation.id,
-              agentName: input.agent.name,
-              manifestHash: input.agent.hash,
-              manifest: input.agent,
-              engine: input.agent.engine,
-              model: input.agent.model,
-              triggerType: input.trigger.type,
-              triggerKey: input.trigger.key,
-              scheduledFor: input.trigger.scheduledFor,
-              createdBy: input.actor,
-            })
-            .returning()
-        )[0];
-      }
-      const message = (
-        await tx
-          .insert(storyMessages)
+          .insert(turns)
           .values({
-            id: newId("msg"),
+            id: newId("turn"),
             orgId: input.orgId,
             projectId: input.projectId,
             storyId: input.storyId,
             conversationId: conversation.id,
-            seq: sequence,
-            role: "user",
-            body: input.body,
-            metadata: attachments.length ? { attachments } : {},
-            actor: input.actor,
-            turnId: turn?.id,
-            requestedAgentName: input.agent.name,
-            requestedTrigger: input.trigger,
-            dedupeKey: input.dedupeKey,
+            agentName: input.agent.name,
+            manifestHash: input.agent.hash,
+            manifest: input.agent,
+            engine: input.agent.engine,
+            model: input.agent.model,
+            triggerType: input.trigger.type,
+            triggerKey: input.trigger.key,
+            scheduledFor: input.trigger.scheduledFor,
+            createdBy: input.actor,
           })
           .returning()
       )[0];
-      if (!message)
-        throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
+    }
+    const message = (
       await tx
-        .update(stories)
-        .set({
-          status: "working",
-          activeAgentName: turn?.agentName ?? story.activeAgentName,
-          archivedAt: null,
-          archivedFromStatus: null,
-          updatedAt: new Date(),
+        .insert(storyMessages)
+        .values({
+          id: newId("msg"),
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: input.storyId,
+          conversationId: conversation.id,
+          seq: sequence,
+          role: "user",
+          body: input.body,
+          metadata: attachments.length ? { attachments } : {},
+          actor: input.actor,
+          turnId: turn?.id,
+          requestedAgentName: input.agent.name,
+          requestedTrigger: input.trigger,
+          dedupeKey: input.dedupeKey,
         })
-        .where(eq(stories.id, input.storyId));
-      return { message, turn, queued: !turn, created: true };
-    });
-    if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
-    return queued;
+        .returning()
+    )[0];
+    if (!message)
+      throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
+    await tx
+      .update(stories)
+      .set({
+        status: reviewHeld ? story.status : "working",
+        activeAgentName: turn?.agentName ?? story.activeAgentName,
+        archivedAt: null,
+        archivedFromStatus: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(stories.id, input.storyId));
+    return { message, turn, queued: !turn, created: true };
   }
 
   async completeTurn(input: {
@@ -546,6 +568,7 @@ export class StoryWorkspaceService {
         .where(and(eq(stories.orgId, input.orgId), eq(stories.id, turn.storyId)));
       if (!completed) throw new StoryServiceError("turn_not_found", "completed turn not found");
       await reconcileTurnBranch(tx, story, completed);
+      await seedReviewCycle(tx, completed, input.output, Boolean(input.attention));
       return completed;
     });
   }
@@ -1131,6 +1154,9 @@ export class StoryWorkspaceService {
               eq(attentionItems.storyId, input.storyId),
               eq(attentionItems.id, input.attentionId),
               eq(attentionItems.status, "open"),
+              input.actor.type === "user"
+                ? undefined
+                : notInArray(attentionItems.kind, [...REVIEW_DECISION_ATTENTION]),
             ),
           )
           .returning({ id: attentionItems.id })
@@ -1138,7 +1164,7 @@ export class StoryWorkspaceService {
       if (!resolved) {
         const existing = (
           await tx
-            .select({ status: attentionItems.status })
+            .select({ status: attentionItems.status, kind: attentionItems.kind })
             .from(attentionItems)
             .where(
               and(
@@ -1152,6 +1178,15 @@ export class StoryWorkspaceService {
         )[0];
         if (!existing)
           throw new StoryServiceError("attention_not_found", "attention item not found", 404);
+        if (
+          REVIEW_DECISION_ATTENTION.some((kind) => kind === existing.kind) &&
+          input.actor.type !== "user"
+        )
+          throw new StoryServiceError(
+            "review_human_required",
+            "A project member must resolve this review decision",
+            403,
+          );
         return;
       }
       const remaining = (
@@ -1210,7 +1245,11 @@ export class StoryWorkspaceService {
     )[0];
     if (!attention)
       throw new StoryServiceError("attention_not_found", "attention item not found", 404);
-    if (!attention.turnId || attention.kind === "agent_waiting") {
+    if (
+      !attention.turnId ||
+      attention.kind === "agent_waiting" ||
+      REVIEW_DECISION_ATTENTION.some((kind) => kind === attention.kind)
+    ) {
       throw new StoryServiceError(
         "attention_not_retryable",
         "This attention item needs a reply or dismissal rather than a retry",
@@ -1220,6 +1259,11 @@ export class StoryWorkspaceService {
       throw new StoryServiceError("attention_resolved", "attention item is already resolved");
     }
     const failedTurn = await scopedTurn(this.db, input.orgId, input.projectId, attention.turnId);
+    if (failedTurn.triggerType === REVIEW_TRIGGER)
+      throw new StoryServiceError(
+        "attention_not_retryable",
+        "Review the cycle decision and use a new approved plan before starting another cycle.",
+      );
     const [request] = await this.db
       .select()
       .from(storyMessages)
@@ -1265,7 +1309,12 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
-      if (active || (await activePreviewWriter(tx, input))) return undefined;
+      if (
+        active ||
+        (await activePreviewWriter(tx, input)) ||
+        (await reviewHoldsQueue(tx, input, input.actor.type === "user"))
+      )
+        return undefined;
       const message = (
         await tx
           .select()

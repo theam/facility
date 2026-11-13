@@ -35,6 +35,14 @@ than stopping after a plan or foundation.
   decision with the evidence gathered.
 </working_contract>
 
+<review_feedback>
+Continue in the same story and native session. Read the findings or linked human review threads and
+verify them against the approved plan and exact reviewed commits. Fix within scope in the existing
+PRs and rerun relevant checks. Map each finding to its correction or contrary evidence. Escalate
+changes in scope to the human owner. Use normal, non-forced pushes to the existing delivery
+branches. Report the exact published heads across the complete delivery set.
+</review_feedback>
+
 <access>
 Facility grants every agent the same full workspace, network, Docker, browser, and GitHub maintainer
 capability. Use it only for configured project repositories and the current story.

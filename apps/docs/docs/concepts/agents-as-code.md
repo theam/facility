@@ -46,13 +46,104 @@ Only agent manifests and `SKILL.md` files are downloaded. A failed or incomplete
 the last valid catalog; successfully reading a commit that removes definitions removes them from
 the catalog.
 
-The default kickstart catalog includes `architect`, `builder`, `pr-reviewer`, `address-review`,
+The default kickstart catalog includes `architect`, `builder`, `pr-reviewer`,
 `ci-doctor`, and `security-audit`. They are ordinary manifests rather than built-in runtime roles.
 You can edit, disable, or replace them and add more `.md` files using the same schema.
 
 For a human decision, an agent can include an [author decision brief](../reference/decision-brief.md)
 with its complete plan. The shared format supports summary, comparison and diagram views without
 another model call. It works with any configured role; the brief grants no execution authority.
+
+## Automatic delivery review
+
+Install or configure `pr-reviewer` in the project's canonical catalog. The automatic cycle is off
+until a project and repository configuration writer confirms a workflow policy in Settings.
+Choose the Builder and Reviewer, require plan approval for that Builder, hold after failure, and
+require human delivery acceptance. The story's approved plan must select both exact manifests and
+all connected repositories.
+
+### When a cycle starts
+
+Register the complete set of required PRs in the story delivery panel. A cycle starts only when a
+turn of the configured Builder ends its response with the published heads of exactly that
+registered set:
+
+```text
+<facility-delivery-heads>
+[{"repository":"example/app","number":10,"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+</facility-delivery-heads>
+```
+
+Other Builder turns, such as answers or partial work, leave the story as it is. Facility compares
+the declaration against GitHub and the retained primary checkout, pins each PR's base and head,
+waits for exact-head CI and uses the exact preview generation when the project requires it. A
+project can also require named checks and a PR label. Facility reads GitHub before taking the
+story lock and retries outages, timeouts and rate limits until the cycle deadline; missing or
+invalid evidence stops the cycle for a person.
+
+### The read-only Reviewer
+
+The Reviewer runs like the Builder, as a native turn in the story workspace, with a fresh
+context for each review. It explores the code beyond the diff: it reads the checkouts, runs
+`git diff`, `git log`, `gh pr view` and `gh pr diff`, and follows consumers, tests and security
+boundaries. Reading is enforced in layers:
+
+- **The engine.** Claude Code receives reading tools only; every other tool, including edits,
+  other commands, `git fetch` and git's `--output`, is denied. User, project and local settings,
+  hooks and MCP servers do not apply to the turn, so files in the workspace cannot widen it. Codex
+  runs in its read-only sandbox, which also blocks network access, so a Codex Reviewer cannot use
+  `gh`.
+- **Credentials.** The turn receives a GitHub token limited to the read permissions the
+  installation grants, and none of the project's other secrets; it keeps only its own engine's
+  credentials.
+- **The workspace.** Facility records each checkout's HEAD, branch and status before the turn. If
+  anything changed afterwards, it stops the cycle for a person and restores each changed checkout
+  that had no uncommitted work before the turn.
+
+These layers are not an operating-system boundary: the turn runs as the same user as the
+workspace's services and can read files the workspace can read.
+
+The Reviewer ends its final response with one `<facility-review>` block that accounts for the
+plan's acceptance criteria and lists findings with priority, location, evidence, impact and fix.
+Facility then leaves the report on each required pull request as a comment review of the exact
+reviewed head. It never approves or requests changes, so it cannot satisfy or block branch
+protection. If GitHub is temporarily unavailable, Facility retries until the cycle's time limit.
+The story's review panel links to each published review, or says why GitHub refused it.
+
+### Correction and decision
+
+A result with only suggestions goes to human review. P0 and P1 findings block, and P2 findings
+block when they demonstrate an acceptance, correctness, security or data defect. Blockers within
+the approved plan start a single correction in the original Builder session, which updates the
+same PRs with fast-forward pushes. A second review then verifies the new candidate, the earlier
+findings and regressions. The cycle stops for a person on a finding outside the approved plan,
+missing evidence, failed work, changed heads, bases or authorization, a change by the Reviewer,
+or blockers that persist after the second review. Dismissing that stop releases messages the
+cycle held. A fresh cycle needs a new approved plan decision and a new human Builder turn.
+
+The cycle runs at most two reviews and one correction within its time limit, which covers
+waiting for CI and every cycle turn. It has no budget of its own: each of its turns counts
+against the project budget like any other agent turn. Acceptance stays unavailable, in the story,
+Attention and the backlog, while the cycle's Builder or Reviewer is working. The story workflow
+panel and `facility_get_story_workflow` show the same phase, rounds, reports and pending decision.
+
+### Pull requests outside Facility
+
+With the cycle on, the cycle reviews the pull requests of Facility stories and their Builder
+corrects them; Facility does not also run the Reviewer's GitHub trigger on them. Pull requests
+opened by people or other tools keep the Reviewer's GitHub review, which is left on the pull
+request and has no Builder to correct it. Without the cycle, the Reviewer's GitHub triggers work
+as before.
+
+### Migrate an existing catalog
+
+`facility init` and kickstart install five standard manifests in new repositories, including
+`pr-reviewer` with GitHub triggers for opened and updated pull requests. `facility doctor`
+reports an existing `.agents/address-review.md`. In a reviewed repository change, move its
+review-thread instructions to the existing Builder, preserve its PRs, and remove the manifest. For
+existing feedback, send the current PR and review threads to the Builder in the same story.
+Check GitHub workflows separately, so that a GitHub Action does not review the same story pull
+requests a second time.
 
 ## Installed skills
 
