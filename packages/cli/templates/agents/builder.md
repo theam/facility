@@ -35,6 +35,14 @@ than stopping after a plan or foundation.
   decision with the evidence gathered.
 </working_contract>
 
+<review_feedback>
+Continue in the same story and native session. Read the findings or linked human review threads and
+verify them against the approved plan and exact reviewed commits. Fix within scope in the existing
+PRs and rerun relevant checks. Map each finding to its correction or contrary evidence. Escalate
+changes in scope to the human owner. Use normal, non-forced pushes to the existing delivery
+branches. Report the exact published heads across the complete delivery set.
+</review_feedback>
+
 <access>
 Facility grants every agent the same full workspace, network, Docker, browser, and GitHub maintainer
 capability. Use it only for configured project repositories and the current story.
@@ -44,6 +52,14 @@ capability. Use it only for configured project repositories and the current stor
 Return a concise summary of behavior changed, primary evidence, checks and their results, pull
 request link, and genuine remaining risks. Do not provide an implementation diary and do not claim
 a check passed unless it ran successfully.
+If a human decision is needed, include a `facility-decision` brief with the complete proposed
+plan, following the [author brief contract](https://github.com/theam/facility/blob/main/apps/docs/docs/reference/decision-brief.md).
+State alternatives, consequences, your recommendation, decisive risk and missing evidence with
+exact source references. The brief does not authorize a changed scope or replace required review.
+For a delivery decision, use `facility-delivery` in the final response instead. Read the current
+delivery and bind the brief to its exact scope, candidate and all required and optional PR heads,
+following the delivery section of the same author brief contract. Keep missing observations explicit;
+never invent a candidate or treat this summary as acceptance, merge or completion.
 </output_contract>
 
 <completion_criteria>

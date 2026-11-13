@@ -1,4 +1,5 @@
 import { Eyebrow, StatusDot } from "@facility/ui";
+import Link from "next/link";
 import { AgentEditor } from "@/components/agents/agent-editor";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -25,7 +26,13 @@ export default async function ProjectAgentsPage({
     <div className="flex flex-col gap-8">
       <LiveRefresh seconds={30} />
       <header className="flex flex-col gap-2">
-        <Eyebrow>agents as code</Eyebrow>
+        <Link
+          href={`/projects/${encodeURIComponent(projectId)}/settings`}
+          className="inline-flex min-h-11 w-fit items-center text-sm text-(--info) underline"
+        >
+          ← Project settings
+        </Link>
+        <Eyebrow>project settings · agents</Eyebrow>
         <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">Agents</h1>
         <p className="max-w-2xl text-[13px] leading-relaxed text-(--dim)">
           This catalog is read directly from{" "}
@@ -35,7 +42,7 @@ export default async function ProjectAgentsPage({
         </p>
       </header>
 
-      <div className="grid gap-px border border-(--line) bg-(--line) lg:grid-cols-2">
+      <div className="rounded-lg grid gap-px border border-(--line) bg-(--line) lg:grid-cols-2">
         {result.data.agents.map((agent) => (
           <AgentCard key={agent.name} agent={agent} projectId={projectId} canWrite={canWrite} />
         ))}
@@ -55,11 +62,11 @@ export default async function ProjectAgentsPage({
         {!skills.ok ? (
           <ErrorNotice message={`Couldn't load installed skills — ${skills.message}`} />
         ) : skills.data.skills.length === 0 ? (
-          <p className="border border-(--line) p-5 text-[12px] text-(--dim)">
+          <p className="rounded-lg border border-(--line) p-5 text-[12px] text-(--dim)">
             No repository-installed skills were found.
           </p>
         ) : (
-          <div className="grid gap-px border border-(--line) bg-(--line) lg:grid-cols-2">
+          <div className="rounded-lg grid gap-px border border-(--line) bg-(--line) lg:grid-cols-2">
             {skills.data.skills.map((skill) => (
               <SkillCard key={skill.path} skill={skill} />
             ))}
@@ -67,7 +74,7 @@ export default async function ProjectAgentsPage({
         )}
       </section>
 
-      <div className="border border-(--line) bg-(--bg-subtle) p-5 text-[12px] leading-relaxed text-(--mut)">
+      <div className="rounded-lg border border-(--line) bg-(--bg-subtle) p-5 text-[12px] leading-relaxed text-(--mut)">
         Every agent receives the same full workspace, Docker, browser, network, and GitHub
         maintainer access. Per-agent permissions and tool allowlists are intentionally not part of
         the manifest.
@@ -131,7 +138,7 @@ function AgentCard({
         {agent.triggers.map((trigger, index) => (
           <span
             key={`${trigger.type}:${String(trigger.name ?? index)}`}
-            className="border border-(--line) px-2 py-1 font-mono text-[10px] text-(--mut)"
+            className="rounded-md border border-(--line) px-2 py-1 font-mono text-[10px] text-(--mut)"
           >
             {triggerLabel(trigger)}
           </span>

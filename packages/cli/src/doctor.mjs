@@ -6,7 +6,6 @@ const AGENTS = [
   "architect",
   "builder",
   "pr-reviewer",
-  "address-review",
   "ci-doctor",
   "security-audit",
 ];
@@ -15,7 +14,10 @@ export async function doctor(flags, version) {
   const dir = flags.dir || process.cwd();
   const checks = [checkProjectManifest(dir), ...AGENTS.map((name) => checkAgent(dir, name))];
   const problems = checks.filter((check) => !check.ok).length;
-  const result = { mode: "local", ok: problems === 0, problems, checks };
+  const legacy = existsSync(join(dir, ".agents/address-review.md"))
+    ? ["Migrate .agents/address-review.md explicitly. Move review feedback to the existing Builder and review legacy GitHub triggers separately."]
+    : [];
+  const result = { mode: "local", ok: problems === 0, problems, checks, ...(legacy.length ? { warnings: legacy } : {}) };
 
   if (flags.json) {
     console.log(JSON.stringify(result));
@@ -28,6 +30,7 @@ export async function doctor(flags, version) {
     if (check.ok) ok(`${check.label}: ${check.detail}`);
     else warn(`${check.label}: ${check.detail}`);
   }
+  for (const warning of legacy) warn(warning);
   item(result.ok ? "Facility can create a story workspace from this repository." : `${problems} problem${problems === 1 ? "" : "s"} found.`);
   return result.ok ? 0 : 1;
 }
@@ -57,7 +60,7 @@ function checkAgent(dir, name) {
   if (!new RegExp(`^name:\\s*${escapeRegExp(name)}\\s*$`, "m").test(source)) return failed(relative, `name must be ${name}`);
   if (!/^engine:\s*(?:claude_code|codex)\s*$/m.test(source)) return failed(relative, "engine must be claude_code or codex");
   if (!/^model:\s*\S+\s*$/m.test(source)) return failed(relative, "model is missing");
-  if (!/^triggers:\s*$/m.test(source) || !/^\s{2}- type:\s*(?:manual|schedule|github)\s*$/m.test(source)) {
+  if (!/^triggers:\s*$/m.test(source) || !/^\s{2}- type:\s*(?:manual|mcp|ui|schedule|github)\s*$/m.test(source)) {
     return failed(relative, "at least one supported trigger is required");
   }
   if (/^(?:permissions|sandbox|tools):/m.test(source)) return failed(relative, "per-agent access controls are not supported");

@@ -152,7 +152,8 @@ client migration requirements.
 ## Merge and destructive actions
 
 Agent manifests cannot define a custom permission set. Reviewers and scheduled agents have the
-same capability as builders. Their prompts define behavior, while GitHub branch protection,
+same capability as builders, except the Reviewer's turns in the automatic delivery review cycle,
+which run read-only. Their prompts define behavior, while GitHub branch protection,
 required reviews, and CI remain structural controls for merge.
 
 Optional project workflow policies gate native turns on a current approved plan with exact agent

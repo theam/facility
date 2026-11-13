@@ -25,8 +25,10 @@ control destroys them.
 
 ## Are agents sandboxed differently by role?
 
-No. Every agent receives the same full workspace and GitHub installation access. Role-specific
-restraint belongs in its prompt. Tenant and project isolation still apply.
+Native turns share workspace and GitHub installation access. In the optional
+[automatic delivery review](concepts/agents-as-code.md#automatic-delivery-review), the Reviewer
+runs as a read-only turn in the same workspace: reading tools only, a read-only GitHub token, and
+none of the project's other secrets.
 
 ## Where are agents configured?
 

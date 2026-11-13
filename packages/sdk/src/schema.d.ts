@@ -527,6 +527,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectId}/attention/stories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get stories */
+        get: operations["listProjectAttentionStories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectId}/overview": {
         parameters: {
             query?: never;
@@ -6358,11 +6375,12 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string;
+                group?: "review" | "in_progress" | "waiting" | "backlog" | "done" | "archived";
                 phase?: ("not_started" | "in_progress" | "attention" | "review" | "done" | "archived" | "open" | "all")[];
                 label?: string[];
                 assignee?: string[];
                 repository?: string[];
-                sort?: "priority" | "updated" | "created";
+                sort?: "priority" | "updated" | "created" | "activity";
                 limit?: number;
                 offset?: number;
             };
@@ -6394,7 +6412,37 @@ export interface operations {
                             done: number;
                             archived: number;
                         };
+                        groupCounts?: {
+                            review: number;
+                            in_progress: number;
+                            waiting: number;
+                            backlog: number;
+                            done: number;
+                            archived: number;
+                        };
                         items: {
+                            tracking?: {
+                                /** @enum {string} */
+                                group: "review" | "in_progress" | "waiting" | "backlog" | "done" | "archived";
+                                pendingMessages: number;
+                                /** @enum {string|null} */
+                                messageWait: "previous_turn" | "preview" | "dispatch" | null;
+                                previewApplying: boolean;
+                                plan: {
+                                    revision: number;
+                                    digest: string;
+                                } | null;
+                                delivery: {
+                                    ready: boolean;
+                                    detail: string;
+                                } | null;
+                                wait: {
+                                    /** @enum {string} */
+                                    kind: "workflow" | "retry_delay" | "dispatch" | "unavailable";
+                                    detail: string;
+                                    retryAfter: string | null;
+                                } | null;
+                            };
                             key: string;
                             /** @enum {string} */
                             kind: "story" | "issue" | "pull_request";
@@ -6510,6 +6558,539 @@ export interface operations {
                                 count: number;
                             }[];
                         };
+                    };
+                };
+            };
+            /** @description The request is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication is required or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The authenticated principal lacks the required permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The resource was not found or is outside the principal scope. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request conflicts with current resource state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request rate limit was exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An unexpected server error occurred. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A required service is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listProjectAttentionStories: {
+        parameters: {
+            query?: {
+                category?: "all" | "plans" | "notices" | "deliveries" | "pulls";
+                q?: string;
+                limit?: number;
+                offset?: number;
+                pullOffset?: number;
+            };
+            header?: never;
+            path: {
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Default Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: date-time */
+                        generatedAt: string;
+                        otherPullRequests: {
+                            total: number;
+                            limit: number;
+                            offset: number;
+                            items: {
+                                repository: string;
+                                number: number;
+                                title: string | null;
+                                url: string | null;
+                                draft: boolean | null;
+                                headSha: string | null;
+                                stale: boolean;
+                                checks: {
+                                    /** @enum {string} */
+                                    state: "unobserved" | "pending" | "success" | "failure";
+                                    headSha: string | null;
+                                    current: boolean;
+                                    observedAt: string | null;
+                                };
+                                /** Format: date-time */
+                                observedAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                stories: {
+                                    id: string;
+                                    title: string;
+                                    status: string;
+                                    /** @enum {string} */
+                                    relation: "delivery" | "source";
+                                }[];
+                            }[];
+                        };
+                        total: number;
+                        counts: {
+                            stories: number;
+                            plans: number;
+                            notices: number;
+                            deliveries: number;
+                        };
+                        workflowPolicy: {
+                            available: boolean;
+                            error: string | null;
+                        };
+                        budget: {
+                            /** @enum {boolean} */
+                            available: false;
+                            /** @enum {string} */
+                            reason: "permission";
+                        } | {
+                            /** @enum {boolean} */
+                            available: true;
+                            /** @enum {string} */
+                            state: "not_configured" | "disabled" | "ok" | "warning" | "exceeded" | "unconfirmed";
+                            enabled: boolean;
+                            monthlyLimitCents: number | null;
+                            spentCents: number;
+                            remainingCents: number | null;
+                            /** Format: date-time */
+                            windowStart: string;
+                            /** Format: date-time */
+                            windowEnd: string;
+                        };
+                        limit: number;
+                        offset: number;
+                        items: {
+                            storyId: string;
+                            storyTitle: string;
+                            /** @enum {string} */
+                            storyStatus: "ready" | "working" | "attention" | "review" | "done" | "archived";
+                            /** Format: date-time */
+                            waitingSince: string;
+                            noticeCount: number;
+                            noticeKinds: {
+                                kind: string;
+                                count: number;
+                            }[];
+                            delivery: {
+                                decisionBrief?: {
+                                    /** @enum {string} */
+                                    status: "absent";
+                                } | {
+                                    /** @enum {string} */
+                                    status: "available";
+                                    source: {
+                                        messageId: string;
+                                        seq: number;
+                                        createdAt: string;
+                                        digest: string | null;
+                                        turn: {
+                                            id: string;
+                                            agentName: string;
+                                            engine: string;
+                                            model: string;
+                                        } | null;
+                                    };
+                                    subject: {
+                                        scopeRevision: number;
+                                        candidateRevision: string;
+                                        pullRequests: {
+                                            repositoryId: string;
+                                            number: number;
+                                            headSha: string;
+                                            required: boolean;
+                                            primary: boolean;
+                                        }[];
+                                    };
+                                    brief: {
+                                        /** @enum {number} */
+                                        schemaVersion: 1;
+                                        summary: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        whyNow: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        options: {
+                                            id: string;
+                                            label: string;
+                                            consequence: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        }[];
+                                        recommendation: {
+                                            optionId: string;
+                                            reason: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        } | null;
+                                        decisiveRisk: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        unknowns: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        }[];
+                                        evidence: {
+                                            id: string;
+                                            label: string;
+                                            reference: string;
+                                            /** Format: uri */
+                                            url: string;
+                                        }[];
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    status: "stale";
+                                    source: {
+                                        messageId: string;
+                                        seq: number;
+                                        createdAt: string;
+                                        digest: string | null;
+                                        turn: {
+                                            id: string;
+                                            agentName: string;
+                                            engine: string;
+                                            model: string;
+                                        } | null;
+                                    };
+                                    subject: {
+                                        scopeRevision: number;
+                                        candidateRevision: string;
+                                        pullRequests: {
+                                            repositoryId: string;
+                                            number: number;
+                                            headSha: string;
+                                            required: boolean;
+                                            primary: boolean;
+                                        }[];
+                                    };
+                                    brief: {
+                                        /** @enum {number} */
+                                        schemaVersion: 1;
+                                        summary: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        whyNow: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        options: {
+                                            id: string;
+                                            label: string;
+                                            consequence: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        }[];
+                                        recommendation: {
+                                            optionId: string;
+                                            reason: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        } | null;
+                                        decisiveRisk: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        unknowns: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        }[];
+                                        evidence: {
+                                            id: string;
+                                            label: string;
+                                            reference: string;
+                                            /** Format: uri */
+                                            url: string;
+                                        }[];
+                                    };
+                                    /** @enum {string} */
+                                    reason: "scope_changed" | "heads_changed" | "candidate_changed";
+                                } | {
+                                    /** @enum {string} */
+                                    status: "unverifiable";
+                                    source: {
+                                        messageId: string;
+                                        seq: number;
+                                        createdAt: string;
+                                        digest: string | null;
+                                        turn: {
+                                            id: string;
+                                            agentName: string;
+                                            engine: string;
+                                            model: string;
+                                        } | null;
+                                    };
+                                    subject: {
+                                        scopeRevision: number;
+                                        candidateRevision: string;
+                                        pullRequests: {
+                                            repositoryId: string;
+                                            number: number;
+                                            headSha: string;
+                                            required: boolean;
+                                            primary: boolean;
+                                        }[];
+                                    };
+                                    brief: {
+                                        /** @enum {number} */
+                                        schemaVersion: 1;
+                                        summary: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        whyNow: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        options: {
+                                            id: string;
+                                            label: string;
+                                            consequence: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        }[];
+                                        recommendation: {
+                                            optionId: string;
+                                            reason: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        } | null;
+                                        decisiveRisk: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        unknowns: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        }[];
+                                        evidence: {
+                                            id: string;
+                                            label: string;
+                                            reference: string;
+                                            /** Format: uri */
+                                            url: string;
+                                        }[];
+                                    };
+                                    /** @enum {string} */
+                                    reason: "source_unavailable" | "observations_unavailable" | "observations_stale";
+                                } | {
+                                    /** @enum {string} */
+                                    status: "invalid";
+                                    source: {
+                                        messageId: string;
+                                        seq: number;
+                                        createdAt: string;
+                                        digest: string | null;
+                                        turn: {
+                                            id: string;
+                                            agentName: string;
+                                            engine: string;
+                                            model: string;
+                                        } | null;
+                                    };
+                                    /** @enum {string} */
+                                    reason: "too_large" | "duplicate" | "malformed" | "unsupported_version" | "invalid_fields";
+                                };
+                                candidate: {
+                                    revision: string | null;
+                                    /** @enum {string} */
+                                    state: "scope_incomplete" | "unobserved" | "stale" | "recorded";
+                                    requiredCount: number;
+                                    mergedCount: number;
+                                    allRequiredMerged: boolean | null;
+                                };
+                                scopeRevision: number;
+                                storyStatus: string;
+                                pullRequests: {
+                                    repository: string;
+                                    number: number;
+                                    url: string | null;
+                                    title: string | null;
+                                    required: boolean;
+                                    primary: boolean;
+                                    /** @enum {string} */
+                                    state: "open" | "closed" | "merged" | "unobserved";
+                                    draft: boolean | null;
+                                    headSha: string | null;
+                                    stale: boolean;
+                                    checks: {
+                                        /** @enum {string} */
+                                        state: "unobserved" | "pending" | "success" | "failure";
+                                        headSha: string | null;
+                                        current: boolean;
+                                        observedAt: string | null;
+                                    };
+                                }[];
+                                acceptance: {
+                                    required: boolean | null;
+                                    /** @enum {string} */
+                                    status: "missing" | "current" | "stale";
+                                    receipt: {
+                                        id: string;
+                                        revision: number;
+                                        candidateRevision: string;
+                                        /** Format: date-time */
+                                        confirmedAt: string;
+                                        confirmedBy: {
+                                            /** @enum {string} */
+                                            type: "user";
+                                            id: string;
+                                            name: string | null;
+                                        };
+                                    } | null;
+                                };
+                                preview: {
+                                    state: string;
+                                    desiredGeneration: string;
+                                    deployedGeneration: string | null;
+                                    /** Format: date-time */
+                                    observedAt: string;
+                                } | null;
+                                acceptanceReady: boolean;
+                                blocked: {
+                                    code: string;
+                                    message: string;
+                                } | null;
+                                /** Format: date-time */
+                                waitingSince: string;
+                            } | null;
+                            plan: {
+                                revision: number;
+                                digest: string;
+                                /** Format: date-time */
+                                proposedAt: string;
+                                decisionBrief: {
+                                    /** @enum {string} */
+                                    status: "available";
+                                    brief: {
+                                        /** @enum {number} */
+                                        schemaVersion: 1;
+                                        summary: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        whyNow: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        options: {
+                                            id: string;
+                                            label: string;
+                                            consequence: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        }[];
+                                        recommendation: {
+                                            optionId: string;
+                                            reason: {
+                                                text: string;
+                                                evidenceIds: string[];
+                                            };
+                                        } | null;
+                                        decisiveRisk: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                        unknowns: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        }[];
+                                        evidence: {
+                                            id: string;
+                                            label: string;
+                                            reference: string;
+                                            /** Format: uri */
+                                            url: string;
+                                        }[];
+                                    };
+                                } | {
+                                    /** @enum {string} */
+                                    status: "absent";
+                                } | {
+                                    /** @enum {string} */
+                                    status: "invalid";
+                                    /** @enum {string} */
+                                    reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                                };
+                            } | null;
+                        }[];
                     };
                 };
             };
@@ -7167,6 +7748,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -7420,6 +8055,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -7647,6 +8336,60 @@ export interface operations {
                         revision: number;
                         digest: string;
                         markdown: string;
+                        decisionBrief?: {
+                            /** @enum {string} */
+                            status: "available";
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                        } | {
+                            /** @enum {string} */
+                            status: "absent";
+                        } | {
+                            /** @enum {string} */
+                            status: "invalid";
+                            /** @enum {string} */
+                            reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                        };
                         repositories: {
                             repositoryId: string;
                             repository: string;
@@ -7937,6 +8680,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -8113,6 +8910,60 @@ export interface operations {
                             revision: number;
                             digest: string;
                             markdown: string;
+                            decisionBrief?: {
+                                /** @enum {string} */
+                                status: "available";
+                                brief: {
+                                    /** @enum {number} */
+                                    schemaVersion: 1;
+                                    summary: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    whyNow: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    options: {
+                                        id: string;
+                                        label: string;
+                                        consequence: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    }[];
+                                    recommendation: {
+                                        optionId: string;
+                                        reason: {
+                                            text: string;
+                                            evidenceIds: string[];
+                                        };
+                                    } | null;
+                                    decisiveRisk: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                    unknowns: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    }[];
+                                    evidence: {
+                                        id: string;
+                                        label: string;
+                                        reference: string;
+                                        /** Format: uri */
+                                        url: string;
+                                    }[];
+                                };
+                            } | {
+                                /** @enum {string} */
+                                status: "absent";
+                            } | {
+                                /** @enum {string} */
+                                status: "invalid";
+                                /** @enum {string} */
+                                reason: "duplicate" | "malformed" | "unsupported_version" | "invalid_fields" | "too_large";
+                            };
                             repositories: {
                                 repositoryId: string;
                                 repository: string;
@@ -8345,6 +9196,16 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                            };
                         };
                     };
                 };
@@ -8448,6 +9309,16 @@ export interface operations {
                         requireDeliveryAcceptance?: boolean;
                         /** @default false */
                         requirePreviewForAcceptance?: boolean;
+                        reviewCycle?: {
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            timeoutMinutes: number;
+                            requiredPullLabel?: string;
+                            requiredChecks?: {
+                                repository: string;
+                                name: string;
+                            }[];
+                        };
                     };
                     idempotency_key: string;
                 };
@@ -8471,6 +9342,16 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                            };
                         };
                         nonce: string;
                         /** Format: date-time */
@@ -8578,6 +9459,16 @@ export interface operations {
                         requireDeliveryAcceptance?: boolean;
                         /** @default false */
                         requirePreviewForAcceptance?: boolean;
+                        reviewCycle?: {
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            timeoutMinutes: number;
+                            requiredPullLabel?: string;
+                            requiredChecks?: {
+                                repository: string;
+                                name: string;
+                            }[];
+                        };
                     };
                     nonce: string;
                     /** Format: date-time */
@@ -8605,6 +9496,16 @@ export interface operations {
                             requireDeliveryAcceptance: boolean;
                             /** @default false */
                             requirePreviewForAcceptance: boolean;
+                            reviewCycle?: {
+                                builderAgent: string;
+                                reviewerAgent: string;
+                                timeoutMinutes: number;
+                                requiredPullLabel?: string;
+                                requiredChecks?: {
+                                    repository: string;
+                                    name: string;
+                                }[];
+                            };
                         };
                     };
                 };
@@ -8718,6 +9619,16 @@ export interface operations {
                                 requireDeliveryAcceptance: boolean;
                                 /** @default false */
                                 requirePreviewForAcceptance: boolean;
+                                reviewCycle?: {
+                                    builderAgent: string;
+                                    reviewerAgent: string;
+                                    timeoutMinutes: number;
+                                    requiredPullLabel?: string;
+                                    requiredChecks?: {
+                                        repository: string;
+                                        name: string;
+                                    }[];
+                                };
                             };
                         };
                         plan: {
@@ -8728,6 +9639,206 @@ export interface operations {
                         };
                         queuedAgents: string[];
                         blockedReason: string | null;
+                        reviewCycle?: {
+                            id: string;
+                            /** @enum {string} */
+                            phase: "waiting_for_evidence" | "review" | "correction" | "human_review" | "decision_required";
+                            builderAgent: string;
+                            reviewerAgent: string;
+                            reviewsStarted: number;
+                            correctionsStarted: number;
+                            deadline: string;
+                            costCents: number | null;
+                            reason: string | null;
+                            activeTurnId: string | null;
+                            candidate: {
+                                id: string;
+                                deliveryRevision: string;
+                                scopeRevision: number;
+                                pullRequests: {
+                                    repository: string;
+                                    number: number;
+                                    headSha: string;
+                                    baseSha: string;
+                                    repositoryId: string;
+                                    primary: boolean;
+                                    headRef: string;
+                                    baseRef: string;
+                                    /** Format: uri */
+                                    url: string;
+                                    changedFiles: number;
+                                    checks: {
+                                        headSha: string | null;
+                                        /** @enum {string} */
+                                        state: "pending" | "success" | "failure" | "unobserved";
+                                        observedAt: string | null;
+                                        runs: {
+                                            id: string;
+                                            name: string;
+                                            status: string;
+                                            conclusion: string | null;
+                                            observedAt: string;
+                                        }[];
+                                    };
+                                }[];
+                                preview: {
+                                    generation: string;
+                                    observedAt: string;
+                                    sources?: {
+                                        repository: string;
+                                        headSha: string;
+                                        submodules: {
+                                            repository: string;
+                                            path: string;
+                                            pinnedSha: string;
+                                            headSha: string;
+                                        }[];
+                                    }[];
+                                } | null;
+                            } | null;
+                            reviews: {
+                                turnId: string;
+                                reviewerManifestHash: string;
+                                policyRevision: number;
+                                planRevision: number;
+                                candidate: {
+                                    id: string;
+                                    deliveryRevision: string;
+                                    scopeRevision: number;
+                                    pullRequests: {
+                                        repository: string;
+                                        number: number;
+                                        headSha: string;
+                                        baseSha: string;
+                                        repositoryId: string;
+                                        primary: boolean;
+                                        headRef: string;
+                                        baseRef: string;
+                                        /** Format: uri */
+                                        url: string;
+                                        changedFiles: number;
+                                        checks: {
+                                            headSha: string | null;
+                                            /** @enum {string} */
+                                            state: "pending" | "success" | "failure" | "unobserved";
+                                            observedAt: string | null;
+                                            runs: {
+                                                id: string;
+                                                name: string;
+                                                status: string;
+                                                conclusion: string | null;
+                                                observedAt: string;
+                                            }[];
+                                        };
+                                    }[];
+                                    preview: {
+                                        generation: string;
+                                        observedAt: string;
+                                        sources?: {
+                                            repository: string;
+                                            headSha: string;
+                                            submodules: {
+                                                repository: string;
+                                                path: string;
+                                                pinnedSha: string;
+                                                headSha: string;
+                                            }[];
+                                        }[];
+                                    } | null;
+                                };
+                                result: {
+                                    candidateId: string;
+                                    reviewedPulls: {
+                                        repository: string;
+                                        number: number;
+                                        headSha: string;
+                                        baseSha: string;
+                                    }[];
+                                    acceptance: {
+                                        id: string;
+                                        criterion: string;
+                                        /** @enum {string} */
+                                        state: "verified" | "violated" | "unverified";
+                                        evidence: string;
+                                    }[];
+                                    findings: {
+                                        repository: string;
+                                        number: number;
+                                        id: string;
+                                        /** @enum {string} */
+                                        priority: "P0" | "P1" | "P2" | "P3";
+                                        /** @enum {string} */
+                                        category: "acceptance" | "correctness" | "security" | "data" | "suggestion";
+                                        requirement: string;
+                                        path: string;
+                                        line: number;
+                                        evidence: string;
+                                        impact: string;
+                                        fix: string;
+                                        /** @enum {string} */
+                                        disposition: "open" | "resolved";
+                                        /** @enum {string} */
+                                        correction: "within_plan" | "requires_decision";
+                                    }[];
+                                    missingEvidence: string[];
+                                };
+                                publication?: {
+                                    repository: string;
+                                    number: number;
+                                    /** @enum {string} */
+                                    state: "published" | "failed";
+                                    /** Format: uri */
+                                    url?: string;
+                                    reason?: string;
+                                }[];
+                            }[];
+                        };
+                        execution?: {
+                            observedAt: string;
+                            decision: {
+                                id: string;
+                                decisionRevision: number;
+                                planRevision: number;
+                                planDigest: string;
+                            } | null;
+                            turns: {
+                                turnId: string;
+                                agentName: string;
+                                engine: string;
+                                model: string;
+                                manifestHash: string;
+                                /** @enum {string} */
+                                state: "queued" | "running" | "succeeded" | "failed" | "canceled";
+                                authorizedAt: string;
+                                startedAt: string | null;
+                                endedAt: string | null;
+                            }[];
+                            hasMore: boolean;
+                            unavailable: boolean;
+                        };
+                        executionScope?: {
+                            observedAt: string;
+                            planRevision: number;
+                            repositories: {
+                                matches: boolean;
+                                connectedCount: number;
+                                missing: string[];
+                                removed: string[];
+                            };
+                            queuedWork: {
+                                turnId: string;
+                                agentName: string;
+                                engine: string;
+                                model: string;
+                                manifestHash: string;
+                                createdAt: string;
+                                /** @enum {string} */
+                                configuration: "current" | "changed" | "unavailable";
+                                /** @enum {string} */
+                                planAgent: "current" | "missing" | "changed";
+                            }[];
+                            hasMore: boolean;
+                        };
                         acceptance: {
                             /** @enum {number} */
                             schemaVersion: 1;
@@ -10403,6 +11514,235 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        decisionBrief?: {
+                            /** @enum {string} */
+                            status: "absent";
+                        } | {
+                            /** @enum {string} */
+                            status: "available";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            subject: {
+                                scopeRevision: number;
+                                candidateRevision: string;
+                                pullRequests: {
+                                    repositoryId: string;
+                                    number: number;
+                                    headSha: string;
+                                    required: boolean;
+                                    primary: boolean;
+                                }[];
+                            };
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                        } | {
+                            /** @enum {string} */
+                            status: "stale";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            subject: {
+                                scopeRevision: number;
+                                candidateRevision: string;
+                                pullRequests: {
+                                    repositoryId: string;
+                                    number: number;
+                                    headSha: string;
+                                    required: boolean;
+                                    primary: boolean;
+                                }[];
+                            };
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                            /** @enum {string} */
+                            reason: "scope_changed" | "heads_changed" | "candidate_changed";
+                        } | {
+                            /** @enum {string} */
+                            status: "unverifiable";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            subject: {
+                                scopeRevision: number;
+                                candidateRevision: string;
+                                pullRequests: {
+                                    repositoryId: string;
+                                    number: number;
+                                    headSha: string;
+                                    required: boolean;
+                                    primary: boolean;
+                                }[];
+                            };
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                            /** @enum {string} */
+                            reason: "source_unavailable" | "observations_unavailable" | "observations_stale";
+                        } | {
+                            /** @enum {string} */
+                            status: "invalid";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            /** @enum {string} */
+                            reason: "too_large" | "duplicate" | "malformed" | "unsupported_version" | "invalid_fields";
+                        };
                         /** @enum {number} */
                         schemaVersion: 1;
                         orgId: string;
@@ -10602,6 +11942,235 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        decisionBrief?: {
+                            /** @enum {string} */
+                            status: "absent";
+                        } | {
+                            /** @enum {string} */
+                            status: "available";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            subject: {
+                                scopeRevision: number;
+                                candidateRevision: string;
+                                pullRequests: {
+                                    repositoryId: string;
+                                    number: number;
+                                    headSha: string;
+                                    required: boolean;
+                                    primary: boolean;
+                                }[];
+                            };
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                        } | {
+                            /** @enum {string} */
+                            status: "stale";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            subject: {
+                                scopeRevision: number;
+                                candidateRevision: string;
+                                pullRequests: {
+                                    repositoryId: string;
+                                    number: number;
+                                    headSha: string;
+                                    required: boolean;
+                                    primary: boolean;
+                                }[];
+                            };
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                            /** @enum {string} */
+                            reason: "scope_changed" | "heads_changed" | "candidate_changed";
+                        } | {
+                            /** @enum {string} */
+                            status: "unverifiable";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            subject: {
+                                scopeRevision: number;
+                                candidateRevision: string;
+                                pullRequests: {
+                                    repositoryId: string;
+                                    number: number;
+                                    headSha: string;
+                                    required: boolean;
+                                    primary: boolean;
+                                }[];
+                            };
+                            brief: {
+                                /** @enum {number} */
+                                schemaVersion: 1;
+                                summary: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                whyNow: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                options: {
+                                    id: string;
+                                    label: string;
+                                    consequence: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                }[];
+                                recommendation: {
+                                    optionId: string;
+                                    reason: {
+                                        text: string;
+                                        evidenceIds: string[];
+                                    };
+                                } | null;
+                                decisiveRisk: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                };
+                                unknowns: {
+                                    text: string;
+                                    evidenceIds: string[];
+                                }[];
+                                evidence: {
+                                    id: string;
+                                    label: string;
+                                    reference: string;
+                                    /** Format: uri */
+                                    url: string;
+                                }[];
+                            };
+                            /** @enum {string} */
+                            reason: "source_unavailable" | "observations_unavailable" | "observations_stale";
+                        } | {
+                            /** @enum {string} */
+                            status: "invalid";
+                            source: {
+                                messageId: string;
+                                seq: number;
+                                createdAt: string;
+                                digest: string | null;
+                                turn: {
+                                    id: string;
+                                    agentName: string;
+                                    engine: string;
+                                    model: string;
+                                } | null;
+                            };
+                            /** @enum {string} */
+                            reason: "too_large" | "duplicate" | "malformed" | "unsupported_version" | "invalid_fields";
+                        };
                         /** @enum {number} */
                         schemaVersion: 1;
                         orgId: string;
@@ -13256,6 +14825,7 @@ export interface operations {
         parameters: {
             query?: {
                 before?: number;
+                after?: number;
                 limit?: number;
             };
             header?: never;
@@ -13552,6 +15122,7 @@ export interface operations {
     getWorkspaceStoryConversation: {
         parameters: {
             query?: {
+                messageId?: string;
                 order?: "asc" | "desc";
                 before?: number;
                 after?: number;

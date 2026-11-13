@@ -84,7 +84,7 @@ const denied = () =>
   );
 
 /** This facade has fixed read capabilities and one deadline; mutation methods cannot reach Octokit. */
-function underDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+export function underDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) {
     void work.catch(() => undefined);
     return Promise.reject(

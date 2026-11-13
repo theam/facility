@@ -209,7 +209,6 @@ describe("agent manifests", () => {
     const catalog = parseAgentCatalog(sources);
 
     expect(catalog.map((agent) => agent.name)).toEqual([
-      "address-review",
       "architect",
       "builder",
       "ci-doctor",

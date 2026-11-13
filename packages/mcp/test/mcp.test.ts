@@ -63,6 +63,105 @@ function textPayload(result: unknown) {
 }
 
 describe("@facility/mcp 0.12", () => {
+  test("forwards tracking groups and activity ordering to the shared backlog reader", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { total: 63, groupCounts: { waiting: 63 }, items: [] };
+      },
+    });
+    try {
+      const response = await client.callTool({
+        name: "facility_list_backlog",
+        arguments: {
+          projectId: "p/a",
+          group: "waiting",
+          sort: "activity",
+          offset: 50,
+          repository: ["repo-id", "example/app"],
+        },
+      });
+      expect(response.isError).not.toBe(true);
+      expect(calls[0]).toMatchObject([
+        "GET",
+        "/v1/projects/p%2Fa/backlog",
+        {
+          query: {
+            group: "waiting",
+            sort: "activity",
+            offset: 50,
+            repository: "repo-id,example/app",
+          },
+        },
+      ]);
+      expect(JSON.parse(textPayload(response))).toMatchObject({
+        total: 63,
+        groupCounts: { waiting: 63 },
+      });
+      expect(
+        (
+          await client.callTool({
+            name: "facility_list_backlog",
+            arguments: { projectId: "p", group: "capacity" },
+          })
+        ).isError,
+      ).toBe(true);
+      expect(calls).toHaveLength(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("reads incremental run activity through the shared endpoint and forwards cursor zero", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { order: "asc", items: [], has_more: false, next_cursor: null };
+      },
+    });
+    const result = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p/a", storyId: "s/b", turnId: "t/c", after: 0, limit: 7 },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(calls[0]).toMatchObject([
+      "GET",
+      "/v1/projects/p%2Fa/workspace-stories/s%2Fb/turns/t%2Fc/activity",
+      { query: { after: 0, limit: 7 } },
+    ]);
+    expect(JSON.parse(textPayload(result))).toMatchObject({ order: "asc", items: [] });
+    const invalid = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p", storyId: "s", turnId: "t", after: -1 },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(calls).toHaveLength(1);
+    const raw = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p/a", storyId: "s/b", turnId: "t/c", eventSeq: 4 },
+    });
+    expect(raw.isError).not.toBe(true);
+    expect(calls[1]).toMatchObject([
+      "GET",
+      "/v1/projects/p%2Fa/workspace-stories/s%2Fb/turns/t%2Fc/events/4",
+      { query: {} },
+    ]);
+    const mixed = await client.callTool({
+      name: "facility_get_story_activity",
+      arguments: { projectId: "p", storyId: "s", turnId: "t", eventSeq: 4, after: 0 },
+    });
+    expect(mixed.isError).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(toolDefinitions.find((t) => t.name === "facility_get_story_activity")).toMatchObject({
+      permission: "projects:read",
+      method: "GET",
+    });
+    await client.close();
+    await server.close();
+  });
   test("prepares binary uploads without transporting file bytes in tools, then attaches completed IDs", async () => {
     const calls: unknown[][] = [];
     const { client, server } = await connect({
@@ -142,6 +241,7 @@ describe("@facility/mcp 0.12", () => {
       "facility_list_skills",
       "facility_list_stories",
       "facility_get_story",
+      "facility_get_story_activity",
       "facility_get_delivery",
       "facility_set_delivery",
       "facility_get_delivery_integration_policy",
@@ -178,6 +278,7 @@ describe("@facility/mcp 0.12", () => {
       "facility_get_observability",
       "facility_list_backlog",
       "facility_list_attention",
+      "facility_list_attention_stories",
       "facility_sync_github",
       "facility_open_preview",
       "facility_suspend_story",
@@ -305,6 +406,33 @@ describe("@facility/mcp 0.12", () => {
     await client.close();
     await server.close();
   });
+  test("passes an exact source message reference to the shared conversation reader", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { messages: [], focus: { messageId: "msg-original", seq: 4 } };
+      },
+    });
+    const result = await client.callTool({
+      name: "facility_get_conversation",
+      arguments: { projectId: "project", storyId: "story", messageId: "msg-original", limit: 10 },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(calls).toEqual([
+      [
+        "GET",
+        "/v1/projects/project/workspace-stories/story/conversation",
+        {
+          query: { messageId: "msg-original", after: 0, limit: 10 },
+          body: undefined,
+          idempotencyKey: undefined,
+        },
+      ],
+    ]);
+    await client.close();
+    await server.close();
+  });
 
   test("maps delivery policy, notices, integration evidence and completion with stable retries", async () => {
     const calls: unknown[][] = [];
@@ -397,6 +525,51 @@ describe("@facility/mcp 0.12", () => {
         },
       ],
     ]);
+    await client.close();
+    await server.close();
+  });
+
+  test("reads whole-story attention pages without invoking writes", async () => {
+    const calls: unknown[][] = [];
+    const { client, server } = await connect({
+      request: async (...args) => {
+        calls.push(args);
+        return { total: 0, items: [] };
+      },
+    });
+    const result = await client.callTool({
+      name: "facility_list_attention_stories",
+      arguments: {
+        projectId: "proj/one",
+        category: "pulls",
+        q: "scope",
+        limit: 2,
+        offset: 4,
+        pullOffset: 6,
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(calls).toEqual([
+      [
+        "GET",
+        "/v1/projects/proj%2Fone/attention/stories",
+        {
+          query: { category: "pulls", q: "scope", limit: 2, offset: 4, pullOffset: 6 },
+          body: undefined,
+          idempotencyKey: undefined,
+        },
+      ],
+    ]);
+    const invalid = await client.callTool({
+      name: "facility_list_attention_stories",
+      arguments: { projectId: "proj/one", limit: 26 },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(calls).toHaveLength(1);
+    const catalog = await client.listTools();
+    expect(
+      catalog.tools.find((tool) => tool.name === "facility_list_attention_stories")?.annotations,
+    ).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     await client.close();
     await server.close();
   });

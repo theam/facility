@@ -51,9 +51,9 @@ it("requires an explicit confirmation and permits cancelling without a request",
   expect(container.textContent).toContain("example/app");
   expect(container.textContent).toContain("oldest remaining repository becomes primary");
   expect(container.textContent).toContain("GitHub repository is not deleted");
-  expect(button("confirm disconnect").disabled).toBe(true);
-  await click("confirm disconnect");
-  await click("cancel");
+  expect(button("Confirm disconnect").disabled).toBe(true);
+  await click("Confirm disconnect");
+  await click("Cancel");
   expect(fetch).not.toHaveBeenCalled();
   expect(button("disconnect")).toBeTruthy();
 });
@@ -70,9 +70,9 @@ it("shows progress, sends the exact scoped DELETE, and refreshes after success",
   vi.stubGlobal("fetch", fetch);
   await render();
   await confirm();
-  await click("confirm disconnect");
-  expect(button("disconnecting…").disabled).toBe(true);
-  expect(button("cancel").disabled).toBe(true);
+  await click("Confirm disconnect");
+  expect(button("Disconnecting…").disabled).toBe(true);
+  expect(button("Cancel").disabled).toBe(true);
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(fetch).toHaveBeenCalledWith(
     "/api/v1/projects/proj_test/repos/repo_test",
@@ -100,10 +100,10 @@ it.each([
   );
   await render();
   await confirm();
-  await click("confirm disconnect");
+  await click("Confirm disconnect");
   expect(container.querySelector("[role='alert']")?.textContent).toBe("Repository is still in use");
   expect(container.querySelector("[role='status']")).toBeNull();
-  expect(button("confirm disconnect").disabled).toBe(false);
+  expect(button("Confirm disconnect").disabled).toBe(false);
   expect(refresh).not.toHaveBeenCalled();
 });
 it("does not expose the action to readers", async () => {
