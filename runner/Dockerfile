@@ -35,6 +35,7 @@ RUN archive=/tmp/moby.tar.gz \
   && cd /src \
   && go mod edit -replace=github.com/containerd/containerd/v2=github.com/containerd/containerd/v2@v2.3.6 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
@@ -63,6 +64,7 @@ RUN archive=/tmp/docker-cli.tar.gz \
   && cp vendor.mod go.mod \
   && cp vendor.sum go.sum \
   && go mod edit -replace=github.com/go-jose/go-jose/v4=github.com/go-jose/go-jose/v4@v4.1.6 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
@@ -85,9 +87,9 @@ RUN archive=/tmp/containerd.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
-  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.18.7 \
   && go mod edit -replace=github.com/go-jose/go-jose/v4=github.com/go-jose/go-jose/v4@v4.1.6 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
@@ -110,6 +112,7 @@ RUN archive=/tmp/rootlesskit.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags='-s -w' -o /out/rootlesskit ./cmd/rootlesskit \
   && test "$(/out/rootlesskit --version | awk '{print $3}')" = "3.0.2" \
@@ -129,6 +132,7 @@ RUN archive=/tmp/buildx.tar.gz \
   && go mod edit -replace=github.com/moby/go-archive=github.com/moby/go-archive@v0.3.0 \
   && go mod edit -replace=github.com/containerd/containerd/v2=github.com/containerd/containerd/v2@v2.3.6 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
@@ -153,6 +157,7 @@ RUN archive=/tmp/compose.tar.gz \
   && cd /src \
   && go mod edit -replace=github.com/containerd/containerd/v2=github.com/containerd/containerd/v2@v2.3.6 \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
@@ -173,6 +178,7 @@ RUN archive=/tmp/runc.tar.gz \
   && mkdir -p /src /out \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && GOFLAGS=-mod=mod make -C /src runc \
   && test "$(/src/runc --version | awk '/^go:/{print $2}')" = "go1.26.9" \
@@ -191,6 +197,7 @@ RUN archive=/tmp/gh.tar.gz \
   && tar -xzf "$archive" --strip-components=1 -C /src \
   && cd /src \
   && go mod edit -replace=golang.org/x/crypto=golang.org/x/crypto@v0.56.0 \
+  && go mod edit -replace=github.com/klauspost/compress=github.com/klauspost/compress@v1.20.2 \
   && go mod edit -replace=golang.org/x/net=golang.org/x/net@v0.62.0 \
   && go mod edit -replace=golang.org/x/mod=golang.org/x/mod@v0.40.0 \
   && go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v1.83.2 \
@@ -219,7 +226,7 @@ RUN for binary in /out/*; do \
     printf '%s\n' "$metadata" | awk \
       '$1 == "dep" { pending = ($2 == "github.com/klauspost/compress"); if (pending) { found = 1; version = $3 }; next } \
        pending && $1 == "=>" { if ($2 != "github.com/klauspost/compress") { bad = 1; exit }; version = $3; pending = 0 } \
-       function patched(value, parts) { if (value !~ /^v1\.[0-9]+\.[0-9]+$/) return 0; split(substr(value, 2), parts, "."); return parts[2] > 18 || (parts[2] == 18 && parts[3] >= 7) } \
+       function patched(value, parts) { if (value !~ /^v1\.[0-9]+\.[0-9]+$/) return 0; split(substr(value, 2), parts, "."); return parts[2] > 20 || (parts[2] == 20 && parts[3] >= 2) } \
        END { exit (bad || (found && !patched(version))) }' || exit 1; \
   done \
   && for binary in /out/*; do \
@@ -266,9 +273,10 @@ FROM node:24.22.2-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33
 # Bump this audited epoch only when a scanner identifies a distro fix that the
 # official image has not incorporated yet; using it in the command makes that
 # refresh explicit and reproducible instead of disabling the whole build cache.
-ARG DEBIAN_SECURITY_REFRESH=20261105
+ARG DEBIAN_SECURITY_REFRESH=20261112
 ARG CHROMIUM_MIN_VERSION=156.0.8078.79-1~deb13u1
 ARG EXPAT_MIN_VERSION=2.9.0-1~deb13u1
+ARG ZLIB_MIN_VERSION=1:1.3.dfsg+really1.3.1-1+deb13u1
 RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -324,6 +332,7 @@ RUN test -n "$DEBIAN_SECURITY_REFRESH" \
   && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium)" ge "$CHROMIUM_MIN_VERSION" \
   && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' chromium-common)" ge "$CHROMIUM_MIN_VERSION" \
   && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libexpat1)" ge "$EXPAT_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' zlib1g)" ge "$ZLIB_MIN_VERSION" \
   && rm -rf /var/lib/apt/lists/*
 
 # npm is a runtime capability for repositories that use package-lock.json, so

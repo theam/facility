@@ -456,6 +456,9 @@ export class ProjectOverviewService {
 
 export function attentionAction(item: { kind: string; turnId: string | null }) {
   if (item.kind === "agent_waiting") return "reply" as const;
+  // The review-cycle owner requires a human decision, never a failed-turn retry.
+  if (item.kind === "review_cycle_ready" || item.kind === "review_cycle_decision")
+    return "dismiss" as const;
   if (item.turnId) return "retry" as const;
   return "dismiss" as const;
 }

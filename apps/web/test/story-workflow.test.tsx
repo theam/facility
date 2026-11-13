@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { DeliveryAcceptanceReview, StoryWorkflowPolicyState } from "@facility/sdk";
+import type { DeliveryAcceptanceReview, StoryAgent, StoryWorkflowPolicyState } from "@facility/sdk";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,59 @@ describe("interactive workflow controls", () => {
     expect(container.querySelector("fieldset")?.disabled).toBe(true);
     expect(container.textContent).toContain("must confirm changes in Facility");
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("turns on the review cycle with a time limit that fits its turns and no cycle-specific budget", async () => {
+    const agents: StoryAgent[] = ["builder", "pr-reviewer"].map((name) => ({
+      name,
+      description: "Fixture",
+      engine: "claude_code",
+      model: "claude-sonnet-5",
+      enabled: true,
+      options: {},
+      triggers: [{ type: "manual" }],
+      file: `.agents/${name}.md`,
+      prompt: "Fixture",
+      hash: "a".repeat(64),
+      commit_sha: "b".repeat(40),
+      synced_at: "2026-11-12T10:00:00.000Z",
+      schedule_status: { schedules: [], last_result: null },
+    }));
+    const calls: Array<Record<string, unknown>> = [];
+    fetcher.mockImplementation(async (_url, options) => {
+      const body = JSON.parse(String(options?.body));
+      calls.push(body);
+      return response({
+        expectedRevision: 1,
+        policy: body.policy,
+        nonce: "nonce",
+        expiresAt: new Date(Date.now() + 600000).toISOString(),
+        proof: "p".repeat(43),
+      });
+    });
+    await act(async () =>
+      root.render(
+        <WorkflowPolicy projectId="project" initial={initial} agents={agents} canWrite />,
+      ),
+    );
+    const toggle = [...container.querySelectorAll("label")]
+      .find((label) => label.textContent?.includes("up to two reviews and one correction"))
+      ?.querySelector("input");
+    if (!toggle) throw Error("Missing automatic review toggle");
+    await act(async () => toggle.click());
+    expect(container.textContent).not.toContain("Cost limit");
+    expect(container.textContent).toContain("counts against the project budget");
+    await click("Review changes");
+    expect(calls[0]).toMatchObject({
+      policy: {
+        reviewCycle: {
+          builderAgent: "builder",
+          reviewerAgent: "pr-reviewer",
+          timeoutMinutes: 120,
+        },
+      },
+    });
+    expect(calls[0]?.policy).not.toHaveProperty("reviewCycle.maxCostCents");
+    expect(container.textContent).toContain("Up to 120 minutes.");
   });
   it("requires an explicit policy review and preserves its confirmation key after an acknowledgement failure", async () => {
     const calls: Array<{ path: string; body: Record<string, unknown> }> = [];

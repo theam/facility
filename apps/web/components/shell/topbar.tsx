@@ -14,7 +14,7 @@ export function Topbar({
   current?: Pick<Project, "id" | "slug" | "name">;
 }) {
   return (
-    <header className="hidden items-center justify-between border-b border-(--line) px-8 py-3.5 lg:flex">
+    <header className="hidden items-center justify-between border-b border-(--line) bg-(--bg-subtle) px-8 py-3 lg:flex">
       <div className="flex min-w-0 items-center gap-3">
         <PillTag>{me.org?.name ?? "Facility"}</PillTag>
         <span className="text-(--dim)">/</span>

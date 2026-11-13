@@ -2,6 +2,7 @@ import { agentSchedules, type FacilityDb, projects, turns } from "@facility/db";
 import cronParser from "cron-parser";
 import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
 import type { StoryWorkspaceService } from "../stories/service.js";
+import { readWorkflowPolicy } from "../stories/workflow-policy.js";
 import {
   type ProjectManifestSource,
   projectWorkspaceInput,
@@ -120,9 +121,16 @@ export class AgentScheduler {
   }
 
   private async syncProject(orgId: string, projectId: string, now: Date) {
-    const manifests = (await this.catalog.list(orgId, projectId)).map((row) =>
-      manifestFromProjection(row),
-    );
+    const [projections, workflow] = await Promise.all([
+      this.catalog.list(orgId, projectId),
+      readWorkflowPolicy(this.db, { orgId, projectId }),
+    ]);
+    const cycle = workflow.policy.reviewCycle;
+    const manifests = projections
+      .map(manifestFromProjection)
+      .filter(
+        (manifest) => !cycle || ![cycle.reviewerAgent, "address-review"].includes(manifest.name),
+      );
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await tx.execute(

@@ -60,7 +60,7 @@ export function BudgetForm({ projectId, budget }: { projectId: string; budget: P
   return (
     <form
       onSubmit={save}
-      className="grid gap-4 border border-(--line) bg-(--bg-subtle) p-5 sm:grid-cols-3"
+      className="rounded-lg grid gap-4 border border-(--line) bg-(--bg-subtle) p-5 sm:grid-cols-3"
     >
       <Field label="Monthly limit (USD)">
         <TextInput

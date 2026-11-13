@@ -22,12 +22,12 @@ export default async function ProjectsPage() {
           </p>
         </div>
         <ButtonLink href="/projects/new" variant="primary">
-          connect project
+          Connect project
         </ButtonLink>
       </div>
 
       {projects.data.length === 0 ? (
-        <div className="max-w-2xl border border-(--line) p-8">
+        <div className="rounded-lg max-w-2xl border border-(--line) p-8">
           <p className="text-sm leading-relaxed text-(--mut)">
             Connect a repository, add <code>.facility.yml</code> and the shared{" "}
             <code>.agents/</code>

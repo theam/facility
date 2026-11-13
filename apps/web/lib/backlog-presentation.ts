@@ -14,6 +14,15 @@ export const PHASES: Array<{ value: BacklogPhase; label: string; tone: PhaseTone
   { value: "done", label: "Done", tone: "ok" },
   { value: "archived", label: "Archived", tone: "muted" },
 ];
+export const TRACKING_GROUPS = [
+  { value: "in_progress", label: "In progress", tone: "agent" },
+  { value: "waiting", label: "Waiting", tone: "machine" },
+  { value: "review", label: "For review", tone: "human" },
+  { value: "backlog", label: "Backlog", tone: "muted" },
+  { value: "done", label: "Done", tone: "ok" },
+  { value: "archived", label: "Archived", tone: "muted" },
+] as const;
+export type TrackingGroup = (typeof TRACKING_GROUPS)[number]["value"];
 export type PhaseTone = "agent" | "human" | "ok" | "bad" | "machine" | "muted";
 
 export function phaseLabel(phase: BacklogPhase) {
@@ -45,7 +54,7 @@ export function activityLine(item: BacklogItem, now = new Date()): string {
     case "changes_requested":
       return "Changes requested in review";
     case "approved":
-      return "Approved, ready to merge";
+      return "Recorded review approval · merge readiness not established";
     case "awaiting_review":
       return pull?.ciState === "pending"
         ? "Awaiting review · checks running"
@@ -116,11 +125,12 @@ export function personLabel(person: { login: string | null; name: string | null;
 
 export type StoriesSearch = {
   q: string;
+  group?: TrackingGroup;
   phase: string[];
   label: string[];
   assignee: string[];
   repository: string[];
-  sort: "priority" | "updated" | "created";
+  sort: "priority" | "updated" | "created" | "activity";
   page: number;
   start?: string;
 };
@@ -138,14 +148,20 @@ export function parseStoriesSearch(
       .filter(Boolean)
       .slice(0, 50);
   const sortValue = Array.isArray(params.sort) ? params.sort[0] : params.sort;
+  const groupValue = Array.isArray(params.group) ? params.group[0] : params.group;
+  const group = TRACKING_GROUPS.find((entry) => entry.value === groupValue)?.value;
   const pageValue = Number(Array.isArray(params.page) ? params.page[0] : params.page);
   return {
     q: (Array.isArray(params.q) ? params.q[0] : params.q)?.trim().slice(0, 200) ?? "",
+    ...(group ? { group } : {}),
     phase: list(params.phase),
     label: list(params.label),
     assignee: list(params.assignee),
     repository: list(params.repository),
-    sort: sortValue === "updated" || sortValue === "created" ? sortValue : "priority",
+    sort:
+      sortValue === "updated" || sortValue === "created" || sortValue === "priority"
+        ? sortValue
+        : "activity",
     page: Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : 1,
     start: (Array.isArray(params.start) ? params.start[0] : params.start) || undefined,
   };
@@ -154,6 +170,7 @@ export function parseStoriesSearch(
 export function toBacklogQuery(search: StoriesSearch): BacklogQuery {
   return {
     ...(search.q ? { q: search.q } : {}),
+    ...(search.group ? { group: search.group } : {}),
     ...(search.phase.length > 0 ? { phase: search.phase as BacklogQuery["phase"] } : {}),
     ...(search.label.length > 0 ? { label: search.label } : {}),
     ...(search.assignee.length > 0 ? { assignee: search.assignee } : {}),
@@ -172,11 +189,12 @@ export function storiesHref(
   const next = { ...search, ...changes };
   const params = new URLSearchParams();
   if (next.q) params.set("q", next.q);
+  if (next.group) params.set("group", next.group);
   for (const phase of next.phase) params.append("phase", phase);
   for (const label of next.label) params.append("label", label);
   for (const assignee of next.assignee) params.append("assignee", assignee);
   for (const repository of next.repository) params.append("repository", repository);
-  if (next.sort !== "priority") params.set("sort", next.sort);
+  if (next.sort !== "activity") params.set("sort", next.sort);
   if (next.page > 1) params.set("page", String(next.page));
   const query = params.toString();
   return `/projects/${encodeURIComponent(projectId)}/stories${query ? `?${query}` : ""}`;
@@ -188,7 +206,7 @@ export function activeFilterCount(search: StoriesSearch) {
     search.label.length +
     search.assignee.length +
     search.repository.length +
-    (search.sort !== "priority" ? 1 : 0)
+    (search.sort !== "activity" ? 1 : 0)
   );
 }
 

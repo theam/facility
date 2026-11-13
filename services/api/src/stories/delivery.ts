@@ -11,6 +11,7 @@ import {
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError } from "../errors.js";
 import { MIRROR_STALE_AFTER_MS } from "./backlog.js";
+import { readDeliveryBriefs } from "./delivery-decision-brief.js";
 import {
   type DeliveryLink,
   deliveryCandidate,
@@ -356,13 +357,29 @@ async function readSnapshot(
     updatedAt: declaration?.updatedAt.toISOString() ?? null,
     updatedBy: declaration?.updatedBy ?? null,
   };
+  const candidate = deliveryCandidate(declared, pulls);
+  const briefs = await readDeliveryBriefs(
+    db,
+    scope,
+    new Map([
+      [
+        scope.storyId,
+        {
+          scopeRevision: declared.revision,
+          candidate,
+          pullRequests: pulls,
+        },
+      ],
+    ]),
+  );
   return {
     schemaVersion: 1,
     ...scope,
     generatedAt: now.toISOString(),
     scope: declared,
     pullRequests: pulls,
-    candidate: deliveryCandidate(declared, pulls),
+    candidate,
+    decisionBrief: briefs.get(scope.storyId) ?? { status: "absent" },
     available: options.includeAvailable ? await availablePulls(db, scope, options, now) : null,
   };
 }

@@ -111,6 +111,20 @@ describe("backlog presentation", () => {
     );
   });
 
+  it("round-trips a tracking group while retaining explicit historical sorts", () => {
+    const search = parseStoriesSearch({ group: "waiting", page: "3", q: "sync" });
+    expect(toBacklogQuery(search)).toMatchObject({
+      group: "waiting",
+      sort: "activity",
+      offset: 100,
+    });
+    expect(storiesHref("p", search, { page: 1 })).toBe("/projects/p/stories?q=sync&group=waiting");
+    expect(parseStoriesSearch({ group: "bogus", sort: "priority" })).toMatchObject({
+      sort: "priority",
+    });
+    expect(parseStoriesSearch({ group: "bogus" }).group).toBeUndefined();
+  });
+
   it("explains provisional titles without hiding the request", () => {
     expect(titleStatus({ titleSource: "pending", createdAt: "2026-09-10T11:59:00Z" }, now)).toBe(
       "Generating title…",
@@ -156,7 +170,7 @@ describe("backlog presentation", () => {
       "/projects/proj/stories?q=%2342&phase=attention&phase=review&label=bug&label=ui&assignee=me&sort=updated",
     );
     expect(parseStoriesSearch({ sort: "bogus", page: "-1" })).toMatchObject({
-      sort: "priority",
+      sort: "activity",
       page: 1,
     });
     expect(storiesHref("proj", parseStoriesSearch({}))).toBe("/projects/proj/stories");

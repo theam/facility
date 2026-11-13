@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DeliveryDecisionBriefProjectionSchema } from "./delivery-decision-brief.js";
 
 export const DeliveryPullRequestInput = z
   .object({
@@ -112,6 +113,7 @@ export const AvailableDeliveryPullRequestSchema = z.object({
   stale: z.boolean(),
 });
 export const StoryDeliverySchema = z.object({
+  decisionBrief: DeliveryDecisionBriefProjectionSchema.optional(),
   schemaVersion: z.literal(1),
   orgId: z.string(),
   projectId: z.string(),

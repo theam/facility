@@ -1,6 +1,6 @@
-import { cx, StatusDot } from "@facility/ui";
+import { cardClassName, cx, StatusDot } from "@facility/ui";
 import Link from "next/link";
-import type { BacklogItem, BacklogPerson } from "@/lib/api";
+import type { BacklogItem, BacklogPerson, ProjectBacklog } from "@/lib/api";
 import {
   activityLine,
   PHASES,
@@ -10,9 +10,11 @@ import {
   relativeTime,
   type StoriesSearch,
   storiesHref,
+  TRACKING_GROUPS,
   titleStatus,
 } from "@/lib/backlog-presentation";
 import { safeExternalUrl } from "@/lib/story-presentation";
+import { storyReviewHref } from "@/lib/story-review-navigation";
 
 const LABEL_LIMIT = 3;
 const PERSON_LIMIT = 4;
@@ -26,6 +28,7 @@ export function BacklogList({
   items,
   search,
   counts,
+  groupCounts,
   canStart,
   now,
 }: {
@@ -33,23 +36,33 @@ export function BacklogList({
   items: BacklogItem[];
   search: StoriesSearch;
   counts: Record<BacklogItem["phase"], number>;
+  groupCounts?: ProjectBacklog["groupCounts"];
   canStart: boolean;
   now: Date;
 }) {
-  const grouped = search.sort === "priority" && search.phase.length !== 1;
-  let lastPhase: BacklogItem["phase"] | null = null;
+  const grouped =
+    (search.sort === "priority" || (search.sort === "activity" && groupCounts === undefined)) &&
+    search.phase.length !== 1;
+  const trackingGroups = search.sort === "activity" && groupCounts !== undefined;
+  let lastPhase: string | null = null;
   return (
-    <ol className="flex flex-col border border-(--line)">
+    <ol className={`${cardClassName} flex flex-col overflow-hidden`}>
       {items.map((item) => {
-        const header = grouped && item.phase !== lastPhase;
-        lastPhase = item.phase;
+        const group = trackingGroups
+          ? TRACKING_GROUPS.find((group) => group.value === item.tracking?.group)
+          : null;
+        const key = group?.value ?? item.phase;
+        const header = (trackingGroups || grouped) && key !== lastPhase;
+        lastPhase = key;
         return (
           <li key={item.key} className="flex flex-col">
             {header ? (
-              <h3 className="flex items-center gap-2 border-b border-(--line) bg-(--bg-subtle) px-4 py-2 text-[11.5px] font-medium text-(--mut) sm:px-5">
-                <StatusDot tone={phaseTone(item.phase)} />
-                {phaseLabel(item.phase)}
-                <span className="font-mono text-(--dim)">{counts[item.phase]}</span>
+              <h3 className="flex items-center gap-2 border-b border-(--line) bg-(--bg) px-5 py-2.5 text-[11px] font-medium uppercase tracking-[0.06em] text-(--dim)">
+                <StatusDot tone={group?.tone ?? phaseTone(item.phase)} />
+                {group?.label ?? phaseLabel(item.phase)}
+                <span className="font-mono text-(--dim)">
+                  {group ? groupCounts?.[group.value] : counts[item.phase]}
+                </span>
               </h3>
             ) : null}
             <BacklogRow
@@ -93,7 +106,7 @@ function BacklogRow({
 
   return (
     <article
-      className="grid gap-x-6 gap-y-2 border-b border-(--line) px-4 py-3 last:border-b-0 hover:bg-(--bg-subtle) sm:px-5 lg:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]"
+      className="grid gap-x-6 gap-y-2 border-b border-(--line) px-5 py-4 last:border-b-0 hover:bg-(--bg) lg:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)]"
       aria-label={item.title}
     >
       <div className="flex min-w-0 flex-col gap-1.5">
@@ -157,7 +170,7 @@ function BacklogRow({
                 <Link
                   key={label}
                   href={storiesHref(projectId, search, { label: [label], page: 1 })}
-                  className="border border-(--line) px-1.5 py-px text-[10.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
+                  className="rounded bg-(--card) px-1.5 py-px text-[11px] text-(--mut) hover:text-(--ink)"
                 >
                   {label}
                 </Link>
@@ -183,7 +196,7 @@ function BacklogRow({
             item.phase === "attention"
               ? "text-(--bad)"
               : running
-                ? "text-(--accent)"
+                ? "text-(--accent-ink)"
                 : "text-(--mut)",
           )}
         >
@@ -191,7 +204,10 @@ function BacklogRow({
         </p>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-(--dim) lg:justify-end">
           <People people={item.assignees} projectId={projectId} search={search} />
-          <time dateTime={item.lastActivityAt} title="Last activity">
+          <time
+            dateTime={item.lastActivityAt}
+            title="Last recorded update; workspace health is not task progress"
+          >
             {relativeTime(item.lastActivityAt, now)}
           </time>
         </div>
@@ -207,7 +223,7 @@ function BacklogRow({
           {storyHref && item.activity.turnId ? (
             <Link
               href={`${storyHref}#run-${item.activity.turnId}`}
-              className="text-(--accent) underline-offset-4 hover:underline"
+              className="text-(--accent-ink) underline-offset-4 hover:underline"
             >
               Run →
             </Link>
@@ -235,13 +251,18 @@ function BacklogRow({
           {canStart && item.kind === "issue" && item.phase === "not_started" ? (
             <Link
               href={startHref}
-              className="border border-(--accent) px-2 py-px text-(--accent) hover:bg-(--accent) hover:text-black"
+              className="rounded-md border border-(--accent) bg-(--accent)/25 px-2 py-0.5 text-(--ink) hover:bg-(--accent)"
             >
               Start
             </Link>
           ) : null}
         </nav>
       </div>
+      {item.tracking ? (
+        <div className="min-w-0 lg:col-span-2">
+          <TrackingDetails projectId={projectId} item={item} storyHref={storyHref} />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -320,24 +341,139 @@ export function PhaseChips({
     { value: "all", label: "All", count: all },
   ];
   return (
-    <nav aria-label="Work phase" className="flex flex-wrap gap-1.5">
+    <nav aria-label="Work phase" className="flex flex-wrap gap-x-5 gap-y-1">
       {chips.map((chip) => (
         <Link
           key={chip.value}
           href={storiesHref(projectId, search, {
             phase: chip.value === "open" ? [] : [chip.value],
+            group: undefined,
             page: 1,
           })}
           aria-current={selected === chip.value ? "page" : undefined}
           className={cx(
-            "inline-flex h-8 items-center gap-1.5 border px-2.5 text-[12px] transition-colors",
+            "inline-flex min-h-11 items-center gap-1.5 border-b-2 text-[13px] transition-colors",
             selected === chip.value
-              ? "border-(--line-strong) text-(--ink)"
-              : "border-(--line) text-(--mut) hover:text-(--ink)",
+              ? "border-(--ink) text-(--ink)"
+              : "border-transparent text-(--mut) hover:text-(--ink)",
           )}
         >
           {chip.label}
-          <span className="font-mono text-[10.5px] text-(--dim)">{chip.count}</span>
+          <span className="text-(--dim)">{chip.count}</span>
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+function TrackingDetails({
+  projectId,
+  item,
+  storyHref,
+}: {
+  projectId: string;
+  item: BacklogItem;
+  storyHref: string | null;
+}) {
+  const tracking = item.tracking;
+  if (!tracking) return null;
+  const planHref =
+    tracking.plan && item.story ? storyReviewHref(projectId, item.story.id, tracking.plan) : null;
+  return (
+    <div className="flex flex-col gap-1 break-words text-sm text-(--mut)">
+      {tracking.previewApplying ? <p>Preview preparation is using the workspace.</p> : null}
+      {tracking.pendingMessages > 0 ? (
+        <p>
+          {tracking.pendingMessages} pending message{tracking.pendingMessages === 1 ? "" : "s"} ·{" "}
+          {tracking.messageWait === "previous_turn"
+            ? "waiting for the current turn"
+            : tracking.messageWait === "preview"
+              ? "waiting for preview preparation"
+              : "awaiting dispatch; cause unavailable"}
+        </p>
+      ) : null}
+      {tracking.wait ? (
+        <p>
+          {tracking.wait.detail}
+          {tracking.wait.retryAfter ? (
+            <>
+              {" "}
+              Retry time:{" "}
+              <time dateTime={tracking.wait.retryAfter}>
+                {new Date(tracking.wait.retryAfter).toLocaleString("en-GB", { timeZone: "UTC" })}{" "}
+                UTC
+              </time>
+              .
+            </>
+          ) : null}
+        </p>
+      ) : null}
+      {planHref ? (
+        <Link className="inline-flex min-h-11 items-center text-(--info) underline" href={planHref}>
+          Review plan r{tracking.plan?.revision}
+        </Link>
+      ) : null}
+      {item.attention.some((notice) => notice.source === "facility") && storyHref ? (
+        <Link
+          className="inline-flex min-h-11 items-center text-(--info) underline"
+          href={`${storyHref}#story-attention`}
+        >
+          {item.attention.filter((notice) => notice.source === "facility").length} open notice
+          {item.attention.filter((notice) => notice.source === "facility").length === 1 ? "" : "s"}
+        </Link>
+      ) : null}
+      {tracking.wait?.kind === "workflow" && storyHref ? (
+        <Link
+          className="inline-flex min-h-11 items-center text-(--info) underline"
+          href={`${storyHref}#story-plan`}
+        >
+          Review what holds this turn
+        </Link>
+      ) : null}
+      {tracking.delivery ? <p>{tracking.delivery.detail}</p> : null}
+    </div>
+  );
+}
+
+export function WorkGroups({
+  projectId,
+  search,
+  counts,
+}: {
+  projectId: string;
+  search: StoriesSearch;
+  counts: ProjectBacklog["groupCounts"];
+}) {
+  if (!counts)
+    return (
+      <p role="status" className="text-sm text-(--mut)">
+        Work groups are unavailable from this server. The recorded backlog is shown below.
+      </p>
+    );
+  return (
+    <nav aria-label="Work groups" className="flex gap-6 overflow-x-auto border-b border-(--line)">
+      {[
+        {
+          value: undefined,
+          label: "All matching",
+          count: Object.values(counts).reduce((a, b) => a + b, 0),
+        },
+        ...TRACKING_GROUPS.filter(
+          (group) => !["done", "archived"].includes(group.value) || counts[group.value] > 0,
+        ).map((group) => ({ ...group, count: counts[group.value] })),
+      ].map((group) => (
+        <Link
+          key={group.value ?? "all"}
+          href={storiesHref(projectId, search, { group: group.value, page: 1, sort: "activity" })}
+          aria-current={search.group === group.value ? "page" : undefined}
+          className={cx(
+            "-mb-px inline-flex min-h-11 shrink-0 items-center gap-1.5 border-b-2 text-sm focus-visible:outline-2 focus-visible:outline-(--info)",
+            search.group === group.value
+              ? "border-(--ink) text-(--ink)"
+              : "border-transparent text-(--mut) hover:text-(--ink)",
+          )}
+        >
+          {group.label} <span className="text-(--dim)">{group.count}</span>
         </Link>
       ))}
     </nav>

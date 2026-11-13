@@ -121,7 +121,7 @@ export function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 pt-[18vh]"
+      className="fixed inset-0 z-[100] flex items-start justify-center bg-[rgba(16,24,40,0.35)] pt-[18vh]"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}
@@ -129,7 +129,7 @@ export function CommandPalette({
       aria-modal="true"
       aria-label="Command palette"
     >
-      <div className="w-full max-w-lg border border-(--line) bg-(--bg)">
+      <div className="rounded-lg w-full max-w-lg border border-(--line) bg-(--bg)">
         <input
           ref={inputRef}
           value={query}

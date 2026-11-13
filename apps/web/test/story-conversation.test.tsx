@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RunActivity } from "../components/story/run-activity";
 import { StoryConversation } from "../components/story/story-conversation";
 import type { StoryConversationPage, StoryMessage, StoryTurnSummary } from "../lib/api";
+import { PLAN_PROPOSAL_EVENT } from "../lib/story-plan-events";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
@@ -90,6 +91,98 @@ function exchangeTexts() {
 }
 
 describe("story conversation paging", () => {
+  it("reads newest first, with the latest exchange on top and older pages below", async () => {
+    const latest = exchange(5, "turn-c");
+    const earlier = exchange(3, "turn-b");
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={page(
+            [latest.response, latest.request, earlier.response, earlier.request],
+            [],
+            2,
+          )}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+    const list = container.querySelector('ol[aria-label="Conversation, newest first"]');
+    expect(list).not.toBeNull();
+    expect(exchangeTexts()[0]).toContain("Response 6");
+    expect(exchangeTexts().at(-1)).toContain("Response 4");
+    expect(
+      (list as Node).compareDocumentPosition(button("Older messages")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+  it("opens a linked long original in full with its author and preserves focus on refresh", async () => {
+    const { request, response } = exchange(1, "turn-source");
+    response.body = `${"Original details. ".repeat(150)}Final source fact.`;
+    response.author.name = "reviewer";
+    if (response.turn) response.turn.agentName = "reviewer";
+    const linked = {
+      ...page([response], [request]),
+      focus: { messageId: response.id, seq: response.seq },
+    };
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const props = {
+      projectId: "project",
+      storyId: "story",
+      waitingTurnIds: [],
+      canExecute: false,
+      initial: linked,
+      latestHref: "/projects/project/stories/story?planRevision=1#conversation",
+    };
+    await act(async () => root.render(<StoryConversation {...props} />));
+    expect(container.textContent).toContain("Final source fact.");
+    expect(container.textContent).toContain("reviewer");
+    expect(document.activeElement?.id).toBe(`message-${response.id}`);
+    const link = container.querySelector('a[href*="planRevision=1"]') as HTMLAnchorElement;
+    link.focus();
+    await act(async () =>
+      root.render(<StoryConversation {...props} initial={structuredClone(linked)} />),
+    );
+    expect(document.activeElement).toBe(link);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("carries the recorded response agent into a plan draft without starting work", async () => {
+    const { request, response } = exchange(1, "turn-a");
+    if (!request.turn || !response.turn) throw new Error("Missing fixture turn");
+    request.turn.agentName = "architect";
+    response.turn.agentName = "architect";
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const received = vi.fn();
+    window.addEventListener(PLAN_PROPOSAL_EVENT, received);
+    try {
+      await act(async () =>
+        root.render(
+          <StoryConversation
+            projectId="project"
+            storyId="story"
+            initial={page([response, request])}
+            waitingTurnIds={[]}
+            canExecute
+            canProposePlan
+          />,
+        ),
+      );
+      await act(async () => button("Propose as plan").click());
+      expect(received).toHaveBeenCalledOnce();
+      expect((received.mock.calls[0]?.[0] as CustomEvent).detail).toMatchObject({
+        agentName: "architect",
+        messageId: response.id,
+        markdown: response.body,
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(PLAN_PROPOSAL_EVENT, received);
+    }
+  });
   it("loads older pages on request, merges related context, and stops at the beginning", async () => {
     const third = exchange(5, "turn-c");
     const second = exchange(3, "turn-b");
@@ -195,10 +288,10 @@ describe("story conversation paging", () => {
     await render(runningResponseless);
     expect(exchangeTexts()).toHaveLength(2);
     expect(container.querySelector("[role='status']")?.textContent).toContain("1 new exchange");
-    await act(async () => button("show latest").click());
+    await act(async () => button("Show latest").click());
     expect(exchangeTexts()).toHaveLength(3);
     expect(exchangeTexts()[0]).toContain("Running");
-    expect(exchangeTexts()[0]).toContain("cancel turn");
+    expect(exchangeTexts()[0]).toContain("Cancel turn");
     expect(exchangeTexts()[0]).not.toContain("Response");
 
     // A refresh that completes the run updates the exchange in place.

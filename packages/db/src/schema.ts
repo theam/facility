@@ -1456,6 +1456,40 @@ export const turns = pgTable(
   ],
 );
 
+export const storyReviewCycles = pgTable(
+  "story_review_cycles",
+  {
+    originTurnId: text("origin_turn_id").primaryKey(),
+    orgId: text("org_id").notNull(),
+    projectId: text("project_id").notNull(),
+    storyId: text("story_id").notNull(),
+    phase: text("phase").notNull().default("waiting_for_evidence"),
+    deadline: timestamp("deadline", { withTimezone: true }).notNull(),
+    data: jsonb("data").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    foreignKey({
+      name: "story_review_cycle_origin_fk",
+      columns: [table.orgId, table.projectId, table.storyId, table.originTurnId],
+      foreignColumns: [turns.orgId, turns.projectId, turns.storyId, turns.id],
+    }),
+    check(
+      "story_review_cycle_phase_check",
+      sql`${table.phase} in ('waiting_for_evidence', 'review', 'correction', 'human_review', 'decision_required')`,
+    ),
+    index("story_review_cycles_scope_idx").on(
+      table.orgId,
+      table.projectId,
+      table.storyId,
+      table.createdAt.desc(),
+    ),
+    uniqueIndex("story_review_cycles_active_uidx")
+      .on(table.storyId)
+      .where(sql`${table.phase} in ('waiting_for_evidence', 'review', 'correction')`),
+  ],
+);
+
 export const projectBudgets = pgTable(
   "project_budgets",
   {

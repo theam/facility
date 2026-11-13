@@ -37,6 +37,8 @@ import { StoryConsultationService } from "../src/stories/consultations.js";
 import { StoryInputFileService } from "../src/stories/input-files.js";
 import { StoryPreviewConvergenceService } from "../src/stories/preview-convergence.js";
 import { StoryPreviewConvergenceExecutor } from "../src/stories/preview-convergence-executor.js";
+import { StoryReviewCycles } from "../src/stories/review-cycle.js";
+import { ReviewCycleSource } from "../src/stories/review-cycle-source.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { StoryTitleService } from "../src/stories/titles.js";
 import type { StoryDomain } from "../src/story-domain.js";
@@ -282,6 +284,15 @@ environment:
       environment,
       engines,
       dispatcher,
+      reviewCycles: new StoryReviewCycles(
+        db,
+        stories,
+        catalog,
+        new ReviewCycleSource(db, async () => {
+          throw Error("No review provider in this fixture");
+        }),
+        async () => undefined,
+      ),
       previews,
       scheduler: new AgentScheduler(db, catalog, stories, projectManifests, config.workspaceImage),
       githubTriggers: new GithubAgentTriggerService(
@@ -383,7 +394,7 @@ environment:
     const agents = mcpData(
       await mcp.callTool({ name: "facility_list_agents", arguments: { projectId } }),
     ) as { agents: Array<{ name: string; hash: string; model: string }> };
-    expect(agents.agents).toHaveLength(6);
+    expect(agents.agents).toHaveLength(5);
     expect(agents.agents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -684,14 +695,7 @@ environment:
     expect(replayedDelete.workspace.state).toBe("destroyed");
   });
 
-  const expectedNames = [
-    "address-review",
-    "architect",
-    "builder",
-    "ci-doctor",
-    "pr-reviewer",
-    "security-audit",
-  ];
+  const expectedNames = ["architect", "builder", "ci-doctor", "pr-reviewer", "security-audit"];
   it("lists every canonical kickstart agent", async () => {
     const listed = mcpData(
       await mcp.callTool({ name: "facility_list_agents", arguments: { projectId } }),
@@ -813,14 +817,7 @@ function mcpData(result: Awaited<ReturnType<Client["callTool"]>>) {
 }
 
 async function loadKickstartAgentSources(root: string) {
-  const names = [
-    "architect",
-    "builder",
-    "pr-reviewer",
-    "address-review",
-    "ci-doctor",
-    "security-audit",
-  ];
+  const names = ["architect", "builder", "pr-reviewer", "ci-doctor", "security-audit"];
   const target = join(root, "kickstart");
   await mkdir(target, { recursive: true });
   await command("git", ["init", "--initial-branch=main"], target);

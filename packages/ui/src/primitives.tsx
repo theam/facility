@@ -26,7 +26,9 @@ export function PillTag({
     <span
       className={cx(
         "inline-flex h-7 items-center rounded-full border px-3 text-[12px] font-medium",
-        active ? "border-(--line-strong) bg-(--card) text-(--ink)" : "border-(--line) text-(--mut)",
+        active
+          ? "border-(--line-strong) bg-(--bg-subtle) text-(--ink)"
+          : "border-(--line) bg-(--bg-subtle) text-(--mut)",
         className,
       )}
       {...props}
@@ -60,10 +62,10 @@ export function StatusDot({
 }) {
   return (
     <span className={cx("relative inline-flex h-2 w-2", className)} aria-hidden>
-      <span className="absolute inset-0" style={{ background: semanticVar[tone] }} />
+      <span className="absolute inset-0 rounded-full" style={{ background: semanticVar[tone] }} />
       {pulse ? (
         <span
-          className="absolute inset-0 animate-ping"
+          className="absolute inset-0 animate-ping rounded-full"
           style={{ background: semanticVar[tone], opacity: 0.6 }}
         />
       ) : null}

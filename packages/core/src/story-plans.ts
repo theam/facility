@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DecisionBriefProjectionSchema } from "./decision-brief.js";
 import { DeliveryPullRequestInput } from "./story-delivery.js";
 
 const Revision = z.number().int().min(0).max(2_147_483_646);
@@ -96,6 +97,7 @@ export const StoryPlanSchema = z.object({
   revision: z.number().int(),
   digest: z.string(),
   markdown: z.string(),
+  decisionBrief: DecisionBriefProjectionSchema.optional(),
   repositories: z.array(PlanRepositorySchema).max(50),
   agents: z.array(PlanAgentSchema).max(20),
   proposedBy: PlanActorSchema,
@@ -145,7 +147,7 @@ export const StoryPlansSchema = z.object({
   plan: StoryPlanSchema.nullable(),
   decision: StoryPlanDecisionSchema.nullable(),
   history: z.object({
-    items: z.array(StoryPlanSchema.omit({ markdown: true })),
+    items: z.array(StoryPlanSchema.omit({ markdown: true, decisionBrief: true })),
     hasMore: z.boolean(),
     nextBeforeRevision: z.number().int().nullable(),
   }),

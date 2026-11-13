@@ -5,7 +5,7 @@ import type {
   ProjectObservability,
   ProjectOverview,
 } from "./api";
-import { errorSummary, safeExternalUrl } from "./story-presentation";
+import { errorSummary, isReviewNotice, safeExternalUrl } from "./story-presentation";
 
 // Presentation decisions for the project overview, kept free of React so the
 // state interpretation is unit-testable. Server data stays untouched; these
@@ -88,6 +88,10 @@ export function attentionKindLabel(kind: string) {
       return "Delivery integration";
     case "delivery_completion":
       return "Delivery completion";
+    case "review_cycle_ready":
+      return "Delivery ready for human review";
+    case "review_cycle_decision":
+      return "Delivery review needs a decision";
     default:
       return kind.replaceAll("_", " ");
   }
@@ -156,17 +160,25 @@ export function attentionNotice(
 ): AttentionEntry {
   const resolved = notice.status === "resolved";
   const waiting = notice.kind === "agent_waiting";
+  const review = isReviewNotice(notice.kind);
   const delivery = ["delivery_integration", "delivery_completion"].includes(notice.kind);
   const deliveryFailure = delivery && /failed|needs attention/i.test(notice.title);
   return {
     key: `attention:${notice.id}`,
-    tone: resolved ? "machine" : waiting || (delivery && !deliveryFailure) ? "human" : "bad",
-    title: delivery ? notice.title : attentionKindLabel(notice.kind),
+    tone: resolved
+      ? "machine"
+      : waiting || review || (delivery && !deliveryFailure)
+        ? "human"
+        : "bad",
+    title: delivery || review ? notice.title : attentionKindLabel(notice.kind),
     storyId: notice.storyId,
     storyTitle: notice.storyTitle,
     summary:
-      waiting || delivery
-        ? (notice.detail ?? "The agent is waiting for your reply.")
+      waiting || delivery || review
+        ? (notice.detail ??
+          (review
+            ? "Review the recorded candidate and findings in the story."
+            : "The agent is waiting for your reply."))
         : errorSummary(notice.detail),
     at: notice.createdAt,
     action:
@@ -177,7 +189,7 @@ export function attentionNotice(
           }
         : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
     item: resolved ? null : notice,
-    detail: waiting || delivery ? null : notice.detail,
+    detail: waiting || delivery || review ? null : notice.detail,
     resolved: resolved
       ? { label: resolutionLabel(notice.resolution ?? null), at: notice.resolvedAt ?? null }
       : null,

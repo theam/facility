@@ -1,0 +1,151 @@
+{
+  "id": "cycle-a",
+  "phase": "decision_required",
+  "builderAgent": "implementador",
+  "reviewerAgent": "qa-custom",
+  "reviewsStarted": 1,
+  "correctionsStarted": 0,
+  "deadline": "2026-11-05T11:00:00Z",
+  "costCents": null,
+  "reason": "The permissions change exceeds the approved plan.",
+  "activeTurnId": null,
+  "candidate": {
+    "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "deliveryRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "scopeRevision": 2,
+    "pullRequests": [
+      {
+        "repositoryId": "repo-app",
+        "repository": "example/app",
+        "number": 1,
+        "primary": true,
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "headRef": "feature",
+        "baseRef": "main",
+        "url": "https://github.com/example/app/pull/1",
+        "changedFiles": 2,
+        "checks": {
+          "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+          "state": "success",
+          "observedAt": "2026-11-05T10:00:00Z",
+          "runs": []
+        }
+      },
+      {
+        "repositoryId": "repo-api",
+        "repository": "example/api",
+        "number": 2,
+        "primary": false,
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "headRef": "feature",
+        "baseRef": "main",
+        "url": "https://github.com/example/api/pull/2",
+        "changedFiles": 2,
+        "checks": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "success",
+          "observedAt": "2026-11-05T10:00:00Z",
+          "runs": []
+        }
+      }
+    ],
+    "preview": null
+  },
+  "reviews": [
+    {
+      "turnId": "review-a",
+      "reviewerManifestHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "policyRevision": 3,
+      "planRevision": 4,
+      "candidate": {
+        "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "deliveryRevision": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "scopeRevision": 2,
+        "pullRequests": [
+          {
+            "repositoryId": "repo-app",
+            "repository": "example/app",
+            "number": 1,
+            "primary": true,
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+            "headRef": "feature",
+            "baseRef": "main",
+            "url": "https://github.com/example/app/pull/1",
+            "changedFiles": 2,
+            "checks": {
+              "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+              "state": "success",
+              "observedAt": "2026-11-05T10:00:00Z",
+              "runs": []
+            }
+          },
+          {
+            "repositoryId": "repo-api",
+            "repository": "example/api",
+            "number": 2,
+            "primary": false,
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "headRef": "feature",
+            "baseRef": "main",
+            "url": "https://github.com/example/api/pull/2",
+            "changedFiles": 2,
+            "checks": {
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "state": "success",
+              "observedAt": "2026-11-05T10:00:00Z",
+              "runs": []
+            }
+          }
+        ],
+        "preview": null
+      },
+      "result": {
+        "candidateId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "reviewedPulls": [
+          {
+            "repository": "example/app",
+            "number": 1,
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "headSha": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          {
+            "repository": "example/api",
+            "number": 2,
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "acceptance": [
+          {
+            "id": "criterion-a",
+            "criterion": "Readers cannot change project permissions",
+            "state": "violated",
+            "evidence": "The reader request returned success in the isolated test."
+          }
+        ],
+        "findings": [
+          {
+            "id": "finding-a",
+            "repository": "example/api",
+            "number": 2,
+            "priority": "P1",
+            "category": "security",
+            "requirement": "Preserve reader permissions",
+            "path": "src/permissions.ts",
+            "line": 12,
+            "impact": "A reader can change permissions.",
+            "evidence": "The missing role check admits a reader request.",
+            "fix": "Restore the role check and verify the denial path.",
+            "disposition": "open",
+            "correction": "requires_decision"
+          }
+        ],
+        "missingEvidence": ["Preview has not been observed."]
+      }
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "subject": {
+    "scopeRevision": 4,
+    "candidateRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pullRequests": [
+      {
+        "repositoryId": "repo-app",
+        "number": 11,
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "required": true,
+        "primary": true
+      },
+      {
+        "repositoryId": "repo-api",
+        "number": 22,
+        "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "required": false,
+        "primary": false
+      }
+    ]
+  },
+  "brief": {
+    "schemaVersion": 1,
+    "summary": {
+      "text": "Review the application and API changes as one delivery.",
+      "evidenceIds": ["review"]
+    },
+    "whyNow": {
+      "text": "The author has finished the changes and asks for a delivery decision.",
+      "evidenceIds": ["review"]
+    },
+    "options": [
+      {
+        "id": "accept",
+        "label": "Accept this delivery",
+        "consequence": {
+          "text": "Record acceptance of the exact candidate after checking the evidence. Merge remains a separate action.",
+          "evidenceIds": ["review"]
+        }
+      },
+      {
+        "id": "revise",
+        "label": "Request changes",
+        "consequence": {
+          "text": "Continue work on the same story and review its next candidate.",
+          "evidenceIds": []
+        }
+      }
+    ],
+    "recommendation": {
+      "optionId": "accept",
+      "reason": {
+        "text": "The reviewed behavior matches the requested objective.",
+        "evidenceIds": ["review"]
+      }
+    },
+    "decisiveRisk": {
+      "text": "Compatibility outside the tested environment remains unverified.",
+      "evidenceIds": []
+    },
+    "unknowns": [
+      {
+        "text": "The author has not tested production traffic.",
+        "evidenceIds": []
+      }
+    ],
+    "evidence": [
+      {
+        "id": "review",
+        "label": "Recorded review",
+        "reference": "Synthetic review of the cited heads",
+        "url": "https://example.com/reviews/delivery-4"
+      }
+    ]
+  }
+}

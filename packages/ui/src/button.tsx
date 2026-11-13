@@ -1,45 +1,64 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx";
 
-type Variant = "primary" | "outline" | "textual" | "danger";
+type Variant = "primary" | "outline" | "ghost" | "textual" | "danger";
 type Size = "sm" | "md" | "lg";
 type Tone = "agent";
 
 const sizes: Record<Size, string> = {
-  sm: "h-8 px-3.5 text-[12.5px]",
-  md: "h-10 px-6 text-[13px]",
-  lg: "h-[52px] px-10 text-[13.5px]",
+  sm: "min-h-9 px-3 py-1.5 text-[13px] pointer-coarse:min-h-11",
+  md: "min-h-10 px-4 py-2 text-[14px] pointer-coarse:min-h-11",
+  lg: "min-h-12 px-6 py-2.5 text-[15px]",
 };
 
+/**
+ * Buttons always have their own surface and a 6px radius, so they never read as
+ * text; links stay plain blue text. Heights follow the pointer: compact with a
+ * mouse, 44px on touch screens. One primary action per decision; secondary
+ * actions use the filled surface and tertiary actions the ghost style.
+ */
 function classesFor(variant: Variant, size: Size, tone?: Tone, className?: string) {
   const base =
-    "group relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap font-medium transition-colors disabled:pointer-events-none disabled:opacity-50";
+    "group relative inline-flex max-w-full select-none items-center justify-center gap-2 overflow-hidden rounded-md whitespace-normal text-center font-medium leading-tight transition-colors disabled:pointer-events-none disabled:opacity-50";
+  if (variant === "ghost") {
+    return cx(
+      base,
+      sizes[size],
+      "border border-transparent text-(--mut) hover:bg-(--card) hover:text-(--ink)",
+      className,
+    );
+  }
   if (variant === "textual") {
-    return cx(base, "h-auto px-0 text-(--mut) hover:text-(--ink)", className);
+    return cx(base, "h-auto rounded-none px-0 text-(--mut) hover:text-(--ink)", className);
   }
   if (variant === "danger") {
     return cx(
       base,
       sizes[size],
-      "border border-(--bad) text-(--bad) hover:bg-(--bad) hover:text-black",
+      "border border-(--bad)/40 bg-(--bad)/5 text-(--bad) hover:bg-(--bad) hover:text-white",
       className,
     );
   }
   if (variant === "primary") {
     if (tone === "agent") {
-      return cx(base, sizes[size], "border border-(--accent) text-(--accent)", className);
+      return cx(
+        base,
+        sizes[size],
+        "border border-(--accent) bg-(--accent)/25 text-(--ink)",
+        className,
+      );
     }
     return cx(
       base,
       sizes[size],
-      "border border-(--line-strong) bg-(--ink) text-(--bg) hover:bg-(--card) hover:text-(--ink)",
+      "border border-transparent bg-(--ink) text-white shadow-(--shadow-card) hover:bg-[#1f2937]",
       className,
     );
   }
   return cx(
     base,
     sizes[size],
-    "border border-(--line) text-(--mut) hover:border-(--line-strong) hover:text-(--ink)",
+    "border border-(--line-strong) bg-(--bg-subtle) text-(--ink) shadow-(--shadow-card) hover:bg-(--bg)",
     className,
   );
 }
@@ -67,7 +86,7 @@ function Label({
   return (
     <span
       className={cx(
-        "relative z-10 inline-flex items-center gap-2 transition-colors",
+        "relative z-10 inline-flex min-w-0 items-center gap-2 wrap-anywhere transition-colors",
         variant === "primary" && tone === "agent" && "group-hover:text-black",
       )}
     >
@@ -116,4 +135,17 @@ export function ButtonLink({
       </Label>
     </a>
   );
+}
+
+/** The same surface for a navigation link that must look like a button, such as pagination. */
+export function buttonClassName({
+  variant = "outline",
+  size = "sm",
+  className,
+}: {
+  variant?: Variant;
+  size?: Size;
+  className?: string;
+} = {}) {
+  return classesFor(variant, size, undefined, className);
 }

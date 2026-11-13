@@ -1,6 +1,6 @@
 import { type FacilityDb, githubInstallations, projectRepositories } from "@facility/db";
 import { and, asc, eq, inArray } from "drizzle-orm";
-import type { GithubMaintainerTokenFactory } from "./client.js";
+import { GITHUB_READ_ONLY_PERMISSIONS, type GithubMaintainerTokenFactory } from "./client.js";
 import { repositoryDevelopmentBranch } from "./development-branch.js";
 import type { GithubGitIdentity } from "./git-identity.js";
 
@@ -35,7 +35,12 @@ export class GithubWorkspaceCredentialBroker {
     private readonly tokenFactory: GithubMaintainerTokenFactory,
   ) {}
 
-  async issue(orgId: string, projectId: string): Promise<GithubWorkspaceCredentials> {
+  /** `readOnly` narrows every token to GITHUB_READ_ONLY_PERMISSIONS (the automatic Reviewer). */
+  async issue(
+    orgId: string,
+    projectId: string,
+    options: { readOnly?: boolean } = {},
+  ): Promise<GithubWorkspaceCredentials> {
     const repositories = await this.db
       .select()
       .from(projectRepositories)
@@ -95,6 +100,7 @@ export class GithubWorkspaceCredentialBroker {
             await this.tokenFactory({
               installationId: installation.installationId,
               repositories: names,
+              ...(options.readOnly ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } } : {}),
             }),
           ] as const;
         }),

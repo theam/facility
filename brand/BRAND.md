@@ -38,6 +38,43 @@ The yellow rule is the palette's one law:
 yellow marks something an agent did or is doing. A yellow element with no
 agent behind it is off-brand.
 
+### Application surfaces
+
+The application uses a light canvas with white cards, like a calm report:
+one card per topic, a hairline border, a 12px radius and a faint shadow. Its
+values live in `packages/ui/src/tokens.css`:
+
+| role | value | use |
+|---|---|---|
+| canvas / card / fill | `#F5F6F8` / `#FFFFFF` / `#EEF0F3` | page, cards and fields, sidebar and chips |
+| ink / secondary / dim | `#111827` / `#4B5563` / `#5F6774` | readable text, including metadata |
+| hairline / strong / control | `#E4E7EC` / `#D0D5DD` / `#8B95A1` | separators, card edges, field boundaries |
+| human | `#B45309` | a decision needs human attention |
+| success / failure | `#047857` / `#B42318` | verified result / failure, always with a label |
+| information / focus | `#2563EB` | links, information and keyboard outlines |
+| agent text | `#8A6800` | text about agent work; yellow itself stays a fill |
+
+Status is shown with rounded pills (tinted background, dot and label) and key
+figures with metric cards: an uppercase label, a large number and one line of
+context.
+
+Agent yellow remains `#FFD923`. Focus must also identify human controls, so it
+uses blue independently of agent activity. Outlines surround controls, including
+native disclosure summaries. Fields have stronger boundaries than separators.
+
+Buttons always have their own surface and a 6px radius; links stay plain blue
+text, so the two never look alike. Each decision has one primary button (solid
+ink); secondary actions use the filled card surface, tertiary actions the ghost
+style, agent actions a tinted yellow and destructive ones a tinted red. Buttons
+and fields are 36–40px tall with a fine pointer and at least 44px on touch
+screens, and can grow when text wraps. Labels use sentence case.
+
+Check rendered foregrounds and backgrounds, including overlays and interactive
+states, rather than treating token pairs as accessibility certification. The
+application's grain is included in contrast checks. Documentation currently has
+its own stylesheet in `apps/docs/src/css/custom.css`; these application tokens do
+not silently restyle that separate surface.
+
 ## Mark
 
 A unit of work moving through a stable workspace. Geometry only

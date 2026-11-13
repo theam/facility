@@ -732,6 +732,87 @@ describe("agent automations use persistent story workspaces", async () => {
     expect(await persistedCounts()).toEqual(before);
   });
 
+  it("with the review cycle on, reviews outside pull requests and leaves story pull requests to the cycle", async () => {
+    const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+    if (!project) throw new Error("expected fixture project");
+    // An ungated agent starts the Facility story; the Builder would wait for an approved plan.
+    const architectAgent = agents.find((agent) => agent.name === "architect");
+    if (!architectAgent) throw new Error("expected architect agent");
+    await db
+      .update(projects)
+      .set({
+        settings: {
+          ...(project.settings as Record<string, unknown>),
+          storyWorkflow: {
+            revision: 1,
+            policy: {
+              planApprovalAgents: ["builder"],
+              holdAfterFailure: true,
+              requireDeliveryAcceptance: true,
+              requirePreviewForAcceptance: false,
+              reviewCycle: {
+                builderAgent: "builder",
+                reviewerAgent: "pr-reviewer",
+                timeoutMinutes: 60,
+              },
+            },
+          },
+        },
+      })
+      .where(eq(projects.id, projectId));
+    const pullOpened = (number: number, branch: string) => ({
+      id: `delivery-${randomUUID()}`,
+      orgId,
+      eventType: "pull_request",
+      payload: {
+        action: "opened",
+        repository: { owner: { login: "acme" }, name: `app-${suffix}` },
+        pull_request: {
+          number,
+          title: `Pull request ${number}`,
+          html_url: `https://github.com/acme/app/pull/${number}`,
+          head: { ref: branch },
+          merged: false,
+        },
+        sender: { type: "User", login: "contributor" },
+      },
+    });
+    try {
+      // Someone else's pull request: the Reviewer still reviews it on GitHub.
+      await expect(github.handle(pullOpened(301, "contrib/outside-fix"))).resolves.toEqual({
+        matched: 1,
+        queued: 1,
+        merged: 0,
+      });
+      // A Facility story's pull request: the cycle reviews it and its Builder corrects it.
+      await storiesService.start({
+        orgId,
+        projectId,
+        repositoryId,
+        provider: "manual",
+        externalId: `cycle-story-${suffix}`,
+        title: "Deliver through the cycle",
+        branch: "facility/cycle-delivery",
+        agent: architectAgent,
+        message: "Build the approved plan.",
+        messageDedupeKey: `cycle-story-${suffix}`,
+        actor: { type: "service", id: "github:contributor" },
+        workspace: workspaceInput(projectManifest),
+        trigger: { type: "github", key: "issues:opened" },
+      });
+      await expect(github.handle(pullOpened(302, "facility/cycle-delivery"))).resolves.toEqual({
+        matched: 0,
+        queued: 0,
+        merged: 0,
+      });
+    } finally {
+      await db
+        .update(projects)
+        .set({ settings: project.settings })
+        .where(eq(projects.id, projectId));
+    }
+  });
+
   it("reuses an issue workspace for its pull request without completing or suspending it on merge", async () => {
     const builderAgent = agents.find((agent) => agent.name === "builder");
     if (!builderAgent) throw new Error("expected builder agent");

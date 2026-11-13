@@ -26,7 +26,7 @@ export function SignOutButton() {
       }}
       className="text-[12px] font-medium text-(--mut) hover:text-(--ink)"
     >
-      {busy ? "signing out…" : "sign out"}
+      {busy ? "Signing out…" : "Sign out"}
     </button>
   );
 }

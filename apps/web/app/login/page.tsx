@@ -19,7 +19,7 @@ export default function LoginPage() {
           variant="primary"
           size="lg"
         >
-          {localDevelopment ? "continue locally" : "continue with GitHub"}
+          {localDevelopment ? "Continue locally" : "Continue with GitHub"}
         </ButtonLink>
       </div>
 

@@ -74,13 +74,13 @@ export function AgentLine({
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       <span
-        className="inline-flex size-7 shrink-0 items-center justify-center border border-(--accent)/60 bg-(--card) p-0.5"
+        className="rounded-md inline-flex size-7 shrink-0 items-center justify-center border border-(--accent)/60 bg-(--card) p-0.5"
         aria-hidden="true"
       >
         {engine?.brand ? (
           <AiMark brand={engine.brand} className="size-full" />
         ) : (
-          <span className="font-mono text-[10px] font-semibold text-(--accent)">AI</span>
+          <span className="font-mono text-[10px] font-semibold text-(--accent-ink)">AI</span>
         )}
       </span>
       <span className="flex min-w-0 flex-col leading-tight">

@@ -1,4 +1,4 @@
-import { Divider, Eyebrow, PillTag } from "@facility/ui";
+import { cardClassName, Divider, Eyebrow, PillTag } from "@facility/ui";
 import Link from "next/link";
 import { ErrorNotice, Offline } from "@/components/offline";
 import { DevelopmentBranch } from "@/components/project/development-branch";
@@ -33,16 +33,40 @@ export default async function ProjectSettingsPage({
   }
 
   return (
-    <div className="flex max-w-3xl flex-col gap-10">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-10">
       <div className="flex flex-col gap-2">
-        <Eyebrow>settings</Eyebrow>
-        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
-          {project.data.name}
-        </h1>
+        <p className="eyebrow">Project settings</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{project.data.name}</h1>
         <p className="text-sm leading-relaxed text-(--mut)">
           Repository behavior is configured in <code>.facility.yml</code>. Agent prompts, engines,
           models and triggers are configured together under <code>.agents/</code>.
         </p>
+        <nav
+          aria-label="Project configuration"
+          className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-(--info)"
+        >
+          <Link
+            href={`/projects/${encodeURIComponent(projectId)}/agents`}
+            className="inline-flex min-h-11 items-center hover:underline"
+          >
+            Agents and skills
+          </Link>
+          <Link
+            href="#workflow-policy"
+            className="inline-flex min-h-11 items-center hover:underline"
+          >
+            Workflow policy
+          </Link>
+          <Link href="#repositories" className="inline-flex min-h-11 items-center hover:underline">
+            Repositories
+          </Link>
+          <Link
+            href={`/projects/${encodeURIComponent(projectId)}/insights`}
+            className="inline-flex min-h-11 items-center hover:underline"
+          >
+            Budget and usage
+          </Link>
+        </nav>
       </div>
 
       {repos.ok && repos.data.find((repo) => repo.role === "primary") && (
@@ -64,21 +88,23 @@ export default async function ProjectSettingsPage({
         />
       )}
 
-      {workflow.ok ? (
-        <WorkflowPolicy
-          key={projectId}
-          projectId={projectId}
-          initial={workflow.data}
-          agents={agents.ok ? agents.data.agents : []}
-          catalogError={agents.ok ? undefined : agents.message}
-          canWrite={
-            can(me.ok ? me.data.permissions : [], "projects:write") &&
-            can(me.ok ? me.data.permissions : [], "repos:write")
-          }
-        />
-      ) : (
-        <ErrorNotice message={`Workflow policy unavailable: ${workflow.message}`} />
-      )}
+      <div id="workflow-policy" className="scroll-mt-6">
+        {workflow.ok ? (
+          <WorkflowPolicy
+            key={projectId}
+            projectId={projectId}
+            initial={workflow.data}
+            agents={agents.ok ? agents.data.agents : []}
+            catalogError={agents.ok ? undefined : agents.message}
+            canWrite={
+              can(me.ok ? me.data.permissions : [], "projects:write") &&
+              can(me.ok ? me.data.permissions : [], "repos:write")
+            }
+          />
+        ) : (
+          <ErrorNotice message={`Workflow policy unavailable: ${workflow.message}`} />
+        )}
+      </div>
 
       <WorkspaceVariables
         projectId={projectId}
@@ -93,7 +119,7 @@ export default async function ProjectSettingsPage({
         canWrite={can(me.ok ? me.data.permissions : [], "projects:write")}
       />
 
-      <section className="flex flex-col gap-4">
+      <section id="repositories" className="flex scroll-mt-6 flex-col gap-4">
         <Eyebrow>repositories</Eyebrow>
         {!repos.ok ? (
           <ErrorNotice message={`Repositories could not be loaded: ${repos.message}`} />
@@ -106,11 +132,11 @@ export default async function ProjectSettingsPage({
             .
           </p>
         ) : (
-          <div className="flex flex-col border border-(--line)">
+          <div className={`${cardClassName} flex flex-col overflow-hidden`}>
             {repos.data.map((repo) => (
               <div
                 key={repo.id}
-                className="flex flex-wrap items-center gap-3 border-b border-(--line) px-5 py-4 last:border-0"
+                className="flex flex-wrap items-center gap-3 border-b border-(--line) px-5 py-4 last:border-b-0"
               >
                 <a
                   href={`https://github.com/${repo.owner}/${repo.name}`}
@@ -140,10 +166,10 @@ export default async function ProjectSettingsPage({
       <section className="flex flex-col gap-3">
         <Eyebrow>access model</Eyebrow>
         <p className="text-sm leading-relaxed text-(--mut)">
-          Every configured agent gets the same full shell, network, Docker, browser and GitHub App
-          installation access. Workflow policies can require plan approval before native execution;
-          they do not narrow an agent’s tools or repository access. GitHub branch protection and
-          pull-request review remain the merge boundary.
+          Native turns get the same full shell, network, Docker, browser and GitHub App installation
+          access. Workflow policies can require plan approval before native execution; they do not
+          narrow an agent’s tools or repository access. GitHub branch protection and pull-request
+          review remain the merge boundary.
         </p>
       </section>
     </div>

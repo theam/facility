@@ -90,7 +90,7 @@ describe("preview launch controls", () => {
       .mockResolvedValueOnce(Response.json({ url: "https://preview.test/auth?token=second" }));
     vi.stubGlobal("fetch", fetch);
     await render();
-    await clickAndWait("open app ↗", () => opened.mock.calls.length === 1);
+    await clickAndWait("Open app ↗", () => opened.mock.calls.length === 1);
     expect(container.querySelector("a[href*='token=']")).toBeNull();
     await clickAndWait("Open a new authenticated preview ↗", () => opened.mock.calls.length === 2);
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -112,8 +112,8 @@ describe("preview launch controls", () => {
         ),
     );
     await render();
-    await clickAndWait("open app ↗", () => opened.mock.calls.length === 1);
-    await clickAndWait("Open a new authenticated preview ↗", () => !button("open app ↗").disabled);
+    await clickAndWait("Open app ↗", () => opened.mock.calls.length === 1);
+    await clickAndWait("Open a new authenticated preview ↗", () => !button("Open app ↗").disabled);
     expect(container.querySelector("[role='alert']")?.textContent).toBe("Permission denied");
     expect(opened).toHaveBeenCalledTimes(1);
     expect(container.querySelector("a[href*='token=']")).toBeNull();
@@ -126,10 +126,10 @@ describe("preview launch controls", () => {
     vi.stubGlobal("fetch", fetch);
     await render(false, true);
     expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
-      "open app ↗",
+      "Open app ↗",
     ]);
-    expect(container.textContent).not.toContain("maintenance");
-    await clickAndWait("open app ↗", () => opened.mock.calls.length === 1);
+    expect(container.textContent).not.toContain("More");
+    await clickAndWait("Open app ↗", () => opened.mock.calls.length === 1);
     expect(opened).toHaveBeenCalledWith(
       "https://native-one.vercel.run",
       "_blank",
@@ -180,7 +180,7 @@ it("integrates repeated UI launches with a local one-time exchange server", asyn
   );
   try {
     await render();
-    await clickAndWait("open app ↗", () => opened.mock.calls.length === 1);
+    await clickAndWait("Open app ↗", () => opened.mock.calls.length === 1);
     const first = String(opened.mock.calls[0]?.[0]);
     expect((await nativeFetch(first)).status).toBe(200);
     expect((await nativeFetch(first)).status).toBe(401);

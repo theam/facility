@@ -1,4 +1,4 @@
-export { Button, ButtonLink } from "./button";
+export { Button, ButtonLink, buttonClassName } from "./button";
 export { cx } from "./cx";
 export { Field, Select, TextArea, TextInput } from "./field";
 export { Cell, CellAccent, HairlineGrid } from "./grid";
@@ -14,5 +14,6 @@ export {
   StatusDot,
   toneFor,
 } from "./primitives";
+export { Card, cardClassName, KpiCard, StatusPill } from "./surface";
 export type { TerminalLine } from "./terminal";
 export { Terminal } from "./terminal";

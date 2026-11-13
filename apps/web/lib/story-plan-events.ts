@@ -4,6 +4,7 @@ export type PlanProposalSource = {
   storyId: string;
   messageId: string;
   markdown: string;
+  agentName?: string;
 };
 
 export function requestPlanProposal(source: PlanProposalSource) {
