@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, cx, TextArea } from "@facility/ui";
+import { Button, cardClassName, cx, TextArea } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useId, useRef, useState } from "react";
@@ -45,49 +45,43 @@ export function NewStory({
   const [agent, setAgent] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  // One key per request attempt: retrying after a failure reuses it, so the
-  // server sees one story even if the button is pressed twice.
-  const attemptKey = useRef<string | null>(null);
+  // Preserve retries of the same request, but allow corrections after a failure.
+  const attempt = useRef<{ signature: string; key: string } | null>(null);
   const defaultChoice = agents.find((choice) => choice.isDefault) ?? null;
   const canSubmit = message.trim().length > 0 && !pending && (defaultChoice || agent);
-
-  function updateMessage(value: string) {
-    if (!attemptKey.current || message.trim().length === 0) {
-      attemptKey.current = `ui-start-${crypto.randomUUID()}`;
-    }
-    setMessage(value);
-  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSubmit) return;
-    const key = attemptKey.current ?? `ui-start-${crypto.randomUUID()}`;
-    attemptKey.current = key;
+    const path = `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories`;
+    const request = {
+      ...(linked
+        ? {
+            provider: "github",
+            external_id: `issue:${linked.number}`,
+            repository_id: linked.repositoryId,
+            title: linked.title,
+          }
+        : { provider: "manual" }),
+      ...(agent ? { agent } : {}),
+      message,
+    };
+    const signature = JSON.stringify([path, request]);
+    if (attempt.current?.signature !== signature) {
+      attempt.current = { signature, key: `ui-start-${crypto.randomUUID()}` };
+    }
     setPending(true);
     setError("");
-    const result = await clientApi<WorkspaceStoryBundle>(
-      "POST",
-      `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories`,
-      {
-        ...(linked
-          ? {
-              provider: "github",
-              external_id: `issue:${linked.number}`,
-              repository_id: linked.repositoryId,
-              title: linked.title,
-            }
-          : { provider: "manual" }),
-        ...(agent ? { agent } : {}),
-        message,
-        idempotency_key: key,
-      },
-    );
+    const result = await clientApi<WorkspaceStoryBundle>("POST", path, {
+      ...request,
+      idempotency_key: attempt.current.key,
+    });
     if (!result.ok) {
       setPending(false);
       setError(result.message);
       return;
     }
-    attemptKey.current = null;
+    attempt.current = null;
     router.push(
       `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(result.data.story.id)}`,
     );
@@ -99,7 +93,7 @@ export function NewStory({
       id="new-story"
       onSubmit={submit}
       aria-labelledby={headingId}
-      className="scroll-mt-6 flex flex-col gap-4 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
+      className={`${cardClassName} scroll-mt-6 flex flex-col gap-4 p-5 sm:p-6`}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id={headingId} className="text-[15px] font-semibold text-(--ink)">
@@ -133,7 +127,7 @@ export function NewStory({
           required
           maxLength={200_000}
           value={message}
-          onChange={(event) => updateMessage(event.target.value)}
+          onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.currentTarget.form?.requestSubmit();
@@ -212,7 +206,7 @@ function AgentPicker({
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
         aria-controls={groupId}
-        className="flex h-10 items-center gap-2 border border-(--line) px-3 text-[12.5px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink)"
+        className="flex min-h-9 items-center gap-2 rounded-md border border-(--line) bg-(--card) px-3 text-[13px] text-(--mut) hover:border-(--line-strong) hover:text-(--ink) pointer-coarse:min-h-11"
       >
         <span className="text-(--dim)">Run with</span>
         {shown ? (
@@ -231,7 +225,7 @@ function AgentPicker({
       <fieldset
         id={groupId}
         hidden={!open}
-        className="absolute right-0 z-20 mt-1 flex w-[min(92vw,26rem)] flex-col gap-1 border border-(--line) bg-(--bg) p-2 shadow-(--shadow-lift)"
+        className="absolute right-0 z-20 mt-1 flex w-[min(92vw,26rem)] flex-col gap-1 rounded-md border border-(--line) bg-(--bg) p-2 shadow-(--shadow-lift)"
       >
         <legend className="sr-only">Reusable action to run</legend>
         <p className="px-2 py-1 text-[11px] leading-relaxed text-(--dim)">

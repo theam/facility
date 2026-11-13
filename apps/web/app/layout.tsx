@@ -30,7 +30,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#000000",
+  themeColor: "#f5f6f8",
   width: "device-width",
   initialScale: 1,
 };
@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // Extensions such as Grammarly inject body attributes before React hydrates.
   return (
     <html lang="en" className={`${plexMono.variable} ${plexSans.variable}`}>
-      <body suppressHydrationWarning className="grain min-h-dvh">
+      <body suppressHydrationWarning className="min-h-dvh">
         {children}
       </body>
     </html>

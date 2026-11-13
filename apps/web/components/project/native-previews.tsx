@@ -89,7 +89,7 @@ export function NativePreviews({
       {canWrite && (
         <div>
           <Button size="sm" disabled={pending || checked === saved} onClick={save}>
-            {pending ? "saving…" : "save preview settings"}
+            {pending ? "Saving…" : "Save preview settings"}
           </Button>
         </div>
       )}

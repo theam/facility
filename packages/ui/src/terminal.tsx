@@ -3,7 +3,7 @@ import { cx } from "./cx";
 import type { Semantic } from "./primitives";
 
 const lineColor: Record<Semantic | "plain", string> = {
-  agent: "text-(--accent)",
+  agent: "text-(--accent-ink)",
   human: "text-(--human)",
   ok: "text-(--ok)",
   bad: "text-(--bad)",

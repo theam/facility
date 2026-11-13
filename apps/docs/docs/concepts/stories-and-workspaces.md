@@ -14,6 +14,11 @@ scheduled activation to the same story. An idempotency key protects individual s
 requests from network retries. These are different concerns: the external id identifies the body
 of work, while the key identifies one requested operation.
 
+The web UI preserves the key when retrying an unchanged story-start, integration-result,
+or source-completion request after an error. Editing the request or receiving a different
+delivery candidate starts a new operation with a new key. Server permissions and current
+candidate checks still apply to every attempt.
+
 A project member can continue a story created by another member. The conversation is shared
 project state rather than a private chat transcript.
 

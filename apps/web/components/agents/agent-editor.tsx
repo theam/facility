@@ -164,7 +164,7 @@ export function AgentEditor({ projectId, agent }: { projectId: string; agent: St
           className="w-fit"
           disabled={pending}
         >
-          {pending ? "validating and committing…" : "validate and open pull request"}
+          {pending ? "Validating and committing…" : "Validate and open pull request"}
         </Button>
       </form>
     </details>

@@ -1,18 +1,28 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { generateApiKey, newId } from "@facility/core";
 import {
   apiKeys,
   attentionItems,
   createDb,
+  githubPullRequests,
   migrate,
   orgs,
+  projectBudgets,
+  projectRepositories,
   projects,
   roles,
   seed,
   stories,
   storyConversations,
+  storyDeliveryPullRequests,
+  storyPlanDecisions,
+  storyPlanRequests,
+  storyPlanRevisions,
+  storyPlanStates,
   turns,
 } from "@facility/db";
+import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -78,6 +88,79 @@ describe("project attention list", async () => {
     runtime: newId("attn"),
     dismissed: newId("attn"),
   };
+  const planStory = newId("story");
+  const approvedStory = newId("story");
+  const rejectedStory = newId("story");
+  const revisedStory = newId("story");
+  const brief = JSON.parse(
+    readFileSync(
+      new URL("../../../packages/core/test/fixtures/decision-brief.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+  async function plan(storyId: string, revision = 1, scope = { orgId, projectId }) {
+    await db.insert(storyPlanRevisions).values({
+      ...scope,
+      storyId,
+      revision,
+      digest: String(revision).repeat(64),
+      markdown: `# Plan\n\n\`\`\`facility-decision\n${JSON.stringify(brief)}\n\`\`\``,
+      repositories: [{ repositoryId: "repo-fixture", repository: "example/app" }],
+      agents: [
+        {
+          name: "planner",
+          manifestHash: "a".repeat(64),
+          engine: "codex",
+          model: "fixture",
+          repositoryId: "repo-fixture",
+          catalogCommitSha: "b".repeat(40),
+          observedAt: now.toISOString(),
+        },
+      ],
+      proposedBy: { type: "service", id: "fixture", name: null },
+      proposedAt: minutesAgo(90 - revision),
+    });
+    if (revision === 1) await db.insert(storyPlanStates).values({ ...scope, storyId, revision });
+    else
+      await db
+        .update(storyPlanStates)
+        .set({ revision })
+        .where(eq(storyPlanStates.storyId, storyId));
+  }
+
+  async function decide(storyId: string, intent: "approve" | "reject") {
+    const requestId = newId("dreq");
+    const target = {
+      orgId,
+      projectId,
+      storyId,
+      planRevision: 1,
+      planDigest: "1".repeat(64),
+      intent,
+      reason: intent === "reject" ? "Reduce scope" : null,
+    };
+    await db.insert(storyPlanRequests).values({
+      ...target,
+      id: requestId,
+      decisionRevision: 0,
+      requestedBy: { type: "user", id: "user_test", name: null },
+      requestedAt: minutesAgo(50),
+      expiresAt: now,
+    });
+    await db.insert(storyPlanDecisions).values({
+      ...target,
+      id: newId("dec"),
+      requestId,
+      decisionRevision: 1,
+      confirmedBy: { type: "user", id: "user_test", name: null },
+    });
+    await db
+      .update(storyPlanStates)
+      .set({ decisionRevision: 1 })
+      .where(eq(storyPlanStates.storyId, storyId));
+  }
+
   const longDetail = "x".repeat(3_000);
 
   async function story(input: { id: string; orgId?: string; projectId?: string; title: string }) {
@@ -235,6 +318,23 @@ describe("project attention list", async () => {
       },
     ]);
 
+    for (const [id, title] of [
+      [planStory, "Plan without a notice"],
+      [approvedStory, "Approved plan"],
+      [rejectedStory, "Rejected plan"],
+      [revisedStory, "Revised plan"],
+    ] as const) {
+      await story({ id, title });
+      await plan(id);
+    }
+    await decide(approvedStory, "approve");
+    await decide(rejectedStory, "reject");
+    await decide(revisedStory, "approve");
+    await plan(revisedStory, 2);
+    await plan(ids.billingStory);
+    await plan(siblingStory, 1, { orgId, projectId: siblingProjectId });
+    await plan(otherStory, 1, { orgId: otherOrgId, projectId: otherProjectId });
+
     readerSecret = await key("attention reader", ["projects:read"], projectId);
     noReadSecret = await key("attention cost viewer", ["costs:read"], projectId);
     await app.ready();
@@ -293,6 +393,41 @@ describe("project attention list", async () => {
       ids.dismissed,
     ]);
     expect(all.total).toBe(4);
+  });
+
+  it.each([
+    "review_cycle_ready",
+    "review_cycle_decision",
+  ])("projects %s as a human notice without advertising a retry", async (kind) => {
+    const id = newId("attn");
+    const detail = "The recorded candidate requires a human decision before further correction.";
+    await db.insert(attentionItems).values({
+      id,
+      orgId,
+      projectId,
+      storyId: ids.billingStory,
+      turnId: ids.billingTurn,
+      kind,
+      title: "Delivery review needs a human decision",
+      detail,
+      status: "open",
+      createdAt: now,
+    });
+    try {
+      const page = await service.list(orgId, projectId, { ...open, kind: [kind] }, now);
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).toMatchObject({
+        id,
+        kind,
+        detail,
+        turnId: ids.billingTurn,
+        action: "dismiss",
+      });
+      const sibling = await service.list(orgId, siblingProjectId, { ...open, kind: [kind] }, now);
+      expect(sibling.items).toHaveLength(0);
+    } finally {
+      await db.delete(attentionItems).where(eq(attentionItems.id, id));
+    }
   });
 
   it("filters by kind while the kind facets still show every kind", async () => {
@@ -395,5 +530,301 @@ describe("project attention list", async () => {
       });
       expect(malformed.statusCode, query).toBe(400);
     }
+  });
+  it("pages whole stories with pending plans even when no notice exists", async () => {
+    const query = { category: "all" as const, limit: 1, offset: 0 };
+    const first = await service.listStories(orgId, projectId, query, now);
+    expect(first.counts).toEqual({ stories: 4, plans: 3, notices: 3, deliveries: 0 });
+    expect(first.total).toBe(4);
+    const pages = await Promise.all(
+      [0, 1, 2, 3].map((offset) =>
+        service.listStories(orgId, projectId, { ...query, offset }, now),
+      ),
+    );
+    const items = pages.flatMap((page) => page.items);
+    expect(new Set(items.map((item) => item.storyId)).size).toBe(4);
+    expect(items.at(-1)?.storyId).toBe(ids.checkoutStory);
+    const billing = items.find((item) => item.storyId === ids.billingStory);
+    if (!billing) throw new Error("Billing story missing");
+    expect(billing.noticeCount).toBe(2);
+    expect(billing.noticeKinds).toEqual([
+      { kind: "runtime_error", count: 1 },
+      { kind: "turn_error", count: 1 },
+    ]);
+    expect(billing.plan).toMatchObject({
+      revision: 1,
+      digest: "1".repeat(64),
+      decisionBrief: { status: "available", brief },
+    });
+    expect(items.find((item) => item.storyId === planStory)?.noticeCount).toBe(0);
+    expect(items.find((item) => item.storyId === revisedStory)?.plan?.revision).toBe(2);
+    expect(items.map((item) => item.storyId)).not.toContain(approvedStory);
+    expect(items.map((item) => item.storyId)).not.toContain(rejectedStory);
+    const beyond = await service.listStories(orgId, projectId, { ...query, offset: 100 }, now);
+    expect(beyond.items).toEqual([]);
+    expect(beyond.counts).toEqual(first.counts);
+  });
+
+  it("filters matching stories without discarding their other notices or plan", async () => {
+    const query = { category: "all" as const, limit: 10, offset: 0 };
+    const found = await service.listStories(orgId, projectId, { ...query, q: "%" }, now);
+    expect(found.counts).toEqual({ stories: 1, plans: 1, notices: 2, deliveries: 0 });
+    expect(found.items[0]?.noticeKinds).toHaveLength(2);
+    expect((await service.listStories(orgId, projectId, { ...query, q: "_" }, now)).total).toBe(0);
+    expect(
+      (await service.listStories(orgId, projectId, { ...query, category: "plans" }, now)).counts,
+    ).toEqual({ stories: 3, plans: 3, notices: 2, deliveries: 0 });
+    expect(
+      (await service.listStories(orgId, projectId, { ...query, category: "notices" }, now)).counts,
+    ).toEqual({ stories: 2, plans: 1, notices: 3, deliveries: 0 });
+    expect((await service.listStories(otherOrgId, projectId, query, now)).counts).toEqual({
+      stories: 0,
+      plans: 0,
+      notices: 0,
+      deliveries: 0,
+    });
+    const other = await service.listStories(otherOrgId, otherProjectId, query, now);
+    expect(other.counts).toEqual({ stories: 1, plans: 1, notices: 1, deliveries: 0 });
+  });
+
+  it("serves grouped reads with the same permission boundary and no cost data", async () => {
+    const url = `/v1/projects/${projectId}/attention/stories`;
+    const reader = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${readerSecret}` },
+    });
+    expect(reader.statusCode, reader.body).toBe(200);
+    expect(reader.headers["cache-control"]).toBe("no-store");
+    const expected = await service.listStories(orgId, projectId, {
+      category: "all",
+      limit: 10,
+      offset: 0,
+    });
+    expect(reader.json().items).toEqual(JSON.parse(JSON.stringify(expected.items)));
+    expect(reader.json()).not.toHaveProperty("spend");
+    for (const [target, headers, code] of [
+      [url, {}, 401],
+      [url, { authorization: `Bearer ${noReadSecret}` }, 403],
+      [
+        `/v1/projects/${siblingProjectId}/attention/stories`,
+        { authorization: `Bearer ${readerSecret}` },
+        404,
+      ],
+      [`/v1/projects/${otherProjectId}/attention/stories`, { cookie: ownerCookie }, 404],
+    ] as const) {
+      const response = await app.inject({ method: "GET", url: target, headers });
+      expect(response.statusCode).toBe(code);
+    }
+    for (const query of [
+      "category=urgent",
+      "limit=26",
+      "offset=-1",
+      "pullOffset=-1",
+      "pullOffset=1.5",
+      "limit=0",
+    ]) {
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: `${url}?${query}`,
+            headers: { cookie: ownerCookie },
+          })
+        ).statusCode,
+      ).toBe(400);
+    }
+  });
+  it("shows a project budget once and omits its state and figures without budget permission", async () => {
+    await db
+      .insert(projectBudgets)
+      .values({ id: newId("bud"), orgId, projectId, enabled: true, monthlyLimitCents: 0 });
+    const url = `/v1/projects/${projectId}/attention/stories`;
+    const owner = await app.inject({ url, headers: { cookie: ownerCookie } });
+    expect(owner.statusCode, owner.body).toBe(200);
+    expect(owner.json().budget).toMatchObject({
+      available: true,
+      state: "exceeded",
+      spentCents: 0,
+      monthlyLimitCents: 0,
+    });
+    expect(owner.json().items.every((item: Record<string, unknown>) => !("budget" in item))).toBe(
+      true,
+    );
+    const reader = await app.inject({ url, headers: { authorization: `Bearer ${readerSecret}` } });
+    expect(reader.json().budget).toEqual({ available: false, reason: "permission" });
+    expect(reader.json().counts).toEqual(owner.json().counts);
+    await db
+      .update(projectBudgets)
+      .set({ enabled: false })
+      .where(eq(projectBudgets.projectId, projectId));
+    expect((await app.inject({ url, headers: { cookie: ownerCookie } })).json().budget.state).toBe(
+      "disabled",
+    );
+  });
+
+  it("covers every other open PR without hiding historical links or duplicating active deliveries", async () => {
+    const repositoryId = newId("repo");
+    const scope = { orgId, projectId };
+    await db.insert(projectRepositories).values({
+      id: repositoryId,
+      ...scope,
+      owner: "example",
+      name: `inventory-${suffix}`,
+      defaultBranch: "main",
+    });
+    const repository = `example/inventory-${suffix}`;
+    const head = "a".repeat(40);
+    await db.insert(githubPullRequests).values(
+      Array.from({ length: 27 }, (_, i) => ({
+        id: newId("ghp"),
+        ...scope,
+        repositoryId,
+        number: i + 1,
+        title: i === 0 ? "100% literal_review" : `Inventory change ${i + 1}`,
+        state: i < 25 ? "open" : i === 25 ? "closed" : "merged",
+        draft: i === 1,
+        headRef: "feature",
+        headSha: head,
+        baseRef: "main",
+        htmlUrl: `https://github.com/${repository}/pull/${i + 1}`,
+        syncedAt: now,
+        githubUpdatedAt: minutesAgo(100 - i),
+        ciState: i === 2 ? "success" : null,
+        ciHeadSha: i === 2 ? "b".repeat(40) : null,
+      })),
+    );
+    const linked = new Map<string, string>();
+    for (const [status, number] of [
+      ["working", 25],
+      ["done", 24],
+      ["archived", 23],
+      ["deleted", 22],
+      ["source", 21],
+    ] as const) {
+      const id = newId("story");
+      linked.set(status, id);
+      await story({ id, title: `Associated ${status}` });
+      await db
+        .update(stories)
+        .set({
+          status: status === "done" || status === "archived" ? status : "working",
+          ...(status === "deleted" ? { deletedAt: now } : {}),
+          ...(status === "source"
+            ? { provider: "github", repositoryId, externalId: `pull-request:${number}` }
+            : {}),
+        })
+        .where(eq(stories.id, id));
+      if (status !== "source")
+        await db.insert(storyDeliveryPullRequests).values({
+          ...scope,
+          storyId: id,
+          repositoryId,
+          pullNumber: number,
+          required: true,
+          isPrimary: true,
+        });
+    }
+    // Same PR numbers in another project and tenant may not leak into this inventory.
+    for (const [tenant, project] of [
+      [orgId, siblingProjectId],
+      [otherOrgId, otherProjectId],
+    ] as const) {
+      const repo = newId("repo");
+      await db.insert(projectRepositories).values({
+        id: repo,
+        orgId: tenant,
+        projectId: project,
+        owner: "example",
+        name: `outside-${project}`,
+        defaultBranch: "main",
+      });
+      await db.insert(githubPullRequests).values({
+        id: newId("ghp"),
+        orgId: tenant,
+        projectId: project,
+        repositoryId: repo,
+        number: 1,
+        title: "Outside secret PR",
+        state: "open",
+        headRef: "feature",
+        headSha: head,
+        baseRef: "main",
+        htmlUrl: "https://github.com/example/outside/pull/1",
+      });
+    }
+    const query = { category: "all" as const, limit: 10, offset: 0 };
+    const pages = await Promise.all(
+      [0, 10, 20].map((pullOffset) =>
+        service.listStories(orgId, projectId, { ...query, pullOffset }, now),
+      ),
+    );
+    const pulls = pages.flatMap((page) => page.otherPullRequests.items);
+    expect(pages.map((page) => page.otherPullRequests.total)).toEqual([24, 24, 24]);
+    expect(pulls.map((pull) => pull.number)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+    expect(new Set(pulls.map((pull) => `${pull.repository}#${pull.number}`)).size).toBe(24);
+    expect(pulls.every((pull) => pull.repository === repository)).toBe(true);
+    expect(pulls[2]?.checks).toMatchObject({
+      state: "success",
+      current: false,
+      headSha: "b".repeat(40),
+    });
+    expect(pulls[1]?.draft).toBe(true);
+    expect(pulls.find((pull) => pull.number === 24)?.stories).toMatchObject([
+      { id: linked.get("done"), status: "done", relation: "delivery" },
+    ]);
+    expect(pulls.find((pull) => pull.number === 23)?.stories).toMatchObject([
+      { id: linked.get("archived"), status: "archived" },
+    ]);
+    expect(pulls.find((pull) => pull.number === 22)?.stories).toEqual([]);
+    expect(pulls.find((pull) => pull.number === 21)?.stories).toMatchObject([
+      { id: linked.get("source"), relation: "source" },
+    ]);
+    const active = pages[0]?.items.find((item) => item.storyId === linked.get("working"));
+    expect(active?.delivery?.pullRequests.map((pull) => pull.number)).toEqual([25]);
+    for (const q of ["%", "_", "100% LITERAL_REVIEW"]) {
+      const found = await service.listStories(orgId, projectId, { ...query, q }, now);
+      expect(found.otherPullRequests.items.map((pull) => pull.number)).toEqual([1]);
+    }
+    const whole = await service.listStories(
+      orgId,
+      projectId,
+      { ...query, q: "Inventory change 25" },
+      now,
+    );
+    expect(whole.items.map((item) => item.storyId)).toEqual([linked.get("working")]);
+    expect(whole.otherPullRequests.total).toBe(0);
+    const onlyPulls = await service.listStories(
+      orgId,
+      projectId,
+      { ...query, category: "pulls", pullOffset: 20 },
+      now,
+    );
+    expect(onlyPulls.total).toBe(0);
+    expect(onlyPulls.otherPullRequests.items).toHaveLength(4);
+    const beyond = await service.listStories(orgId, projectId, { ...query, pullOffset: 1000 }, now);
+    expect(beyond.otherPullRequests).toMatchObject({ total: 24, items: [] });
+    expect(
+      (await service.listStories(otherOrgId, projectId, query, now)).otherPullRequests.total,
+    ).toBe(0);
+    const http = await app.inject({
+      url: `/v1/projects/${projectId}/attention/stories?category=pulls&pullOffset=20`,
+      headers: { authorization: `Bearer ${readerSecret}` },
+    });
+    expect(http.statusCode, http.body).toBe(200);
+    expect(
+      http.json().otherPullRequests.items.map((pull: { number: number }) => pull.number),
+    ).toEqual([21, 22, 23, 24]);
+    // Moving a story back to active moves its PR to its delivery card on refresh.
+    const completedStory = linked.get("done");
+    if (!completedStory) throw new Error("Missing completed story fixture");
+    await db.update(stories).set({ status: "working" }).where(eq(stories.id, completedStory));
+    const moved = await service.listStories(orgId, projectId, { ...query, limit: 25 }, now);
+    expect(moved.otherPullRequests.total).toBe(23);
+    expect(moved.otherPullRequests.items.some((pull) => pull.number === 24)).toBe(false);
+    expect(
+      moved.items.find((item) => item.storyId === linked.get("done"))?.delivery?.pullRequests[0]
+        ?.number,
+    ).toBe(24);
   });
 });

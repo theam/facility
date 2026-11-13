@@ -12,7 +12,6 @@ const crew = [
   "architect",
   "builder",
   "pr-reviewer",
-  "address-review",
   "ci-doctor",
   "security-audit",
 ];
@@ -86,6 +85,7 @@ test("init installs the complete 0.12 repository contract and nothing from the l
   const expected = [".facility.yml", ...crew.map((name) => `.agents/${name}.md`)];
   for (const file of expected) assert.ok(existsSync(join(dir, file)), `missing ${file}`);
   for (const forbidden of [
+    ".agents/address-review.md",
     ".facility.json",
     "STANDARD.md",
     ".github/workflows/facility-crew.yml",
@@ -413,4 +413,18 @@ test("local commands reject unknown and valueless flags and legacy commands", ()
   const legacy = runCli(["runs", "--json"]);
   assert.equal(legacy.status, 1);
   assert.match(legacy.stderr, /Unknown command: runs/);
+});
+
+test("doctor reports an explicit migration for an existing address-review manifest", (t) => {
+  const dir = makeTargetRepo();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const init = runCli(["init", "--yes", "--repo=acme/demo-app", "--start=npm run dev"], dir);
+  assert.equal(init.status, 0, init.stdout + init.stderr);
+  const legacy = join(dir, ".agents/address-review.md");
+  writeFileSync(legacy, "existing project instructions");
+  const result = runCli(["doctor", "--json"], dir);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.match(report.warnings[0], /existing Builder/);
+  assert.equal(readFileSync(legacy, "utf8"), "existing project instructions");
 });
