@@ -178,7 +178,14 @@ function workspaceKickstartAnswers(
   };
 }
 
-function inferStartCommand(existing: Map<string, string>, packageManager: string) {
+// Facility waits for `environment.start` to exit before it checks readiness, so a package script
+// that keeps a dev server in the foreground would hold the environment phase until its timeout.
+// The proposed command runs it detached and keeps its output in the workspace.
+function detachedStart(command: string) {
+  return `nohup ${command} >>/workspace/.facility/start.log 2>&1 </dev/null &`;
+}
+
+export function inferStartCommand(existing: Map<string, string>, packageManager: string) {
   if (
     ["compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"].some((path) =>
       existing.has(path),
@@ -200,7 +207,7 @@ function inferStartCommand(existing: Map<string, string>, packageManager: string
               : existing.has("yarn.lock")
                 ? "yarn"
                 : "npm";
-        return manager === "npm" ? `npm run ${script}` : `${manager} ${script}`;
+        return detachedStart(manager === "npm" ? `npm run ${script}` : `${manager} ${script}`);
       }
     } catch {
       // The explicit failing command below keeps an incomplete kickstart honest.

@@ -25,7 +25,8 @@ facility instance bootstrap
 ## `facility init`
 
 Init detects the GitHub remote, package manager, setup command, development command, and likely
-service port. Interactive mode lets you correct those values. `--yes` accepts detected or explicit
+service port. A detected package `dev` or `start` script is written detached, with its output in
+`/workspace/.facility/start.log`, because Facility waits for `start` to exit. Interactive mode lets you correct those values. `--yes` accepts detected or explicit
 values without prompts.
 
 | Flag | Purpose |
