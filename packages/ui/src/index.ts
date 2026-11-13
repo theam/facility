@@ -13,6 +13,7 @@ export {
   PillTag,
   StatusDot,
   toneFor,
+  VisuallyHidden,
 } from "./primitives";
 export { Card, cardClassName, KpiCard, StatusPill } from "./surface";
 export type { TerminalLine } from "./terminal";
