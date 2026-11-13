@@ -15,6 +15,9 @@ export type AgentTurnRequest = {
   cwd: string;
   nativeSessionId?: string;
   timeoutMs?: number;
+  maxBudgetUsd?: number;
+  /** Restricts the engine to reading: no edits, commits, pushes or other writing tools. */
+  readOnly?: boolean;
   signal?: AbortSignal;
   environment?: Record<string, string>;
   onEvent?: (event: AgentTurnEvent) => void;
@@ -189,6 +192,28 @@ done
 set -e
 exit "$status"`;
 
+/** Tools a read-only Claude Code turn may use without approval. Print mode cannot ask,
+ * so every other tool call (edits, writes, other commands, MCP writes) is denied. Nothing
+ * that fetches from a remote is allowed: `git fetch` can run commands and reach any host. */
+export const CLAUDE_READ_ONLY_TOOLS = [
+  "Read",
+  "Grep",
+  "Glob",
+  "Bash(git diff:*)",
+  "Bash(git log:*)",
+  "Bash(git show:*)",
+  "Bash(git status:*)",
+  "Bash(git rev-parse:*)",
+  "Bash(git ls-files:*)",
+  "Bash(gh pr view:*)",
+  "Bash(gh pr diff:*)",
+  "Bash(gh pr checks:*)",
+  "Bash(gh run view:*)",
+];
+
+/** Denied even though an allowed prefix matches: git can write any file with `--output`. */
+export const CLAUDE_READ_ONLY_DENIED = ["Edit", "Write", "NotebookEdit", "Bash(git * --output*)"];
+
 export class ClaudeCodeEngine extends CliAgentEngine {
   readonly name = "claude_code" as const;
 
@@ -199,11 +224,28 @@ export class ClaudeCodeEngine extends CliAgentEngine {
       "--output-format",
       "stream-json",
       "--verbose",
-      "--permission-mode",
-      "bypassPermissions",
+      ...(request.readOnly
+        ? [
+            "--permission-mode",
+            "default",
+            "--allowedTools",
+            CLAUDE_READ_ONLY_TOOLS.join(","),
+            "--disallowedTools",
+            CLAUDE_READ_ONLY_DENIED.join(","),
+            // Files the reviewed code or an earlier turn could write must not widen the
+            // turn: no user, project or local settings, hooks or MCP servers apply.
+            "--setting-sources",
+            "",
+            "--settings",
+            JSON.stringify({ disableAllHooks: true }),
+            "--strict-mcp-config",
+          ]
+        : ["--permission-mode", "bypassPermissions"]),
       "--model",
       request.manifest.model,
     ];
+    if (request.maxBudgetUsd !== undefined)
+      args.push("--max-budget-usd", request.maxBudgetUsd.toFixed(6));
     if (request.nativeSessionId) args.push("--resume", request.nativeSessionId);
     return this.execute(request, "claude", args, new ClaudeEventParser());
   }
@@ -215,7 +257,10 @@ export class CodexEngine extends CliAgentEngine {
   async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
     const shared = [
       "--json",
-      "--dangerously-bypass-approvals-and-sandbox",
+      // Read-only turns run in Codex's read-only sandbox and never ask for approval.
+      ...(request.readOnly
+        ? ["--sandbox", "read-only", "-c", 'approval_policy="never"']
+        : ["--dangerously-bypass-approvals-and-sandbox"]),
       "--model",
       request.manifest.model,
     ];

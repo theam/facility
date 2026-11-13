@@ -1,4 +1,4 @@
-import { cx, Eyebrow } from "@facility/ui";
+import { buttonClassName, cardClassName, cx } from "@facility/ui";
 import Link from "next/link";
 import { AttentionRow } from "@/components/attention/attention-row";
 import { ErrorNotice, Offline } from "@/components/offline";
@@ -13,15 +13,14 @@ import {
   toAttentionQuery,
   toggleKind,
 } from "@/lib/attention-presentation";
-import { attentionKindLabel, attentionNotice, attentionSignals } from "@/lib/overview-presentation";
+import { attentionKindLabel, attentionNotice } from "@/lib/overview-presentation";
 import { can } from "@/lib/permissions";
 
-export const metadata = { title: "attention" };
+export const metadata = { title: "notices" };
 
 /**
- * Everything the project raised for a person, newest first. The overview shows
- * the latest few; this page is where all of them can be read, searched and
- * handled. Reading it never wakes a machine or starts an agent.
+ * Recorded project notices, newest first, including their resolved history.
+ * Plans, delivery reviews and project conditions live on Attention. Reading it never wakes a machine or starts an agent.
  */
 export default async function ProjectAttentionPage({
   params,
@@ -32,20 +31,15 @@ export default async function ProjectAttentionPage({
 }) {
   const [{ projectId }, rawSearch] = await Promise.all([params, searchParams]);
   const search = parseAttentionSearch(rawSearch);
-  // Failing checks and budget alerts are live state, not stored notices. They
-  // lead the unfiltered open view so it holds everything the overview counts.
-  const withSignals = search.status === "open" && !isFiltered(search) && search.page === 1;
-  const [result, me, overview] = await Promise.all([
+  const [result, me] = await Promise.all([
     api.projectAttention(projectId, toAttentionQuery(search)),
     api.me(),
-    withSignals ? api.projectOverview(projectId) : null,
   ]);
   if (!result.ok && result.offline) return <Offline />;
 
   const now = new Date();
   const base = `/projects/${encodeURIComponent(projectId)}`;
   const canExecute = me.ok && can(me.data.permissions, "workspaces:execute");
-  const signals = overview?.ok ? attentionSignals(overview.data, projectId) : [];
   const page = result.ok ? result.data : null;
   const entries = page ? page.items.map((item) => attentionNotice(item, projectId)) : [];
   const total = page?.total ?? 0;
@@ -54,19 +48,19 @@ export default async function ProjectAttentionPage({
   const lastPage = Math.max(1, Math.ceil(total / ATTENTION_PAGE_SIZE));
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6">
       <LiveRefresh seconds={15} />
       <header className="flex flex-col gap-1.5">
         <Link href={base} className="w-fit text-[12px] text-(--mut) hover:text-(--ink)">
-          ← Overview
+          ← Attention
         </Link>
-        <Eyebrow>attention</Eyebrow>
-        <h1 className="text-[clamp(22px,3vw,32px)] font-semibold tracking-tight">
-          Needs your attention
-        </h1>
-        {page ? (
-          <p className="text-[12.5px] text-(--mut)">{headerLine(page, signals.length, search)}</p>
-        ) : null}
+        <p className="eyebrow">Project history</p>
+        <h1 className="text-[26px] font-semibold tracking-tight">Notices</h1>
+        {page ? <p className="text-[12.5px] text-(--mut)">{headerLine(page, search)}</p> : null}
+        <p className="text-sm text-(--mut)">
+          Questions, failures and resolved notices. Plans and delivery reviews are grouped in
+          Attention.
+        </p>
       </header>
 
       {page ? (
@@ -93,12 +87,9 @@ export default async function ProjectAttentionPage({
               name="q"
               defaultValue={search.q}
               placeholder="Search notices and stories"
-              className="h-9 w-full min-w-0 border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-72"
+              className="h-9 w-full min-w-0 rounded-md border border-(--line) bg-(--bg-subtle) px-3 text-[13px] text-(--ink) placeholder:text-(--dim) hover:border-(--line-strong) sm:w-72"
             />
-            <button
-              type="submit"
-              className="h-9 border border-(--line) px-3 text-[12px] text-(--mut) hover:text-(--ink)"
-            >
+            <button type="submit" className={buttonClassName()}>
               Search
             </button>
             {isFiltered(search) ? (
@@ -114,30 +105,6 @@ export default async function ProjectAttentionPage({
         </div>
       ) : null}
 
-      {withSignals && signals.length > 0 ? (
-        <section
-          aria-label="Also waiting on you"
-          className="border border-(--bad)/50 bg-(--bg-subtle) px-5 pt-4 sm:px-6"
-        >
-          <h2 className="font-semibold">Also waiting on you · {signals.length}</h2>
-          <p className="mt-1 text-[12px] text-(--dim)">
-            Live state from pull requests and the budget. These clear on their own once the checks
-            pass or the budget allows new turns.
-          </p>
-          <div className="mt-3 flex flex-col">
-            {signals.map((entry) => (
-              <AttentionRow
-                key={entry.key}
-                entry={entry}
-                projectId={projectId}
-                now={now}
-                canExecute={canExecute}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
       <section aria-label="Notices" className="flex flex-col gap-3">
         {!result.ok ? (
           <ErrorNotice message={`Couldn't load the notices — ${result.message}`} />
@@ -145,7 +112,7 @@ export default async function ProjectAttentionPage({
           <EmptyState projectId={projectId} search={search} total={total} />
         ) : (
           <>
-            <div className="flex flex-col border-b border-(--line)">
+            <div className={`${cardClassName} flex flex-col overflow-hidden px-5 sm:px-6`}>
               {entries.map((entry) => (
                 <AttentionRow
                   key={entry.key}
@@ -167,7 +134,7 @@ export default async function ProjectAttentionPage({
                 {search.page > 1 ? (
                   <Link
                     href={attentionHref(projectId, search, { page: search.page - 1 })}
-                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className={buttonClassName()}
                   >
                     ← Newer
                   </Link>
@@ -178,7 +145,7 @@ export default async function ProjectAttentionPage({
                 {search.page < lastPage ? (
                   <Link
                     href={attentionHref(projectId, search, { page: search.page + 1 })}
-                    className="border border-(--line) px-3 py-1.5 hover:text-(--ink)"
+                    className={buttonClassName()}
                   >
                     Older →
                   </Link>
@@ -192,7 +159,7 @@ export default async function ProjectAttentionPage({
   );
 }
 
-function headerLine(page: ProjectAttention, signals: number, search: AttentionSearch) {
+function headerLine(page: ProjectAttention, search: AttentionSearch) {
   if (isFiltered(search)) {
     return `${page.total} ${search.status} ${page.total === 1 ? "notice matches" : "notices match"}`;
   }
@@ -200,7 +167,6 @@ function headerLine(page: ProjectAttention, signals: number, search: AttentionSe
     page.counts.open === 0
       ? "No open notices"
       : `${page.counts.open} open ${page.counts.open === 1 ? "notice" : "notices"}`,
-    signals > 0 ? `${signals} from pull requests and the budget` : null,
     `${page.counts.resolved} resolved`,
   ];
   return parts.filter((part): part is string => part !== null).join(" · ");
@@ -285,10 +251,10 @@ function KindChips({
 
 function chipClass(selected: boolean) {
   return cx(
-    "inline-flex h-8 items-center gap-1.5 border px-2.5 text-[12px] transition-colors",
+    "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-medium transition-colors",
     selected
-      ? "border-(--line-strong) text-(--ink)"
-      : "border-(--line) text-(--mut) hover:text-(--ink)",
+      ? "border-(--ink) bg-(--ink) text-white"
+      : "border-(--line) bg-(--bg-subtle) text-(--mut) hover:text-(--ink)",
   );
 }
 
@@ -305,7 +271,7 @@ function EmptyState({
   // pages still hold some.
   if (total > 0) {
     return (
-      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+      <div className="flex flex-col items-start gap-3 rounded-xl border border-(--line) bg-(--bg-subtle) p-8 text-sm text-(--dim)">
         <p>No notices left on this page.</p>
         <Link
           href={attentionHref(projectId, search, { page: 1 })}
@@ -318,7 +284,7 @@ function EmptyState({
   }
   if (isFiltered(search)) {
     return (
-      <div className="flex flex-col items-start gap-3 border border-(--line) p-8 text-sm text-(--dim)">
+      <div className="flex flex-col items-start gap-3 rounded-xl border border-(--line) bg-(--bg-subtle) p-8 text-sm text-(--dim)">
         <p>Nothing matches these filters.</p>
         <Link
           href={attentionHref(projectId, search, { q: "", kind: [], page: 1 })}
@@ -330,7 +296,7 @@ function EmptyState({
     );
   }
   return (
-    <p className="border border-(--line) p-8 text-sm leading-relaxed text-(--dim)">
+    <p className="rounded-xl border border-(--line) bg-(--bg-subtle) p-8 text-sm leading-relaxed text-(--dim)">
       {search.status === "open"
         ? "No open notices. When an agent asks a question or a run fails, it appears here with the action that handles it."
         : "No resolved notices yet. Answered, retried and dismissed notices are kept here."}

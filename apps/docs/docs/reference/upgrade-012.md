@@ -33,8 +33,8 @@ rollback window have closed.
 
 Regenerate or update `.agents/*.md` before connecting a repository. The 0.12 schema accepts only
 `reasoning_effort` under `options`; remove the former `max_turns` field. Permission, sandbox, and
-tool-allowlist fields are also rejected because every agent now receives the same full workspace
-and project GitHub capability. One invalid manifest prevents that repository's catalog from being
+tool-allowlist fields are also rejected. Native turns share workspace and project GitHub
+capabilities. See [the migration for address-review](../concepts/agents-as-code.md#migrate-an-existing-catalog). One invalid manifest prevents that repository's catalog from being
 activated, so run kickstart validation before the setup pull request is merged.
 
 Names listed in `.facility.yml` under `environment.secrets` or `environment.variables` now resolve

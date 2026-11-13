@@ -55,7 +55,7 @@ export function ProjectSwitcher({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        className="flex min-w-0 items-center gap-2 font-mono text-[13px] text-(--ink) hover:text-(--accent)"
+        className="flex min-h-8 min-w-0 items-center gap-2 rounded-full border border-(--line) bg-(--bg-subtle) px-3 text-[13px] font-medium text-(--ink) hover:bg-(--bg)"
       >
         <span className="truncate">{current ? current.slug : "select project"}</span>
         <span aria-hidden className="text-[9px] text-(--dim)">
@@ -63,7 +63,7 @@ export function ProjectSwitcher({
         </span>
       </button>
       {open ? (
-        <div className="absolute left-0 top-full z-50 mt-2 w-72 border border-(--line) bg-(--bg) shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+        <div className="absolute left-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-lg border border-(--line) bg-(--bg-subtle) shadow-(--shadow-lift)">
           <input
             ref={inputRef}
             value={query}

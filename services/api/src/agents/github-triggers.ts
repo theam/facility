@@ -11,7 +11,9 @@ import {
 import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
+import { storyDeliversThroughCycle } from "../stories/review-cycle-rules.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
+import { workflowPolicyFromSettings } from "../stories/workflow-policy.js";
 import {
   type ProjectManifestSource,
   projectWorkspaceInput,
@@ -120,6 +122,7 @@ export class GithubAgentTriggerService {
           orgId: projects.orgId,
           repositoryId: projectRepositories.id,
           installationId: projectRepositories.installationId,
+          settings: projects.settings,
         })
         .from(projectRepositories)
         .innerJoin(
@@ -200,8 +203,16 @@ export class GithubAgentTriggerService {
         ),
       ),
     );
+    // With the review cycle on, the cycle reviews the pull requests of Facility stories
+    // and their Builder corrects them; every other pull request keeps its GitHub review.
+    const cycle = workflowPolicyFromSettings(project.settings).policy.reviewCycle;
+    const cycleOwnsEvent = !!cycle && !!linkedStory && storyDeliversThroughCycle(linkedStory);
     const matches = manifests
       .filter((manifest) => manifest.enabled)
+      .filter(
+        (manifest) =>
+          !cycleOwnsEvent || ![cycle?.reviewerAgent, "address-review"].includes(manifest.name),
+      )
       .flatMap((manifest) =>
         manifest.triggers
           .filter(

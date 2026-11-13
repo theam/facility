@@ -12,6 +12,7 @@ import type { AgentCatalogService } from "../agents/catalog.js";
 import { authorizePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import type { InteractivePlanActor } from "./plan-confirmation.js";
+import { reviewCatalogProblem } from "./review-cycle-rules.js";
 import {
   verifyWorkflowConfirmationProof,
   WORKFLOW_CONFIRMATION_TTL_MS,
@@ -136,7 +137,7 @@ async function configuredAgents(
   scope: WorkflowProjectScope,
   policy: StoryWorkflowPolicy,
 ) {
-  if (!policy.planApprovalAgents.length) return null;
+  if (!policy.planApprovalAgents.length && !policy.reviewCycle) return null;
   const snapshot = await catalog.refreshSnapshot(scope.orgId, scope.projectId);
   if (!snapshot.repositoryId)
     throw new ApiError(
@@ -151,6 +152,10 @@ async function configuredAgents(
         "workflow_agent_unavailable",
         `Choose an enabled configured agent: ${name}`,
       );
+  if (policy.reviewCycle) {
+    const problem = reviewCatalogProblem(policy.reviewCycle, snapshot.manifests);
+    if (problem) throw new ApiError(409, "review_catalog_incompatible", problem);
+  }
   return snapshot.repositoryId;
 }
 export async function reviewWorkflowPolicy(

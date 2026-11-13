@@ -2,13 +2,13 @@ import {
   type DeliveryAcceptanceReceipt,
   type DeliveryAcceptanceRequest,
   type DeliveryAcceptanceSnapshot,
-  DeliveryAcceptanceSnapshotSchema,
   newId,
   type PlanActor,
   type RequestDeliveryAcceptanceBody,
   type StoryDeliveryAcceptance,
 } from "@facility/core";
 import {
+  attentionItems,
   type FacilityDb,
   githubPullRequests,
   stories,
@@ -16,14 +16,21 @@ import {
   storyDeliveryAcceptances,
   storyDeliveryPullRequests,
   storyPreviewConvergences,
+  turns,
 } from "@facility/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { z } from "zod";
 import { authorizePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import { readStoryDelivery } from "./delivery.js";
+import { acceptanceSnapshot, sameAcceptedCandidate } from "./delivery-acceptance-snapshot.js";
 import { appendStoryEvidence } from "./evidence.js";
 import type { InteractivePlanActor } from "./plan-confirmation.js";
+import {
+  isReviewActive,
+  latestReviewCycle,
+  REVIEW_DECISION_ATTENTION,
+} from "./review-cycle-state.js";
 import {
   verifyWorkflowConfirmationProof,
   WORKFLOW_CONFIRMATION_TTL_MS,
@@ -111,75 +118,54 @@ async function candidateSnapshot(
   requireReadyPreview: boolean,
 ): Promise<DeliveryAcceptanceSnapshot> {
   const policy = await readWorkflowPolicy(db, scope);
+  let reviewInProgress = false;
+  if (requireReadyPreview) {
+    const cycle = await latestReviewCycle(db, scope);
+    const builder = policy.policy.reviewCycle?.builderAgent;
+    const [building] = builder
+      ? await db
+          .select({ id: turns.id })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, scope.orgId),
+              eq(turns.projectId, scope.projectId),
+              eq(turns.storyId, scope.storyId),
+              eq(turns.agentName, builder),
+              inArray(turns.state, ["queued", "running"]),
+            ),
+          )
+          .limit(1)
+      : [];
+    reviewInProgress = !!building || (!!cycle && isReviewActive(cycle.phase));
+  }
   const delivery = await readStoryDelivery(db, scope);
   const plan = await readWorkflowPlan(db, scope);
-  if (delivery.candidate.state !== "recorded" || !delivery.candidate.revision)
-    throw new ApiError(
-      409,
-      "workflow_candidate_unavailable",
-      "Declare the complete required PR set and refresh its current heads before accepting delivery",
-    );
-  if (
-    plan.state.status === "rejected" ||
-    (policy.policy.planApprovalAgents.length && plan.state.status !== "approved")
-  )
-    throw new ApiError(
-      409,
-      "workflow_plan_approval_required",
-      "Approve the current plan before accepting its delivery",
-    );
-  let previewGeneration: string | null = null;
-  if (requireReadyPreview && policy.policy.requirePreviewForAcceptance) {
-    const [preview] = await db
-      .select()
-      .from(storyPreviewConvergences)
-      .where(
-        and(
-          eq(storyPreviewConvergences.orgId, scope.orgId),
-          eq(storyPreviewConvergences.projectId, scope.projectId),
-          eq(storyPreviewConvergences.storyId, scope.storyId),
-        ),
-      )
-      .for("share")
-      .limit(1);
-    if (
-      preview?.state !== "ready" ||
-      preview.desiredGeneration !== delivery.candidate.revision ||
-      preview.deployedGeneration !== delivery.candidate.revision
-    )
-      throw new ApiError(
-        409,
-        "workflow_preview_not_ready",
-        "Wait for the preview of the complete current candidate before accepting it",
-      );
-    previewGeneration = preview.deployedGeneration;
-  }
-  return DeliveryAcceptanceSnapshotSchema.parse({
-    candidateRevision: delivery.candidate.revision,
-    scopeRevision: delivery.scope.revision,
-    planRevision: plan.state.revision,
-    planDigest: plan.plan?.digest ?? null,
-    decisionRevision: plan.state.decisionRevision,
-    policyRevision: policy.revision,
+  const [preview] =
+    requireReadyPreview && policy.policy.requirePreviewForAcceptance
+      ? await db
+          .select()
+          .from(storyPreviewConvergences)
+          .where(
+            and(
+              eq(storyPreviewConvergences.orgId, scope.orgId),
+              eq(storyPreviewConvergences.projectId, scope.projectId),
+              eq(storyPreviewConvergences.storyId, scope.storyId),
+            ),
+          )
+          .for("share")
+          .limit(1)
+      : [];
+  return acceptanceSnapshot(
+    {
+      policy,
+      delivery,
+      plan: { state: plan.state, digest: plan.plan?.digest ?? null },
+      preview: preview ?? null,
+      reviewInProgress,
+    },
     acceptanceRevision,
-    previewGeneration,
-    pullRequests: delivery.pullRequests
-      .filter((pull) => pull.required)
-      .map((pull) => ({
-        repository: pull.repository,
-        number: pull.number,
-        headSha: pull.headSha,
-        url: pull.url,
-      }))
-      .sort((a, b) => a.repository.localeCompare(b.repository) || a.number - b.number),
-  });
-}
-function sameAcceptedCandidate(a: DeliveryAcceptanceSnapshot, b: DeliveryAcceptanceSnapshot) {
-  // A retained workspace may be suspended after acceptance. Keep preview evidence
-  // in the receipt without making running compute a permanent acceptance condition.
-  return (
-    workflowDigest({ ...a, previewGeneration: null }) ===
-    workflowDigest({ ...b, previewGeneration: null })
+    requireReadyPreview,
   );
 }
 export async function readDeliveryAcceptance(
@@ -433,6 +419,24 @@ export async function confirmDeliveryAcceptance(
       confirmedBy: { type: "user", id: actor.id, name: actor.name },
       confirmedAt: now,
     });
+    await tx
+      .update(attentionItems)
+      .set({
+        status: "resolved",
+        resolution: "delivery_accepted",
+        resolvedAt: now,
+        updatedAt: now,
+        resolvedBy: { type: "user", id: actor.id },
+      })
+      .where(
+        and(
+          eq(attentionItems.orgId, scope.orgId),
+          eq(attentionItems.projectId, scope.projectId),
+          eq(attentionItems.storyId, scope.storyId),
+          eq(attentionItems.status, "open"),
+          inArray(attentionItems.kind, [...REVIEW_DECISION_ATTENTION]),
+        ),
+      );
     await appendStoryEvidence(tx, {
       ...scope,
       source: "facility",

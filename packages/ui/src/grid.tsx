@@ -2,20 +2,15 @@ import type { HTMLAttributes } from "react";
 import { cx } from "./cx";
 
 /**
- * The signature card layout: 1px hairline seams via grid gap over a --line
- * backdrop. Children must set their own `bg-(--bg)` or `bg-(--card)`.
+ * A grid of cards. Each cell is its own white card, so an incomplete last row
+ * leaves canvas, not an empty tile.
  */
 export function HairlineGrid({
   className,
   cols = "sm:grid-cols-2 lg:grid-cols-3",
   ...props
 }: HTMLAttributes<HTMLDivElement> & { cols?: string }) {
-  return (
-    <div
-      className={cx("grid gap-px border border-(--line) bg-(--line)", cols, className)}
-      {...props}
-    />
-  );
+  return <div className={cx("grid gap-3", cols, className)} {...props} />;
 }
 
 export function Cell({
@@ -26,8 +21,8 @@ export function Cell({
   return (
     <div
       className={cx(
-        "group relative bg-(--bg) p-6 sm:p-8",
-        interactive && "transition-colors hover:bg-(--card)",
+        "group relative overflow-hidden rounded-xl border border-(--line) bg-(--bg-subtle) p-6 shadow-(--shadow-card) sm:p-8",
+        interactive && "transition-colors hover:border-(--line-strong)",
         className,
       )}
       {...props}

@@ -17,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { AgentCatalogService, GithubAgentCatalogSource } from "../src/agents/catalog.js";
 import { buildApp } from "../src/app.js";
-import type { GithubClientFactory } from "../src/github/client.js";
+import type { GithubClientFactory, GithubMaintainerTokenFactory } from "../src/github/client.js";
 import { repositoryDevelopmentBranch } from "../src/github/development-branch.js";
 import { kickstartRepo } from "../src/github/kickstart.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
@@ -227,7 +227,7 @@ it("selects development sources and preserves metadata, settings, stories and qu
   expect(
     (await new GithubProjectManifestSource(db, factory).load(orgId, projectId)).environment.setup,
   ).toBe("echo development");
-  const tokenFactory = vi.fn(async () => ({
+  const tokenFactory = vi.fn(async (_input: Parameters<GithubMaintainerTokenFactory>[0]) => ({
     token: "fake-installation-token",
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     gitIdentity: { name: "test[bot]", email: "test@example.com" },
@@ -236,6 +236,15 @@ it("selects development sources and preserves metadata, settings, stories and qu
     (await new GithubWorkspaceCredentialBroker(db, tokenFactory).issue(orgId, projectId))
       .repositories[0],
   ).toMatchObject({ defaultBranch: "main", developmentBranch: "develop" });
+  // Without options the token keeps the installation's permissions; a read-only turn
+  // asks GitHub for a token narrowed to reading.
+  expect(tokenFactory.mock.calls.at(-1)?.[0]).not.toHaveProperty("permissions");
+  await new GithubWorkspaceCredentialBroker(db, tokenFactory).issue(orgId, projectId, {
+    readOnly: true,
+  });
+  expect(tokenFactory.mock.calls.at(-1)?.[0]).toMatchObject({
+    permissions: { contents: "read", pull_requests: "read", metadata: "read" },
+  });
   expect(
     await repositoryDevelopmentBranch(db, {
       orgId,

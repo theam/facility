@@ -101,10 +101,10 @@ export function DisconnectRepository({
           ) : null}
           <div className="flex gap-2">
             <Button size="sm" disabled={!confirmed || pending} onClick={disconnect}>
-              {pending ? "disconnecting…" : "confirm disconnect"}
+              {pending ? "Disconnecting…" : "Confirm disconnect"}
             </Button>
             <Button size="sm" disabled={pending} onClick={() => setConfirming(false)}>
-              cancel
+              Cancel
             </Button>
           </div>
         </>

@@ -1,4 +1,11 @@
-import { can } from "@facility/core";
+import {
+  can,
+  DecisionBriefProjectionSchema,
+  DeliveryDecisionBriefProjectionSchema,
+  DeliveryPullRequestSchema,
+  PlanActorSchema,
+  StoryDeliverySchema,
+} from "@facility/core";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ATTENTION_STATUSES, ProjectAttentionService } from "../../insights/project-attention.js";
@@ -61,6 +68,128 @@ export const ProjectAttentionResponse = z.object({
   counts: z.object({ open: z.number(), resolved: z.number() }),
   facets: z.object({ kinds: z.array(z.object({ kind: z.string(), count: z.number() })) }),
   items: z.array(AttentionNotice),
+});
+const AttentionStoriesQuery = z.object({
+  category: z.enum(["all", "plans", "notices", "deliveries", "pulls"]).default("all"),
+  q: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(25).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+  pullOffset: z.coerce.number().int().min(0).default(0),
+});
+const AttentionDelivery = z.object({
+  decisionBrief: DeliveryDecisionBriefProjectionSchema.optional(),
+  candidate: StoryDeliverySchema.shape.candidate,
+  scopeRevision: z.number(),
+  storyStatus: z.string(),
+  pullRequests: z.array(
+    DeliveryPullRequestSchema.pick({
+      repository: true,
+      number: true,
+      url: true,
+      title: true,
+      required: true,
+      primary: true,
+      state: true,
+      draft: true,
+      headSha: true,
+      stale: true,
+      checks: true,
+    }),
+  ),
+  acceptance: z.object({
+    required: z.boolean().nullable(),
+    status: z.enum(["missing", "current", "stale"]),
+    receipt: z
+      .object({
+        id: z.string(),
+        revision: z.number(),
+        candidateRevision: z.string(),
+        confirmedAt: DateValue,
+        confirmedBy: PlanActorSchema.extend({ type: z.literal("user") }),
+      })
+      .nullable(),
+  }),
+  preview: z
+    .object({
+      state: z.string(),
+      desiredGeneration: z.string(),
+      deployedGeneration: z.string().nullable(),
+      observedAt: DateValue,
+    })
+    .nullable(),
+  acceptanceReady: z.boolean(),
+  blocked: z.object({ code: z.string(), message: z.string() }).nullable(),
+  waitingSince: DateValue,
+});
+export const ProjectAttentionStoriesResponse = z.object({
+  generatedAt: DateValue,
+  otherPullRequests: z.object({
+    total: z.number(),
+    limit: z.number(),
+    offset: z.number(),
+    items: z.array(
+      DeliveryPullRequestSchema.pick({
+        repository: true,
+        number: true,
+        title: true,
+        url: true,
+        draft: true,
+        headSha: true,
+        stale: true,
+        checks: true,
+      }).extend({
+        observedAt: DateValue,
+        updatedAt: DateValue,
+        stories: z.array(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            status: z.string(),
+            relation: z.enum(["delivery", "source"]),
+          }),
+        ),
+      }),
+    ),
+  }),
+  total: z.number(),
+  counts: z.object({
+    stories: z.number(),
+    plans: z.number(),
+    notices: z.number(),
+    deliveries: z.number(),
+  }),
+  workflowPolicy: z.object({ available: z.boolean(), error: z.string().nullable() }),
+  budget: z.union([
+    z.object({ available: z.literal(false), reason: z.literal("permission") }),
+    z.object({
+      available: z.literal(true),
+      state: z.enum(["not_configured", "disabled", "ok", "warning", "exceeded", "unconfirmed"]),
+      enabled: z.boolean(),
+      monthlyLimitCents: z.number().nullable(),
+      spentCents: z.number(),
+      remainingCents: z.number().nullable(),
+      windowStart: DateValue,
+      windowEnd: DateValue,
+    }),
+  ]),
+  limit: z.number(),
+  offset: z.number(),
+  items: z.array(
+    StoryReference.extend({
+      waitingSince: DateValue,
+      noticeCount: z.number(),
+      noticeKinds: z.array(z.object({ kind: z.string(), count: z.number() })),
+      delivery: AttentionDelivery.nullable(),
+      plan: z
+        .object({
+          revision: z.number(),
+          digest: z.string(),
+          proposedAt: DateValue,
+          decisionBrief: DecisionBriefProjectionSchema,
+        })
+        .nullable(),
+    }),
+  ),
 });
 const ReviewItem = z.object({
   source: z.enum(["mirror", "story"]),
@@ -173,6 +302,31 @@ export const ProjectOverviewResponse = z.object({
 export async function registerProjectOverviewRoutes(app: FastifyInstance, context: V1RouteContext) {
   const service = new ProjectOverviewService(context.db, app.storyDomain.costs);
   const attention = new ProjectAttentionService(context.db);
+
+  app.get(
+    "/v1/projects/:projectId/attention/stories",
+    {
+      config: { permission: "projects:read" },
+      schema: {
+        params: ProjectParams,
+        querystring: AttentionStoriesQuery,
+        response: { 200: ProjectAttentionStoriesResponse },
+        operationId: "listProjectAttentionStories",
+      },
+    },
+    async (request, reply) => {
+      const actor = principal(request);
+      const { projectId } = request.params as z.infer<typeof ProjectParams>;
+      reply.header("cache-control", "no-store");
+      return attention.listStories(
+        actor.orgId,
+        projectId,
+        request.query as z.infer<typeof AttentionStoriesQuery>,
+        new Date(),
+        { budgets: can(actor.permissions, "budgets:read") },
+      );
+    },
+  );
 
   app.get(
     "/v1/projects/:projectId/overview",

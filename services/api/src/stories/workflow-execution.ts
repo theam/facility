@@ -11,9 +11,10 @@ import {
 } from "@facility/db";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
-import { authorizePrincipal } from "../auth/workspace-execution.js";
+import { authorizePrincipal, observePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import { appendStoryEvidence } from "./evidence.js";
+import { matchesPlanAgent, matchesPlanRepositoryScope } from "./plan-scope.js";
 import { planState } from "./plan-state.js";
 import {
   type WorkflowScope,
@@ -65,7 +66,7 @@ export async function readWorkflowPlan(db: FacilityDb, scope: WorkflowScope) {
     : [];
   return { state: planState(row, decision), plan, decision };
 }
-const Authorization = z
+export const PlanExecutionAuthorizationSchema = z
   .object({
     schemaVersion: z.literal(1),
     policyRevision: z.number().int(),
@@ -79,19 +80,44 @@ const Authorization = z
     repositoryIds: z.array(z.string()),
   })
   .strict();
-export type PlanExecutionAuthorization = z.infer<typeof Authorization>;
+export type PlanExecutionAuthorization = z.infer<typeof PlanExecutionAuthorizationSchema>;
 const ExecutionActor = z.object({
   type: z.enum(["user", "service", "system"]),
   id: z.string().min(1).max(200),
 });
 
 /** Called under the shared project/story lock, before compute or provider admission. */
-export async function authorizePlanExecution(
+export function authorizePlanExecution(
   db: FacilityDb,
   scope: WorkflowScope,
   agent: AgentManifest,
   actor: unknown,
   turnId?: string,
+) {
+  return planExecutionGate(db, scope, agent, actor, turnId, true);
+}
+
+/** The same checks as authorizePlanExecution without its row locks: snapshot
+ * evidence for read-only projections such as backlog waits and workflow status,
+ * never authorization for a write. A concurrent change to the agent
+ * configuration, repositories or membership can neither block nor fail the read. */
+export function observePlanExecutionGate(
+  db: FacilityDb,
+  scope: WorkflowScope,
+  agent: AgentManifest,
+  actor: unknown,
+  turnId?: string,
+) {
+  return planExecutionGate(db, scope, agent, actor, turnId, false);
+}
+
+async function planExecutionGate(
+  db: FacilityDb,
+  scope: WorkflowScope,
+  agent: AgentManifest,
+  actor: unknown,
+  turnId: string | undefined,
+  lock: boolean,
 ): Promise<PlanExecutionAuthorization | null> {
   const project = await workflowProject(db, scope);
   const state = workflowPolicyFromSettings(project.settings);
@@ -119,7 +145,7 @@ export async function authorizePlanExecution(
       "workflow_project_inactive",
       "Restore the project before releasing approved work",
     );
-  const [configured] = await db
+  const configuredQuery = db
     .select()
     .from(agentManifests)
     .where(
@@ -129,8 +155,8 @@ export async function authorizePlanExecution(
         eq(agentManifests.name, agent.name),
       ),
     )
-    .for("share")
     .limit(1);
+  const [configured] = lock ? await configuredQuery.for("share") : await configuredQuery;
   const currentAgent = AgentManifestSchema.safeParse(configured?.manifest);
   if (!currentAgent.success || !currentAgent.data.enabled || currentAgent.data.hash !== agent.hash)
     throw new WorkflowGateError(
@@ -156,17 +182,12 @@ export async function authorizePlanExecution(
       "Review and approve the current plan before this agent starts",
     );
   const selected = context.plan.agents.find((candidate) => candidate.name === agent.name);
-  if (
-    !selected ||
-    selected.manifestHash !== agent.hash ||
-    selected.engine !== agent.engine ||
-    selected.model !== agent.model
-  )
+  if (!matchesPlanAgent(selected, agent))
     throw new WorkflowGateError(
       "workflow_plan_agent_changed",
       "Review a plan containing this exact configured agent version",
     );
-  const repositories = await db
+  const repositoriesQuery = db
     .select()
     .from(projectRepositories)
     .where(
@@ -175,23 +196,9 @@ export async function authorizePlanExecution(
         eq(projectRepositories.projectId, scope.projectId),
       ),
     )
-    .orderBy(projectRepositories.id)
-    .for("share");
-  const primary = repositories.find((repository) => repository.role === "primary");
-  if (
-    !primary ||
-    selected.repositoryId !== primary.id ||
-    repositories.length !== context.plan.repositories.length ||
-    repositories.some(
-      (repository) =>
-        !context.plan?.repositories.some(
-          (approved) =>
-            approved.repositoryId === repository.id &&
-            approved.repository.toLowerCase() ===
-              `${repository.owner}/${repository.name}`.toLowerCase(),
-        ),
-    )
-  )
+    .orderBy(projectRepositories.id);
+  const repositories = lock ? await repositoriesQuery.for("share") : await repositoriesQuery;
+  if (!matchesPlanRepositoryScope(context.plan.repositories, repositories, selected?.repositoryId))
     throw new WorkflowGateError(
       "workflow_plan_repository_scope_changed",
       "Approve the full current project repository scope before granting native project execution",
@@ -201,8 +208,9 @@ export async function authorizePlanExecution(
       "workflow_previous_turn_failed",
       "Review the failed or canceled work and confirm a new plan decision before releasing queued agents",
     );
+  const principal = lock ? authorizePrincipal : observePrincipal;
   try {
-    await authorizePrincipal(
+    await principal(
       db,
       scope,
       { type: "user", id: context.decision.confirmedBy.id },
@@ -210,13 +218,9 @@ export async function authorizePlanExecution(
       "workflow_plan_authorizer_revoked",
     );
     if (requester.type === "user")
-      await authorizePrincipal(db, scope, { type: "user", id: requester.id }, [
-        "workspaces:execute",
-      ]);
+      await principal(db, scope, { type: "user", id: requester.id }, ["workspaces:execute"]);
     else if (requester.type === "service" && !requester.id.startsWith("github:"))
-      await authorizePrincipal(db, scope, { type: "key", id: requester.id }, [
-        "workspaces:execute",
-      ]);
+      await principal(db, scope, { type: "key", id: requester.id }, ["workspaces:execute"]);
     // GitHub/scheduler actors are constructed by trusted trigger handlers. Their
     // queued execution still requires the current human plan authorizer above.
   } catch (error) {
@@ -256,10 +260,10 @@ export async function recordPlanExecution(
       data: authorization,
     });
 }
-export async function planExecutionStillAuthorized(
+export async function readPlanExecutionReceipt(
   db: FacilityDb,
   scope: WorkflowScope,
-  turn: typeof turns.$inferSelect,
+  turnId: string,
 ) {
   const [receipt] = await db
     .select()
@@ -269,12 +273,19 @@ export async function planExecutionStillAuthorized(
         eq(storyEvidenceEvents.orgId, scope.orgId),
         eq(storyEvidenceEvents.projectId, scope.projectId),
         eq(storyEvidenceEvents.storyId, scope.storyId),
-        eq(storyEvidenceEvents.externalKey, `workflow:execution:${turn.id}`),
+        eq(storyEvidenceEvents.externalKey, `workflow:execution:${turnId}`),
       ),
     )
     .limit(1);
+  return receipt ? PlanExecutionAuthorizationSchema.parse(receipt.data) : null;
+}
+export async function planExecutionStillAuthorized(
+  db: FacilityDb,
+  scope: WorkflowScope,
+  turn: typeof turns.$inferSelect,
+) {
   try {
-    const expected = receipt ? Authorization.parse(receipt.data) : null;
+    const expected = await readPlanExecutionReceipt(db, scope, turn.id);
     const actual = await authorizePlanExecution(
       db,
       scope,

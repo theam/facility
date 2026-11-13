@@ -1,14 +1,29 @@
 "use client";
 
-import type { StoryAgent, StoryPlan, StoryPlanRepositories, StoryPlans } from "@facility/sdk";
-import { Button, Eyebrow, Field, TextArea, TextInput } from "@facility/ui";
+import type {
+  PlanDecisionReview,
+  StoryAgent,
+  StoryPlan,
+  StoryPlanRepositories,
+  StoryPlans,
+  StoryWorkflowStatus,
+} from "@facility/sdk";
+import { Button, buttonClassName, Field, TextArea, TextInput } from "@facility/ui";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { PlanConfirmation } from "@/components/story/plan-confirmation";
 import { PlanContent } from "@/components/story/plan-content";
+import { PlanExecutionOutcome } from "@/components/story/plan-execution-outcome";
+import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { PLAN_PROPOSAL_EVENT, type PlanProposalSource } from "@/lib/story-plan-events";
 import { formatTime } from "@/lib/story-presentation";
+import {
+  type PlanSelection,
+  selectionMatchesPlan,
+  storyReviewHref,
+} from "@/lib/story-review-navigation";
 
 type Repositories = StoryPlanRepositories;
 function newer(previous: StoryPlans | undefined, next: StoryPlans) {
@@ -33,8 +48,14 @@ export function StoryPlanPanel({
   projectId,
   storyId,
   initial,
+  selection,
+  latestPlanHref,
   agents,
   defaultAgent,
+  queuedAgents = [],
+  blockedReason,
+  workflow,
+  workflowError,
   catalogError,
   canWrite,
   userId,
@@ -42,8 +63,15 @@ export function StoryPlanPanel({
   projectId: string;
   storyId: string;
   initial?: StoryPlans;
+  selection?: PlanSelection;
+  latestPlanHref?: string;
   agents: StoryAgent[];
   defaultAgent: string | null;
+  queuedAgents?: string[];
+  blockedReason?: string | null;
+  workflow?: StoryWorkflowStatus;
+  /** Why the workflow could not be read; inline approval then waits like the confirmation page. */
+  workflowError?: string;
   catalogError?: string;
   canWrite: boolean;
   userId?: string;
@@ -66,6 +94,12 @@ export function StoryPlanPanel({
     [busy, setBusy] = useState(false);
   const [rejecting, setRejecting] = useState(false),
     [reason, setReason] = useState("");
+  const [inlineReview, setInlineReview] = useState<PlanDecisionReview | null>(null);
+  // Closing the inline confirmation returns focus to the decision buttons, or to the
+  // recorded outcome, instead of dropping it to the page.
+  const decisionButtons = useRef<HTMLDivElement>(null),
+    noticeLine = useRef<HTMLParagraphElement>(null),
+    focusAfterReview = useRef<"buttons" | "notice" | null>(null);
   const [historyPages, setHistoryPages] = useState<StoryPlans["history"] | null>(null),
     [decisionPages, setDecisionPages] = useState<StoryPlans["decisions"] | null>(null);
   const [historical, setHistorical] = useState<StoryPlan | null>(null);
@@ -77,15 +111,30 @@ export function StoryPlanPanel({
   const textarea = useRef<HTMLTextAreaElement>(null),
     sourceNotice = useRef<HTMLDivElement>(null);
   const draftMarkdown = useRef("");
+  const initializeRepositoryScope = useRef(false);
+  const [scopeNotice, setScopeNotice] = useState<string | null>(null);
   const observedHeads = useRef({
     revision: initial?.state.revision ?? 0,
     decisionRevision: initial?.state.decisionRevision ?? 0,
   });
   const path = `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/plan`;
   const storyPath = `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`;
+  const selectionCurrent =
+    !selection ||
+    (current?.state.revision === selection.revision &&
+      selectionMatchesPlan(selection, current?.plan));
   useEffect(() => {
     if (initial) setCurrent((old) => newer(old, initial));
   }, [initial]);
+  useEffect(() => {
+    if (inlineReview || !focusAfterReview.current) return;
+    const target =
+      focusAfterReview.current === "notice"
+        ? noticeLine.current
+        : decisionButtons.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    focusAfterReview.current = null;
+    target?.focus();
+  }, [inlineReview]);
   useEffect(() => {
     if (!current) return;
     if (current.state.revision > observedHeads.current.revision)
@@ -119,6 +168,7 @@ export function StoryPlanPanel({
       const value = (event as CustomEvent<PlanProposalSource>).detail;
       if (
         canWrite &&
+        !selection &&
         value?.projectId === projectId &&
         value.storyId === storyId &&
         typeof value.markdown === "string"
@@ -127,7 +177,7 @@ export function StoryPlanPanel({
     }
     window.addEventListener(PLAN_PROPOSAL_EVENT, receive);
     return () => window.removeEventListener(PLAN_PROPOSAL_EVENT, receive);
-  }, [projectId, storyId, canWrite]);
+  }, [projectId, storyId, canWrite, selection]);
   useEffect(() => {
     if (pendingSource) sourceNotice.current?.focus();
   }, [pendingSource]);
@@ -142,14 +192,14 @@ export function StoryPlanPanel({
     [],
   );
 
-  async function loadRepositories(offset = 0, term = "", choosePrimary = false) {
+  async function loadRepositories(offset = 0, term = "") {
     const n = ++optionsSequence.current;
     if (offset === 0) searchTerm.current = term;
     setLoadingOptions(true);
     setOptionsError(null);
     const result = await clientApi<Repositories>(
       "GET",
-      `${path}/repositories?${new URLSearchParams({ q: searchTerm.current, limit: "25", offset: String(offset) })}`,
+      `${path}/repositories?${new URLSearchParams({ q: searchTerm.current, limit: "50", offset: String(offset) })}`,
     );
     if (n !== optionsSequence.current) return;
     setLoadingOptions(false);
@@ -168,12 +218,15 @@ export function StoryPlanPanel({
             ]
           : result.data.items,
     }));
-    if (choosePrimary)
-      setRepositories((selected) =>
-        selected.length
-          ? selected
-          : result.data.items.filter((repo) => repo.primary).map((repo) => repo.repository),
+    if (initializeRepositoryScope.current && offset === 0 && term === "") {
+      initializeRepositoryScope.current = false;
+      setRepositories(result.data.hasMore ? [] : result.data.items.map((repo) => repo.repository));
+      setScopeNotice(
+        result.data.hasMore
+          ? "This project has more than 50 connected repositories. No partial scope was selected automatically. Review the required scope; a plan can include up to 50 repositories."
+          : "All connected project repositories are selected for this new plan. Review the scope before saving; removing repositories can leave queued work blocked.",
       );
+    }
   }
   function startEdit(value = current, from?: PlanProposalSource) {
     if (busyRef.current) return;
@@ -186,16 +239,43 @@ export function StoryPlanPanel({
     setMarkdown(draftMarkdown.current);
     setRepositories(value?.plan?.repositories.map((repo) => repo.repository) ?? []);
     setSelectedAgents(
-      value?.plan?.agents.map((agent) => agent.name) ?? (defaultAgent ? [defaultAgent] : []),
+      value?.plan?.agents.map((agent) => agent.name) ??
+        (queuedAgents.length
+          ? [...new Set(queuedAgents)]
+          : from
+            ? from.agentName
+              ? [from.agentName]
+              : []
+            : defaultAgent
+              ? [defaultAgent]
+              : []),
     );
+    initializeRepositoryScope.current = !value?.plan;
+    setScopeNotice(null);
+    setOptions(null);
+    setQuery("");
     setSource(from?.messageId ?? value?.plan?.source?.messageId);
     setError(null);
     setNotice(null);
     setEditing(true);
     setPendingSource(null);
     retry.current = null;
-    void loadRepositories(0, "", !value?.plan);
+    void loadRepositories();
   }
+  // "Propose a revision" from a linked plan lands here with ?edit=plan: open the
+  // editor once on the current plan and drop the marker from the address.
+  const editRequested = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once when the current plan is known.
+  useEffect(() => {
+    if (editRequested.current || selection || !canWrite || !current) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("edit") !== "plan") return;
+    editRequested.current = true;
+    url.searchParams.delete("edit");
+    // The router owns the address; a native replace would be restored on the next navigation.
+    router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
+    startEdit();
+  }, [current, selection, canWrite]);
   async function load(kind: "current" | "history" | "decisions" = "current") {
     if (busyRef.current) return;
     const params = new URLSearchParams();
@@ -249,6 +329,12 @@ export function StoryPlanPanel({
   }
   async function mutate(action: "proposal" | "approve" | "reject") {
     if (busyRef.current) return;
+    if (!selectionCurrent || (selection && action === "proposal")) {
+      setError(
+        "Open the current plan explicitly before changing or deciding a different revision.",
+      );
+      return;
+    }
     const body =
       action === "proposal"
         ? {
@@ -300,13 +386,31 @@ export function StoryPlanPanel({
         idempotency_key: key,
       });
       if (n !== sequence.current) return;
-      busyRef.current = false;
-      setBusy(false);
       if (!result.ok) {
+        busyRef.current = false;
+        setBusy(false);
         setError(result.message);
         return;
       }
-      router.push(`${storyPath}/plan/decisions/${encodeURIComponent(result.data.request.id)}`);
+      // The request exists now. A later click asks for a fresh one instead of
+      // replaying this request after it expires.
+      retry.current = null;
+      // Confirm in place with the same review and single-use proof the confirmation
+      // page uses; fall back to that page when the review cannot be read here.
+      const requestId = result.data.request.id;
+      const review = await clientApi<PlanDecisionReview>(
+        "GET",
+        `${path}/decisions/${encodeURIComponent(requestId)}`,
+      );
+      if (n !== sequence.current) return;
+      busyRef.current = false;
+      setBusy(false);
+      if (review.ok && review.data?.plan && review.data?.request?.id === requestId) {
+        setRejecting(false);
+        setInlineReview(review.data);
+        return;
+      }
+      router.push(`${storyPath}/plan/decisions/${encodeURIComponent(requestId)}`);
     }
   }
   async function showRevision(revision: number) {
@@ -347,46 +451,173 @@ export function StoryPlanPanel({
     (item) => item.decisionRevision,
   );
   const staleDraft = editing && current && current.state.revision !== baseRevision;
+  const missingQueuedAgents = [...new Set(queuedAgents)].filter(
+    (name) => !current?.plan?.agents.some((agent) => agent.name === name),
+  );
+  if (selection && !selectionCurrent)
+    return (
+      <section
+        id="story-plan"
+        aria-label="Story plan"
+        className="flex min-w-0 scroll-mt-6 flex-col gap-4"
+      >
+        <h2 className="text-lg font-semibold">
+          {selection.revision ? `Linked plan r${selection.revision}` : "Linked plan unavailable"}
+        </h2>
+        <p role={selection.error ? "alert" : "status"} className="text-sm text-(--mut)">
+          {selection.error ??
+            (current?.plan
+              ? `The current plan is r${current.plan.revision}. This linked revision stays open for comparison; no decision will be requested for a different plan.`
+              : "The current plan could not be verified. This linked revision stays open for reading.")}
+        </p>
+        <Link
+          className="inline-flex min-h-11 items-center text-(--info) underline underline-offset-4"
+          href={latestPlanHref ?? `${storyPath}#story-plan`}
+        >
+          Open current plan{current?.plan ? ` r${current.plan.revision}` : ""}
+        </Link>
+        {blockedReason ? (
+          <p className="border-l-2 border-(--human) pl-3 text-sm">
+            Current workflow: {blockedReason}
+          </p>
+        ) : null}
+        {selection.plan && !selection.error ? (
+          <PlanContent plan={selection.plan} location={{ projectId, storyId }} />
+        ) : null}
+      </section>
+    );
+  const decisionActions =
+    canWrite && current?.plan && (!editing || selection) && inlineReview ? (
+      <PlanConfirmation
+        key={inlineReview.request.id}
+        compact
+        initial={inlineReview}
+        initialWorkflow={workflow}
+        initialWorkflowError={workflowError}
+        onClose={() => {
+          focusAfterReview.current = "buttons";
+          setInlineReview(null);
+          router.refresh();
+        }}
+        onConfirmed={() => {
+          focusAfterReview.current = "notice";
+          setInlineReview(null);
+          setNotice(
+            inlineReview.request.intent === "approve"
+              ? `Approval recorded for plan r${inlineReview.request.planRevision}.`
+              : `Requested changes recorded for plan r${inlineReview.request.planRevision}. Continue in the conversation to refine it.`,
+          );
+          router.refresh();
+        }}
+      />
+    ) : canWrite && current?.plan && (!editing || selection) ? (
+      <div className="flex flex-col gap-3">
+        <div ref={decisionButtons} className="flex flex-wrap gap-2">
+          {current.state.status !== "approved" || blockedReason ? (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => {
+                setReason("");
+                void mutate("approve");
+              }}
+            >
+              Approve plan r{current.state.revision}
+            </Button>
+          ) : null}
+          <Button size="sm" disabled={busy} onClick={() => setRejecting((value) => !value)}>
+            Request changes
+          </Button>
+        </div>
+        {rejecting ? (
+          <div className="flex flex-col gap-3">
+            <Field label="What should change?">
+              <TextArea
+                rows={3}
+                maxLength={2000}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </Field>
+            <Button
+              size="sm"
+              disabled={busy || !reason.trim()}
+              onClick={() => void mutate("reject")}
+            >
+              Review requested changes
+            </Button>
+          </div>
+        ) : null}
+        {current.pending.items
+          .filter((item) => !item.boundUserId || item.boundUserId === userId)
+          .map((item) => (
+            <Link
+              key={item.id}
+              className="break-words text-[12px] underline underline-offset-4"
+              href={`${storyPath}/plan/decisions/${encodeURIComponent(item.id)}`}
+            >
+              Open requested {item.intent === "approve" ? "approval" : "changes"} for r
+              {item.planRevision} · expires {formatTime(item.expiresAt)}
+            </Link>
+          ))}
+        {current.pending.hasMore ? (
+          <p className="text-xs text-(--dim)">
+            More requests exist. You can request a fresh review of the current plan above.
+          </p>
+        ) : null}
+      </div>
+    ) : null;
   return (
     <section
       id="story-plan"
       aria-label="Story plan"
-      className="flex min-w-0 scroll-mt-6 flex-col gap-4 border border-(--line) p-4 sm:p-5"
+      className="flex min-w-0 scroll-mt-6 flex-col gap-4"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Eyebrow>plan and decisions</Eyebrow>
-          <h2 className="mt-1 text-[18px] font-semibold">
-            {current?.plan ? `Plan r${current.state.revision}` : "Agree on the plan"}
-          </h2>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={busy} onClick={() => void load()}>
-            {busy ? "Loading…" : "Reload plan"}
-          </Button>
-          {canWrite && current && !editing ? (
-            <Button size="sm" disabled={busy} onClick={() => startEdit()}>
-              {current.plan ? "Propose revision" : "Propose plan"}
-            </Button>
-          ) : null}
-        </div>
-      </div>
+      <h2 className="flex flex-wrap items-baseline gap-x-3 text-[18px] font-semibold">
+        {current?.plan ? `Plan r${current.state.revision}` : "Agree on the plan"}
+        {current?.state.status === "proposed" ? (
+          <span className="text-xs font-normal text-(--human)">Pending approval</span>
+        ) : null}
+      </h2>
       {error ? (
         <p role="alert" className="break-words text-sm text-(--bad)">
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p role="status" className="text-sm text-(--mut)">
+        <p ref={noticeLine} tabIndex={-1} role="status" className="text-sm text-(--mut)">
           {notice}
         </p>
       ) : null}
-      {pendingSource && canWrite ? (
+      {blockedReason ? (
+        <div role="status" className="flex flex-col gap-2 border-l-2 border-(--human) pl-3 text-sm">
+          <p className="break-words text-(--mut)">{blockedReason}</p>
+          {queuedAgents.length ? (
+            <p className="break-words text-(--mut)">
+              Waiting agents: {[...new Set(queuedAgents)].join(", ")}.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {current?.plan && missingQueuedAgents.length ? (
+        <p role="alert" className="text-sm text-(--bad)">
+          This plan does not include queued work for {missingQueuedAgents.join(", ")}. Propose a
+          revision with the intended agents before approving recovery.
+        </p>
+      ) : null}
+      {current && !current.plan && !editing ? (
+        <PlanExecutionScope
+          scope={workflow?.executionScope}
+          planRevision={current.state.revision}
+        />
+      ) : null}
+      {pendingSource && canWrite && !selection ? (
         <div
           ref={sourceNotice}
           tabIndex={-1}
           role="status"
-          className="flex flex-col gap-3 border border-(--human)/60 p-3"
+          className="rounded-lg flex flex-col gap-3 border border-(--human)/60 p-3"
         >
           <p>
             {editing
@@ -410,14 +641,35 @@ export function StoryPlanPanel({
         </p>
       ) : current.plan ? (
         <>
-          <p className="text-[13px] font-medium">
-            {current.state.status === "approved"
-              ? "Approved for this revision"
-              : current.state.status === "rejected"
-                ? "Changes requested for this revision"
-                : "Awaiting a decision on this revision"}
-          </p>
-          <PlanContent plan={current.plan} />
+          {current.state.status !== "proposed" ? (
+            <p className="text-[13px] font-medium">
+              {current.state.status === "approved"
+                ? "Approved for this revision"
+                : current.state.status === "rejected"
+                  ? "Changes requested for this revision"
+                  : "Awaiting a decision on this revision"}
+            </p>
+          ) : null}
+          {current.state.status === "approved" && current.decision ? (
+            <PlanExecutionOutcome
+              decision={current.decision}
+              workflow={workflow}
+              storyPath={`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`}
+            />
+          ) : null}
+          <PlanContent
+            plan={selection?.plan ?? current.plan}
+            location={{ projectId, storyId }}
+            checks={
+              (!editing || selection) && (current.state.status !== "approved" || blockedReason) ? (
+                <PlanExecutionScope
+                  scope={workflow?.executionScope}
+                  planRevision={current.state.revision}
+                />
+              ) : null
+            }
+            actions={decisionActions}
+          />
           {current.decision ? (
             <p className="break-words text-[12px] text-(--mut)">
               {current.decision.planRevision !== current.state.revision
@@ -439,7 +691,7 @@ export function StoryPlanPanel({
           No plan has been proposed. Write one or use an agent response from the conversation.
         </p>
       )}
-      {editing && canWrite ? (
+      {editing && canWrite && !selection ? (
         <form
           className="flex flex-col gap-4 border-t border-(--line) pt-4"
           onSubmit={(event) => {
@@ -480,7 +732,7 @@ export function StoryPlanPanel({
           >
             <textarea
               ref={textarea}
-              className="min-h-48 w-full border border-(--line) bg-(--bg-subtle) px-3 py-2 text-[14px] leading-relaxed"
+              className="rounded-lg min-h-48 w-full border border-(--line) bg-(--bg-subtle) px-3 py-2 text-[14px] leading-relaxed"
               rows={9}
               value={markdown}
               maxLength={100_000}
@@ -493,6 +745,11 @@ export function StoryPlanPanel({
           </Field>
           <fieldset className="flex min-w-0 flex-col gap-2">
             <legend className="mb-2 text-[12px] font-medium">Repositories</legend>
+            {scopeNotice ? (
+              <p role="status" className="text-xs text-(--mut)">
+                {scopeNotice}
+              </p>
+            ) : null}
             <div className="flex min-w-0 flex-wrap gap-2">
               <TextInput
                 aria-label="Find plan repositories"
@@ -531,13 +788,14 @@ export function StoryPlanPanel({
                   disabled={
                     busy || (!repositories.includes(repo.repository) && repositories.length >= 50)
                   }
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    initializeRepositoryScope.current = false;
                     setRepositories((selected) =>
                       event.target.checked
                         ? [...selected, repo.repository]
                         : selected.filter((name) => name !== repo.repository),
-                    )
-                  }
+                    );
+                  }}
                 />
                 <span className="min-w-0 break-words">
                   {repo.repository}
@@ -562,6 +820,13 @@ export function StoryPlanPanel({
           </fieldset>
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-2 text-[12px] font-medium">Agents</legend>
+            <p className="text-xs text-(--mut)">
+              Choose the agents allowed to execute this plan. The author and the executing agent can
+              differ.
+              {queuedAgents.length
+                ? ` Existing queued work: ${[...new Set(queuedAgents)].join(", ")}. A matching approval may resume those turns.`
+                : ""}
+            </p>
             {enabledAgents.map((agent) => (
               <label key={agent.name} className="flex items-start gap-2 text-[13px]">
                 <input
@@ -613,10 +878,12 @@ export function StoryPlanPanel({
               size="sm"
               disabled={
                 busy ||
+                loadingOptions ||
                 !!staleDraft ||
                 !markdown.trim() ||
                 !repositories.length ||
                 !selectedAgents.length ||
+                selectedAgents.length > 20 ||
                 !!invalidAgents.length ||
                 !!catalogError
               }
@@ -629,69 +896,30 @@ export function StoryPlanPanel({
           </div>
         </form>
       ) : null}
-      {canWrite && current?.plan && !editing ? (
-        <div className="flex flex-col gap-3 border-t border-(--line) pt-4">
-          <p className="text-[12px] text-(--dim)">
-            Review and confirm the exact plan on the next page. Confirmation does not start agents
-            or accept delivery.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={busy}
-              onClick={() => {
-                setReason("");
-                void mutate("approve");
-              }}
+      <div className="-ml-2.5 flex flex-wrap items-center gap-1">
+        {selection ? (
+          canWrite ? (
+            <Link
+              href={`${storyPath}?edit=plan#story-plan`}
+              className={buttonClassName({ variant: "ghost" })}
             >
-              Review approval
-            </Button>
-            <Button size="sm" disabled={busy} onClick={() => setRejecting((value) => !value)}>
-              Request changes
-            </Button>
-          </div>
-          {rejecting ? (
-            <div className="flex flex-col gap-3">
-              <Field label="What should change?">
-                <TextArea
-                  rows={3}
-                  maxLength={2000}
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                />
-              </Field>
-              <Button
-                size="sm"
-                disabled={busy || !reason.trim()}
-                onClick={() => void mutate("reject")}
-              >
-                Review requested changes
-              </Button>
-            </div>
-          ) : null}
-          {current.pending.items
-            .filter((item) => !item.boundUserId || item.boundUserId === userId)
-            .map((item) => (
-              <Link
-                key={item.id}
-                className="break-words text-[12px] underline underline-offset-4"
-                href={`${storyPath}/plan/decisions/${encodeURIComponent(item.id)}`}
-              >
-                Open requested {item.intent === "approve" ? "approval" : "changes"} for r
-                {item.planRevision} · expires {formatTime(item.expiresAt)}
-              </Link>
-            ))}
-          {current.pending.hasMore ? (
-            <p className="text-xs text-(--dim)">
-              More requests exist. You can request a fresh review of the current plan above.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+              Propose a revision
+            </Link>
+          ) : null
+        ) : canWrite && current && !editing ? (
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => startEdit()}>
+            {current.plan ? "Propose a revision" : "Propose a plan"}
+          </Button>
+        ) : null}
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void load()}>
+          {busy ? "Loading…" : "Reload plan"}
+        </Button>
+      </div>
       {history.length || decisions.length ? (
-        <details className="border-t border-(--line) pt-4 text-[12px]">
-          <summary className="cursor-pointer">Plan and decision history</summary>
+        <details className="text-[12px]">
+          <summary className="min-h-11 w-fit cursor-pointer py-3 text-(--mut)">
+            Plan and decision history
+          </summary>
           <div className="mt-3 flex flex-col gap-3">
             {history.map((item) => (
               <div key={item.revision} className="flex flex-wrap items-center gap-2">
@@ -722,9 +950,18 @@ export function StoryPlanPanel({
               </Button>
             ) : null}
             {historical ? (
-              <div className="flex min-w-0 flex-col gap-3 border border-(--line) p-3">
+              <div className="rounded-lg flex min-w-0 flex-col gap-3 border border-(--line) p-3">
                 <p className="font-medium">Historical plan · r{historical.revision}</p>
-                <PlanContent plan={historical} />
+                <Link
+                  href={storyReviewHref(projectId, storyId, {
+                    revision: historical.revision,
+                    digest: historical.digest,
+                  })}
+                  className="inline-flex min-h-11 items-center text-(--info) underline"
+                >
+                  Open linked revision r{historical.revision}
+                </Link>
+                <PlanContent plan={historical} location={{ projectId, storyId }} />
                 <Button size="sm" onClick={() => setHistorical(null)}>
                   Close historical plan
                 </Button>

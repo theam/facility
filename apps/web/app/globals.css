@@ -11,6 +11,7 @@
   --color-mut: var(--mut);
   --color-dim: var(--dim);
   --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
   --color-human: var(--human);
   --color-ok: var(--ok);
   --color-bad: var(--bad);
@@ -21,7 +22,7 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
   background: var(--bg);
 }
 

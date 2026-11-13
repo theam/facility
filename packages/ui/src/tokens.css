@@ -1,71 +1,77 @@
 /* Facility tokens — TAM-50 tier.
  * Source of truth: brand/BRAND.md.
- * The one law: --accent (#FFD923) marks agent work and focus. Never decoration. */
+ * The one law: --accent (#FFD923) marks agent work. Focus has its own blue. */
 
 :root {
-  /* surfaces */
-  --bg: #000000;
-  --bg-subtle: #0d1117;
-  --card: #161b22;
+  /* surfaces — a light canvas with white cards, as calm as a report */
+  --bg: #f5f6f8;
+  --bg-subtle: #ffffff;
+  --card: #eef0f3;
 
   /* ink */
-  --ink: #ffffff;
-  --mut: #999999;
-  --dim: #5c6570;
+  --ink: #111827;
+  --mut: #4b5563;
+  --dim: #5f6774;
 
   /* hairlines */
-  --line: rgba(255, 255, 255, 0.14);
-  --line-strong: rgba(255, 255, 255, 0.28);
+  --line: #e4e7ec;
+  --line-strong: #d0d5dd;
+  --control-line: #8b95a1;
 
-  /* semantics — AI is yellow, humans are orange, machines are gray */
+  /* semantics — agents are yellow, human decisions amber, machines gray.
+   * Yellow stays a fill (dots, badges, the wordmark); text about agent work
+   * uses --accent-ink so it stays readable on light surfaces. */
   --accent: #ffd923;
-  /* The resting tone for large agent surfaces. The full accent works at the
-   * scale of a badge or a 1px button edge, but across a whole bar it reads as
-   * an alarm — same hue, lower intensity, with the full accent kept for hover
-   * and focus so the surface still answers when you reach for it. */
-  --accent-soft: color-mix(in srgb, var(--accent) 55%, var(--bg));
-  --human: #ffb238;
-  --ok: #2fbf71;
-  --bad: #ff6b60;
-  --info: #79c0ff;
-  --code: #c8cfd8;
-  --machine: #8a93a0;
+  --accent-ink: #8a6800;
+  --accent-soft: color-mix(in srgb, var(--accent) 35%, var(--bg-subtle));
+  --human: #b45309;
+  --ok: #047857;
+  --bad: #b42318;
+  --info: #2563eb;
+  --focus: #2563eb;
+  --code: #344054;
+  --machine: #6b7280;
 
-  /* Floating surfaces: the plain lift, and the lift the agent surfaces take on
-   * when hovered or focused. */
-  --shadow-lift: 0 8px 30px rgba(0, 0, 0, 0.45);
-  --shadow-agent-lift: 0 8px 30px rgba(0, 0, 0, 0.45),
-    0 0 24px -4px color-mix(in srgb, var(--accent) 40%, transparent);
+  /* Cards sit on the canvas with a hairline and a whisper of shadow. Floating
+   * surfaces lift further. */
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-lift: 0 12px 32px rgba(16, 24, 40, 0.14);
+  --shadow-agent-lift: 0 12px 32px rgba(16, 24, 40, 0.14),
+    0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
-/* Focus is the accent stroke — never hidden (WCAG 2.2 AA floor). */
+/* The outline surrounds the control; its gap separates it from filled buttons.
+ * Containers with clipped edges can place it inside via --focus-offset. */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
+summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: none;
-  box-shadow: 0 2px 0 0 var(--accent);
+  outline: 2px solid var(--focus);
+  outline-offset: var(--focus-offset, 3px);
 }
 
-/* Squared system: buttons and inputs carry no radius. */
-button,
+/* Fields need a visible boundary even when empty. Keep decorative dividers soft.
+ * Existing border utilities and their hover state use these local tokens. */
 input,
 select,
 textarea {
-  border-radius: 0;
+  --line: var(--control-line);
+  --line-strong: var(--mut);
 }
 
 /* Section label — calm sans. Mono is reserved for genuinely technical
  * tokens (ids, cron, code, costs, agent names), never for scaffolding. */
 .eyebrow {
   font-family: var(--font-sans, ui-sans-serif, sans-serif);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--dim);
 }
 

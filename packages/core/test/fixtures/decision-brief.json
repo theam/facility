@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "summary": {
+    "text": "Resume the retained task across the connected repositories.",
+    "evidenceIds": ["scope"]
+  },
+  "whyNow": {
+    "text": "The previous preparation failed. The proposed plan includes the missing repository.",
+    "evidenceIds": ["scope"]
+  },
+  "options": [
+    {
+      "id": "resume",
+      "label": "Review and approve this plan",
+      "consequence": {
+        "text": "Matching queued work may resume after the current execution and budget checks.",
+        "evidenceIds": ["scope"]
+      }
+    },
+    {
+      "id": "revise",
+      "label": "Request a smaller scope",
+      "consequence": {
+        "text": "The author must propose a new revision before this different scope can be approved.",
+        "evidenceIds": []
+      }
+    }
+  ],
+  "recommendation": {
+    "optionId": "resume",
+    "reason": {
+      "text": "The retained task still matches the requested objective.",
+      "evidenceIds": ["scope"]
+    }
+  },
+  "decisiveRisk": {
+    "text": "The preparation may still fail; the new repository has not been exercised in the retained workspace.",
+    "evidenceIds": []
+  },
+  "unknowns": [
+    {
+      "text": "A successful preparation and measured execution cost remain unobserved.",
+      "evidenceIds": []
+    }
+  ],
+  "evidence": [
+    {
+      "id": "scope",
+      "label": "Repository scope review",
+      "reference": "Synthetic review recorded 2026-11-05",
+      "url": "https://example.com/reviews/scope-r3"
+    }
+  ]
+}

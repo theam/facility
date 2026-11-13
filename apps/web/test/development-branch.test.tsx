@@ -112,7 +112,7 @@ it("disables controls while branch validation is pending", async () => {
   await change("develop");
   await act(async () => button().click());
   expect(input().disabled).toBe(true);
-  expect(button().textContent).toBe("saving…");
+  expect(button().textContent).toBe("Saving…");
   await act(async () => complete(Response.json({ settings: { developmentBranch: "develop" } })));
   expect(input().disabled).toBe(false);
 });

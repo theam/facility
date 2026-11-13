@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { generateApiKey, newId, type StoryDelivery } from "@facility/core";
 import {
   apiKeys,
@@ -12,13 +13,17 @@ import {
   roles,
   seed,
   stories,
+  storyConversations,
   storyDeliveryPullRequests,
   storyDeliveryScopes,
   storyEvidenceEvents,
+  storyMessages,
+  turns,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
+import { StoryWorkspaceService } from "../src/stories/service.js";
 import { createStoryDomain } from "../src/story-domain.js";
 import type { AppConfig } from "../src/types.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
@@ -211,6 +216,225 @@ describe("project-scoped delivery register API", () => {
     await client.end();
     expect(upstream).not.toHaveBeenCalled();
     for (const call of runtimeCalls) expect(call).not.toHaveBeenCalled();
+  });
+
+  it("reads the latest native author brief beyond recent messages and rejects changed or unverified sources", async () => {
+    const id = await story();
+    const refs = [newId("repo"), newId("repo")] as const;
+    const scoped = { orgId, projectId, storyId: id };
+    try {
+      for (const [index, repositoryId] of refs.entries()) {
+        await db.insert(projectRepositories).values({
+          id: repositoryId,
+          orgId,
+          projectId,
+          owner,
+          name: `brief-${repositoryId}`,
+          defaultBranch: "main",
+        });
+        await db.insert(githubPullRequests).values({
+          id: newId("ghp"),
+          orgId,
+          projectId,
+          repositoryId,
+          number: index + 1,
+          title: "Brief delivery",
+          state: "open",
+          headRef: "feature",
+          baseRef: "main",
+          headSha: "b".repeat(40),
+          htmlUrl: `https://github.com/${owner}/brief/pull/${index + 1}`,
+          ciState: "success",
+          ciHeadSha: "b".repeat(40),
+          ciUpdatedAt: new Date(),
+        });
+      }
+      const recorded = await save(id, {
+        ...body(),
+        pull_requests: refs.map((repositoryId, index) => ({
+          repository: `${owner}/brief-${repositoryId}`,
+          number: index + 1,
+          required: index === 0,
+          primary: index === 0,
+        })),
+      });
+      expect(recorded.statusCode).toBe(200);
+      const delivery = recorded.json<StoryDelivery>();
+      expect(delivery.decisionBrief).toEqual({ status: "absent" });
+      const example = JSON.parse(
+        readFileSync(
+          new URL(
+            "../../../packages/core/test/fixtures/delivery-decision-brief.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      const envelope = {
+        ...example,
+        subject: {
+          scopeRevision: delivery.scope.revision,
+          candidateRevision: delivery.candidate.revision,
+          pullRequests: delivery.pullRequests.map(
+            ({ repositoryId, number, headSha, required, primary }) => ({
+              repositoryId,
+              number,
+              headSha,
+              required,
+              primary,
+            }),
+          ),
+        },
+      };
+      const output = `Original delivery review\n\n\`\`\`facility-delivery\n${JSON.stringify(envelope)}\n\`\`\``;
+      const conversationId = newId("sess");
+      await db.insert(storyConversations).values({ ...scoped, id: conversationId });
+      const service = new StoryWorkspaceService(db, runtime, enqueue);
+      async function finish(text: string) {
+        const turnId = newId("turn");
+        await db.insert(turns).values({
+          ...scoped,
+          id: turnId,
+          conversationId,
+          agentName: "reviewer",
+          manifestHash: "fixture",
+          manifest: {},
+          engine: "codex",
+          model: "configured-model",
+          state: "running",
+          triggerType: "ui",
+          createdBy: { type: "user", id: "user_local_admin" },
+        });
+        const complete = {
+          orgId,
+          projectId,
+          turnId,
+          output: text,
+          actor: { type: "system" as const, id: "synthetic-native-session" },
+          metadata: { content: "final_response" as const, model: "reported-model" },
+        };
+        await service.completeTurn(complete);
+        await service.completeTurn(complete);
+        const rows = await db.select().from(storyMessages).where(eq(storyMessages.turnId, turnId));
+        expect(rows).toHaveLength(1);
+        if (!rows[0]) throw new Error("Missing recorded message");
+        return rows[0];
+      }
+      const original = await finish(output);
+      expect(original.body).toBe(output);
+      expect(original.metadata).toMatchObject({
+        content: "final_response",
+        model: "reported-model",
+        deliveryDecisionBrief: 1,
+      });
+      await db.insert(storyMessages).values(
+        Array.from({ length: 30 }, (_, index) => ({
+          ...scoped,
+          id: newId("msg"),
+          conversationId,
+          seq: index + 2,
+          role: "user",
+          body: "Later conversation",
+          actor: { type: "user", id: "user_local_admin" },
+        })),
+      );
+      await db
+        .update(storyConversations)
+        .set({ nextSeq: 32 })
+        .where(eq(storyConversations.id, conversationId));
+      const read = async () =>
+        (await app.inject({ url: path(id), headers: headers("viewer") })).json<StoryDelivery>();
+      const valid = (await read()).decisionBrief;
+      const originalPage = await app.inject({
+        url: `/v1/projects/${projectId}/workspace-stories/${id}/conversation?messageId=${original.id}&limit=1`,
+        headers: headers("viewer"),
+      });
+      expect(originalPage.statusCode).toBe(200);
+      expect(originalPage.json().focus).toEqual({ messageId: original.id, seq: 1 });
+      expect(originalPage.json().messages).toHaveLength(1);
+      expect(originalPage.json().messages[0]).toMatchObject({
+        id: original.id,
+        body: output,
+        author: { kind: "agent", name: "reviewer" },
+      });
+      expect(valid).toMatchObject({
+        status: "available",
+        source: {
+          messageId: original.id,
+          seq: 1,
+          turn: { agentName: "reviewer", model: "configured-model" },
+        },
+        brief: example.brief,
+      });
+      const attention = await app.inject({
+        url: `/v1/projects/${projectId}/attention/stories?category=deliveries&limit=25`,
+        headers: headers("viewer"),
+      });
+      expect(attention.statusCode).toBe(200);
+      expect(
+        attention.json().items.find((item: { storyId: string }) => item.storyId === id)?.delivery
+          .decisionBrief,
+      ).toEqual(valid);
+      for (const role of ["noRead", "otherProject", "otherTenant"])
+        expect((await app.inject({ url: path(id), headers: headers(role) })).statusCode).toBe(
+          role === "noRead" ? 403 : 404,
+        );
+      const mirror = and(
+        eq(githubPullRequests.repositoryId, refs[1]),
+        eq(githubPullRequests.number, 2),
+      );
+      await db
+        .update(githubPullRequests)
+        .set({ headSha: "c".repeat(40) })
+        .where(mirror);
+      const changed = await read();
+      expect(changed.candidate.revision).toBe(delivery.candidate.revision);
+      expect(changed.decisionBrief).toMatchObject({
+        status: "stale",
+        reason: "heads_changed",
+        source: { messageId: original.id },
+      });
+      await db
+        .update(githubPullRequests)
+        .set({ headSha: "b".repeat(40), syncedAt: new Date(Date.now() - 3_600_000) })
+        .where(mirror);
+      expect((await read()).decisionBrief).toMatchObject({
+        status: "unverifiable",
+        reason: "observations_stale",
+      });
+      await db.update(githubPullRequests).set({ syncedAt: new Date() }).where(mirror);
+      const newer = await finish('```facility-delivery\n{"schemaVersion":2}\n```');
+      expect((await read()).decisionBrief).toMatchObject({
+        status: "invalid",
+        reason: "unsupported_version",
+        source: { messageId: newer.id },
+      });
+      const [unchanged] = await db
+        .select()
+        .from(storyMessages)
+        .where(eq(storyMessages.id, original.id));
+      expect(unchanged?.body).toBe(output);
+      const lost = await finish(output);
+      await db.update(storyMessages).set({ turnId: null }).where(eq(storyMessages.id, lost.id));
+      expect((await read()).decisionBrief).toMatchObject({
+        status: "unverifiable",
+        reason: "source_unavailable",
+        source: { messageId: lost.id, turn: null },
+      });
+      const oversized = await finish(`${"x".repeat(100001)}\n${output}`);
+      expect((await read()).decisionBrief).toMatchObject({
+        status: "invalid",
+        reason: "too_large",
+        source: { messageId: oversized.id, digest: null },
+      });
+      expect(enqueue).not.toHaveBeenCalled();
+    } finally {
+      await db.delete(storyDeliveryPullRequests).where(eq(storyDeliveryPullRequests.storyId, id));
+      await db
+        .delete(githubPullRequests)
+        .where(inArray(githubPullRequests.repositoryId, [...refs]));
+      await db.delete(projectRepositories).where(inArray(projectRepositories.id, [...refs]));
+    }
   });
 
   it("authenticates and scopes every read and write without leaking another project or tenant", async () => {

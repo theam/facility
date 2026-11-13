@@ -7,6 +7,7 @@ import type {
   StoryConsultationHandoff,
   StoryConsultationOptions,
   StoryConsultations,
+  StoryWorkspace,
 } from "@facility/sdk";
 import { Button, Eyebrow, Field, Select, TextArea, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
@@ -93,6 +94,7 @@ export function StoryConsultationPanel({
   defaultAgent,
   canExecute,
   draftOwnerId,
+  computeState,
 }: {
   projectId: string;
   storyId: string;
@@ -102,6 +104,7 @@ export function StoryConsultationPanel({
   defaultAgent: string | null;
   canExecute: boolean;
   draftOwnerId?: string;
+  computeState?: StoryWorkspace["state"];
 }) {
   const router = useRouter();
   const base = `/v1/projects/${encodeURIComponent(projectId)}/workspace-stories/${encodeURIComponent(storyId)}/consultations`;
@@ -284,10 +287,7 @@ export function StoryConsultationPanel({
     } else setError(result.message);
   }
   return (
-    <section
-      id="consultation"
-      className="flex min-w-0 flex-col gap-4 border border-(--line) p-5 lg:p-6"
-    >
+    <section id="consultation" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <Eyebrow>read-only consultation</Eyebrow>
@@ -421,7 +421,7 @@ export function StoryConsultationPanel({
           {draft.sources.map((source, index) => (
             <div
               key={source.rowId}
-              className="flex min-w-0 flex-col gap-3 border border-(--line) p-3"
+              className="rounded-lg flex min-w-0 flex-col gap-3 border border-(--line) p-3"
             >
               <div className="flex flex-wrap items-end gap-3">
                 <Field
@@ -713,6 +713,7 @@ export function StoryConsultationPanel({
             key={handoff.consultationId}
             projectId={projectId}
             storyId={storyId}
+            computeState={computeState}
             agents={agents.filter((agent) => agent.enabled)}
             initialDraft={{ agent: defaultAgent ?? "", message: handoff.message }}
             draftOwnerId={

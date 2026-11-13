@@ -60,12 +60,10 @@ export function renderWorkspaceKickstart(
       path: ".facility.yml",
       content: projectManifest(answers, servicePort),
     },
-    ...["architect", "builder", "pr-reviewer", "address-review", "ci-doctor", "security-audit"].map(
-      (name) => ({
-        path: `.agents/${name}.md`,
-        content: renderTemplate(readFileSync(join(root, "agents", `${name}.md`), "utf8"), models),
-      }),
-    ),
+    ...["architect", "builder", "pr-reviewer", "ci-doctor", "security-audit"].map((name) => ({
+      path: `.agents/${name}.md`,
+      content: renderTemplate(readFileSync(join(root, "agents", `${name}.md`), "utf8"), models),
+    })),
   ];
   const files = candidates
     .filter((file) => !existing.has(file.path))

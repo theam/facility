@@ -1,10 +1,18 @@
 "use client";
 
-import type { DeliveryAcceptanceRequest, StoryDelivery, StoryWorkflowStatus } from "@facility/sdk";
+import type {
+  DeliveryAcceptanceRequest,
+  DeliveryAcceptanceReview,
+  StoryDelivery,
+  StoryWorkflowStatus,
+} from "@facility/sdk";
 import { Button, Eyebrow } from "@facility/ui";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { clientApi } from "@/lib/client-api";
+import { DeliveryAcceptanceConfirmation } from "./delivery-acceptance-confirmation";
+import { ReviewCycleDetails, reviewCycleBlocksAcceptance } from "./review-cycle-details";
 
 export function StoryWorkflowPanel({
   initial,
@@ -15,17 +23,77 @@ export function StoryWorkflowPanel({
   canWrite: boolean;
   candidateReady: boolean;
 }) {
+  const router = useRouter();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState<DeliveryAcceptanceRequest | null>(null);
+  const [inlineReview, setInlineReview] = useState<DeliveryAcceptanceReview | null>(null),
+    [notice, setNotice] = useState<string | null>(null);
   const working = useRef(false),
     retry = useRef<{ candidate: string; key: string } | null>(null);
+  // Closing the inline review returns focus to the request button or to the recorded
+  // outcome instead of dropping it to the page.
+  const requestButton = useRef<HTMLDivElement>(null),
+    noticeLine = useRef<HTMLParagraphElement>(null),
+    focusAfterReview = useRef<"request" | "notice" | null>(null);
+  useEffect(() => {
+    if (inlineReview || !focusAfterReview.current) return;
+    const target =
+      focusAfterReview.current === "notice"
+        ? noticeLine.current
+        : requestButton.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    focusAfterReview.current = null;
+    target?.focus();
+  }, [inlineReview]);
   const path = `/v1/projects/${encodeURIComponent(initial.projectId)}/workspace-stories/${encodeURIComponent(initial.storyId)}`;
+  const [observation, setObservation] = useState<{
+    source: StoryWorkflowStatus;
+    workflow: StoryWorkflowStatus;
+  } | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const status = observation?.source === initial ? observation.workflow : initial;
+  const cycle = status.reviewCycle;
+  const cycleBlocksAcceptance = reviewCycleBlocksAcceptance(cycle);
+  const active = cycleBlocksAcceptance;
+
+  useEffect(() => {
+    if (!active) return;
+    let stopped = false;
+    let reading = false;
+    const timer = setInterval(async () => {
+      if (reading || document.visibilityState === "hidden") return;
+      reading = true;
+      const result = await clientApi<StoryWorkflowStatus>("GET", `${path}/workflow`);
+      reading = false;
+      if (stopped) return;
+      if (!result.ok) {
+        setRefreshError(result.message);
+        return;
+      }
+      if (
+        result.data?.projectId !== initial.projectId ||
+        result.data.storyId !== initial.storyId ||
+        result.data.orgId !== initial.orgId
+      ) {
+        setRefreshError("The workflow response does not match this story.");
+        return;
+      }
+      setRefreshError(null);
+      setObservation({ source: initial, workflow: result.data });
+      if (result.data.reviewCycle?.phase !== cycle?.phase) router.refresh();
+    }, 5_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [active, cycle?.phase, initial, path, router]);
+
   async function requestReview() {
-    if (working.current || !canWrite) return;
+    if (working.current || !canWrite || cycleBlocksAcceptance) return;
     working.current = true;
     setBusy(true);
     setError(null);
+    setNotice(null);
     const delivery = await clientApi<StoryDelivery>("GET", `${path}/delivery`);
     if (
       !delivery.ok ||
@@ -48,6 +116,26 @@ export function StoryWorkflowPanel({
       setBusy(false);
       return;
     }
+    if (
+      workflow.data?.projectId !== initial.projectId ||
+      workflow.data.storyId !== initial.storyId ||
+      workflow.data.orgId !== initial.orgId
+    ) {
+      setError("The workflow response does not match this story.");
+      working.current = false;
+      setBusy(false);
+      return;
+    }
+    setObservation({ source: initial, workflow: workflow.data });
+    if (reviewCycleBlocksAcceptance(workflow.data.reviewCycle)) {
+      setError(
+        workflow.data.reviewCycle?.reason ??
+          "Wait for the recorded review cycle to finish before requesting acceptance.",
+      );
+      working.current = false;
+      setBusy(false);
+      return;
+    }
     const candidate = JSON.stringify([
       delivery.data.candidate.revision,
       workflow.data.plan.revision,
@@ -66,23 +154,40 @@ export function StoryWorkflowPanel({
         idempotency_key: retry.current.key,
       },
     );
-    working.current = false;
-    setBusy(false);
     if (!result.ok) {
+      working.current = false;
+      setBusy(false);
       setError(result.message);
       return;
     }
+    // The request exists now. A later click asks for a fresh one instead of replaying
+    // this request after it expires.
+    retry.current = null;
     setRequest(result.data);
+    // Confirm in place with the same review and single-use proof the confirmation
+    // page uses; the link below stays as the fallback when it cannot be read here.
+    const review = await clientApi<DeliveryAcceptanceReview>(
+      "GET",
+      `${path}/delivery-acceptance/${encodeURIComponent(result.data.id)}`,
+    );
+    working.current = false;
+    setBusy(false);
+    if (review.ok && review.data?.request?.id === result.data.id && review.data.request.snapshot)
+      setInlineReview(review.data);
   }
   return (
-    <section
-      aria-label="Workflow status"
-      className="flex min-w-0 flex-col gap-3 border border-(--line) p-4 sm:p-5"
-    >
+    <section aria-label="Workflow status" className="flex min-w-0 flex-col gap-3">
       <Eyebrow>approvals and acceptance</Eyebrow>
-      {initial.blockedReason ? (
+      {cycle ? <ReviewCycleDetails cycle={cycle} /> : null}
+      {refreshError ? (
+        <p role="status" className="break-words text-sm text-(--mut)">
+          Could not update the review — {refreshError}. The last recorded observation remains
+          visible.
+        </p>
+      ) : null}
+      {status.blockedReason ? (
         <p role="alert" className="break-words text-sm text-(--bad)">
-          {initial.blockedReason}{" "}
+          {status.blockedReason}{" "}
           <Link href="#story-plan" className="underline">
             Review the current plan
           </Link>
@@ -90,8 +195,8 @@ export function StoryWorkflowPanel({
         </p>
       ) : null}
       <p className="text-sm">
-        Delivery acceptance: <strong>{initial.acceptance.status}</strong>
-        {initial.acceptance.required
+        Delivery acceptance: <strong>{status.acceptance.status}</strong>
+        {status.acceptance.required
           ? " · required before story completion"
           : " · optional for this project"}
         .
@@ -100,11 +205,11 @@ export function StoryWorkflowPanel({
         Acceptance records your review of the exact required PR heads and plan. New heads or
         plan/policy changes require a fresh acceptance.
       </p>
-      {initial.acceptance.receipt ? (
+      {status.acceptance.receipt ? (
         <p className="break-words text-sm text-(--dim)">
-          Last accepted by {initial.acceptance.receipt.confirmedBy.name ?? "a project member"} ·
-          plan r{initial.acceptance.receipt.snapshot.planRevision} · acceptance r
-          {initial.acceptance.receipt.revision}.
+          Last accepted by {status.acceptance.receipt.confirmedBy.name ?? "a project member"} · plan
+          r{status.acceptance.receipt.snapshot.planRevision} · acceptance r
+          {status.acceptance.receipt.revision}.
         </p>
       ) : null}
       {error ? (
@@ -112,7 +217,33 @@ export function StoryWorkflowPanel({
           {error}
         </p>
       ) : null}
-      {request ? (
+      {notice ? (
+        <p ref={noticeLine} tabIndex={-1} role="status" className="text-sm text-(--ok)">
+          {notice}
+        </p>
+      ) : null}
+      {inlineReview ? (
+        <DeliveryAcceptanceConfirmation
+          key={inlineReview.request.id}
+          compact
+          initial={inlineReview}
+          onClose={() => {
+            focusAfterReview.current = "request";
+            setInlineReview(null);
+            setRequest(null);
+            router.refresh();
+          }}
+          onConfirmed={() => {
+            focusAfterReview.current = "notice";
+            setInlineReview(null);
+            setRequest(null);
+            setNotice(
+              "Acceptance recorded. Merging and completing the story remain separate actions.",
+            );
+            router.refresh();
+          }}
+        />
+      ) : request ? (
         <Link
           className="w-fit max-w-full break-words text-sm underline"
           href={request.confirmationUrl}
@@ -129,9 +260,9 @@ export function StoryWorkflowPanel({
           before requesting acceptance.
         </p>
       ) : null}
-      {canWrite && candidateReady && initial.acceptance.status !== "current" ? (
-        <div>
-          <Button disabled={busy} onClick={() => void requestReview()}>
+      {canWrite && candidateReady && !inlineReview && status.acceptance.status !== "current" ? (
+        <div ref={requestButton}>
+          <Button disabled={busy || cycleBlocksAcceptance} onClick={() => void requestReview()}>
             {busy ? "Preparing review…" : "Request delivery acceptance"}
           </Button>
         </div>

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { TRACKING_GROUPS } from "../../stories/backlog-tracking.js";
 import { PHASE_REASONS, WORK_PHASES } from "../../stories/phase.js";
 import { DateValue, principal, type V1RouteContext } from "./shared.js";
 
@@ -17,11 +18,12 @@ const list = <T extends z.ZodTypeAny>(item: T) =>
 const Phase = z.enum(WORK_PHASES);
 const BacklogQuery = z.object({
   q: z.string().trim().max(200).optional(),
+  group: z.enum(TRACKING_GROUPS).optional(),
   phase: list(z.enum([...WORK_PHASES, "open", "all"])),
   label: list(z.string().trim().min(1).max(160)),
   assignee: list(z.string().trim().min(1).max(200)),
   repository: list(z.string().trim().min(1).max(200)),
-  sort: z.enum(["priority", "updated", "created"]).default("priority"),
+  sort: z.enum(["priority", "updated", "created", "activity"]).default("priority"),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -47,6 +49,23 @@ const PullRequest = z.object({
   updatedAt: DateValue,
 });
 const BacklogItem = z.object({
+  tracking: z
+    .object({
+      group: z.enum(TRACKING_GROUPS),
+      pendingMessages: z.number(),
+      messageWait: z.enum(["previous_turn", "preview", "dispatch"]).nullable(),
+      previewApplying: z.boolean(),
+      plan: z.object({ revision: z.number(), digest: z.string() }).nullable(),
+      delivery: z.object({ ready: z.boolean(), detail: z.string() }).nullable(),
+      wait: z
+        .object({
+          kind: z.enum(["workflow", "retry_delay", "dispatch", "unavailable"]),
+          detail: z.string(),
+          retryAfter: z.string().nullable(),
+        })
+        .nullable(),
+    })
+    .optional(),
   key: z.string(),
   kind: z.enum(["story", "issue", "pull_request"]),
   title: z.string(),
@@ -119,6 +138,14 @@ export const BacklogResponse = z.object({
       z.ZodNumber
     >,
   ),
+  groupCounts: z
+    .object(
+      Object.fromEntries(TRACKING_GROUPS.map((group) => [group, z.number()])) as Record<
+        (typeof TRACKING_GROUPS)[number],
+        z.ZodNumber
+      >,
+    )
+    .optional(),
   items: z.array(BacklogItem),
   facets: z.object({
     labels: z.array(z.object({ name: z.string(), count: z.number() })),
@@ -152,6 +179,7 @@ export async function registerBacklogRoutes(app: FastifyInstance, _context: V1Ro
         projectId,
         {
           q: query.q,
+          group: query.group,
           phase: query.phase,
           label: query.label,
           assignee: query.assignee,

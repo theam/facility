@@ -139,12 +139,38 @@ beforeEach(() => {
 });
 
 describe("attention page", () => {
-  it("lists every open notice with its verb, after the live signals the overview also counts", async () => {
+  it.each([
+    "review_cycle_ready",
+    "review_cycle_decision",
+  ])("keeps %s reason visible and offers no retry", async (kind) => {
+    const data = openPage();
+    const failed = data.items[1];
+    if (!failed) throw new Error("Missing notice fixture");
+    data.items = [
+      {
+        ...failed,
+        kind,
+        title: "Review needs a human decision",
+        detail: "The proposed permissions change exceeds the approved plan.",
+        action: "dismiss",
+      },
+    ];
+    mocks.attention = { ok: true, data };
+    const { root } = await render();
+    const notices = section(root, "Notices");
+    expect(notices.textContent).toContain(
+      "The proposed permissions change exceeds the approved plan.",
+    );
+    expect(notices.textContent).not.toContain("The run reported an error");
+    expect(notices.textContent).not.toContain("Technical details");
+    expect([...notices.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Dismiss"]);
+  });
+  it("lists every open notice with its verb and links to the complete Attention view", async () => {
     const { root, text } = await render();
     expect(mocks.queries).toEqual([{ status: "open", limit: 25, offset: 0 }]);
-    expect(text).toContain("Needs your attention");
-    expect(text).toContain("2 open notices · 1 from pull requests and the budget · 7 resolved");
-    expect(root.querySelector('a[href="/projects/project"]')?.textContent).toBe("← Overview");
+    expect(root.querySelector("h1")?.textContent).toBe("Notices");
+    expect(text).toContain("2 open notices · 7 resolved");
+    expect(root.querySelector('a[href="/projects/project"]')?.textContent).toBe("← Attention");
 
     const tabs = section(root, "Notice status");
     expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe("Open2");
@@ -157,9 +183,8 @@ describe("attention page", () => {
       kinds.querySelector('a[href="/projects/project/attention?kind=turn_error"]'),
     ).not.toBeNull();
 
-    const signals = section(root, "Also waiting on you");
-    expect(signals.textContent).toContain("Checks failed on pull request #42");
-    expect(signals.querySelector('a[href="https://github.com/acme/app/pull/42"]')).not.toBeNull();
+    expect(mocks.overviewCalls).toBe(0);
+    expect(root.querySelector('[aria-label="Also waiting on you"]')).toBeNull();
 
     const notices = section(root, "Notices");
     expect(notices.querySelectorAll("article")).toHaveLength(2);
@@ -170,7 +195,7 @@ describe("attention page", () => {
     ).toBe("Reply in the story →");
     expect(notices.textContent).toContain("Technical details");
     const buttons = [...notices.querySelectorAll("button")].map((button) => button.textContent);
-    expect(buttons).toEqual(["dismiss", "retry", "dismiss"]);
+    expect(buttons).toEqual(["Dismiss", "Retry", "Dismiss"]);
     expect(text).toContain("Showing 1–2 of 2");
     expect(text).not.toContain("Older →");
   });
@@ -239,7 +264,6 @@ describe("attention page", () => {
     mocks.permissions = ["projects:read"];
     const { root, text } = await render();
     expect(section(root, "Notices").querySelector("button")).toBeNull();
-    expect(section(root, "Also waiting on you").querySelector("button")).toBeNull();
     expect(text).toContain("Reply in the story");
   });
 

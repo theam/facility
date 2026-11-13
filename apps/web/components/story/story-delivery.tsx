@@ -1,11 +1,12 @@
 "use client";
 
-import { Button, Eyebrow, Field, TextInput } from "@facility/ui";
+import { Button, Field, TextInput } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import type { StoryDelivery } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import { formatTime, safeExternalUrl } from "@/lib/story-presentation";
+import { DeliveryDecisionBrief } from "./delivery-decision-brief";
 
 type Pull = StoryDelivery["pullRequests"][number];
 type Selection = Pick<Pull, "repository" | "number" | "required" | "primary">;
@@ -160,15 +161,10 @@ export function StoryDeliveryPanel({
   }
 
   return (
-    <section
-      id="story-delivery"
-      aria-label="Delivery pull requests"
-      className="min-w-0 border border-(--line) p-5 lg:p-6"
-    >
+    <section id="story-delivery" aria-label="Delivery pull requests" className="min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Eyebrow>delivery</Eyebrow>
-          <h2 className="mt-2 text-lg font-semibold">Pull requests for this story</h2>
+          <h2 className="mt-2 text-lg font-semibold">Delivery</h2>
         </div>
         {current && canWrite && !editing ? (
           <Button
@@ -185,6 +181,22 @@ export function StoryDeliveryPanel({
           </Button>
         ) : null}
       </div>
+      {!editing && current ? (
+        <DeliveryDecisionBrief
+          projection={current.decisionBrief}
+          actions={
+            canWrite ? (
+              <a
+                href="#story-section-workflow"
+                className="rounded-md inline-flex min-h-11 w-fit items-center border border-(--info) px-4 font-medium text-(--info)"
+              >
+                Review acceptance →
+              </a>
+            ) : null
+          }
+          storyUrl={`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`}
+        />
+      ) : null}
       {!current ? (
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-(--mut)">
           <p>The delivery register is unavailable.</p>
@@ -329,7 +341,7 @@ export function StoryDeliveryPanel({
           <fieldset disabled={saving} className="mt-4 min-w-0 space-y-4">
             <legend className="sr-only">Edit delivery pull requests</legend>
             {draft.map((pull) => (
-              <div key={identity(pull)} className="min-w-0 border border-(--line) p-3">
+              <div key={identity(pull)} className="min-w-0 border-b border-(--line) py-3">
                 <p className="break-all text-sm font-medium">
                   {pull.repository} #{pull.number}
                 </p>
@@ -423,7 +435,7 @@ export function StoryDeliveryPanel({
                   {available.items.map((pull) => (
                     <li
                       key={identity(pull)}
-                      className="flex min-w-0 flex-wrap items-center justify-between gap-3 border border-(--line) p-3"
+                      className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-(--line) py-3"
                     >
                       <div className="min-w-0 flex-1 basis-36 text-sm">
                         <p className="break-all font-medium">

@@ -75,7 +75,7 @@ export function DevelopmentBranch({
         value={value}
         placeholder={defaultBranch}
         disabled={!canWrite || pending}
-        className="border border-(--line) bg-transparent px-3 py-2 font-mono text-sm"
+        className="rounded-md border border-(--line) bg-(--bg-subtle) px-3 py-2 font-mono text-sm"
         onChange={(event) => {
           setValue(event.target.value);
           setMessage("");
@@ -84,7 +84,7 @@ export function DevelopmentBranch({
       {canWrite && (
         <div>
           <Button size="sm" disabled={pending || value.trim() === saved} onClick={save}>
-            {pending ? "saving…" : "save development branch"}
+            {pending ? "Saving…" : "Save development branch"}
           </Button>
         </div>
       )}

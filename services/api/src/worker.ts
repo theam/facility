@@ -83,6 +83,7 @@ export async function startWorker() {
   const observedPreviewsAtStartup = await storyDomain.previewConvergence.reconcileObserved();
   const previewLifecycleAtStartup = await storyDomain.previewConvergence.reconcileLifecycle();
   const recoveredPreviewsAtStartup = await storyDomain.previewConvergence.recover();
+  await storyDomain.reviewCycles.recover();
   const recoveredCompletionAtStartup = await storyDomain.completion.recover();
   if (interruptedAtStartup > 0 || queuedAtStartup > 0) {
     logger.info(
@@ -210,6 +211,7 @@ export async function startWorker() {
         const previewLifecycle = await storyDomain.previewConvergence.reconcileLifecycle();
         const recoveredPreviews = await storyDomain.previewConvergence.recover();
         const recoveredCompletion = await storyDomain.completion.recover();
+        const recoveredReviewCycles = await storyDomain.reviewCycles.recover();
         result = {
           ...(await storyDomain.scheduler.tick()),
           interruptedTurns,
@@ -222,6 +224,7 @@ export async function startWorker() {
           previewLifecycle,
           recoveredPreviews,
           recoveredCompletion,
+          recoveredReviewCycles,
         };
       }
       logger.info({ queue, jobId, ...result }, "worker completed job");
