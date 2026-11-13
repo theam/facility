@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
-import { newId } from "@facility/core";
+import { newId, readDeliveryDecisionBrief } from "@facility/core";
 import {
   attentionItems,
   budgetReservations,
@@ -23,9 +23,9 @@ import {
   users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
-import { ACTIVITY_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
+import { ACTIVITY_NOISE_TYPES, PROGRESS_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
 import { readUsageJournal } from "../turns/usage-journal.js";
@@ -40,6 +40,12 @@ import type {
 import { reconcileTurnBranch } from "./branch.js";
 import { type InputFileReference, validateInputFileReferences } from "./input-files.js";
 import { isGithubIssueStory } from "./phase.js";
+import { REVIEW_TRIGGER } from "./review-cycle-rules.js";
+import {
+  REVIEW_DECISION_ATTENTION,
+  reviewHoldsQueue,
+  seedReviewCycle,
+} from "./review-cycle-state.js";
 import { authorizePlanExecution } from "./workflow-execution.js";
 import { lockWorkflowExecution, lockWorkflowProject } from "./workflow-policy.js";
 
@@ -118,6 +124,22 @@ export class StoryServiceError extends Error {
     this.name = "StoryServiceError";
   }
 }
+
+type QueuedMessageInput = {
+  attachmentIds?: string[];
+  orgId: string;
+  projectId: string;
+  storyId: string;
+  body: string;
+  dedupeKey: string;
+  agent: AgentManifest;
+  actor: StoryActor;
+  trigger: {
+    type: "manual" | "mcp" | "ui" | "github" | "schedule" | typeof REVIEW_TRIGGER;
+    key?: string;
+    scheduledFor?: Date;
+  };
+};
 
 export class StoryWorkspaceService {
   constructor(
@@ -334,21 +356,23 @@ export class StoryWorkspaceService {
     return { ...(await this.get(input.orgId, input.projectId, aggregate.story.id)), queued };
   }
 
-  async queueMessage(input: {
-    attachmentIds?: string[];
-    orgId: string;
-    projectId: string;
-    storyId: string;
-    body: string;
-    dedupeKey: string;
-    agent: AgentManifest;
-    actor: StoryActor;
-    trigger: {
-      type: "manual" | "mcp" | "ui" | "github" | "schedule";
-      key?: string;
-      scheduledFor?: Date;
-    };
-  }) {
+  async queueMessage(input: QueuedMessageInput) {
+    if (input.trigger.type === REVIEW_TRIGGER)
+      throw new StoryServiceError("message_invalid", "Use an explicit agent trigger", 400);
+    const queued = await this.db.transaction((rawTx) =>
+      this.storeMessage(rawTx as unknown as FacilityDb, input, false),
+    );
+    if (!queued)
+      throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
+    if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
+    return queued;
+  }
+
+  async queueReviewTurn(tx: FacilityDb, input: QueuedMessageInput) {
+    return (await this.storeMessage(tx, input, true))?.turn;
+  }
+
+  private async storeMessage(tx: FacilityDb, input: QueuedMessageInput, reviewHandoff: boolean) {
     if (!input.body.trim()) {
       throw new StoryServiceError("message_invalid", "message must not be empty", 400);
     }
@@ -360,121 +384,119 @@ export class StoryWorkspaceService {
       );
     }
 
-    const queued = await this.db.transaction(async (rawTx) => {
-      const tx = rawTx as unknown as FacilityDb;
-      await lockStory(tx, input.orgId, input.projectId, input.storyId);
-      const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
-      if (story.deletedAt) {
-        throw new StoryServiceError("story_workspace_deleted", "story workspace was deleted");
-      }
-      const conversation = (
-        await tx
-          .select()
-          .from(storyConversations)
-          .where(
-            and(
-              eq(storyConversations.orgId, input.orgId),
-              eq(storyConversations.projectId, input.projectId),
-              eq(storyConversations.storyId, input.storyId),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!conversation)
-        throw new StoryServiceError("conversation_not_found", "story conversation not found", 404);
+    await lockStory(tx, input.orgId, input.projectId, input.storyId);
+    const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
+    if (story.deletedAt) {
+      throw new StoryServiceError("story_workspace_deleted", "story workspace was deleted");
+    }
+    const conversation = (
+      await tx
+        .select()
+        .from(storyConversations)
+        .where(
+          and(
+            eq(storyConversations.orgId, input.orgId),
+            eq(storyConversations.projectId, input.projectId),
+            eq(storyConversations.storyId, input.storyId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!conversation)
+      throw new StoryServiceError("conversation_not_found", "story conversation not found", 404);
 
-      const duplicate = (
-        await tx
-          .select()
-          .from(storyMessages)
-          .where(
-            and(
-              eq(storyMessages.conversationId, conversation.id),
-              eq(storyMessages.dedupeKey, input.dedupeKey),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (duplicate) {
-        const turn = duplicate.turnId
-          ? (await tx.select().from(turns).where(eq(turns.id, duplicate.turnId)).limit(1))[0]
-          : undefined;
-        return { message: duplicate, turn, queued: !turn, created: false };
-      }
+    const duplicate = (
+      await tx
+        .select()
+        .from(storyMessages)
+        .where(
+          and(
+            eq(storyMessages.conversationId, conversation.id),
+            eq(storyMessages.dedupeKey, input.dedupeKey),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (duplicate) {
+      const turn = duplicate.turnId
+        ? (await tx.select().from(turns).where(eq(turns.id, duplicate.turnId)).limit(1))[0]
+        : undefined;
+      return { message: duplicate, turn, queued: !turn, created: false };
+    }
 
-      const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
+    const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
 
-      const activeTurn = (
+    const activeTurn = (
+      await tx
+        .select()
+        .from(turns)
+        .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
+        .limit(1)
+    )[0];
+    const activePreview = await activePreviewWriter(tx, input);
+    if (reviewHandoff && (activeTurn || activePreview)) return undefined;
+    const reviewHeld =
+      !reviewHandoff && (await reviewHoldsQueue(tx, input, input.actor.type === "user"));
+    await recordParticipation(tx, story, input.actor);
+    const sequence = await allocateMessageSequence(tx, conversation.id);
+    let turn: typeof turns.$inferSelect | undefined;
+    if (!activeTurn && !activePreview && !reviewHeld) {
+      turn = (
         await tx
-          .select()
-          .from(turns)
-          .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
-          .limit(1)
-      )[0];
-      const activePreview = await activePreviewWriter(tx, input);
-      await recordParticipation(tx, story, input.actor);
-      const sequence = await allocateMessageSequence(tx, conversation.id);
-      let turn: typeof turns.$inferSelect | undefined;
-      if (!activeTurn && !activePreview) {
-        turn = (
-          await tx
-            .insert(turns)
-            .values({
-              id: newId("turn"),
-              orgId: input.orgId,
-              projectId: input.projectId,
-              storyId: input.storyId,
-              conversationId: conversation.id,
-              agentName: input.agent.name,
-              manifestHash: input.agent.hash,
-              manifest: input.agent,
-              engine: input.agent.engine,
-              model: input.agent.model,
-              triggerType: input.trigger.type,
-              triggerKey: input.trigger.key,
-              scheduledFor: input.trigger.scheduledFor,
-              createdBy: input.actor,
-            })
-            .returning()
-        )[0];
-      }
-      const message = (
-        await tx
-          .insert(storyMessages)
+          .insert(turns)
           .values({
-            id: newId("msg"),
+            id: newId("turn"),
             orgId: input.orgId,
             projectId: input.projectId,
             storyId: input.storyId,
             conversationId: conversation.id,
-            seq: sequence,
-            role: "user",
-            body: input.body,
-            metadata: attachments.length ? { attachments } : {},
-            actor: input.actor,
-            turnId: turn?.id,
-            requestedAgentName: input.agent.name,
-            requestedTrigger: input.trigger,
-            dedupeKey: input.dedupeKey,
+            agentName: input.agent.name,
+            manifestHash: input.agent.hash,
+            manifest: input.agent,
+            engine: input.agent.engine,
+            model: input.agent.model,
+            triggerType: input.trigger.type,
+            triggerKey: input.trigger.key,
+            scheduledFor: input.trigger.scheduledFor,
+            createdBy: input.actor,
           })
           .returning()
       )[0];
-      if (!message)
-        throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
+    }
+    const message = (
       await tx
-        .update(stories)
-        .set({
-          status: "working",
-          activeAgentName: turn?.agentName ?? story.activeAgentName,
-          archivedAt: null,
-          archivedFromStatus: null,
-          updatedAt: new Date(),
+        .insert(storyMessages)
+        .values({
+          id: newId("msg"),
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: input.storyId,
+          conversationId: conversation.id,
+          seq: sequence,
+          role: "user",
+          body: input.body,
+          metadata: attachments.length ? { attachments } : {},
+          actor: input.actor,
+          turnId: turn?.id,
+          requestedAgentName: input.agent.name,
+          requestedTrigger: input.trigger,
+          dedupeKey: input.dedupeKey,
         })
-        .where(eq(stories.id, input.storyId));
-      return { message, turn, queued: !turn, created: true };
-    });
-    if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
-    return queued;
+        .returning()
+    )[0];
+    if (!message)
+      throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
+    await tx
+      .update(stories)
+      .set({
+        status: reviewHeld ? story.status : "working",
+        activeAgentName: turn?.agentName ?? story.activeAgentName,
+        archivedAt: null,
+        archivedFromStatus: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(stories.id, input.storyId));
+    return { message, turn, queued: !turn, created: true };
   }
 
   async completeTurn(input: {
@@ -510,7 +532,12 @@ export class StoryWorkspaceService {
         body: input.output,
         actor: input.actor,
         turnId: turn.id,
-        metadata: input.metadata ?? {},
+        metadata: {
+          ...input.metadata,
+          // Derived here from the redacted final output, never supplied as authority.
+          deliveryDecisionBrief:
+            readDeliveryDecisionBrief(input.output).status === "absent" ? null : 1,
+        },
       });
       const completed = (
         await tx
@@ -541,6 +568,7 @@ export class StoryWorkspaceService {
         .where(and(eq(stories.orgId, input.orgId), eq(stories.id, turn.storyId)));
       if (!completed) throw new StoryServiceError("turn_not_found", "completed turn not found");
       await reconcileTurnBranch(tx, story, completed);
+      await seedReviewCycle(tx, completed, input.output, Boolean(input.attention));
       return completed;
     });
   }
@@ -1126,6 +1154,9 @@ export class StoryWorkspaceService {
               eq(attentionItems.storyId, input.storyId),
               eq(attentionItems.id, input.attentionId),
               eq(attentionItems.status, "open"),
+              input.actor.type === "user"
+                ? undefined
+                : notInArray(attentionItems.kind, [...REVIEW_DECISION_ATTENTION]),
             ),
           )
           .returning({ id: attentionItems.id })
@@ -1133,7 +1164,7 @@ export class StoryWorkspaceService {
       if (!resolved) {
         const existing = (
           await tx
-            .select({ status: attentionItems.status })
+            .select({ status: attentionItems.status, kind: attentionItems.kind })
             .from(attentionItems)
             .where(
               and(
@@ -1147,6 +1178,15 @@ export class StoryWorkspaceService {
         )[0];
         if (!existing)
           throw new StoryServiceError("attention_not_found", "attention item not found", 404);
+        if (
+          REVIEW_DECISION_ATTENTION.some((kind) => kind === existing.kind) &&
+          input.actor.type !== "user"
+        )
+          throw new StoryServiceError(
+            "review_human_required",
+            "A project member must resolve this review decision",
+            403,
+          );
         return;
       }
       const remaining = (
@@ -1205,7 +1245,11 @@ export class StoryWorkspaceService {
     )[0];
     if (!attention)
       throw new StoryServiceError("attention_not_found", "attention item not found", 404);
-    if (!attention.turnId || attention.kind === "agent_waiting") {
+    if (
+      !attention.turnId ||
+      attention.kind === "agent_waiting" ||
+      REVIEW_DECISION_ATTENTION.some((kind) => kind === attention.kind)
+    ) {
       throw new StoryServiceError(
         "attention_not_retryable",
         "This attention item needs a reply or dismissal rather than a retry",
@@ -1215,6 +1259,11 @@ export class StoryWorkspaceService {
       throw new StoryServiceError("attention_resolved", "attention item is already resolved");
     }
     const failedTurn = await scopedTurn(this.db, input.orgId, input.projectId, attention.turnId);
+    if (failedTurn.triggerType === REVIEW_TRIGGER)
+      throw new StoryServiceError(
+        "attention_not_retryable",
+        "Review the cycle decision and use a new approved plan before starting another cycle.",
+      );
     const [request] = await this.db
       .select()
       .from(storyMessages)
@@ -1260,7 +1309,12 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
-      if (active || (await activePreviewWriter(tx, input))) return undefined;
+      if (
+        active ||
+        (await activePreviewWriter(tx, input)) ||
+        (await reviewHoldsQueue(tx, input, input.actor.type === "user"))
+      )
+        return undefined;
       const message = (
         await tx
           .select()
@@ -1342,6 +1396,7 @@ export class StoryWorkspaceService {
       recentEvents,
       recentEvidence,
       assignees,
+      progressRows,
     ] = await Promise.all([
       this.db
         .select()
@@ -1392,6 +1447,28 @@ export class StoryWorkspaceService {
             .limit(200)
         : Promise.resolve(undefined),
       this.assignees(orgId, projectId, [storyId]).then((rows) => rows.get(storyId) ?? []),
+      this.db
+        .select({ event: turnEvents, turn: turns })
+        .from(turnEvents)
+        .innerJoin(
+          turns,
+          and(
+            eq(turns.orgId, turnEvents.orgId),
+            eq(turns.projectId, turnEvents.projectId),
+            eq(turns.storyId, turnEvents.storyId),
+            eq(turns.id, turnEvents.turnId),
+          ),
+        )
+        .where(
+          and(
+            eq(turnEvents.orgId, orgId),
+            eq(turnEvents.projectId, projectId),
+            eq(turnEvents.storyId, storyId),
+            notInArray(turnEvents.type, [...PROGRESS_NOISE_TYPES]),
+          ),
+        )
+        .orderBy(desc(turnEvents.createdAt), desc(turnEvents.seq), desc(turnEvents.turnId))
+        .limit(1),
     ]);
     return {
       story,
@@ -1401,6 +1478,15 @@ export class StoryWorkspaceService {
       artifacts,
       attention,
       assignees,
+      progress: {
+        observedAt: new Date().toISOString(),
+        latest: progressRows[0]
+          ? {
+              turn: conversationTurn(progressRows[0].turn),
+              activity: presentTurnEvent(progressRows[0].event),
+            }
+          : null,
+      },
       events: recentEvents ? recentEvents.reverse() : undefined,
       timeline:
         recentEvents && recentEvidence
@@ -1421,8 +1507,46 @@ export class StoryWorkspaceService {
     orgId: string,
     projectId: string,
     storyId: string,
-    options: { after?: number; before?: number; order?: "asc" | "desc"; limit?: number } = {},
+    options: {
+      after?: number;
+      before?: number;
+      order?: "asc" | "desc";
+      limit?: number;
+      messageId?: string;
+    } = {},
   ) {
+    let focus: { messageId: string; seq: number } | null = null;
+    if (options.messageId !== undefined) {
+      if (options.before !== undefined || (options.after ?? 0) !== 0)
+        throw new StoryServiceError(
+          "invalid_cursor",
+          "Choose a source message or a pagination cursor, not both",
+          400,
+        );
+      await scopedStory(this.db, orgId, projectId, storyId);
+      const [target] = await this.db
+        .select({ id: storyMessages.id, seq: storyMessages.seq })
+        .from(storyMessages)
+        .where(
+          and(
+            eq(storyMessages.orgId, orgId),
+            eq(storyMessages.projectId, projectId),
+            eq(storyMessages.storyId, storyId),
+            eq(storyMessages.id, options.messageId),
+          ),
+        )
+        .limit(1);
+      if (!target)
+        throw new StoryServiceError(
+          "message_not_found",
+          "The source message is not available in this story",
+          404,
+        );
+      focus = { messageId: target.id, seq: target.seq };
+      // The linked message is the newest boundary, with earlier context and the
+      // existing per-run enrichment. Never substitute the latest conversation.
+      options = { ...options, order: "desc", after: 0, before: target.seq + 1 };
+    }
     const limit = Math.min(200, Math.max(1, options.limit ?? 50));
     const rows = await this.conversation(orgId, projectId, storyId, {
       ...options,
@@ -1503,6 +1627,7 @@ export class StoryWorkspaceService {
     return {
       messages,
       related: related.map(enrich),
+      focus,
       hasMore,
       nextCursor: hasMore && edge ? edge.seq : null,
     };
@@ -1517,8 +1642,10 @@ export class StoryWorkspaceService {
     projectId: string,
     storyId: string,
     turnId: string,
-    options: { before?: number; limit?: number } = {},
+    options: { before?: number; after?: number; limit?: number } = {},
   ) {
+    if (options.before !== undefined && options.after !== undefined)
+      throw new StoryServiceError("invalid_activity_cursor", "Use before or after, not both", 400);
     const turn = await scopedTurn(this.db, orgId, projectId, turnId);
     if (turn.storyId !== storyId)
       throw new StoryServiceError("turn_not_found", "turn not found", 404);
@@ -1534,14 +1661,16 @@ export class StoryWorkspaceService {
           eq(turnEvents.turnId, turnId),
           notInArray(turnEvents.type, [...ACTIVITY_NOISE_TYPES]),
           options.before === undefined ? undefined : lt(turnEvents.seq, options.before),
+          options.after === undefined ? undefined : gt(turnEvents.seq, options.after),
         ),
       )
-      .orderBy(desc(turnEvents.seq))
+      .orderBy(options.after === undefined ? desc(turnEvents.seq) : asc(turnEvents.seq))
       .limit(limit + 1);
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).map(presentTurnEvent);
     return {
       turn: conversationTurn(turn),
+      order: options.after === undefined ? ("desc" as const) : ("asc" as const),
       items,
       hasMore,
       nextCursor: hasMore ? (items.at(-1)?.seq ?? null) : null,

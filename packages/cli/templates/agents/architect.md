@@ -37,6 +37,10 @@ a reduced permission profile.
 Finish with the goal, decisions and tradeoffs, implementation slices, verification plan, and any
 remaining blocker. Name affected modules and concrete acceptance commands. Never claim evidence
 you did not inspect or a check you did not run.
+When requesting a human decision, include a concise `facility-decision` brief with the complete
+plan, following the [author brief contract](https://github.com/theam/facility/blob/main/apps/docs/docs/reference/decision-brief.md).
+Give real alternatives, your recommendation, the decisive risk, missing evidence and exact source
+references. The brief does not grant approval or change workflow policy.
 </output_contract>
 
 <completion_criteria>

@@ -366,7 +366,7 @@ export function Markdown({
         blocks.push(
           <pre
             key={`pre-${blocks.length}`}
-            className="overflow-auto border border-(--line) bg-(--card) p-3 font-mono text-[12px] text-(--mut)"
+            className="rounded-lg overflow-auto border border-(--line) bg-(--card) p-3 font-mono text-[12px] text-(--mut)"
           >
             {code.join("\n")}
           </pre>,
@@ -403,7 +403,7 @@ export function Markdown({
                   <th
                     // biome-ignore lint/suspicious/noArrayIndexKey: static parse, columns never reorder
                     key={`${tkey}-h${c}`}
-                    className="border border-(--line) bg-(--card) px-3 py-1.5 text-left font-mono text-[11px] font-medium text-(--ink)"
+                    className="rounded-lg border border-(--line) bg-(--card) px-3 py-1.5 text-left font-mono text-[11px] font-medium text-(--ink)"
                   >
                     {renderInline(cell, `${tkey}-h${c}`, linkArtifact, linkReference)}
                   </th>
@@ -418,7 +418,7 @@ export function Markdown({
                     <td
                       // biome-ignore lint/suspicious/noArrayIndexKey: static parse, columns never reorder
                       key={`${tkey}-r${r}c${c}`}
-                      className="border border-(--line) px-3 py-1.5 align-top text-(--mut)"
+                      className="rounded-lg border border-(--line) px-3 py-1.5 align-top text-(--mut)"
                     >
                       {renderInline(
                         cells[c] ?? "",
@@ -538,7 +538,7 @@ export function Markdown({
     blocks.push(
       <pre
         key={`pre-${blocks.length}`}
-        className="max-w-full overflow-x-auto border border-(--line) bg-(--card) p-4 font-mono text-[12px] leading-relaxed text-(--code)"
+        className="rounded-lg max-w-full overflow-x-auto border border-(--line) bg-(--card) p-4 font-mono text-[12px] leading-relaxed text-(--code)"
       >
         {code.join("\n")}
       </pre>,

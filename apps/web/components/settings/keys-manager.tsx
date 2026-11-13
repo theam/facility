@@ -79,7 +79,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
         <div
           role="status"
           aria-live="polite"
-          className="flex flex-col gap-2 border border-(--line-strong) bg-(--bg-subtle) p-4"
+          className="rounded-lg flex flex-col gap-2 border border-(--line-strong) bg-(--bg-subtle) p-4"
         >
           <span className="text-[12px] font-medium text-(--ink)">copy this now — shown once</span>
           <code className="break-all font-mono text-[13px] text-(--ink)">{issued}</code>
@@ -114,7 +114,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
           </Select>
         </Field>
         <Button type="submit" variant="primary" disabled={busy || !name || !roleId}>
-          {busy ? "issuing…" : "issue key"}
+          {busy ? "Issuing…" : "Issue key"}
         </Button>
       </form>
       {notice ? (
@@ -131,7 +131,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
       {live.length === 0 ? (
         <p className="text-sm text-(--dim)">No active keys.</p>
       ) : (
-        <div className="flex flex-col border border-(--line)">
+        <div className="rounded-lg flex flex-col border border-(--line)">
           {live.map((k) => (
             <div
               key={k.id}
@@ -151,7 +151,7 @@ export function KeysManager({ keys, roles }: { keys: ApiKey[]; roles: Role[] }) 
                     disabled={revokingId !== null}
                     className="text-[12px] font-medium text-(--bad) disabled:opacity-50"
                   >
-                    {revokingId === k.id ? "revoking…" : "confirm"}
+                    {revokingId === k.id ? "Revoking…" : "Confirm"}
                   </button>
                   <button
                     type="button"

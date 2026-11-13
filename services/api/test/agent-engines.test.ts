@@ -5,6 +5,7 @@ import { parseAgentManifest } from "@facility/agents";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AgentEngineError,
+  CLAUDE_READ_ONLY_TOOLS,
   ClaudeCodeEngine,
   ClaudeEventParser,
   CodexEngine,
@@ -117,7 +118,7 @@ describe("native agent engines", () => {
     if (expected) expect(JSON.stringify(runtime.command?.args)).not.toContain(expected);
   });
 
-  it("parses chunked Claude stream-json and resumes with full access", async () => {
+  it("parses chunked Claude stream-json and resumes with a budget when supplied", async () => {
     const stdout = `${[
       JSON.stringify({ type: "system", subtype: "init", session_id: "claude-session" }),
       JSON.stringify({
@@ -145,6 +146,7 @@ describe("native agent engines", () => {
       prompt: "continue",
       cwd: "repos/app",
       nativeSessionId: "claude-session",
+      maxBudgetUsd: 0.85,
     });
     expect(result).toMatchObject({
       nativeSessionId: "claude-session",
@@ -163,6 +165,8 @@ describe("native agent engines", () => {
       env: { FACILITY_TURN_ID: "turn_claude" },
     });
     expect(runtime.command?.args).toContain("claude");
+    expect(runtime.command?.args).toContain("--max-budget-usd");
+    expect(runtime.command?.args).toContain("0.850000");
     expect(runtime.command?.args).toEqual(
       expect.arrayContaining([
         "--permission-mode",
@@ -209,6 +213,66 @@ describe("native agent engines", () => {
     ]);
     expect(runtime.command?.args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(runtime.command?.args).toEqual(expect.arrayContaining(["codex-thread", "continue"]));
+  });
+
+  it("restricts read-only turns to reading tools and Codex's read-only sandbox", async () => {
+    const claudeOutput = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      session_id: "claude-review",
+      result: "reviewed",
+    })}\n`;
+    const claudeRuntime = new EngineRuntime({
+      exitCode: 0,
+      stdout: claudeOutput,
+      stderr: "",
+      durationMs: 5,
+    });
+    await new ClaudeCodeEngine(claudeRuntime).run({
+      turnId: "turn_review",
+      manifest: manifest("claude_code"),
+      workspace,
+      prompt: "review",
+      cwd: "repos/app",
+      readOnly: true,
+    });
+    const claudeArgs = claudeRuntime.command?.args ?? [];
+    expect(claudeArgs).not.toContain("bypassPermissions");
+    expect(claudeArgs).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
+    const allowed = claudeArgs[claudeArgs.indexOf("--allowedTools") + 1] ?? "";
+    expect(allowed.split(",")).toEqual(CLAUDE_READ_ONLY_TOOLS);
+    expect(allowed).not.toMatch(/Edit|Write|git push|git commit|git fetch|gh api/);
+    // git can write any file through --output even under an allowed read prefix.
+    expect(claudeArgs[claudeArgs.indexOf("--disallowedTools") + 1]).toBe(
+      "Edit,Write,NotebookEdit,Bash(git * --output*)",
+    );
+    // Settings, hooks and MCP servers written into the workspace cannot widen the turn.
+    expect(claudeArgs[claudeArgs.indexOf("--setting-sources") + 1]).toBe("");
+    expect(JSON.parse(claudeArgs[claudeArgs.indexOf("--settings") + 1] ?? "{}")).toEqual({
+      disableAllHooks: true,
+    });
+    expect(claudeArgs).toContain("--strict-mcp-config");
+
+    const codexOutput = `${JSON.stringify({ type: "thread.started", thread_id: "codex-review" })}\n`;
+    const codexRuntime = new EngineRuntime({
+      exitCode: 0,
+      stdout: codexOutput,
+      stderr: "",
+      durationMs: 5,
+    });
+    await new CodexEngine(codexRuntime)
+      .run({
+        turnId: "turn_review",
+        manifest: manifest("codex"),
+        workspace,
+        prompt: "review",
+        cwd: "repos/app",
+        readOnly: true,
+      })
+      .catch(() => undefined);
+    const codexArgs = codexRuntime.command?.args ?? [];
+    expect(codexArgs).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(codexArgs).toEqual(expect.arrayContaining(["--sandbox", "read-only"]));
   });
 
   it("rejects malformed engine output and non-zero exits", async () => {

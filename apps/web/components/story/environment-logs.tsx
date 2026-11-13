@@ -68,7 +68,7 @@ export function EnvironmentLogs({ projectId, storyId }: { projectId: string; sto
             {services.map((service) => (
               <span
                 key={service}
-                className="border border-(--line) px-2 py-1 font-mono text-[10px] text-(--mut)"
+                className="rounded-md border border-(--line) px-2 py-1 font-mono text-[10px] text-(--mut)"
               >
                 {service}
               </span>
@@ -78,10 +78,10 @@ export function EnvironmentLogs({ projectId, storyId }: { projectId: string; sto
         {events.length === 0 && state === "end" ? (
           <p className="text-[12px] text-(--dim)">No environment events yet.</p>
         ) : events.length > 0 ? (
-          <div className="max-h-96 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
+          <div className="rounded-md max-h-96 overflow-auto border border-(--line) bg-(--bg-subtle) p-4 font-mono text-[10.5px] leading-relaxed">
             {events.map((event) => (
               <div key={event.seq} className="mb-3 last:mb-0">
-                <p className="text-(--accent)">
+                <p className="text-(--accent-ink)">
                   {event.seq} · {event.type}
                   <span className="ml-2 text-(--dim)">{formatTime(event.createdAt)}</span>
                 </p>

@@ -339,6 +339,11 @@ export type RequestStoryConsultation = FacilityGeneratedBody<
   "/v1/projects/{projectId}/workspace-stories/{storyId}/consultations"
 >;
 export type WorkspaceStoryBundle = {
+  /** Absent on older servers. Maintenance heartbeats do not establish work progress. */
+  progress?: {
+    observedAt: string;
+    latest: { turn: StoryTurnSummary; activity: StoryActivityItem } | null;
+  };
   /** Absent on older servers; an absent register never means a complete PR set. */
   delivery?: StoryDelivery;
   /** Absent on older servers; null until a complete exact delivery generation is observed. */
@@ -452,6 +457,8 @@ export type StoryMessage = {
   content: StoryMessageContent;
 };
 export type StoryConversationPage = {
+  /** Exact linked message; its page is newest-first from this boundary. */
+  focus?: { messageId: string; seq: number } | null;
   /** The contiguous page in the requested order. */
   messages: StoryMessage[];
   /**
@@ -486,6 +493,8 @@ export type StoryActivityItem = {
 };
 export type StoryTurnActivityPage = {
   turn: StoryTurnSummary;
+  /** Incremental `after` pages are ascending; older servers omit this field. */
+  order?: "asc" | "desc";
   items: StoryActivityItem[];
   has_more: boolean;
   next_cursor: number | null;
@@ -571,4 +580,14 @@ export type DeliveryAcceptanceRequest = FacilityGeneratedResponse<
 export type DeliveryAcceptanceReview = FacilityGeneratedResponse<
   "get",
   "/v1/projects/{projectId}/workspace-stories/{storyId}/delivery-acceptance/{requestId}"
+>;
+
+/** Pending plans and open notices grouped into whole-story pages. */
+export type ProjectAttentionStories = FacilityGeneratedResponse<
+  "GET",
+  "/v1/projects/{projectId}/attention/stories"
+>;
+export type AttentionStoriesQuery = FacilityGeneratedQuery<
+  "GET",
+  "/v1/projects/{projectId}/attention/stories"
 >;

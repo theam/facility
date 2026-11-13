@@ -55,8 +55,9 @@ hashed with SHA-256. A turn stores that hash, the source commit, engine, model, 
 | `triggers` | Yes | Non-empty array of supported trigger objects. |
 
 Unknown fields are invalid. In particular, `permissions`, `sandbox`, `tools`, and `max_turns` are
-not part of the manifest. Every agent receives the same full workspace, shell, network, Docker,
-browser, Git, and configured GitHub repository capability.
+not part of the manifest. Native turns share the full workspace, shell, network, Docker, browser, Git, and configured GitHub
+repository capabilities. In [automatic delivery review](../concepts/agents-as-code.md#automatic-delivery-review), the
+cycle runs its Reviewer's turns read-only.
 
 ## Options
 
@@ -152,7 +153,7 @@ completion criteria, evidence expected, and constraints such as never merging. P
 behavior but cannot reduce credentials. Use repository rules and Facility authorization for
 structural enforcement.
 
-The default catalog provides `architect`, `builder`, `pr-reviewer`, `address-review`, `ci-doctor`,
+The default catalog provides `architect`, `builder`, `pr-reviewer`, `ci-doctor`,
 and `security-audit`. They are starter manifests, not reserved names. Custom agents use this same
 contract.
 
