@@ -19,6 +19,7 @@ import { appendStoryEvidence } from "../stories/evidence.js";
 import { isGithubIssueStory } from "../stories/phase.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import { FacilityGithubClient, type GithubClientFactory } from "./client.js";
+import { githubRateLimitRetryAt } from "./rate-limit.js";
 
 const BODY_LIMIT = 64 * 1024;
 const MAX_SYNC_PAGES = 10;
@@ -958,17 +959,29 @@ export class GithubMirrorService {
     const pullNumber = positiveInteger(pull.number);
     const headSha = string(object(pull.head).sha);
     if (!pullNumber || !headSha) return { ciUpdates: 0, checks: 0 };
-    const [statusResponse, checkRunsResponse] = await Promise.all([
-      client.request("GET /repos/{owner}/{repo}/commits/{ref}/status", { ref: headSha }),
-      client.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
-        ref: headSha,
-        per_page: 100,
-      }),
-    ]);
+    const checkRunsResponse = await client.request(
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
+      { ref: headSha, per_page: 100 },
+    );
+    // Only a 403 that is not a rate limit means commit statuses are unreadable.
+    // Rate limits and every other error abort this refresh.
+    let statusResponse: JsonObject = {};
+    let statusesUnavailable = false;
+    try {
+      statusResponse = object(
+        await client.request("GET /repos/{owner}/{repo}/commits/{ref}/status", {
+          ref: headSha,
+        }),
+      );
+    } catch (error) {
+      if (githubRateLimitRetryAt(error)) throw error;
+      if (!isForbidden(error)) throw error;
+      statusesUnavailable = true;
+    }
     const checkRuns = array(object(checkRunsResponse).check_runs).map(object);
     let checks = 0;
     for (const check of checkRuns) checks += await this.upsertCheck(repository, check, pullNumber);
-    const signal = restCiSignal(statusResponse, checkRunsResponse);
+    const signal = restCiSignal(statusResponse, checkRunsResponse, statusesUnavailable);
     if (!signal) {
       // Record the observation without inventing a successful CI result.
       await this.db
@@ -1157,6 +1170,7 @@ export function webhookCiSignal(
 export function restCiSignal(
   commitStatus: unknown,
   checkRunsResponse: unknown,
+  statusesUnavailable = false,
 ): { state: "pending" | "success" | "failure"; failureNames: string[] } | null {
   const status = object(commitStatus);
   const statuses = array(status.statuses).map(object);
@@ -1185,6 +1199,8 @@ export function restCiSignal(
   if (pendingStatus || checkRuns.some((check) => check.status !== "completed")) {
     return { state: "pending", failureNames: [] };
   }
+  // Unreadable commit statuses cannot confirm success for this head.
+  if (statusesUnavailable) return null;
   return { state: "success", failureNames: [] };
 }
 
@@ -1302,4 +1318,13 @@ function array(value: unknown): unknown[] {
 
 function string(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isForbidden(error: unknown): boolean {
+  if (githubRateLimitRetryAt(error)) return false;
+  if (!error || typeof error !== "object") return false;
+  const status =
+    (error as { status?: unknown }).status ??
+    (error as { response?: { status?: unknown } }).response?.status;
+  return status === 403;
 }
