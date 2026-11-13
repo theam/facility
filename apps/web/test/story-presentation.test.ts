@@ -10,6 +10,7 @@ import {
   errorSummary,
   groupExchanges,
   initials,
+  isRetryableNotice,
   mergeMessages,
   newestMessages,
   presentMessage,
@@ -153,6 +154,16 @@ describe("human story presentation", () => {
     expect(errorSummary("HTTP 401 Unauthorized wss://example")).toContain("authentication");
     expect(errorSummary("fetch failed")).toContain("connect");
     expect(errorSummary("something unrecognized")).toContain("technical details");
+  });
+});
+
+describe("notice actions", () => {
+  it("offers a retry only for a failed run, never for an already billed overrun", () => {
+    expect(isRetryableNotice("turn_error")).toBe(true);
+    expect(isRetryableNotice("worker_interrupted")).toBe(true);
+    expect(isRetryableNotice("turn_limit_exceeded")).toBe(false);
+    expect(isRetryableNotice("agent_waiting")).toBe(false);
+    expect(isRetryableNotice("review_cycle_decision")).toBe(false);
   });
 });
 

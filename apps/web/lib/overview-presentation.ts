@@ -5,7 +5,12 @@ import type {
   ProjectObservability,
   ProjectOverview,
 } from "./api";
-import { errorSummary, isReviewNotice, safeExternalUrl } from "./story-presentation";
+import {
+  errorSummary,
+  isReviewNotice,
+  isTurnLimitNotice,
+  safeExternalUrl,
+} from "./story-presentation";
 
 // Presentation decisions for the project overview, kept free of React so the
 // state interpretation is unit-testable. Server data stays untouched; these
@@ -92,6 +97,8 @@ export function attentionKindLabel(kind: string) {
       return "Delivery ready for human review";
     case "review_cycle_decision":
       return "Delivery review needs a decision";
+    case "turn_limit_exceeded":
+      return "Agent turn went over its limit";
     default:
       return kind.replaceAll("_", " ");
   }
@@ -163,6 +170,8 @@ export function attentionNotice(
   const review = isReviewNotice(notice.kind);
   const delivery = ["delivery_integration", "delivery_completion"].includes(notice.kind);
   const deliveryFailure = delivery && /failed|needs attention/i.test(notice.title);
+  // Its detail is written for people (cost and limit), not a technical error.
+  const overLimit = isTurnLimitNotice(notice.kind);
   return {
     key: `attention:${notice.id}`,
     tone: resolved
@@ -174,7 +183,7 @@ export function attentionNotice(
     storyId: notice.storyId,
     storyTitle: notice.storyTitle,
     summary:
-      waiting || delivery || review
+      waiting || delivery || review || overLimit
         ? (notice.detail ??
           (review
             ? "Review the recorded candidate and findings in the story."
@@ -189,7 +198,7 @@ export function attentionNotice(
           }
         : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
     item: resolved ? null : notice,
-    detail: waiting || delivery || review ? null : notice.detail,
+    detail: waiting || delivery || review || overLimit ? null : notice.detail,
     resolved: resolved
       ? { label: resolutionLabel(notice.resolution ?? null), at: notice.resolvedAt ?? null }
       : null,

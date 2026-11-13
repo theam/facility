@@ -15,6 +15,7 @@ export type AgentTurnRequest = {
   cwd: string;
   nativeSessionId?: string;
   timeoutMs?: number;
+  /** Per-turn spending limit. Claude Code stops the turn at it; Codex cannot and ignores it. */
   maxBudgetUsd?: number;
   /** Restricts the engine to reading: no edits, commits, pushes or other writing tools. */
   readOnly?: boolean;
@@ -129,6 +130,23 @@ abstract class CliAgentEngine implements AgentEngine {
     }
     parser.finish(result.stdout);
     const parsed = parser.result();
+    if (parsed.turnLimitReached) {
+      // The engine stopped itself at maxBudgetUsd. Its usage stays attached so the
+      // turn is billed for the calls it made, including the one that crossed the limit.
+      const limit =
+        request.maxBudgetUsd === undefined ? "" : ` of $${request.maxBudgetUsd.toFixed(2)}`;
+      throw new AgentEngineError(
+        "agent_turn_limit_reached",
+        `${ENGINE_LABELS[this.name]} stopped this turn when it reached the project's per-turn limit${limit}. Its work so far stays in the workspace; raise the limit or narrow the request before retrying.`,
+        {
+          engine: this.name,
+          exitCode: result.exitCode,
+          events: parsed.events,
+          usage: parsed.usage,
+          durationMs: result.durationMs,
+        },
+      );
+    }
     if (result.exitCode !== 0) {
       const message = result.stderr.trim() || `${this.name} exited with status ${result.exitCode}`;
       const corruptSession =
@@ -326,7 +344,11 @@ type ParsedEngineEvents = {
   model?: string;
   events: AgentTurnEvent[];
   usage?: AgentTurnUsage;
+  /** The engine ended the turn because it reached the maxBudgetUsd it was given. */
+  turnLimitReached?: boolean;
 };
+
+const ENGINE_LABELS = { claude_code: "Claude Code", codex: "Codex" } as const;
 
 abstract class EngineEventParser {
   private buffer = "";
@@ -386,6 +408,7 @@ export class ClaudeEventParser extends EngineEventParser {
   private resultText?: string;
   private readonly assistantText: string[] = [];
   private usage?: AgentTurnUsage;
+  private turnLimitReached = false;
 
   protected accept(value: Record<string, unknown>) {
     const type = stringValue(value.type) ?? "unknown";
@@ -395,6 +418,8 @@ export class ClaudeEventParser extends EngineEventParser {
     if (type === "result") {
       this.resultText = stringValue(value.result) ?? this.resultText;
       this.usage = usageValue(value.usage, value.total_cost_usd) ?? this.usage;
+      // `--max-budget-usd` ends print mode with this result subtype and exit status 1.
+      if (value.subtype === "error_max_budget_usd") this.turnLimitReached = true;
     }
     if (type === "assistant") {
       const message = objectValue(value.message);
@@ -417,6 +442,7 @@ export class ClaudeEventParser extends EngineEventParser {
       model: this.model,
       events: this.events,
       usage: this.usage,
+      turnLimitReached: this.turnLimitReached,
     };
   }
 }

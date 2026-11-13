@@ -73,6 +73,7 @@ vi.mock("../lib/api", () => ({
         state: mocks.budgetUnconfirmed ? "unconfirmed" : "not_configured",
         spent_cents: 0,
         monthly_limit_cents: 5000,
+        turn_limit_cents: 250,
         enabled: true,
       },
     }),
@@ -92,6 +93,8 @@ describe("Insights spend rendering", () => {
     const html = await page();
     expect(html).not.toContain("Save budget");
     expect(html).toContain("Monthly limit: $50.00.");
+    expect(html).toContain("Per-turn limit: $2.50.");
+    expect(html).toContain("Codex reports usage only when a turn ends");
     expect(html).toContain("Enforcement is");
     mocks.budgetWritable = true;
   });

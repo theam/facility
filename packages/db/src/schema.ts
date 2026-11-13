@@ -1501,6 +1501,8 @@ export const projectBudgets = pgTable(
       .notNull()
       .references(() => projects.id),
     monthlyLimitCents: integer("monthly_limit_cents").notNull(),
+    /** Most one agent turn may cost while the budget is enforced; null means no per-turn limit. */
+    turnLimitCents: integer("turn_limit_cents"),
     warningPercent: integer("warning_percent").notNull().default(80),
     enabled: boolean("enabled").notNull().default(true),
     updatedBy: text("updated_by"),
@@ -1511,6 +1513,10 @@ export const projectBudgets = pgTable(
     index("project_budgets_org_idx").on(table.orgId),
     check("project_budgets_limit_check", sql`${table.monthlyLimitCents} >= 0`),
     check("project_budgets_warning_check", sql`${table.warningPercent} between 1 and 100`),
+    check(
+      "project_budgets_turn_limit_check",
+      sql`${table.turnLimitCents} is null or ${table.turnLimitCents} > 0`,
+    ),
     foreignKey({
       name: "project_budgets_project_scope_fk",
       columns: [table.orgId, table.projectId],

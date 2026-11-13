@@ -112,7 +112,7 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
 
       <section className="flex flex-col gap-4">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <Eyebrow>monthly budget</Eyebrow>
+          <Eyebrow>budget</Eyebrow>
           <PillTag>{budget.data.state.replaceAll("_", " ")}</PillTag>
         </div>
         <p className="text-[12px] text-(--dim)">
@@ -123,6 +123,11 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
           or API call's full usage cannot be recovered, spending is shown as a lower bound and new
           model calls are blocked while the budget is enabled.
         </p>
+        <p className="text-[12px] text-(--dim)">
+          The optional per-turn limit caps any single agent turn. A turn starts only if its estimate
+          fits. Claude Code stops when it reaches the limit; Codex reports usage only when a turn
+          ends, so it can go over by at most the turn that is running, and that story gets a notice.
+        </p>
         {can(me.ok ? me.data.permissions : [], "budgets:write") ? (
           <BudgetForm projectId={projectId} budget={budget.data} />
         ) : (
@@ -130,6 +135,9 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
             {budget.data.monthly_limit_cents === null
               ? "No monthly limit configured."
               : `Monthly limit: ${money(budget.data.monthly_limit_cents)}.`}{" "}
+            {budget.data.turn_limit_cents === null
+              ? "No per-turn limit."
+              : `Per-turn limit: ${money(budget.data.turn_limit_cents)}.`}{" "}
             Enforcement is {budget.data.enabled ? "enabled" : "disabled"}.
           </p>
         )}

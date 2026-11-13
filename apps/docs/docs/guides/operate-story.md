@@ -513,3 +513,9 @@ Story work produces usage and cost records when the provider reports them. Proje
 views aggregate this history, while workspace environment metrics distinguish running compute from
 retained storage. Set project budgets as an operating control and investigate missing pricing or
 usage data instead of interpreting it as zero.
+
+The budget has two levels: a monthly limit for the whole project and an optional per-turn limit
+for any single agent turn. Claude Code stops at the per-turn limit. Codex can exceed it by at most
+the turn that is running; the story then shows a notice that the turn went over, which you dismiss
+rather than retry. See
+[how the two levels differ](../faq.md#how-do-the-monthly-budget-and-the-per-turn-limit-differ).

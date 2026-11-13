@@ -739,7 +739,7 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_get_budget",
     permission: "budgets:read",
     description:
-      "Read the project's monthly budget, current spend, remaining amount, and enforcement state. Needs budgets:read.",
+      "Read the project's monthly budget, per-turn limit, current spend, remaining amount, and enforcement state. Needs budgets:read.",
     inputSchema: { projectId },
     method: "GET",
     path: (args) => `/v1/projects/${part(args.projectId)}/budget`,
@@ -748,10 +748,11 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "facility_set_budget",
     permission: "budgets:write",
     description:
-      "Set the project monthly budget. Exhausted budgets block new turns. Starting a turn or title reserves a priced estimate against the limit until measured usage replaces it. Needs budgets:write.",
+      "Set the project monthly budget and its optional per-turn limit. Exhausted budgets block new turns. Starting a turn or title reserves a priced estimate against the limit until measured usage replaces it. While enforced, a turn starts only if its estimate fits turnLimitCents; Claude Code stops at that limit, and Codex, which cannot be stopped mid-turn, is reported on its story after a turn that went over. Omit turnLimitCents to keep the current one; null removes it. Needs budgets:write.",
     inputSchema: {
       projectId,
       monthlyLimitCents: z.number().int().min(0),
+      turnLimitCents: z.number().int().min(1).nullable().optional(),
       warningPercent: z.number().int().min(1).max(100).default(80),
       enabled: z.boolean().default(true),
       idempotencyKey,
@@ -760,6 +761,7 @@ export const toolDefinitions: ToolDefinition[] = [
     path: (args) => `/v1/projects/${part(args.projectId)}/budget`,
     body: (args) => ({
       monthly_limit_cents: args.monthlyLimitCents,
+      turn_limit_cents: args.turnLimitCents,
       warning_percent: args.warningPercent,
       enabled: args.enabled,
     }),

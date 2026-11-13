@@ -24,7 +24,11 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
-import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
+import {
+  CostBudgetService,
+  releaseOpenTurnReservation,
+  TURN_LIMIT_ATTENTION,
+} from "../insights/costs.js";
 import { ACTIVITY_NOISE_TYPES, PROGRESS_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
@@ -607,6 +611,74 @@ export class StoryWorkspaceService {
       });
       if (!failed) throw new StoryServiceError("turn_not_found", "failed turn not found");
       return failed;
+    });
+  }
+
+  /**
+   * Record a finished turn whose measured cost went over the per-turn limit it was
+   * admitted under, and open a notice on its story. Codex reports usage only when a
+   * turn ends, so this is the earliest point Facility can act on it. The notice
+   * cannot be retried: rerunning the turn would spend again.
+   */
+  async reportTurnLimitOverrun(input: {
+    orgId: string;
+    projectId: string;
+    storyId: string;
+    turnId: string;
+    agentName: string;
+    engine: string;
+    costCents: number;
+    turnLimitCents: number;
+  }) {
+    return this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockStory(tx, input.orgId, input.projectId, input.storyId);
+      const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
+      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
+      if (turn.storyId !== story.id)
+        throw new StoryServiceError("turn_not_found", "turn not found", 404);
+      const [existing] = await tx
+        .select({ id: attentionItems.id })
+        .from(attentionItems)
+        .where(
+          and(
+            eq(attentionItems.orgId, input.orgId),
+            eq(attentionItems.projectId, input.projectId),
+            eq(attentionItems.storyId, story.id),
+            eq(attentionItems.turnId, turn.id),
+            eq(attentionItems.kind, TURN_LIMIT_ATTENTION),
+          ),
+        )
+        .limit(1);
+      if (existing) return existing.id;
+      const id = newId("attn");
+      await tx.insert(attentionItems).values({
+        id,
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: story.id,
+        turnId: turn.id,
+        kind: TURN_LIMIT_ATTENTION,
+        title: `${input.agentName} went over the per-turn limit`,
+        detail: turnLimitOverrunDetail(input),
+      });
+      await appendTurnEvent(tx, {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: story.id,
+        turnId: turn.id,
+        type: "turn.limit_exceeded",
+        data: {
+          engine: input.engine,
+          costCents: input.costCents,
+          turnLimitCents: input.turnLimitCents,
+        },
+      });
+      await tx
+        .update(stories)
+        .set({ status: lifecycleStatusAfterTurn(story.status, "attention"), updatedAt: new Date() })
+        .where(and(eq(stories.orgId, input.orgId), eq(stories.id, story.id)));
+      return id;
     });
   }
 
@@ -1253,6 +1325,12 @@ export class StoryWorkspaceService {
       throw new StoryServiceError(
         "attention_not_retryable",
         "This attention item needs a reply or dismissal rather than a retry",
+      );
+    }
+    if (attention.kind === TURN_LIMIT_ATTENTION) {
+      throw new StoryServiceError(
+        "attention_not_retryable",
+        "This turn already ran and was billed; retrying it would spend again. Dismiss the notice, then raise the per-turn limit or send a new request if more work is needed.",
       );
     }
     if (attention.status === "resolved" && attention.resolution !== "successful_retry") {
@@ -2659,6 +2737,22 @@ function validateStartInput(input: StartStoryInput) {
   if (!input.title.trim() || input.title.length > 500) {
     throw new StoryServiceError("story_title_invalid", "story title is invalid", 400);
   }
+}
+
+function turnLimitOverrunDetail(input: {
+  engine: string;
+  costCents: number;
+  turnLimitCents: number;
+}) {
+  const reason =
+    input.engine === "codex"
+      ? "Codex reports its usage only when a turn ends, so Facility could not stop it during the turn."
+      : "The engine could not stop the turn before it crossed the limit.";
+  return `This turn cost ${usd(input.costCents)}, more than the project's per-turn limit of ${usd(input.turnLimitCents)}. ${reason} Facility did not retry it. Review its result, then raise the limit, choose a cheaper model or narrow the next request.`;
+}
+
+function usd(cents: number) {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 function lifecycleStatusAfterTurn(

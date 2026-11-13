@@ -494,7 +494,7 @@ describe("cost controls, GitHub mirror, and backlog", async () => {
         model: "claude-haiku-4-5",
       }),
     );
-    expect(second).toEqual(expect.any(String));
+    expect(second).toEqual({ reservationId: expect.any(String), turnLimitCents: null });
     await costs.record({
       orgId,
       projectId: reserveProjectId,

@@ -21,6 +21,7 @@ import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
 import { requirePermissions } from "../../auth/required-permissions.js";
 import { ApiError } from "../../errors.js";
+import { attentionAction } from "../../insights/project-overview.js";
 import { readStoryDelivery, replaceStoryDelivery } from "../../stories/delivery.js";
 import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
@@ -1257,7 +1258,11 @@ function nextOperations(
     operations.push("open_preview", "delete_workspace");
   if (attention.length > 0) operations.push("dismiss_attention");
   if (attention.some((item) => item.kind === "agent_waiting")) operations.push("reply");
-  if (attention.some((item) => item.turnId && item.kind !== "agent_waiting"))
+  if (
+    attention.some(
+      (item) => attentionAction({ kind: item.kind ?? "", turnId: item.turnId ?? null }) === "retry",
+    )
+  )
     operations.push("retry");
   if (story.status === "working") operations.push("cancel_turn");
   return [...new Set(operations)];

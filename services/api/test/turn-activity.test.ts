@@ -217,6 +217,15 @@ describe("turn activity presentation", () => {
       kind: "lifecycle",
       text: "Duration 1 min 5 s",
     });
+    expect(
+      presentTurnEvent(
+        event("turn.limit_exceeded", { engine: "codex", costCents: 400.06, turnLimitCents: 300 }),
+      ),
+    ).toMatchObject({
+      kind: "error",
+      title: "Run went over the per-turn limit",
+      text: "Cost $4.00 of a $3.00 limit",
+    });
     expect(presentTurnEvent(event("some.unknown_type", {}))).toMatchObject({
       kind: "other",
       title: "some unknown type",

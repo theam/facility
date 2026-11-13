@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { generateApiKey, newId } from "@facility/core";
-import { apiKeys, auditEvents, createDb, migrate, projects, seed } from "@facility/db";
+import {
+  apiKeys,
+  auditEvents,
+  createDb,
+  migrate,
+  orgs,
+  projectBudgets,
+  projects,
+  seed,
+} from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -152,6 +161,121 @@ describe("project budget API", async () => {
       headers: { authorization: `Bearer ${scopedOwnerSecret}` },
     });
     expect(crossProject.statusCode).toBe(404);
+  });
+
+  it("stores the per-turn limit with the budget, keeps it when omitted and clears it on null", async () => {
+    const patch = (payload: Record<string, unknown>, key: string) =>
+      app.inject({
+        method: "PATCH",
+        url: `/v1/projects/${projectId}/budget`,
+        headers: { cookie: ownerCookie, "idempotency-key": `${key}-${suffix}` },
+        payload,
+      });
+    const set = await patch({ monthly_limit_cents: 12_500, turn_limit_cents: 500 }, "turn-set");
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toMatchObject({ monthly_limit_cents: 12_500, turn_limit_cents: 500 });
+
+    // A client that predates the field keeps the configured limit.
+    const kept = await patch({ monthly_limit_cents: 15_000 }, "turn-kept");
+    expect(kept.json()).toMatchObject({ monthly_limit_cents: 15_000, turn_limit_cents: 500 });
+
+    const read = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/budget`,
+      headers: { authorization: `Bearer ${viewerSecret}` },
+    });
+    expect(read.json()).toMatchObject({ turn_limit_cents: 500 });
+    const observability = await app.inject({
+      method: "GET",
+      url: `/v1/projects/${projectId}/observability`,
+      headers: { authorization: `Bearer ${viewerSecret}` },
+    });
+    expect(observability.json().budget).toMatchObject({ turnLimitCents: 500 });
+
+    const cleared = await patch(
+      { monthly_limit_cents: 15_000, turn_limit_cents: null },
+      "turn-null",
+    );
+    expect(cleared.json()).toMatchObject({ turn_limit_cents: null });
+    const [stored] = await db
+      .select()
+      .from(projectBudgets)
+      .where(eq(projectBudgets.projectId, projectId));
+    expect(stored).toMatchObject({ monthlyLimitCents: 15_000, turnLimitCents: null });
+  });
+
+  it("rejects malformed, unauthorized and cross-project per-turn limit writes", async () => {
+    const owner = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}/budget`,
+      headers: { cookie: ownerCookie, "idempotency-key": `turn-baseline-${suffix}` },
+      payload: { monthly_limit_cents: 15_000, turn_limit_cents: 700 },
+    });
+    expect(owner.statusCode).toBe(200);
+
+    for (const turn_limit_cents of [0, -1, 1.5, "700", 2_000_000_001]) {
+      const malformed = await app.inject({
+        method: "PATCH",
+        url: `/v1/projects/${projectId}/budget`,
+        headers: { cookie: ownerCookie },
+        payload: { monthly_limit_cents: 15_000, turn_limit_cents },
+      });
+      expect(malformed.statusCode, String(turn_limit_cents)).toBe(400);
+    }
+
+    const denied = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${projectId}/budget`,
+      headers: { authorization: `Bearer ${viewerSecret}` },
+      payload: { monthly_limit_cents: 15_000, turn_limit_cents: 1 },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const crossProject = await app.inject({
+      method: "PATCH",
+      url: `/v1/projects/${otherProjectId}/budget`,
+      headers: { authorization: `Bearer ${scopedOwnerSecret}` },
+      payload: { monthly_limit_cents: 15_000, turn_limit_cents: 1 },
+    });
+    expect(crossProject.statusCode).toBe(404);
+
+    const [stored] = await db
+      .select()
+      .from(projectBudgets)
+      .where(eq(projectBudgets.projectId, projectId));
+    expect(stored?.turnLimitCents).toBe(700);
+    expect(
+      await db.select().from(projectBudgets).where(eq(projectBudgets.projectId, otherProjectId)),
+    ).toEqual([]);
+  });
+
+  it("refuses a per-turn limit for a project in another tenant", async () => {
+    const foreignOrgId = newId("org");
+    const foreignProjectId = newId("proj");
+    await db
+      .insert(orgs)
+      .values({ id: foreignOrgId, name: "Foreign", slug: `foreign-${suffix}`, settings: {} });
+    await db.insert(projects).values({
+      id: foreignProjectId,
+      orgId: foreignOrgId,
+      name: "Foreign",
+      slug: `foreign-${suffix}`,
+      settings: {},
+    });
+    for (const method of ["GET", "PATCH"] as const) {
+      const response = await app.inject({
+        method,
+        url: `/v1/projects/${foreignProjectId}/budget`,
+        headers: { cookie: ownerCookie, "idempotency-key": `foreign-${method}-${suffix}` },
+        ...(method === "PATCH"
+          ? { payload: { monthly_limit_cents: 15_000, turn_limit_cents: 1 } }
+          : {}),
+      });
+      expect(response.statusCode, method).toBe(404);
+    }
+    expect(
+      await db.select().from(projectBudgets).where(eq(projectBudgets.projectId, foreignProjectId)),
+    ).toEqual([]);
   });
 
   it("exposes project-scoped cost, observability, backlog, and audit reads", async () => {

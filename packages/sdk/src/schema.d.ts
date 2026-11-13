@@ -5725,6 +5725,7 @@ export interface operations {
                         id: string | null;
                         enabled: boolean;
                         monthly_limit_cents: number | null;
+                        turn_limit_cents: number | null;
                         warning_percent: number | null;
                         /** Format: date-time */
                         window_start: string;
@@ -5830,6 +5831,7 @@ export interface operations {
             content: {
                 "application/json": {
                     monthly_limit_cents: number;
+                    turn_limit_cents?: number | null;
                     /** @default 80 */
                     warning_percent?: number;
                     /** @default true */
@@ -5848,6 +5850,7 @@ export interface operations {
                         id: string | null;
                         enabled: boolean;
                         monthly_limit_cents: number | null;
+                        turn_limit_cents: number | null;
                         warning_percent: number | null;
                         /** Format: date-time */
                         window_start: string;
@@ -5989,6 +5992,7 @@ export interface operations {
                             id: string | null;
                             enabled: boolean;
                             monthlyLimitCents: number | null;
+                            turnLimitCents: number | null;
                             warningPercent: number | null;
                             /** Format: date-time */
                             windowStart: string;

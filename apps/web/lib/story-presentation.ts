@@ -282,6 +282,16 @@ export function isReviewNotice(kind: string) {
   return kind === "review_cycle_ready" || kind === "review_cycle_decision";
 }
 
+/** A turn that cost more than the per-turn limit. It already ran and was billed. */
+export function isTurnLimitNotice(kind: string) {
+  return kind === "turn_limit_exceeded";
+}
+
+/** Whether the turn behind a notice may be run again from the notice. */
+export function isRetryableNotice(kind: string) {
+  return kind !== "agent_waiting" && !isReviewNotice(kind) && !isTurnLimitNotice(kind);
+}
+
 export function errorSummary(detail: string | null) {
   if (!detail) return "The agent could not complete this run. Review the details before retrying.";
   if (/401|unauthorized/i.test(detail))

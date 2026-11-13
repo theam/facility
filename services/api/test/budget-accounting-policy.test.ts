@@ -1,6 +1,11 @@
 import type { FacilityDb } from "@facility/db";
 import { describe, expect, it, vi } from "vitest";
-import { type BudgetState, CostBudgetService } from "../src/insights/costs.js";
+import {
+  type BudgetState,
+  CostBudgetService,
+  turnLimitFits,
+  turnLimitOverrun,
+} from "../src/insights/costs.js";
 
 function service(state: BudgetState["state"], enabled = true) {
   const costs = new CostBudgetService({} as FacilityDb);
@@ -46,5 +51,24 @@ describe("budget accounting admission", () => {
     await expect(
       service("exceeded").assertTurnAllowed("org_test", "proj_test", "gpt-5.5"),
     ).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+});
+
+describe("per-turn limit", () => {
+  it("admits an estimate up to the limit and anything when no limit is set", () => {
+    expect(turnLimitFits(224, null)).toBe(true);
+    expect(turnLimitFits(224, 224)).toBe(true);
+    expect(turnLimitFits(0, 1)).toBe(true);
+    expect(turnLimitFits(224.000001, 224)).toBe(false);
+  });
+
+  it("reports only a measured cost above the limit the turn was admitted under", () => {
+    expect(turnLimitOverrun(400.06, 300)).toBe(true);
+    expect(turnLimitOverrun(300, 300)).toBe(false);
+    expect(turnLimitOverrun(400, null)).toBe(false);
+    // An unpriced or missing bill is not evidence of an overrun.
+    expect(turnLimitOverrun(null, 300)).toBe(false);
+    expect(turnLimitOverrun(undefined, 300)).toBe(false);
+    expect(turnLimitOverrun(Number.NaN, 300)).toBe(false);
   });
 });

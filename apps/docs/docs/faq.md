@@ -60,6 +60,27 @@ The worktree, conversation,
 and engine sessions remain. Unknown model pricing is rejected while budget enforcement is enabled,
 and unavailable workspace pricing is not reported as zero.
 
+## How do the monthly budget and the per-turn limit differ?
+
+A project budget has two levels, set together and enforced by the same switch:
+
+- The **monthly limit** bounds what the project spends in a UTC calendar month. Every model call
+  reserves its estimate against it and is blocked once the month's committed amount cannot fit.
+- The optional **per-turn limit** bounds what one agent turn may cost, whichever agent runs it:
+  Builder, Architect, Reviewer, or any configured agent. A turn starts only when its priced
+  estimate fits the limit.
+
+How a running turn is held to the per-turn limit depends on its engine. Claude Code receives the
+limit as `--max-budget-usd` and stops when it reaches it; the call that crosses the limit is
+still billed, and the turn fails with a notice that explains the stop. Codex reports usage only
+when its turn ends, so it cannot be stopped mid-turn: it can exceed the per-turn limit by at most
+the turn that is running. When its measured cost went over, Facility records a
+`turn.limit_exceeded` event and opens a notice on the story. Facility never retries that turn,
+because rerunning it would spend again; the notice can only be dismissed. Review the result, then
+raise the limit, choose a cheaper model or narrow the next request.
+
+Disabling enforcement turns off both levels. Usage is still recorded either way.
+
 If a worker dies, recovery reads the turn's retained usage journal. Final counters are charged
 once; partial counters are a lower bound. Missing, unreadable, or incomplete usage is marked
 unpriced and the budget state becomes `unconfirmed`: new agent and title-generation model calls
