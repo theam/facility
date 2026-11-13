@@ -1,14 +1,10 @@
 "use client";
 
-import { Button, Field, Select, TextArea } from "@facility/ui";
+import { Button, ButtonLink, Field, Select, TextArea } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import { COMPOSE_EVENT } from "@/components/story/story-conversation";
-import {
-  CancelTurnButton,
-  storyPath,
-  WorkspaceControls,
-} from "@/components/story/workspace-story-controls";
+import { CancelTurnButton, storyPath } from "@/components/story/workspace-story-controls";
 import type { StoryAgent, StoryWorkspace, WorkspaceStory, WorkspaceStoryBundle } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import {
@@ -19,6 +15,7 @@ import {
   writeStoryDraft,
 } from "@/lib/story-draft";
 import { safeExternalUrl } from "@/lib/story-presentation";
+import { readStoryUpload, type StoryUploadAttempt, writeStoryUpload } from "@/lib/story-upload";
 import { StoryInputFiles } from "./story-input-files";
 
 type Turn = WorkspaceStoryBundle["turns"][number];
@@ -33,29 +30,26 @@ type Artifact = WorkspaceStoryBundle["artifacts"][number];
 export function StoryActions({
   projectId,
   story,
-  workspace,
   agents,
   canExecute,
-  canPreview = canExecute,
-  canWrite,
   computeState,
   activeTurn,
   waitingAgent,
   artifacts,
   draftOwnerId,
+  title,
 }: {
   projectId: string;
   story: WorkspaceStory;
-  workspace: StoryWorkspace | null;
   agents: StoryAgent[];
   canExecute: boolean;
-  canPreview?: boolean;
-  canWrite: boolean;
   computeState?: StoryWorkspace["state"];
   activeTurn: Turn | null;
   waitingAgent: string | null;
   artifacts: Artifact[];
   draftOwnerId?: string;
+  /** Heading shown at the left of the action row, such as "Conversation". */
+  title?: string;
 }) {
   const enabled = agents.filter((candidate) => candidate.enabled);
   const canSend = canExecute && story.deletedAt === null;
@@ -67,7 +61,6 @@ export function StoryActions({
   const [notice, setNotice] = useState("");
   const actionBar = useRef<HTMLElement>(null);
   const panelId = useId();
-  const pullRequestUrl = safeExternalUrl(story.pullRequestUrl);
   const results = artifacts.filter((artifact) => safeExternalUrl(artifact.uri)).slice(0, 3);
 
   useEffect(() => {
@@ -90,58 +83,49 @@ export function StoryActions({
 
   return (
     <div className="flex flex-col gap-3">
-      <section
-        ref={actionBar}
-        className="flex flex-wrap items-center gap-2"
-        aria-label="Story actions"
-      >
-        {canSend ? (
-          <Button
-            variant="primary"
-            tone="agent"
-            size="sm"
-            aria-expanded={open}
-            aria-controls={panelId}
-            onClick={() => {
-              if (open) close();
-              else {
-                setOpen(true);
-                setHasOpened(true);
-                setFocusRequest((request) => request + 1);
-              }
-            }}
-          >
-            {waitingAgent ? `reply to ${waitingAgent}` : "send a task"}
-          </Button>
-        ) : null}
-        {pullRequestUrl ? (
-          <a
-            href={pullRequestUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex h-8 items-center gap-2 border border-(--line-strong) px-3.5 text-[12.5px] font-medium text-(--ink) hover:bg-(--card)"
-          >
-            source pull request #{story.pullRequestNumber} ↗
-          </a>
-        ) : null}
-        {canExecute && activeTurn ? (
-          <CancelTurnButton
-            projectId={projectId}
-            storyId={story.id}
-            turnId={activeTurn.id}
-            inline
-          />
-        ) : null}
-        <WorkspaceControls
-          projectId={projectId}
-          story={story}
-          workspace={workspace}
-          canExecute={canExecute}
-          canPreview={canPreview}
-          canWrite={canWrite}
-          computeState={computeState}
-        />
-      </section>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {title ? <h2 className="text-[15px] font-semibold">{title}</h2> : null}
+        <section
+          ref={actionBar}
+          className="flex flex-wrap items-center gap-2"
+          aria-label="Story actions"
+        >
+          {canSend ? (
+            <Button
+              variant="primary"
+              tone="agent"
+              size="sm"
+              aria-expanded={open}
+              aria-controls={panelId}
+              onClick={() => {
+                if (open) close();
+                else {
+                  setOpen(true);
+                  setHasOpened(true);
+                  setFocusRequest((request) => request + 1);
+                }
+              }}
+            >
+              {waitingAgent ? `Reply to ${waitingAgent}` : "Send a task"}
+            </Button>
+          ) : null}
+          {canSend ? (
+            // A link, so the story reveals the section on every click, even when the
+            // address already points to it.
+            <ButtonLink size="sm" href="#story-section-consultation">
+              Ask without changes
+            </ButtonLink>
+          ) : null}
+          {canExecute && activeTurn ? (
+            <CancelTurnButton
+              projectId={projectId}
+              storyId={story.id}
+              turnId={activeTurn.id}
+              inline
+            />
+          ) : null}
+        </section>
+      </div>
       {results.length > 0 ? (
         <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-(--mut)">
           <span>Results:</span>
@@ -171,6 +155,7 @@ export function StoryActions({
               projectId={projectId}
               storyId={story.id}
               draftOwnerId={draftOwnerId}
+              computeState={computeState}
               agents={enabled}
               preset={preset}
               open={open}
@@ -206,6 +191,7 @@ export function StoryComposer({
   composerId = "story-composer",
   formLabel = "Send a task",
   retargetRequest = 0,
+  computeState,
 }: {
   projectId: string;
   storyId: string;
@@ -220,6 +206,7 @@ export function StoryComposer({
   composerId?: string;
   formLabel?: string;
   retargetRequest?: number;
+  computeState?: StoryWorkspace["state"];
 }) {
   const router = useRouter();
   const defaultAgent =
@@ -235,6 +222,8 @@ export function StoryComposer({
   const [saved, setSaved] = useState(false);
   const [pending, setPending] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadAttempt, setUploadAttempt] = useState<StoryUploadAttempt>();
+  const [uploadSaved, setUploadSaved] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -257,6 +246,10 @@ export function StoryComposer({
   useEffect(() => {
     const previous = readStoryDraft(storageKey);
     if (previous) setDraft(previous);
+    const upload = readStoryUpload(storageKey);
+    setUploadAttempt(upload);
+    setUploadSaved(Boolean(upload));
+    if (upload) setFilesOpen(true);
     setLoaded(true);
   }, [storageKey]);
 
@@ -289,7 +282,8 @@ export function StoryComposer({
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sending.current || uploadBusy || !agent || !message.trim()) return;
+    if (sending.current || !loaded || uploadBusy || uploadAttempt || !agent || !message.trim())
+      return;
     sending.current = true;
     setPending(true);
     setError("");
@@ -321,12 +315,18 @@ export function StoryComposer({
     onDone?.(sent);
   }
 
+  function updateUploadAttempt(attempt?: StoryUploadAttempt) {
+    // Persist before preparing storage so a lost response can replay the same intent.
+    setUploadSaved(writeStoryUpload(storageKey, attempt));
+    setUploadAttempt(attempt);
+  }
+
   return (
     <form
       ref={form}
       id={composerId}
       onSubmit={submit}
-      className="grid gap-3 border border-(--line) bg-(--bg-subtle) p-4 sm:p-5"
+      className="grid gap-3 rounded-lg border border-(--line) bg-(--bg) p-4 sm:p-5"
       aria-label={formLabel}
     >
       <Field label="Message">
@@ -352,21 +352,32 @@ export function StoryComposer({
       >
         {filesOpen
           ? "hide files"
-          : draft.attachmentIds?.length
-            ? `files (${draft.attachmentIds.length})`
-            : "attach files"}
+          : uploadAttempt
+            ? "review unfinished upload"
+            : draft.attachmentIds?.length
+              ? `files (${draft.attachmentIds.length})`
+              : "attach files"}
       </Button>
       {filesOpen ? (
         <StoryInputFiles
           projectId={projectId}
           storyId={storyId}
           selected={draft.attachmentIds ?? []}
+          attempt={uploadAttempt}
+          attemptSaved={uploadSaved}
+          computeState={computeState}
+          onAttempt={updateUploadAttempt}
           onChange={(attachmentIds) =>
             setDraft((current) => ({ ...current, attachmentIds, idempotencyKey: undefined }))
           }
           onBusy={setUploadBusy}
           disabled={pending}
         />
+      ) : null}
+      {uploadAttempt && !filesOpen ? (
+        <p role="status" className="text-[12px] text-(--human)">
+          Resolve the upload of {uploadAttempt.name} or continue without it before sending.
+        </p>
       ) : null}
       <p className="text-[12px] text-(--dim)">
         {saved
@@ -395,28 +406,38 @@ export function StoryComposer({
           <Button
             type="button"
             size="sm"
-            disabled={pending || uploadBusy || (!message && !draft.attachmentIds?.length)}
+            disabled={
+              pending || uploadBusy || (!message && !draft.attachmentIds?.length && !uploadAttempt)
+            }
             onClick={() => {
               setDraft({ agent: draft.agent, message: "" });
+              updateUploadAttempt();
               setError("");
               setNotice("Draft discarded.");
               form.current?.querySelector("textarea")?.focus();
             }}
           >
-            discard draft
+            Discard draft
           </Button>
           {onCancel ? (
             <Button type="button" size="sm" onClick={onCancel} disabled={pending}>
-              close
+              Close
             </Button>
           ) : null}
           <Button
             type="submit"
             variant="primary"
             tone="agent"
-            disabled={pending || uploadBusy || !agent || !message.trim()}
+            disabled={
+              pending ||
+              !loaded ||
+              uploadBusy ||
+              Boolean(uploadAttempt) ||
+              !agent ||
+              !message.trim()
+            }
           >
-            {pending ? "queueing…" : "send to agent"}
+            {pending ? "Queueing…" : "Send to agent"}
           </Button>
         </div>
       </div>

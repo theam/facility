@@ -8,19 +8,68 @@ MCP is the primary way to automate a Facility story. The web UI exposes the same
 useful for browsing conversations, inspecting environments, opening previews, and taking lifecycle
 actions.
 
+The story opens with the relevant recorded step: a proposed or explicitly linked plan,
+the delivery PR set, current work, or post-merge completion and retention. The conversation
+follows that panel. Other sections stay available as disclosures and through **Details and navigation**;
+links to a plan, source message or activity open the relevant content. Preparing a plan from an
+agent response also reveals its panel without starting work.
+
+Refreshes update the facts while preserving the panels and drafts being inspected. If the next
+step changes, **Show the current step first** brings its panel forward explicitly. Unknown
+completion or workflow data remains unavailable; it is never displayed as a successful result.
+
 ## Find work
 
 The Stories page is the project's backlog. It lists mirrored GitHub issues that nobody has started
-next to work started from a request, one entry per unit of work, and groups open entries by phase:
-needs attention, in progress, in review, not started. Done and archived work stay one filter away.
+next to work started from a request, one entry per unit of work. The default work groups are
+**In progress**, **Waiting**, **For review**, and **Backlog**. Browse phases to find completed,
+archived, or other lifecycle states. A pending plan or open notice can put a story in For review
+while its running agent and pending messages remain visible. An incomplete delivery or checks
+still running are distinct from an available acceptance review. A PR review is not proof of
+merge readiness.
 Search accepts a ticket number (`#42`) or words; labels, assignees (including "assigned to me" and
 "unassigned"), repository, and sort combine, and every combination is a shareable URL. Listing the
 backlog never starts an agent or wakes a machine. `facility_list_backlog` returns the same view.
+Repository filters use the project's canonical repository IDs (or current `owner/name`). They
+include a row's source repository and every registered delivery PR repository, including optional
+PRs and manual stories without an issue. A row counts once per repository even when several PRs
+share it. Filter options count open records across the full backlog; matching totals and work-group
+counts apply the selected filters before pagination. A repository outside this project matches nothing.
+Group counts cover all records matching the search and phase filters before the group filter
+and pagination; they are not counts of this page. The lifecycle phase counts ignore the group,
+and choosing a phase clears it. `sort=activity` orders by work group; the existing `priority`,
+`updated`, and `created` sorts remain available. A server that does not support groups shows the
+recorded backlog with an explicit limitation instead of claiming the requested group was applied.
+
+Pending messages have not yet acquired their own turn. They may wait for the current turn or
+for an applying preview to release the workspace. For queued turns on the displayed page,
+Facility rechecks the retained agent's current workflow gate and reports its reason or an
+unavailable assessment. A future retry time is a recorded deferral. Neither a historical error,
+a heartbeat nor a queued turn proves a current shortage of worker capacity; capacity is
+reported as unavailable. The last-checked time applies to this persisted snapshot. These reads
+do not authorize execution, reserve budget, create notices, or repair a retained configuration.
 
 Each entry shows the phase, what is actually happening (a running or queued agent, a waiting
 question, failing checks, a review decision), who is involved, and links to the issue, pull
 request, story, and active run. Assignees from GitHub and people who started or continued the
 story in Facility appear together; neither source removes the other.
+
+When the server records a review-cycle decision or a candidate ready for human review,
+Attention keeps the recorded reason visible. These notices do not offer a failed-turn retry.
+Open the story's acceptance section to inspect the available candidate and findings before
+deciding. Dismissing the notice does not approve a scope change, accept a delivery or restart
+work; those operations retain their own policy and confirmation requirements.
+
+When the workflow response includes a recorded review cycle, the story leads with its phase,
+configured Builder and Reviewer, reason, rounds and cost/time limits. Unknown cost stays
+unconfirmed. Expand the pinned candidate or an individual report to inspect exact heads,
+acceptance evidence, findings and the Reviewer's recommendation. A previous report keeps its
+own candidate and source links after a new head is recorded. Active review observations refresh
+without resetting opened reports; a failed refresh retains the last observation and explains
+the failure. The story does not offer acceptance during active correction or a decision stop,
+and it checks the current workflow again before requesting it. That is a check in the story
+page only: the server owns all execution and acceptance rules. Servers without the optional review-cycle projection keep the existing
+acceptance view; rendering this panel does not enable a review cycle.
 
 ## Start a story
 
@@ -101,6 +150,23 @@ When the story needs attention:
 
 Canceling a turn does not roll back files or commits already written in the workspace.
 
+The header links to **Latest recorded activity**, with the responsible run and
+source time. Health checks alone do not establish progress. **Inspect this run**
+loads its activity even when its conversation is on an older page. An inspection
+stays on the chosen run if another run produces newer activity; choose the newer
+run explicitly to inspect it.
+
+Open **Run details** to read stored events and full original payloads on demand.
+While the panel is open and the tab is visible, it checks for new items every
+eight seconds. Updates are buffered: **Show new activity** reveals them without
+replacing already opened evidence. **Check now** reads at most five ten-item
+pages; if more remain, the next check continues from the last consumed sequence.
+Older history keeps its own cursor. Closing the panel or hiding the tab stops
+polling. Errors keep the last successful history visible with an explicit error;
+a server that cannot confirm forward paging does not claim to be up to date.
+Reading never wakes compute or starts work. Historical workflow holds and retry
+times describe the recorded event; inspect current workflow before deciding.
+
 ## Ask a read-only consultation
 
 In **Ask about this task**, choose **New consultation**, review the configured agent/model and
@@ -127,16 +193,89 @@ and does not confirm a plan or accept delivery.
 
 ## Agree on a versioned plan
 
+When the author includes a [decision brief](../reference/decision-brief.md), review its summary,
+recommendation, decisive risk and missing evidence first. **Alternatives and sources**
+contains the optional **Summary**, **Comparison** and **Diagram** views of the same saved options.
+**Approve plan rN** opens the exact-scope confirmation in place, below the plan; **Request
+changes** prepares a separate decision. **Plan options** contains reload and proposal editing. Open a source beside a claim or
+expand **Original plan** to inspect the full text, including the exact source message text when
+the plan was attributed to one. The proposer and selected execution agents are shown separately.
+Source references are author claims; opening this page does not verify them or invoke a model.
+Missing or malformed briefs leave the complete plan visible. Choosing a format or considering an
+option submits nothing; approval still applies to the full revision and repository/agent scope.
+
+Links from Attention and plan history retain the exact revision and digest, even
+after a newer proposal arrives. A linked plan can request a decision only while
+it still matches the current revision; otherwise open the current plan explicitly.
+A missing revision or digest mismatch shows an error, without substituting another
+plan. **Open original message and author** keeps that revision selected and opens
+the complete source message with its recorded author and earlier context. This
+is a historical conversation window; **Open latest conversation** returns to recent
+messages without changing the selected plan. Missing, foreign or unavailable
+messages show an error rather than unrelated recent responses. These reads do
+not start an agent or wake the workspace.
+
 The story's **plan and decisions** panel shows the proposed text, repositories and configured
 agents. Choose **Propose plan** or **Propose revision**, or **Propose as plan** on an agent response.
 Using a response asks before replacing an open draft. Editing its text removes source-message
 attribution. Select scope by readable names and save the proposal; no agent is started.
 
-Choose **Review approval** or **Request changes** (with a reason). The next page shows the exact
-revision, text and scope before the explicit confirmation button. An approval applies to that
-revision only. A newer proposal retains the old receipt as history and awaits its own decision.
+A new proposal initially selects all connected repositories when the complete set fits the
+50-repository plan limit. A larger set is left unselected with an explanation, so a truncated
+page cannot look like the full scope. Failed repository reads can be retried without losing
+the draft. Revising an existing plan preserves its selected scope.
+
+For a new plan, agents held by a workflow gate take precedence. Otherwise, a proposal from an
+agent response starts with that response's recorded agent; a handwritten plan uses the project's
+UI default. A response without a recorded agent requires an explicit choice. Unavailable agents
+remain visible and must be replaced before saving. The author and the executing agent can differ,
+so review the selection. A plan that omits a held agent shows a warning.
+
+**Scope and retained work** compares the plan with the current repository connections and
+queued agent versions. Missing or changed connections and agent configuration differences are
+shown before confirmation. Expand retained work to inspect each original turn ID, queue time
+and agent configuration hash. Each story currently has one active native turn at a time, even
+when several agents are configured for the project. Bounded reads explicitly mark partial data.
+
+This is a dated observation for one plan revision, not an execution authorization. The native
+gate still checks current policy, exact scope, permissions, budget and capacity when work starts.
+On the confirmation page, **Reload review** refreshes both the requested decision and the scope;
+in place, the confirmation follows the story's own workflow reads. A failed read does not keep
+old scope claims visible and disables approval until it can be read again. If the workflow reports
+blocked recovery, approval also waits for a matching plan revision, repositories and retained
+agent configuration. Correct them in the plan, or cancel a held turn whose agent is no longer
+available from the conversation; requesting changes remains available.
+`facility_get_story_workflow` exposes the same `executionScope` data
+without starting a model, waking compute or queuing work.
+
+The conversation and its reply controls follow the plan directly. Delivery, acceptance,
+consultation and environment details remain available further down the same story.
+
+Choose **Approve plan rN** or **Request changes** (with a reason). The confirmation opens in
+place with the exact revision and requested decision before the explicit confirmation button;
+the plan text and scope stay above it, and **Cancel** closes it without recording anything. If
+the review cannot be read in place, the story opens its confirmation page instead. An approval
+applies to that revision only. A newer proposal retains the old receipt as history and awaits its own decision.
 Concurrent edits and decisions require a fresh review; failed saves preserve the draft and reuse
 the same retry key. Open **Plan and decision history** to inspect earlier revisions and receipts.
+
+Confirmed in place, the review closes and the plan shows the recorded decision once. On the
+confirmation page, the receipt and **After approval** appear first, and the approved plan and its
+original scope remain one expansion away. **Continue in the conversation** returns to the shared
+story without submitting another request.
+
+**After approval** distinguishes queued work, a remaining workflow hold and observed execution.
+Only a recorded native admission links a turn to an exact decision. The turn's current state,
+start/end times and agent version remain inspectable. A running turn can still be preparing its
+environment; a successful turn does not accept delivery. When the review inspected a queued turn
+before confirmation, the page identifies that same turn by ID in the execution result.
+
+The standalone confirmation checks every eight seconds while relevant work is queued or running
+and the page is visible. It stops after terminal state, a newer decision or an error. A failed
+read preserves the approval receipt and clears the old execution claim; **Check execution again**
+retries only the read. A newer plan or decision marks the receipt as historical. Missing or
+unverifiable execution evidence stays unknown, not successful and not proof that no work ran.
+The `execution` field of `facility_get_story_workflow` exposes the same bounded, dated observation.
 
 Decision requests from MCP return the same interactive review link. Open it with an authorized
 Facility browser session before its 15-minute expiry. A service key or OAuth token alone does not
@@ -172,8 +311,9 @@ An older worker does not implement the new admission gate.
 
 The story's **approvals and acceptance** panel separates plan approval from final delivery
 acceptance. Declare the complete required PR set and refresh its heads, then choose **Request
-delivery acceptance**. Open the returned review link, inspect every required PR and exact head,
-and explicitly choose **Accept this exact delivery**. The request expires after 15 minutes.
+delivery acceptance**. The review opens in place on the story, or through its link when it cannot
+be read there. Inspect every required PR and exact head, and explicitly choose **Accept this exact
+delivery**. The request expires after 15 minutes.
 MCP can request that same link and read its status; it cannot confirm acceptance for a person.
 
 The receipt binds the candidate, PR-set scope, plan and decision revisions, and project policy.
@@ -253,6 +393,19 @@ make the preview appear ready. Staged gitlink changes and tracked edits inside a
 work that must be saved first. Ignored/untracked retained data and displaced committed tips are
 preserved under the same rules as other preview updates.
 
+### Read the author’s delivery brief
+
+A final response can include a [delivery brief](../reference/decision-brief.md#delivery-decisions).
+Attention links to the same saved summary, options and sources in the story. The review leads
+with summary, recommendation and risk. Expand **Alternatives and sources** to switch between
+Summary, Comparison and Diagram without submitting a decision. **Review acceptance** opens
+the acceptance section; it does not submit or confirm acceptance. Open the original message to inspect its
+recorded author and full text. Every required and optional head must still match; changed scope
+or heads make the brief historical, and stale observations or an unverified source are explicit.
+A new invalid brief does not reuse an older recommendation. The observed PRs, checks, preview and
+acceptance remain separate from the author’s statements. Without a brief, review that evidence
+directly. Editing the PR set preserves the stored original and reevaluates its binding after save.
+
 ## Complete the source issue
 
 The completion panel separates the merged delivery, the configured post-merge integration and
@@ -260,6 +413,14 @@ the source issue. Manual integration remains a human-recorded result. Repository
 for a result from the exact dispatched event. Completion requires both `projects:write` and
 `github:write`; changing integration policy requires both `projects:write` and `repos:write`.
 Ordinary project preferences preserve these policies.
+
+The panel links to the exact source issue and shows its observed state. A manual story with no
+authoritative source issue, or a source whose current observation is unavailable, explains the
+missing evidence and does not offer **Complete source issue**. Merging its PRs or closing an
+unrelated issue does not establish source completion. For an available source, the action's
+effect is stated before requesting it: close that issue, then suspend compute after the existing
+completion checks pass, preserving retained storage and the conversation. Completion records,
+archive, compute suspension and retained storage are shown separately.
 
 Repository-dispatch callbacks must set `event_id` to the `eventId` received in the
 `facility.delivery.merged` payload (`eventId` in MCP). A destination change or policy re-enable

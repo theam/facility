@@ -1,16 +1,49 @@
 "use client";
 
-import type { PlanDecisionReview, StoryPlans } from "@facility/sdk";
+import type { PlanDecisionReview, StoryPlans, StoryWorkflowStatus } from "@facility/sdk";
 import { Button, Eyebrow } from "@facility/ui";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { PlanContent } from "@/components/story/plan-content";
+import { LivePlanExecutionOutcome } from "@/components/story/plan-execution-outcome";
+import { PlanExecutionScope } from "@/components/story/plan-execution-scope";
 import { clientApi } from "@/lib/client-api";
 import { formatTime } from "@/lib/story-presentation";
 
-export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
+/**
+ * Confirms one requested plan decision with its single-use proof. The same
+ * component serves the confirmation page that request links (including MCP
+ * requests) open, and the inline step on the story, where `compact` hides the
+ * plan and scope already shown above it and `onConfirmed` hands the recorded
+ * decision back so the plan itself shows its outcome once.
+ */
+export function PlanConfirmation({
+  initial,
+  initialWorkflow,
+  initialWorkflowError,
+  compact = false,
+  onClose,
+  onConfirmed,
+}: {
+  initial: PlanDecisionReview;
+  initialWorkflow?: StoryWorkflowStatus;
+  initialWorkflowError?: string;
+  compact?: boolean;
+  onClose?: () => void;
+  onConfirmed?: () => void;
+}) {
   const [review, setReview] = useState(initial),
     [error, setError] = useState<string | null>(null);
+  const [observedWorkflow, setWorkflow] = useState(initialWorkflow),
+    [observedScopeError, setScopeError] = useState(initialWorkflowError);
+  // Inline, the story keeps its workflow current while the review is open: follow it
+  // rather than the copy taken on opening, so a changed scope blocks approval here too.
+  const workflow = compact ? initialWorkflow : observedWorkflow;
+  const scopeError = compact ? initialWorkflowError : observedScopeError;
+  const heading = useRef<HTMLHeadingElement>(null);
+  const scope = workflow?.executionScope;
+  const needsRecovery = !!workflow?.blockedReason;
+  const inspectedWork = useRef(!initial.decision ? initialWorkflow?.executionScope : undefined);
   const [receipt, setReceipt] = useState(initial.decision),
     [busy, setBusy] = useState(false);
   const [expired, setExpired] = useState(() => Date.parse(initial.request.expiresAt) <= Date.now());
@@ -31,27 +64,43 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
     },
     [],
   );
+  // Opening in place replaces the button that was clicked; move focus to the review.
+  useEffect(() => {
+    if (compact) heading.current?.focus();
+  }, [compact]);
+  const Heading = compact ? "h3" : "h1";
   async function reload() {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
     const n = ++sequence.current;
-    const result = await clientApi<PlanDecisionReview>("GET", path);
+    const [result, observation] = await Promise.all([
+      clientApi<PlanDecisionReview>("GET", path),
+      clientApi<StoryWorkflowStatus>(
+        "GET",
+        `/v1/projects/${encodeURIComponent(review.projectId)}/workspace-stories/${encodeURIComponent(review.storyId)}/workflow`,
+      ),
+    ]);
     if (n !== sequence.current) return;
     busyRef.current = false;
     setBusy(false);
+    setWorkflow(observation.ok ? observation.data : undefined);
+    setScopeError(observation.ok ? undefined : observation.message);
     if (!result.ok) {
       setError(result.message);
       return;
     }
     setReview(result.data);
     setReceipt(result.data.decision);
+    if (!result.data.decision)
+      inspectedWork.current = observation.ok ? observation.data.executionScope : undefined;
   }
   async function confirm() {
     if (
       busyRef.current ||
       !review.proof ||
+      approvalBlock ||
       review.request.status !== "pending" ||
       Date.parse(review.request.expiresAt) <= Date.now()
     )
@@ -73,6 +122,10 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
       setError(result.message);
       return;
     }
+    if (onConfirmed) {
+      onConfirmed();
+      return;
+    }
     setReceipt(
       result.data.decisions.items.find((item) => item.requestId === review.request.id) ??
         result.data.decision,
@@ -80,27 +133,115 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
   }
   const pending = review.request.status === "pending" && !!review.proof && !expired && !receipt;
   const approval = review.request.intent === "approve";
+  const approvalBlock =
+    approval && !receipt
+      ? scopeError
+        ? "Reload the execution scope before approving. Its current effect could not be verified."
+        : needsRecovery && (!scope || scope.planRevision !== review.plan.revision)
+          ? "Reload the current plan and scope before approving recovery."
+          : needsRecovery &&
+              scope &&
+              (!scope.repositories.matches ||
+                scope.queuedWork.some(
+                  (turn) => turn.configuration !== "current" || turn.planAgent !== "current",
+                ))
+            ? "Correct the scope or agent configuration, or cancel the held turn in the conversation, before approving recovery."
+            : null
+      : null;
   return (
     <section
       aria-label="Confirm plan decision"
-      className="flex min-w-0 flex-col gap-5 border border-(--line) p-4 sm:p-6"
+      className={
+        compact
+          ? "flex min-w-0 flex-col gap-4 rounded-lg border border-(--human)/30 bg-[#fffaeb] p-4"
+          : "flex min-w-0 flex-col gap-5 rounded-lg border border-(--line) p-4 sm:p-6"
+      }
     >
       <header className="flex flex-col gap-2">
-        <Eyebrow>plan decision</Eyebrow>
-        <h1 className="text-[24px] font-semibold">
+        {compact ? null : <Eyebrow>plan decision</Eyebrow>}
+        <Heading
+          ref={heading}
+          tabIndex={-1}
+          className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}
+        >
           {receipt
             ? "Decision recorded"
             : approval
               ? "Confirm plan approval"
               : "Confirm requested changes"}
-        </h1>
+        </Heading>
         <p className="text-sm text-(--mut)">
-          This decision applies to revision {review.plan.revision} and the repositories and agents
-          below. Depending on project policy, approval may release queued agents immediately. It
-          does not accept the final delivery.
+          {receipt ? (
+            receipt.intent === "approve" ? (
+              "Execution status is shown below. This approval does not accept the final delivery."
+            ) : (
+              "Continue the conversation to refine the plan. Your decision applies to this revision."
+            )
+          ) : (
+            <>
+              This decision applies to revision {review.plan.revision} and the repositories and
+              agents below. Depending on project policy, approval may release queued agents
+              immediately. It does not accept the final delivery.
+            </>
+          )}
         </p>
       </header>
-      <PlanContent plan={review.plan} />
+      {receipt ? (
+        <div role="status" className="flex flex-col gap-2 text-sm">
+          <p>
+            {receipt.intent === "approve" ? "Approval" : "Requested changes"} recorded for plan r
+            {receipt.planRevision} by {receipt.confirmedBy.name ?? "a project member"} ·{" "}
+            {formatTime(receipt.confirmedAt)}.
+          </p>
+          <Link href={`${storyPath}#conversation`} className="w-fit underline underline-offset-4">
+            Continue in the conversation
+          </Link>
+        </div>
+      ) : null}
+      {receipt?.intent === "approve" ? (
+        <LivePlanExecutionOutcome
+          key={receipt.id}
+          decision={receipt}
+          workflow={workflow}
+          projectId={review.projectId}
+          storyId={review.storyId}
+          storyPath={storyPath}
+          retainedTurnIds={
+            inspectedWork.current &&
+            Date.parse(inspectedWork.current.observedAt) <= Date.parse(receipt.confirmedAt)
+              ? inspectedWork.current.queuedWork.map((turn) => turn.turnId)
+              : []
+          }
+        />
+      ) : null}
+      {!receipt && scopeError ? (
+        <p role="alert" className="break-words text-sm text-(--human)">
+          Execution scope unavailable: {scopeError}. Reload to inspect retained work before relying
+          on recovery.
+        </p>
+      ) : null}
+      {compact ? null : receipt ? (
+        <details className="min-w-0">
+          <summary className="cursor-pointer text-sm">
+            Plan r{review.plan.revision} and original scope
+          </summary>
+          <div className="mt-4">
+            <PlanContent
+              plan={review.plan}
+              originalOnly
+              location={{ projectId: review.projectId, storyId: review.storyId }}
+            />
+          </div>
+        </details>
+      ) : (
+        <PlanContent
+          plan={review.plan}
+          location={{ projectId: review.projectId, storyId: review.storyId }}
+        />
+      )}
+      {!receipt && !compact ? (
+        <PlanExecutionScope scope={scope} planRevision={review.plan.revision} />
+      ) : null}
       <div className="flex flex-col gap-2 border-y border-(--line) py-4 text-sm">
         <p>
           <strong>Requested decision:</strong> {approval ? "Approve" : "Request changes to"} plan r
@@ -124,19 +265,12 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
           {error}
         </p>
       ) : null}
-      {receipt ? (
-        <div role="status" className="flex flex-col gap-2">
-          <p>
-            {receipt.intent === "approve" ? "Approval" : "Requested changes"} recorded for plan r
-            {receipt.planRevision} by {receipt.confirmedBy.name ?? "a project member"} ·{" "}
-            {formatTime(receipt.confirmedAt)}.
-          </p>
-          <p className="text-[12px] text-(--dim)">
-            Recorded through an interactive Facility session. Open the story to check the current
-            plan and next action.
-          </p>
-        </div>
-      ) : !pending ? (
+      {pending && approvalBlock ? (
+        <p role="alert" className="text-sm text-(--human)">
+          {approvalBlock}
+        </p>
+      ) : null}
+      {!receipt && !pending ? (
         <p role="alert" className="text-sm text-(--bad)">
           {review.request.status === "superseded"
             ? `This review was superseded. The current plan is r${review.state.revision}; open the story and request a fresh review.`
@@ -150,7 +284,7 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
           <Button
             variant="primary"
             className="h-auto min-h-10 max-w-full whitespace-normal py-2"
-            disabled={busy}
+            disabled={busy || !!approvalBlock}
             onClick={() => void confirm()}
           >
             {busy
@@ -160,12 +294,23 @@ export function PlanConfirmation({ initial }: { initial: PlanDecisionReview }) {
                 : `Confirm changes to plan r${review.plan.revision}`}
           </Button>
         ) : null}
-        <Button size="sm" disabled={busy} onClick={() => void reload()}>
-          {busy ? "Loading…" : "Reload review"}
-        </Button>
-        <Link href={`${storyPath}#story-plan`} className="text-[13px] underline underline-offset-4">
-          Open current plan
-        </Link>
+        {compact ? (
+          <Button size="sm" disabled={busy} onClick={onClose}>
+            {receipt ? "Done" : "Cancel"}
+          </Button>
+        ) : (
+          <>
+            <Button size="sm" disabled={busy} onClick={() => void reload()}>
+              {busy ? "Loading…" : "Reload review"}
+            </Button>
+            <Link
+              href={`${storyPath}#story-plan`}
+              className="text-[13px] underline underline-offset-4"
+            >
+              Open current plan
+            </Link>
+          </>
+        )}
       </div>
     </section>
   );

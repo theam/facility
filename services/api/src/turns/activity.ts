@@ -13,6 +13,13 @@ export const ACTIVITY_TEXT_LIMIT = 2_000;
 /** Stored event types that carry no standalone information for readers. */
 export const ACTIVITY_NOISE_TYPES = ["engine.item.updated", "engine.stream_event"] as const;
 
+/** Health/credential maintenance remains inspectable but is not evidence of work advancing. */
+export const PROGRESS_NOISE_TYPES = [
+  ...ACTIVITY_NOISE_TYPES,
+  "workspace.health",
+  "github.credentials.renewed",
+] as const;
+
 export type ActivityKind =
   | "message"
   | "reasoning"
@@ -79,6 +86,17 @@ function describe(
     };
   }
   switch (type) {
+    case "turn.workflow_held":
+      return { kind: "lifecycle", title: "Workflow held this run", text: text(data.reason) };
+    case "turn.deferred":
+      return {
+        kind: "lifecycle",
+        title: "Run deferred",
+        text:
+          [text(data.reason), text(data.retryAfter) ? `Retry after ${text(data.retryAfter)}` : null]
+            .filter(Boolean)
+            .join(" · ") || null,
+      };
     case "turn.phase":
       return { kind: "lifecycle", title: "Run phase", text: text(data.phase) };
     case "workspace.health":

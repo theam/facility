@@ -50,6 +50,10 @@ The default kickstart catalog includes `architect`, `builder`, `pr-reviewer`, `a
 `ci-doctor`, and `security-audit`. They are ordinary manifests rather than built-in runtime roles.
 You can edit, disable, or replace them and add more `.md` files using the same schema.
 
+For a human decision, an agent can include an [author decision brief](../reference/decision-brief.md)
+with its complete plan. The shared format supports summary, comparison and diagram views without
+another model call. It works with any configured role; the brief grants no execution authority.
+
 ## Installed skills
 
 Facility inventories valid project skills found at `.agents/skills/**/SKILL.md` and
