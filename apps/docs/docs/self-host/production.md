@@ -60,6 +60,13 @@ Vercel workspaces also require `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, and either
 `VERCEL_OIDC_TOKEN` or `VERCEL_TOKEN`; the OIDC token takes precedence. Docker workspaces require
 API and worker access to the host daemon, while agents receive only their workspace-scoped daemon.
 
+Docker publishes each preview gateway on the daemon host's loopback, which an API running in a
+container cannot reach. When API and worker run in containers, as in the single-host Compose file,
+set `FACILITY_DOCKER_PREVIEW_PROXY_LABEL` (for example `facility.preview-proxy=true`) on both and
+give the API container that label. Labeled containers join each workspace network when previews are
+exposed and leave it when the workspace is deleted, and preview URLs use the workspace container
+name. Workspaces stay on separate networks from each other.
+
 See [Authentication](authentication.md) and [GitHub App](github-app.md) for provider-specific
 variables and callbacks.
 
