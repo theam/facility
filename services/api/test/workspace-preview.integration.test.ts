@@ -21,13 +21,17 @@ import { eq } from "drizzle-orm";
 import Fastify from "fastify";
 import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { registerWorkspacePreviewRoutes } from "../src/routes/v1/workspace-previews.js";
 import type { StoryDomain } from "../src/story-domain.js";
 import type { AppConfig } from "../src/types.js";
 import { previewCookieName, WorkspacePreviewService } from "../src/workspaces/preview.js";
+import {
+  PREVIEW_REVALIDATE_MS,
+  PREVIEW_SOCKET_REVOKED,
+} from "../src/workspaces/preview-socket-watch.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -312,6 +316,7 @@ describe("workspace preview HTTP and WebSocket proxy", () => {
   let gateway: ChildProcess;
   let app = Fastify({ logger: false });
   let appOrigin = "";
+  let revoked = false;
 
   beforeAll(async () => {
     backend = createServer(async (request, response) => {
@@ -352,13 +357,13 @@ describe("workspace preview HTTP and WebSocket proxy", () => {
 
     const previews = {
       authorize: async (receivedSessionId: string, receivedToken: string) => {
-        if (receivedSessionId !== sessionId || receivedToken !== cookieToken) {
+        if (receivedSessionId !== sessionId || receivedToken !== cookieToken || revoked) {
           throw Object.assign(new Error("invalid"), {
             code: "preview_access_invalid",
             statusCode: 401,
           });
         }
-        return { id: sessionId };
+        return { id: sessionId, expiresAt: new Date(Date.now() + 60 * 60 * 1_000) };
       },
       target: async (_session: unknown, path: string) => ({
         url: new URL(path, `http://127.0.0.1:${gatewayPort}/`),
@@ -425,6 +430,40 @@ describe("workspace preview HTTP and WebSocket proxy", () => {
         "ping",
       ),
     ).rejects.toThrow();
+  });
+
+  it("closes an open WebSocket and its upstream once the member loses access", async () => {
+    // Earlier sockets of this session must be gone, or the new one joins their watch.
+    await expect.poll(() => backendWs.clients.size).toBe(0);
+    // Only the revalidation clock is faked; sockets and the gateway run for real.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const socket = new WebSocket(
+        `${appOrigin.replace("http:", "ws:")}/workspace-preview/${sessionId}/socket`,
+        { headers: { cookie: `${previewCookieName(sessionId)}=${cookieToken}` } },
+      );
+      const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+        socket.once("close", (code, reason) => resolve({ code, reason: reason.toString() })),
+      );
+      await new Promise((resolve) => socket.once("open", resolve));
+      socket.send("ping");
+      await new Promise((resolve) => socket.once("message", resolve));
+      await expect.poll(() => backendWs.clients.size).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(PREVIEW_REVALIDATE_MS);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+
+      revoked = true;
+      await vi.advanceTimersByTimeAsync(PREVIEW_REVALIDATE_MS);
+      await expect(closed).resolves.toEqual({
+        code: PREVIEW_SOCKET_REVOKED,
+        reason: "Preview access revoked",
+      });
+      await expect.poll(() => backendWs.clients.size).toBe(0);
+    } finally {
+      revoked = false;
+      vi.useRealTimers();
+    }
   });
 });
 
