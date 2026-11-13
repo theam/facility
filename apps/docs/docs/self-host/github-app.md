@@ -47,9 +47,13 @@ OAuth scope on the identity application; it is not a repository permission in th
 Do not create different GitHub Apps or permission profiles for different agents. If an installation
 cannot expose one of the alert APIs, Facility records a scanner as unavailable rather than clean.
 
-Facility intentionally requests one consistent installation capability for all agents. A read-only
-review prompt is not a read-only GitHub principal. Keep merge authority in protected branches,
-required reviews, current required checks, and explicit GitHub bypass settings.
+Facility intentionally requests one consistent installation capability for all agents. The one
+exception is the Reviewer's turn in the
+[automatic delivery review](../concepts/agents-as-code.md#automatic-delivery-review): its token
+keeps only the read permissions the installation grants (contents, pull requests, issues, checks,
+commit statuses, actions and metadata). A review prompt alone is not a read-only GitHub
+principal. Keep merge authority in protected branches, required reviews, current required checks,
+and explicit GitHub bypass settings.
 
 ## Event subscriptions
 
@@ -95,10 +99,10 @@ stores a deduplicated event, and dispatches triggers declared in `.agents/`. Dup
 do not create duplicate turns. A merged pull request marks its story done and suspends compute; it
 does not delete the workspace.
 
-All agents receive the same installation token capability. Facility does not request a smaller
-permission set for reviewers, scheduled agents, or planning agents. Each token is limited to the
-repositories connected to the active Facility project, while retaining the App's complete
-maintainer permission set for those repositories.
+Agents receive the same installation token capability, including reviewers, scheduled agents and
+planning agents outside the review cycle. Each token is limited to the repositories connected to
+the active Facility project, while retaining the App's complete maintainer permission set for those
+repositories. Only the review cycle's Reviewer turns receive a read-only token.
 
 Installation tokens are short-lived and minted when work needs them. Revoking an installation or
 removing a repository stops future credentials and reconciliation; it does not erase existing

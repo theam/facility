@@ -11,7 +11,6 @@ const AGENTS = [
   "architect",
   "builder",
   "pr-reviewer",
-  "address-review",
   "ci-doctor",
   "security-audit",
 ];

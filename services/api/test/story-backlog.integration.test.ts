@@ -16,6 +16,7 @@ import {
   stories,
   storyAssignees,
   storyConversations,
+  storyDeliveryPullRequests,
   turns,
   userIdentities,
   users,
@@ -708,5 +709,169 @@ describe("unified project backlog", async () => {
     expect(other.total).toBe(0);
     const crossed = await service.list(otherOrgId, projectId, { phase: ["all"] });
     expect(crossed.total).toBe(0);
+  });
+
+  it("filters source and delivery repositories consistently without issues or duplicate counts", async () => {
+    const scopedProject = newId("proj");
+    const sourceRepo = newId("repo");
+    const deliveryRepo = newId("repo");
+    const manual = newId("story");
+    const source = newId("story");
+    const [installation] = await db
+      .select()
+      .from(projectRepositories)
+      .where(eq(projectRepositories.id, repositoryId));
+    if (!installation) throw new Error("Missing repository fixture");
+    await db.insert(projects).values({
+      id: scopedProject,
+      orgId,
+      name: "Repository filters",
+      slug: `repository-filters-${suffix}`,
+    });
+    await db.insert(projectRepositories).values([
+      {
+        id: sourceRepo,
+        orgId,
+        projectId: scopedProject,
+        installationId: installation.installationId,
+        owner: "acme",
+        name: `source-${suffix}`,
+        defaultBranch: "main",
+        role: "primary",
+      },
+      {
+        id: deliveryRepo,
+        orgId,
+        projectId: scopedProject,
+        installationId: installation.installationId,
+        owner: "acme",
+        name: `delivery-${suffix}`,
+        defaultBranch: "main",
+        role: "related",
+      },
+    ]);
+    await db.insert(stories).values([
+      {
+        id: manual,
+        orgId,
+        projectId: scopedProject,
+        provider: "manual",
+        externalId: "manual:delivery",
+        title: "Manual delivery",
+        status: "working",
+        createdBy: { type: "user", id: anaId },
+      },
+      {
+        id: source,
+        orgId,
+        projectId: scopedProject,
+        provider: "github",
+        repositoryId: sourceRepo,
+        externalId: "pull-request:101",
+        title: "PR source without issue",
+        status: "working",
+        createdBy: { type: "user", id: anaId },
+      },
+    ]);
+    await db.insert(githubPullRequests).values([
+      {
+        id: newId("ghp"),
+        orgId,
+        projectId: scopedProject,
+        repositoryId: sourceRepo,
+        number: 101,
+        title: "Source PR",
+        state: "open",
+        headRef: "source",
+        headSha: "a".repeat(40),
+        baseRef: "main",
+        htmlUrl: "https://github.com/acme/source/pull/101",
+      },
+      {
+        id: newId("ghp"),
+        orgId,
+        projectId: scopedProject,
+        repositoryId: deliveryRepo,
+        number: 201,
+        title: "Required PR",
+        state: "open",
+        headRef: "required",
+        headSha: "a".repeat(40),
+        baseRef: "main",
+        htmlUrl: "https://github.com/acme/delivery/pull/201",
+      },
+      {
+        id: newId("ghp"),
+        orgId,
+        projectId: scopedProject,
+        repositoryId: deliveryRepo,
+        number: 202,
+        title: "Optional PR",
+        state: "open",
+        headRef: "optional",
+        headSha: "a".repeat(40),
+        baseRef: "main",
+        htmlUrl: "https://github.com/acme/delivery/pull/202",
+      },
+    ]);
+    await db.insert(storyDeliveryPullRequests).values([
+      {
+        orgId,
+        projectId: scopedProject,
+        storyId: manual,
+        repositoryId: deliveryRepo,
+        pullNumber: 201,
+        required: true,
+        isPrimary: true,
+      },
+      {
+        orgId,
+        projectId: scopedProject,
+        storyId: manual,
+        repositoryId: deliveryRepo,
+        pullNumber: 202,
+        required: false,
+      },
+    ]);
+    const all = await service.list(orgId, scopedProject, { phase: ["all"] });
+    expect(all.facets.repositories).toEqual(
+      expect.arrayContaining([
+        { id: sourceRepo, name: `acme/source-${suffix}`, count: 1 },
+        { id: deliveryRepo, name: `acme/delivery-${suffix}`, count: 3 },
+      ]),
+    );
+    const sourceOnly = await service.list(orgId, scopedProject, { repository: [sourceRepo] });
+    expect(sourceOnly.items.map((item) => item.key)).toEqual([`story:${source}`]);
+    const deliveryOnly = await service.list(orgId, scopedProject, {
+      repository: [deliveryRepo],
+      limit: 1,
+    });
+    expect(deliveryOnly.total).toBe(3);
+    expect(deliveryOnly.items).toHaveLength(1);
+    expect(Object.values(deliveryOnly.counts).reduce((sum, count) => sum + count, 0)).toBe(3);
+    expect(
+      Object.values(deliveryOnly.groupCounts ?? {}).reduce((sum, count) => sum + count, 0),
+    ).toBe(3);
+    const manualOnly = await service.list(orgId, scopedProject, {
+      repository: [deliveryRepo],
+      q: "Manual",
+    });
+    expect(manualOnly.items.map((item) => item.key)).toEqual([`story:${manual}`]);
+    const combined = await service.list(orgId, scopedProject, {
+      repository: [sourceRepo, deliveryRepo],
+    });
+    expect(combined.total).toBe(4);
+    expect(new Set(combined.items.map((item) => item.key)).size).toBe(4);
+    const byName = await service.list(orgId, scopedProject, {
+      repository: [`acme/delivery-${suffix}`],
+    });
+    expect(byName.total).toBe(3);
+    const foreign = await service.list(orgId, scopedProject, { repository: [repositoryId] });
+    expect(foreign.total).toBe(0);
+    const crossed = await service.list(otherOrgId, scopedProject, {
+      repository: [sourceRepo, deliveryRepo],
+    });
+    expect(crossed.items).toEqual([]);
+    expect(crossed.facets.repositories).toEqual([]);
   });
 });

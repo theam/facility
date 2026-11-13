@@ -14,6 +14,14 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { type BacklogRepositories, readBacklogRepositories } from "./backlog-repositories.js";
+import {
+  type BacklogTracking,
+  observeBacklogWaits,
+  TRACKING_GROUPS,
+  type TrackingGroup,
+  trackBacklog,
+} from "./backlog-tracking.js";
 import {
   derivePhase,
   isGithubIssueStory,
@@ -37,11 +45,12 @@ export type BacklogPhaseFilter = WorkPhase | "open" | "all";
 
 export type BacklogQuery = {
   q?: string;
+  group?: TrackingGroup;
   phase?: BacklogPhaseFilter[];
   label?: string[];
   assignee?: string[];
   repository?: string[];
-  sort?: "priority" | "updated" | "created";
+  sort?: "priority" | "updated" | "created" | "activity";
   limit?: number;
   offset?: number;
 };
@@ -57,6 +66,7 @@ export type BacklogPerson = {
 };
 
 export type BacklogItem = {
+  tracking?: BacklogTracking;
   key: string;
   kind: "story" | "issue" | "pull_request";
   title: string;
@@ -124,6 +134,7 @@ export type BacklogResult = {
   limit: number;
   offset: number;
   counts: Record<WorkPhase, number>;
+  groupCounts?: Record<TrackingGroup, number>;
   items: BacklogItem[];
   facets: {
     labels: Array<{ name: string; count: number }>;
@@ -163,9 +174,36 @@ export class ProjectBacklogService {
     viewer: BacklogViewer = {},
     now = new Date(),
   ): Promise<BacklogResult> {
+    return this.db.transaction(
+      async (tx) =>
+        new ProjectBacklogService(tx as unknown as FacilityDb).listSnapshot(
+          orgId,
+          projectId,
+          query,
+          viewer,
+          now,
+        ),
+      { isolationLevel: "repeatable read" },
+    );
+  }
+
+  private async listSnapshot(
+    orgId: string,
+    projectId: string,
+    query: BacklogQuery,
+    viewer: BacklogViewer,
+    now: Date,
+  ): Promise<BacklogResult> {
     const limit = Math.min(MAX_LIMIT, Math.max(1, query.limit ?? 50));
     const offset = Math.max(0, query.offset ?? 0);
-    const items = await this.items(orgId, projectId, now);
+    const items = await trackBacklog(
+      this.db,
+      orgId,
+      projectId,
+      await this.items(orgId, projectId, now),
+      now,
+    );
+    const repositoryReferences = await readBacklogRepositories(this.db, orgId, projectId, items);
 
     const phases = expandPhases(query.phase);
     const labels = new Set((query.label ?? []).map((label) => label.toLowerCase()));
@@ -180,8 +218,9 @@ export class ProjectBacklogService {
       labels.size === 0 || item.labels.some((label) => labels.has(label.toLowerCase()));
     const matchesRepository = (item: BacklogItem) =>
       repositories.size === 0 ||
-      (item.issue !== null && repositories.has(item.issue.repositoryId)) ||
-      (item.pullRequest !== null && repositories.has(item.pullRequest.repository));
+      (repositoryReferences.get(item.key) ?? []).some(
+        (repository) => repositories.has(repository.id) || repositories.has(repository.name),
+      );
     const matchesAssignees = (item: BacklogItem) =>
       assigneeFilter.length === 0 || assigneeFilter.some((filter) => filter(item));
 
@@ -197,8 +236,18 @@ export class ProjectBacklogService {
       number
     >;
     for (const item of narrowed) counts[item.phase] += 1;
-    const selected = narrowed.filter((item) => phases.has(item.phase));
+    const phaseSelected = narrowed.filter((item) => phases.has(item.phase));
+    const groupCounts = Object.fromEntries(TRACKING_GROUPS.map((group) => [group, 0])) as Record<
+      TrackingGroup,
+      number
+    >;
+    for (const item of phaseSelected) groupCounts[item.tracking.group]++;
+    const selected = phaseSelected.filter(
+      (item) => !query.group || item.tracking.group === query.group,
+    );
     selected.sort(sorter(query.sort ?? "priority"));
+    const page = selected.slice(offset, offset + limit);
+    await observeBacklogWaits(this.db, orgId, projectId, page, now);
 
     return {
       generatedAt: now,
@@ -206,8 +255,9 @@ export class ProjectBacklogService {
       limit,
       offset,
       counts,
-      items: selected.slice(offset, offset + limit),
-      facets: facets(items),
+      groupCounts,
+      items: page,
+      facets: facets(items, repositoryReferences),
     };
   }
 
@@ -844,6 +894,12 @@ function resolveAssigneeFilter(
 }
 
 function sorter(sort: NonNullable<BacklogQuery["sort"]>) {
+  if (sort === "activity")
+    return (left: BacklogItem, right: BacklogItem) =>
+      TRACKING_GROUPS.indexOf(left.tracking?.group ?? "backlog") -
+        TRACKING_GROUPS.indexOf(right.tracking?.group ?? "backlog") ||
+      right.lastActivityAt.getTime() - left.lastActivityAt.getTime() ||
+      left.key.localeCompare(right.key);
   if (sort === "created") {
     return (left: BacklogItem, right: BacklogItem) =>
       right.createdAt.getTime() - left.createdAt.getTime() || left.key.localeCompare(right.key);
@@ -859,7 +915,10 @@ function sorter(sort: NonNullable<BacklogQuery["sort"]>) {
     left.key.localeCompare(right.key);
 }
 
-function facets(items: BacklogItem[]): BacklogResult["facets"] {
+function facets(
+  items: BacklogItem[],
+  repositoryReferences: BacklogRepositories,
+): BacklogResult["facets"] {
   const labels = new Map<string, { name: string; count: number }>();
   const assignees = new Map<string, BacklogPerson & { count: number }>();
   const repositories = new Map<string, { id: string; name: string; count: number }>();
@@ -884,14 +943,13 @@ function facets(items: BacklogItem[]): BacklogResult["facets"] {
       }
       assignees.set(person.key, entry);
     }
-    if (item.issue) {
-      const entry = repositories.get(item.issue.repositoryId) ?? {
-        id: item.issue.repositoryId,
-        name: item.issue.repository,
+    for (const repository of repositoryReferences.get(item.key) ?? []) {
+      const entry = repositories.get(repository.id) ?? {
+        ...repository,
         count: 0,
       };
       entry.count += 1;
-      repositories.set(item.issue.repositoryId, entry);
+      repositories.set(repository.id, entry);
     }
   }
   const byCount = <T extends { count: number }>(left: T, right: T) => right.count - left.count;

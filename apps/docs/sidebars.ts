@@ -50,6 +50,7 @@ const sidebars: SidebarsConfig = {
         "reference/architecture",
         "reference/project-manifest",
         "reference/agent-manifest",
+        "reference/decision-brief",
         "reference/lifecycle",
         "reference/api",
         "reference/cli",

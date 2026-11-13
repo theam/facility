@@ -19,7 +19,6 @@ describe("Facility 0.12 workspace kickstart", () => {
     });
 
     expect(result.files.map((file) => file.path).sort()).toEqual([
-      ".agents/address-review.md",
       ".agents/architect.md",
       ".agents/builder.md",
       ".agents/ci-doctor.md",
