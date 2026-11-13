@@ -117,6 +117,35 @@ services:
       migrate: { condition: service_completed_successfully }
       runner-image: { condition: service_completed_successfully }
 
+  # One-shot operator bootstrap: binds the first organization, owner identity and
+  # GitHub App installation, then reconciles the bundled roles. Not part of `up`;
+  # run it once after the GitHub App is installed.
+  #   docker compose --profile bootstrap run --rm bootstrap
+  # Every value arrives as an environment variable rather than as an argument, so
+  # nothing here needs a shell: an organization name or a GitHub login is
+  # operator input, and a `sh -c` command would interpolate it. Missing values
+  # are named by the CLI itself, which is why none of these use `:?` — that would
+  # fail interpolation for the whole file, `up` included.
+  bootstrap:
+    profiles: ["bootstrap"]
+    build: { context: ., target: api }
+    command: ["facility", "instance", "bootstrap"]
+    environment:
+      DATABASE_URL: postgres://facility:${POSTGRES_PASSWORD:-facility}@postgres:5432/facility
+      FACILITY_ORG_NAME: ${FACILITY_ORG_NAME:-}
+      FACILITY_ORG_SLUG: ${FACILITY_ORG_SLUG:-}
+      FACILITY_OWNER_EMAIL: ${FACILITY_OWNER_EMAIL:-}
+      FACILITY_OWNER_NAME: ${FACILITY_OWNER_NAME:-}
+      FACILITY_GITHUB_USER_ID: ${FACILITY_GITHUB_USER_ID:-}
+      FACILITY_GITHUB_LOGIN: ${FACILITY_GITHUB_LOGIN:-}
+      FACILITY_GITHUB_ACCOUNT_ID: ${FACILITY_GITHUB_ACCOUNT_ID:-}
+      FACILITY_GITHUB_ACCOUNT_LOGIN: ${FACILITY_GITHUB_ACCOUNT_LOGIN:-}
+      FACILITY_GITHUB_INSTALLATION_ID: ${FACILITY_GITHUB_INSTALLATION_ID:-}
+      FACILITY_GITHUB_ACCOUNT_TYPE: ${FACILITY_GITHUB_ACCOUNT_TYPE:-organization}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: "no"
+
   web:
     build:
       context: .
