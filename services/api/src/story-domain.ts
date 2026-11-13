@@ -116,6 +116,9 @@ export function createStoryDomain(input: {
     {
       onSuspend: (scope) => previewConvergence.suspend(scope),
       onResume: (scope) => previewConvergence.resume(scope),
+      onQueuedTurnCanceled: async (scope) => {
+        await dispatcher.activateQueuedSuccessor(scope);
+      },
     },
   );
   const completion = new StoryCompletionService(input.db, githubFactory, stories, input.enqueue);
