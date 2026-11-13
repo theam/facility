@@ -132,6 +132,12 @@ export class StoryWorkspaceService {
         storyId: string;
       }) => Promise<unknown>;
       onResume?: (scope: { orgId: string; projectId: string; storyId: string }) => Promise<unknown>;
+      onQueuedTurnCanceled?: (scope: {
+        orgId: string;
+        projectId: string;
+        storyId: string;
+        turnId: string;
+      }) => Promise<unknown>;
     } = {},
   ) {}
 
@@ -665,6 +671,19 @@ export class StoryWorkspaceService {
         turnId: input.turnId,
         type: result.turn.startedAt ? "turn.cancel_requested" : "turn.canceled",
         data: { actor: input.actor },
+      });
+    }
+    // A turn canceled before any worker claimed it has no dispatcher left to hand
+    // the conversation on, and the queue sweep never publishes a canceled turn.
+    // A claimed turn is excluded: its worker releases the queue only after the
+    // native process has stopped. Repeating this for an already canceled turn is
+    // harmless, so a retried request can still release a queue it left behind.
+    if (result.turn.state === "canceled" && !result.turn.startedAt) {
+      await this.lifecycleHooks.onQueuedTurnCanceled?.({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: input.storyId,
+        turnId: input.turnId,
       });
     }
     return this.get(input.orgId, input.projectId, input.storyId);

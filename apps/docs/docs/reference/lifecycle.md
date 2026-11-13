@@ -105,6 +105,13 @@ may differ from the prior turn. A sleeping workspace wakes as part of dispatch.
 Stops active engine work and records a canceled turn. It does not revert files, commits, commands,
 or external GitHub effects that already occurred.
 
+Canceling also releases the story's queue. A turn that no worker has claimed — still queued,
+deferred by a GitHub rate limit, or held for plan approval — is settled by the cancellation itself,
+so the next pending message is promoted before the request returns. A running turn is settled by
+the worker that owns it, and the next message is promoted only after its agent process has stopped.
+If the next message cannot be promoted, for example because its agent is no longer available, the
+story receives a `queued_turn_dispatch_error` attention item instead of waiting silently.
+
 ### Retry or dismiss attention
 
 Retry asks Facility to attempt recoverable work again. Dismiss closes an obsolete attention item.

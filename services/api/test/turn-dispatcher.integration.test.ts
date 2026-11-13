@@ -307,10 +307,16 @@ environment:
       defaultBranch: "main",
       role: "primary",
     });
-    storiesService = new StoryWorkspaceService(db, runtime, async (turn) => {
-      if (rejectEnqueue) throw new Error("queue temporarily unavailable");
-      queuedTurns.push(turn.id);
-    });
+    storiesService = new StoryWorkspaceService(
+      db,
+      runtime,
+      async (turn) => {
+        if (rejectEnqueue) throw new Error("queue temporarily unavailable");
+        queuedTurns.push(turn.id);
+      },
+      // Same wiring as createStoryDomain.
+      { onQueuedTurnCanceled: (scope) => dispatcher.activateQueuedSuccessor(scope) },
+    );
     const catalogSource: AgentCatalogSource = {
       load: async () => ({
         commitSha: "a".repeat(40),
@@ -1787,6 +1793,110 @@ Review the request.
     });
     expect(enqueued).toEqual([]);
     await expect(dispatcher.dispatch(input)).resolves.toEqual({ claimed: false });
+  });
+  it.each([
+    "a GitHub rate limit deferral",
+    "a plan approval hold",
+  ] as const)("promotes the next pending message when a turn waiting on %s is canceled", async (wait) => {
+    const input = await startAdmissionStory();
+    const held = wait === "a plan approval hold";
+    if (held) {
+      await db
+        .update(projects)
+        .set({
+          settings: {
+            storyWorkflow: {
+              revision: 1,
+              policy: {
+                planApprovalAgents: [builder.name],
+                holdAfterFailure: false,
+                requireDeliveryAcceptance: false,
+                requirePreviewForAcceptance: false,
+              },
+            },
+          },
+        })
+        .where(eq(projects.id, projectId));
+    } else {
+      credentialFailure = Object.assign(new Error("API rate limit exceeded"), { status: 429 });
+    }
+    try {
+      // This consumes the turn's only dispatch job while leaving the turn queued.
+      await expect(dispatcher.dispatch(input)).resolves.toMatchObject(
+        held ? { claimed: false, state: "held" } : { claimed: true, state: "queued" },
+      );
+      const waiting = await storiesService.queueMessage({
+        orgId,
+        projectId,
+        storyId: input.storyId,
+        body: "Review what is already on the branch instead.",
+        dedupeKey: randomUUID(),
+        agent: reviewer,
+        actor: { type: "user", id: "user_test" },
+        trigger: { type: "manual" },
+      });
+      expect(waiting).toMatchObject({ queued: true, turn: undefined });
+
+      await storiesService.cancelTurn({ ...input, actor: { type: "user", id: "user_test" } });
+
+      // The periodic sweep never publishes a canceled turn again, so cancellation
+      // itself is the last point that can release the conversation queue.
+      const swept: unknown[] = [];
+      await recoverQueuedTurns(db, async (_queue, data) => {
+        if (data.turnId === input.turnId) swept.push(data);
+      });
+      expect(swept).toEqual([]);
+
+      const [message] = await db
+        .select()
+        .from(storyMessages)
+        .where(eq(storyMessages.id, waiting.message.id));
+      const successor = (await storiesService.get(orgId, projectId, input.storyId)).turns.find(
+        (turn) => turn.state === "queued",
+      );
+      expect(successor).toMatchObject({ agentName: reviewer.name });
+      expect(message?.turnId).toBe(successor?.id);
+      expect(queuedTurns).toContain(successor?.id);
+
+      credentialFailure = undefined;
+      await expect(
+        dispatcher.dispatch({ orgId, projectId, turnId: successor?.id ?? "" }),
+      ).resolves.toMatchObject({ state: "succeeded" });
+      expect(engine.requests.at(-1)?.manifest.name).toBe(reviewer.name);
+    } finally {
+      credentialFailure = undefined;
+      if (held) await db.update(projects).set({ settings: {} }).where(eq(projects.id, projectId));
+    }
+  });
+  it("leaves the pending message to the dispatcher that owns a canceled running turn", async () => {
+    const input = await startAdmissionStory();
+    // A claimed turn whose worker has not yet observed the cancellation: its
+    // native process may still be writing to the workspace.
+    await db
+      .update(turns)
+      .set({ state: "running", startedAt: new Date(), updatedAt: new Date() })
+      .where(eq(turns.id, input.turnId));
+    const waiting = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: input.storyId,
+      body: "Continue after the canceled run has stopped.",
+      dedupeKey: randomUUID(),
+      agent: reviewer,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    expect(waiting).toMatchObject({ queued: true, turn: undefined });
+
+    await storiesService.cancelTurn({ ...input, actor: { type: "user", id: "user_test" } });
+
+    const [message] = await db
+      .select()
+      .from(storyMessages)
+      .where(eq(storyMessages.id, waiting.message.id));
+    expect(message?.turnId).toBeNull();
+    const afterCancellation = await storiesService.get(orgId, projectId, input.storyId);
+    expect(afterCancellation.turns.filter((turn) => turn.state === "queued")).toEqual([]);
   });
   it("retains the writer while native stop is pending and rolls back a failed stop", async () => {
     const input = await budgetHandoffStory();
