@@ -61,7 +61,7 @@ deciding. Dismissing the notice does not approve a scope change, accept a delive
 work; those operations retain their own policy and confirmation requirements.
 
 When the workflow response includes a recorded review cycle, the story leads with its phase,
-configured Builder and Reviewer, reason, rounds and cost/time limits. Unknown cost stays
+configured Builder and Reviewer, reason, rounds, time limit and cost so far. Unknown cost stays
 unconfirmed. Expand the pinned candidate or an individual report to inspect exact heads,
 acceptance evidence, findings and the Reviewer's recommendation. A previous report keeps its
 own candidate and source links after a new head is recorded. Each report links to the comment

@@ -266,7 +266,7 @@ export async function registerStoryWorkflowRoutes(app: FastifyInstance, config: 
     },
     async (request, reply) => {
       noStore(reply);
-      return confirmDeliveryAcceptance(
+      const accepted = await confirmDeliveryAcceptance(
         app.facilityDb,
         scope(request),
         requestId(request),
@@ -274,6 +274,11 @@ export async function registerStoryWorkflowRoutes(app: FastifyInstance, config: 
         interactivePlanActor(request),
         config.secretMasterKey,
       );
+      // Acceptance resolves the review cycle's notice, so messages it held can run now.
+      await app.storyDomain.dispatcher
+        .activateQueuedStorySuccessor(scope(request))
+        .catch(() => undefined);
+      return accepted;
     },
   );
 }

@@ -56,8 +56,8 @@ hashed with SHA-256. A turn stores that hash, the source commit, engine, model, 
 
 Unknown fields are invalid. In particular, `permissions`, `sandbox`, `tools`, and `max_turns` are
 not part of the manifest. Native turns share the full workspace, shell, network, Docker, browser, Git, and configured GitHub
-repository capabilities. [Automatic delivery review](../concepts/agents-as-code.md#automatic-delivery-review)
-uses a separate read-only execution path.
+repository capabilities. In [automatic delivery review](../concepts/agents-as-code.md#automatic-delivery-review), the
+cycle runs its Reviewer's turns read-only.
 
 ## Options
 

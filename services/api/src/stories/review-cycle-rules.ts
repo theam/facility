@@ -280,13 +280,15 @@ export function reviewCatalogProblem(policy: ReviewCyclePolicy, manifests: Agent
   const reviewer = manifests.find((agent) => agent.name === policy.reviewerAgent && agent.enabled);
   if (!reviewer || !manifests.some((agent) => agent.name === policy.builderAgent && agent.enabled))
     return "Choose an enabled Builder and Reviewer from the canonical catalog.";
+  // A GitHub trigger keeps reviewing pull requests from people and other tools; the
+  // cycle owns its stories' pull requests and refuses those triggers there.
   const explicitTriggers = reviewer.triggers.map((trigger) => trigger.type);
   if (
     !explicitTriggers.includes("ui") ||
     !explicitTriggers.includes("mcp") ||
-    explicitTriggers.some((type) => type === "github" || type === "schedule")
+    explicitTriggers.includes("schedule")
   )
-    return "Give the Reviewer explicit UI and MCP triggers and retire its automatic triggers before enabling the cycle.";
+    return "Give the Reviewer explicit UI and MCP triggers and remove its schedule before enabling the cycle.";
   if (manifests.some((agent) => agent.enabled && agent.name === "address-review"))
     return "Migrate the legacy address-review manifest to the Builder before enabling the cycle.";
   return null;

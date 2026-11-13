@@ -85,22 +85,30 @@ invalid evidence stops the cycle for a person.
 
 The Reviewer runs like the Builder, as a native turn in the story workspace, with a fresh
 context for each review. It explores the code beyond the diff: it reads the checkouts, runs
-`git diff`, `git log` and `gh pr view`, and follows consumers, tests and security boundaries.
-Reading is enforced in layers:
+`git diff`, `git log`, `gh pr view` and `gh pr diff`, and follows consumers, tests and security
+boundaries. Reading is enforced in layers:
 
-- **The engine.** Claude Code receives reading tools only; every other tool, including edits and
-  other commands, is denied. Codex runs in its read-only sandbox.
-- **Credentials.** The turn receives a GitHub token limited to read permissions and none of the
-  project's other secrets; it keeps only its engine credentials.
+- **The engine.** Claude Code receives reading tools only; every other tool, including edits,
+  other commands, `git fetch` and git's `--output`, is denied. User, project and local settings,
+  hooks and MCP servers do not apply to the turn, so files in the workspace cannot widen it. Codex
+  runs in its read-only sandbox, which also blocks network access, so a Codex Reviewer cannot use
+  `gh`.
+- **Credentials.** The turn receives a GitHub token limited to the read permissions the
+  installation grants, and none of the project's other secrets; it keeps only its own engine's
+  credentials.
 - **The workspace.** Facility records each checkout's HEAD, branch and status before the turn. If
-  anything changed afterwards, it restores the checkout and stops the cycle for a person.
+  anything changed afterwards, it stops the cycle for a person and restores each changed checkout
+  that had no uncommitted work before the turn.
+
+These layers are not an operating-system boundary: the turn runs as the same user as the
+workspace's services and can read files the workspace can read.
 
 The Reviewer ends its final response with one `<facility-review>` block that accounts for the
 plan's acceptance criteria and lists findings with priority, location, evidence, impact and fix.
 Facility then leaves the report on each required pull request as a comment review of the exact
 reviewed head. It never approves or requests changes, so it cannot satisfy or block branch
-protection. The story's review panel links to each published review, or says why GitHub
-refused it.
+protection. If GitHub is temporarily unavailable, Facility retries until the cycle's time limit.
+The story's review panel links to each published review, or says why GitHub refused it.
 
 ### Correction and decision
 

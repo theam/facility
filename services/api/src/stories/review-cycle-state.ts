@@ -36,6 +36,8 @@ export type ReviewCycleData = {
   lastBuilderTurnId: string;
   turnIds: string[];
   status: Omit<ReviewCycleStatus, "id" | "phase" | "deadline">;
+  /** One reconciliation at a time posts pending reviews to GitHub, until this time. */
+  publishing?: { until: string };
 };
 export type ReviewCycle = typeof storyReviewCycles.$inferSelect & {
   phase: ReviewCyclePhase;
@@ -216,3 +218,21 @@ export async function finishReviewCycle(
     },
   });
 }
+
+/** What decides the cycle's next step; publishing reviews to GitHub does not change it. */
+export function reviewCycleProgress(cycle: ReviewCycle) {
+  const { publishing: _publishing, ...data } = cycle.data;
+  return JSON.stringify([
+    cycle.phase,
+    {
+      ...data,
+      status: {
+        ...data.status,
+        reviews: data.status.reviews.map(({ publication: _publication, ...report }) => report),
+      },
+    },
+  ]);
+}
+
+/** A cycle with a report not yet left on its pull requests. */
+export const UNPUBLISHED_REVIEW_PATH = "$.status.reviews[*] ? (!(exists(@.publication)))";

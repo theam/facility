@@ -25,9 +25,10 @@ control destroys them.
 
 ## Are agents sandboxed differently by role?
 
-Native turns share workspace and GitHub installation access. The optional
-[automatic delivery review](concepts/agents-as-code.md#automatic-delivery-review) uses pinned
-read-only evidence and isolated synthetic tests.
+Native turns share workspace and GitHub installation access. In the optional
+[automatic delivery review](concepts/agents-as-code.md#automatic-delivery-review), the Reviewer
+runs as a read-only turn in the same workspace: reading tools only, a read-only GitHub token, and
+none of the project's other secrets.
 
 ## Where are agents configured?
 

@@ -38,7 +38,7 @@ import { buildApp, mintSessionCookie } from "../src/app.js";
 import type { GithubClientFactory, Octokit } from "../src/github/client.js";
 import { readProjectDeliveryReviews } from "../src/insights/project-delivery-reviews.js";
 import { StoryReviewCycles } from "../src/stories/review-cycle.js";
-import { REVIEW_TRIGGER } from "../src/stories/review-cycle-rules.js";
+import { REVIEW_TRIGGER, ReviewEvidenceUnavailable } from "../src/stories/review-cycle-rules.js";
 import { ReviewCycleSource } from "../src/stories/review-cycle-source.js";
 import { lockWorkflowStory } from "../src/stories/workflow-policy.js";
 import { createStoryDomain } from "../src/story-domain.js";
@@ -56,6 +56,7 @@ const base = "2".repeat(40);
 const delivered = "3".repeat(40);
 const corrected = "4".repeat(40);
 const external = "5".repeat(40);
+const rebased = "6".repeat(40);
 const user = { type: "user", id: "user_local_admin" } as const;
 const orgId = "org_local";
 
@@ -87,7 +88,11 @@ const architect = parseAgentManifest(
   ".agents/architect.md",
 );
 const builderSource = agentSource("builder", "codex", "gpt-5.6-luna");
-const reviewerSource = agentSource("pr-reviewer", "claude_code", "claude-sonnet-5");
+// Like the standard template, the Reviewer keeps reviewing other authors' PRs on GitHub.
+const reviewerSource = agentSource("pr-reviewer", "claude_code", "claude-sonnet-5").replace(
+  "  - type: mcp\n",
+  "  - type: mcp\n  - type: github\n    name: pull-request-updated\n    event: pull_request\n    actions: [opened, synchronize]\n",
+);
 const builder = parseAgentManifest(builderSource, ".agents/builder.md");
 
 type Pull = {
@@ -172,7 +177,12 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
     html_url: string;
   }> = [];
   // Simulated GitHub conditions for the pull reads the cycle makes.
-  const github: { down?: boolean; hold?: { entered: () => void; released: Promise<void> } } = {};
+  const github: {
+    down?: boolean;
+    reviewsDown?: boolean;
+    hold?: { entered: () => void; released: Promise<void> };
+    reviewsHold?: { pull: number; entered: () => void; released: Promise<void> };
+  } = {};
   const request = vi.fn(async (route: string, args: Record<string, unknown>) => {
     if (route.startsWith("GET ") && route.endsWith("/pulls/{pull_number}")) {
       if (github.down) throw Object.assign(new Error("Service unavailable"), { status: 503 });
@@ -188,7 +198,8 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
           number: pull.number,
           state: "open",
           draft: false,
-          changed_files: 1,
+          // Larger than any bounded diff: the Reviewer reads the checkout itself.
+          changed_files: 240,
           labels: pull.labels.map((name) => ({ name })),
           head: { sha: pull.head, ref: pull.branch, repo: { full_name: pull.repository } },
           base: { sha: pull.base, ref: "main", repo: { full_name: pull.repository } },
@@ -213,12 +224,21 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
         },
       };
     }
-    if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews")
-      return {
-        data: publishedReviews.filter(
-          (review) => review.repo === args.repo && review.pull === Number(args.pull_number),
-        ),
-      };
+    if (route.endsWith("/pulls/{pull_number}/reviews") && github.reviewsDown)
+      throw Object.assign(new Error("Service unavailable"), { status: 503 });
+    if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews") {
+      const data = publishedReviews.filter(
+        (review) => review.repo === args.repo && review.pull === Number(args.pull_number),
+      );
+      // A slow response: GitHub has already read the reviews it returns.
+      const hold = github.reviewsHold;
+      if (hold?.pull === Number(args.pull_number)) {
+        github.reviewsHold = undefined;
+        hold.entered();
+        await hold.released;
+      }
+      return { data };
+    }
     if (route === "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews") {
       const review = {
         repo: String(args.repo),
@@ -613,6 +633,8 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
           git.head = corrected;
           for (const pull of git.pulls) {
             pull.head = corrected;
+            // GitHub refreshes the PR base to the branch's current commit on a push.
+            pull.base = rebased;
             await mirror(pull);
           }
         }
@@ -800,6 +822,10 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       delivered,
       corrected,
     ]);
+    expect(cycle?.reviews.map((report) => report.candidate.pullRequests[0]?.baseSha)).toEqual([
+      base,
+      rebased,
+    ]);
     expect(cycle?.reviews[1]?.result.findings[0]?.disposition).toBe(
       scenario === "fixed" ? "resolved" : "open",
     );
@@ -895,6 +921,117 @@ describe("bounded review cycle with real storage and the existing dispatcher", (
       headers: { cookie, "idempotency-key": `dismiss-${stop.id}` },
     });
     expect(dismissed.statusCode, dismissed.body).toBe(200);
+    expect(await pendingTurns()).toMatchObject([{ agentName: "builder" }]);
+  });
+
+  it("retries a review GitHub did not take and posts it once when reconciliations overlap", async () => {
+    const { storyId, items } = await story("minor");
+    const ours = () =>
+      publishedReviews.filter((review) => items.some((pull) => pull.number === review.pull));
+    github.reviewsDown = true;
+    try {
+      await dispatch(await active(storyId));
+    } finally {
+      github.reviewsDown = false;
+    }
+    expect(await state(storyId)).toMatchObject({ phase: "human_review" });
+    // A temporary failure is not recorded as the outcome; the review is still pending.
+    expect((await state(storyId))?.reviews[0]?.publication).toBeUndefined();
+    expect(ours()).toHaveLength(0);
+    const [primary] = items;
+    if (!primary) throw new Error("Fixture has no primary PR");
+    const entered = latch();
+    const release = latch();
+    github.reviewsHold = {
+      pull: primary.number,
+      entered: entered.resolve,
+      released: release.promise,
+    };
+    // Recovery finds the pending review although the cycle is no longer active.
+    const recovering = cycles.recover();
+    await entered.promise;
+    await cycles.reconcile(scope(storyId));
+    release.resolve();
+    await recovering;
+    expect(ours()).toHaveLength(2);
+    expect((await state(storyId))?.reviews[0]?.publication).toEqual(
+      items.map((pull) => expect.objectContaining({ number: pull.number, state: "published" })),
+    );
+  });
+
+  it("retries a temporary GitHub failure after the Reviewer turn is claimed", async () => {
+    const { storyId } = await story("minor");
+    const revalidate = cycles.revalidateBeforeExecution.bind(cycles);
+    const refresh = vi.spyOn(cycles, "refresh");
+    const claimed = vi
+      .spyOn(cycles, "revalidateBeforeExecution")
+      .mockImplementationOnce(async (cycle, signal) => {
+        refresh.mockRejectedValueOnce(new ReviewEvidenceUnavailable());
+        return revalidate(cycle, signal, 10);
+      });
+    try {
+      await dispatch(await active(storyId));
+    } finally {
+      claimed.mockRestore();
+      refresh.mockRestore();
+    }
+    expect(await state(storyId)).toMatchObject({ phase: "human_review", reviewsStarted: 1 });
+  });
+
+  it("runs a person's message queued during the review once the delivery reaches human review", async () => {
+    const { storyId } = await story("minor");
+    const reviewTurn = await active(storyId);
+    const { turn: held } = await domain.stories.queueMessage({
+      ...scope(storyId),
+      body: "Also update the changelog.",
+      dedupeKey: `person-${storyId}`,
+      agent: builder,
+      actor: user,
+      trigger: { type: "ui" },
+    });
+    expect(held).toBeUndefined();
+    await dispatch(reviewTurn);
+    expect(await state(storyId)).toMatchObject({ phase: "human_review" });
+    const queued = await db
+      .select()
+      .from(turns)
+      .where(and(eq(turns.storyId, storyId), eq(turns.state, "queued")));
+    expect(queued).toMatchObject([{ agentName: "builder" }]);
+  });
+
+  it("releases an automated message the review held once a person accepts the delivery", async () => {
+    const { storyId } = await story("minor");
+    await dispatch(await active(storyId));
+    const reviewed = await state(storyId);
+    expect(reviewed).toMatchObject({ phase: "human_review" });
+    const { turn: held } = await domain.stories.queueMessage({
+      ...scope(storyId),
+      body: "Summarize the delivery for the release notes.",
+      dedupeKey: `service-${storyId}`,
+      agent: builder,
+      actor: { type: "service", id: tokenId },
+      trigger: { type: "mcp" },
+    });
+    expect(held).toBeUndefined();
+    const pendingTurns = async () =>
+      db
+        .select()
+        .from(turns)
+        .where(and(eq(turns.storyId, storyId), eq(turns.state, "queued")));
+    expect(await pendingTurns()).toHaveLength(0);
+    const requested = await post(`${path(storyId)}/delivery-acceptance`, {
+      expected_candidate_revision: reviewed?.candidate?.deliveryRevision,
+      expected_plan_revision: 1,
+      expected_decision_revision: 1,
+    });
+    const confirmation = await app.inject({
+      url: `${path(storyId)}/delivery-acceptance/${requested.id}`,
+      headers: { cookie },
+    });
+    expect(confirmation.statusCode, confirmation.body).toBe(200);
+    await post(`${path(storyId)}/delivery-acceptance/${requested.id}/confirm`, {
+      proof: confirmation.json().proof,
+    });
     expect(await pendingTurns()).toMatchObject([{ agentName: "builder" }]);
   });
 

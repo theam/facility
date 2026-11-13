@@ -465,7 +465,7 @@ export class TurnDispatcher {
         // The Reviewer keeps its engine credentials and the read-only GitHub token,
         // never the project's other secrets (deployment and service credentials).
         environment: reviewing
-          ? reviewerEnvironment(prepared.processEnvironment, prepared.secretNames)
+          ? reviewerEnvironment(prepared.processEnvironment, prepared.secretNames, manifest.engine)
           : prepared.processEnvironment,
         readOnly: reviewing,
         signal: cancellation.signal,
@@ -506,7 +506,7 @@ export class TurnDispatcher {
       }
       if ((await discardReviewerChanges()).length)
         throw new ReviewCycleStop(
-          "The Reviewer changed the workspace. Facility discarded the change; a person must review this delivery.",
+          "The Reviewer changed the workspace. Facility restored each checkout that had no earlier uncommitted work; a person must review this delivery.",
         );
       await liveEvents.finish(result.events);
       await this.evidence.complete(startedGitEvidence);
@@ -1055,10 +1055,13 @@ export class TurnDispatcher {
     storyId: string;
     turnId?: string;
   }) {
+    const queued = () => this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
     if (this.review) {
       try {
         await this.review.cycles.reconcile(input);
-        if (await reviewHoldsQueue(this.db, input)) return;
+        // A review gate waits for a person; their own queued message is not held by it.
+        const human = ((await queued())?.actor as { type?: string } | undefined)?.type === "user";
+        if (await reviewHoldsQueue(this.db, input, human)) return;
       } catch {
         console.warn(
           JSON.stringify({ event: "review_cycle.reconciliation_deferred", storyId: input.storyId }),
@@ -1066,7 +1069,7 @@ export class TurnDispatcher {
         return;
       }
     }
-    const next = await this.nextQueuedMessage(input.orgId, input.projectId, input.storyId);
+    const next = await queued();
     if (!next?.requestedAgentName) return;
     try {
       const projected = await this.catalog.get(
@@ -1327,15 +1330,18 @@ function agentOutcome(output: string): { output: string; attention?: string } {
   return { output: output.slice(0, match.index).trim(), attention };
 }
 
-/** Engine credentials a read-only Reviewer keeps; other declared project secrets are removed. */
-const REVIEWER_ENGINE_SECRETS = new Set([
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "OPENAI_API_KEY",
-  "CODEX_API_KEY",
-]);
-export function reviewerEnvironment(environment: Record<string, string>, secretNames: string[]) {
-  const removed = new Set(secretNames.filter((name) => !REVIEWER_ENGINE_SECRETS.has(name)));
+/** Credentials of the Reviewer's own engine; it loses every other declared project secret,
+ * including another engine's keys the application itself may use. */
+const REVIEWER_ENGINE_SECRETS: Record<string, ReadonlySet<string>> = {
+  claude_code: new Set(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]),
+  codex: new Set(["OPENAI_API_KEY", "CODEX_API_KEY"]),
+};
+export function reviewerEnvironment(
+  environment: Record<string, string>,
+  secretNames: string[],
+  engine: string,
+) {
+  const kept = REVIEWER_ENGINE_SECRETS[engine] ?? new Set<string>();
+  const removed = new Set(secretNames.filter((name) => !kept.has(name)));
   return Object.fromEntries(Object.entries(environment).filter(([name]) => !removed.has(name)));
 }
