@@ -16,22 +16,29 @@ import {
   storyConversations,
   storyDeliveryAcceptanceRequests,
   storyDeliveryAcceptances,
+  storyEvidenceEvents,
   storyPlanDecisions,
+  storyPlanRepositoryRefs,
+  storyPreviewConvergences,
+  storyPreviewGenerations,
   turns,
   users,
 } from "@facility/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService } from "../src/agents/catalog.js";
 import { buildApp, mintSessionCookie } from "../src/app.js";
+import { ApiError } from "../src/errors.js";
 import {
   authorizePlanExecution,
+  observePlanExecutionGate,
   planExecutionStillAuthorized,
   recordPlanExecution,
 } from "../src/stories/workflow-execution.js";
 import { createStoryDomain, type StoryDomain } from "../src/story-domain.js";
 import type { AppConfig } from "../src/types.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import { readDuringUncommittedWrite } from "./fixtures/uncommitted-write.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
@@ -248,6 +255,11 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
             file: ".agents/builder.md",
             source:
               "---\nname: builder\ndescription: Build a bounded change\nengine: codex\nmodel: fixture-model\nenabled: true\ntriggers:\n  - type: manual\n---\nBuild and test.\n",
+          },
+          {
+            file: ".agents/planner.md",
+            source:
+              "---\nname: planner\ndescription: Plan a bounded change\nengine: codex\nmodel: fixture-model\nenabled: true\ntriggers:\n  - type: manual\n---\nPlan and review scope.\n",
           },
         ],
       }),
@@ -504,6 +516,194 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       .where(eq(turns.id, turnId));
     await savePolicy();
   });
+  it("reports exact retained work and incomplete plan scope before approval without execution effects", async () => {
+    await savePolicy(policy({ planApprovalAgents: ["planner"] }));
+    const value = await delivery();
+    const planner = (await domain.catalog.sync(orgId, projectId)).find(
+      (agent) => agent.name === "planner",
+    );
+    if (!planner) throw Error("Missing planner");
+    const dependencyId = newId("repo");
+    const dependency = {
+      orgId,
+      projectId,
+      owner: projectId,
+      name: "api",
+      role: "related" as const,
+      defaultBranch: "main",
+    };
+    const turnId = newId("turn"),
+      conversationId = newId("sess");
+    await db.insert(projectRepositories).values({ id: dependencyId, ...dependency });
+    await db
+      .insert(storyConversations)
+      .values({ id: conversationId, orgId, projectId, storyId: value.id });
+    await db.insert(turns).values({
+      id: turnId,
+      orgId,
+      projectId,
+      storyId: value.id,
+      conversationId,
+      agentName: planner.name,
+      manifestHash: planner.hash,
+      manifest: planner,
+      engine: planner.engine,
+      model: planner.model,
+      triggerType: "manual",
+      createdBy: { type: "user", id: userId },
+    });
+    const queuedBefore = enqueue.mock.calls.length;
+    async function propose(revision: number, agents: string[], repositories: string[]) {
+      const result = await post(
+        `${path(value.id)}/plan`,
+        {
+          expected_revision: revision,
+          markdown: "Review the retained task",
+          repositories,
+          agents,
+          idempotency_key: randomUUID(),
+        },
+        headers(),
+      );
+      expect(result.statusCode, result.body).toBe(200);
+    }
+    async function read() {
+      const result = await app.inject({ url: `${path(value.id)}/workflow`, headers: headers() });
+      expect(result.statusCode, result.body).toBe(200);
+      return result.json();
+    }
+    try {
+      await propose(0, ["builder"], [`${projectId}/app`]);
+      expect((await read()).executionScope).toMatchObject({
+        planRevision: 1,
+        repositories: {
+          matches: false,
+          connectedCount: 2,
+          missing: [`${projectId}/api`],
+          removed: [],
+        },
+        queuedWork: [
+          {
+            turnId,
+            agentName: "planner",
+            manifestHash: planner.hash,
+            configuration: "current",
+            planAgent: "missing",
+          },
+        ],
+        hasMore: false,
+      });
+      await propose(1, ["planner"], [`${projectId}/app`]);
+      expect((await read()).executionScope).toMatchObject({
+        planRevision: 2,
+        repositories: { matches: false },
+        queuedWork: [{ turnId, planAgent: "current" }],
+      });
+      await propose(2, ["planner"], [`${projectId}/app`, `${projectId}/api`]);
+      const matching = await read();
+      expect(matching).toMatchObject({
+        plan: { status: "proposed" },
+        blockedReason: expect.stringContaining("approve"),
+        executionScope: {
+          planRevision: 3,
+          repositories: { matches: true, missing: [], removed: [] },
+          queuedWork: [{ turnId, planAgent: "current", configuration: "current" }],
+        },
+      });
+      // Status reads observe the dispatcher's gate without its row locks, so an
+      // uncommitted configuration change neither blocks nor fails them.
+      expect(
+        await readDuringUncommittedWrite(
+          databaseUrl,
+          (sql) =>
+            sql`update agent_manifests set manifest = manifest
+              where org_id = ${orgId} and project_id = ${projectId} and name = 'planner'`,
+          read,
+        ),
+      ).toMatchObject({
+        settled: "read",
+        value: { blockedReason: expect.stringContaining("approve") },
+      });
+      await db
+        .update(agentManifests)
+        .set({ manifest: { ...planner, hash: "c".repeat(64) } })
+        .where(
+          and(
+            eq(agentManifests.orgId, orgId),
+            eq(agentManifests.projectId, projectId),
+            eq(agentManifests.name, "planner"),
+          ),
+        );
+      expect((await read()).executionScope.queuedWork[0]).toMatchObject({
+        turnId,
+        configuration: "changed",
+        planAgent: "current",
+      });
+      await db.update(turns).set({ manifest: {} }).where(eq(turns.id, turnId));
+      expect(await read()).toMatchObject({
+        blockedReason: expect.stringContaining("retained agent configuration is unavailable"),
+        executionScope: { queuedWork: [{ turnId, configuration: "unavailable" }] },
+      });
+      await db.update(turns).set({ manifest: planner }).where(eq(turns.id, turnId));
+      await db
+        .update(agentManifests)
+        .set({ manifest: planner })
+        .where(
+          and(
+            eq(agentManifests.orgId, orgId),
+            eq(agentManifests.projectId, projectId),
+            eq(agentManifests.name, "planner"),
+          ),
+        );
+      await db
+        .update(projectRepositories)
+        .set({ name: "renamed-api" })
+        .where(eq(projectRepositories.id, dependencyId));
+      expect((await read()).executionScope.repositories).toMatchObject({
+        matches: false,
+        missing: [`${projectId}/renamed-api`],
+        removed: [`${projectId}/api`],
+      });
+      const foreign = await app.inject({
+        url: `${path(value.id).replace(projectId, otherProjectId)}/workflow`,
+        headers: headers(),
+      });
+      expect([403, 404]).toContain(foreign.statusCode);
+      expect(foreign.body).not.toContain(planner.hash);
+      expect(enqueue.mock.calls.length).toBe(queuedBefore);
+      const [unchanged] = await db.select().from(turns).where(eq(turns.id, turnId));
+      expect(unchanged?.state).toBe("queued");
+      expect(
+        await db.select().from(budgetReservations).where(eq(budgetReservations.turnId, turnId)),
+      ).toHaveLength(0);
+    } finally {
+      await db
+        .update(agentManifests)
+        .set({ manifest: planner })
+        .where(
+          and(
+            eq(agentManifests.orgId, orgId),
+            eq(agentManifests.projectId, projectId),
+            eq(agentManifests.name, "planner"),
+          ),
+        );
+      await db
+        .update(turns)
+        .set({ state: "canceled", endedAt: new Date() })
+        .where(eq(turns.storyId, value.id));
+      await db
+        .delete(storyPlanRepositoryRefs)
+        .where(
+          and(
+            eq(storyPlanRepositoryRefs.storyId, value.id),
+            eq(storyPlanRepositoryRefs.repositoryId, dependencyId),
+          ),
+        );
+      await db.delete(projectRepositories).where(eq(projectRepositories.id, dependencyId));
+      await savePolicy();
+    }
+  });
+
   it("can hold admission with a single database connection without a nested pool checkout", async () => {
     await savePolicy(policy({ planApprovalAgents: ["builder"] }));
     const value = await delivery();
@@ -629,6 +829,52 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       { cookie: otherCookie },
     );
     expect(confirmed.statusCode, confirmed.body).toBe(200);
+    const approval = confirmed.json().decision;
+    async function observed() {
+      const result = await app.inject({ url: `${path(value.id)}/workflow`, headers: headers() });
+      expect(result.statusCode, result.body).toBe(200);
+      return result.json();
+    }
+    expect(await observed()).toMatchObject({
+      plan: { status: "approved" },
+      execution: {
+        decision: { id: approval.id, decisionRevision: 1, planRevision: 1 },
+        turns: [],
+        unavailable: false,
+      },
+      executionScope: { queuedWork: [{ turnId }] },
+    });
+    // The lock-free observation must reach the dispatcher's own outcome.
+    const manifest = builder;
+    async function gateOutcome(gate: typeof authorizePlanExecution) {
+      try {
+        return { authorization: await gate(db, scope, manifest, { type: "user", id: userId }) };
+      } catch (error) {
+        if (error instanceof ApiError) return { code: error.code };
+        throw error;
+      }
+    }
+    async function observationMatchesGate() {
+      const observation = await gateOutcome(observePlanExecutionGate);
+      expect(observation).toEqual(await gateOutcome(authorizePlanExecution));
+      return observation;
+    }
+    expect(
+      await readDuringUncommittedWrite(
+        databaseUrl,
+        async (sql) => {
+          await sql`update agent_manifests set manifest = manifest
+            where org_id = ${orgId} and project_id = ${projectId} and name = 'builder'`;
+          await sql`update project_repositories set name = name
+            where org_id = ${orgId} and project_id = ${projectId}`;
+          await sql`update users set name = name where id in (${otherUserId}, ${userId})`;
+        },
+        observed,
+      ),
+    ).toMatchObject({ settled: "read", value: { plan: { status: "approved" } } });
+    expect(await observationMatchesGate()).toMatchObject({
+      authorization: { planRevision: 1, authorizerId: otherUserId },
+    });
     const authorization = await authorizePlanExecution(db, scope, builder, {
       type: "user",
       id: userId,
@@ -644,11 +890,46 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     expect(released?.retryAfter).toBeNull();
     const [running] = await db
       .update(turns)
-      .set({ state: "running" })
+      .set({ state: "running", startedAt: new Date() })
       .where(eq(turns.id, turnId))
       .returning();
     if (!running) throw Error("Missing running fixture");
     await recordPlanExecution(db, scope, turnId, authorization);
+    await recordPlanExecution(db, scope, turnId, authorization);
+    const queuedCalls = enqueue.mock.calls.length;
+    const runningObservation = await observed();
+    expect(runningObservation.execution).toMatchObject({
+      decision: { id: approval.id },
+      turns: [{ turnId, state: "running", startedAt: expect.any(String) }],
+      hasMore: false,
+      unavailable: false,
+    });
+    expect(runningObservation.execution.turns).toHaveLength(1);
+    expect(runningObservation.executionScope.queuedWork).toEqual([]);
+    expect(enqueue.mock.calls.length).toBe(queuedCalls);
+    await db
+      .update(storyEvidenceEvents)
+      .set({ data: { decisionId: approval.id } })
+      .where(
+        and(
+          eq(storyEvidenceEvents.orgId, orgId),
+          eq(storyEvidenceEvents.projectId, projectId),
+          eq(storyEvidenceEvents.storyId, value.id),
+          eq(storyEvidenceEvents.externalKey, `workflow:execution:${turnId}`),
+        ),
+      );
+    expect((await observed()).execution).toMatchObject({ turns: [], unavailable: true });
+    await db
+      .update(storyEvidenceEvents)
+      .set({ data: authorization })
+      .where(
+        and(
+          eq(storyEvidenceEvents.orgId, orgId),
+          eq(storyEvidenceEvents.projectId, projectId),
+          eq(storyEvidenceEvents.storyId, value.id),
+          eq(storyEvidenceEvents.externalKey, `workflow:execution:${turnId}`),
+        ),
+      );
     expect(await planExecutionStillAuthorized(db, scope, running)).toBe(true);
     const weakening = await reviewPolicy(policy());
     const deniedPolicy = await post(`${policyPath}/confirm`, {
@@ -664,6 +945,7 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     await db.update(users).set({ status: "inactive" }).where(eq(users.id, otherUserId));
     try {
       expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
+      expect(await observationMatchesGate()).toEqual({ code: "workflow_plan_authorizer_revoked" });
     } finally {
       await db.update(users).set({ status: "active" }).where(eq(users.id, otherUserId));
     }
@@ -680,6 +962,9 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     });
     try {
       expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
+      expect(await observationMatchesGate()).toEqual({
+        code: "workflow_plan_repository_scope_changed",
+      });
     } finally {
       await db.delete(projectRepositories).where(eq(projectRepositories.id, extraRepo));
     }
@@ -689,6 +974,9 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       .where(eq(agentManifests.projectId, projectId));
     try {
       expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
+      expect(await observationMatchesGate()).toEqual({
+        code: "workflow_agent_configuration_changed",
+      });
     } finally {
       await db
         .update(agentManifests)
@@ -708,11 +996,18 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       headers(),
     );
     expect(changed.statusCode, changed.body).toBe(200);
+    expect(await observed()).toMatchObject({
+      plan: { revision: 2, status: "proposed" },
+      execution: { decision: { id: approval.id, planRevision: 1 } },
+    });
     expect(await planExecutionStillAuthorized(db, scope, running)).toBe(false);
     await db
       .update(turns)
       .set({ state: "canceled", endedAt: new Date() })
       .where(eq(turns.id, turnId));
+    expect((await observed()).execution.turns).toMatchObject([
+      { turnId, state: "canceled", endedAt: expect.any(String) },
+    ]);
     await savePolicy();
   });
   it("holds successors after a failure until a later interactive decision", async () => {
@@ -784,5 +1079,213 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       await authorizePlanExecution(db, scope, builder, { type: "user", id: userId }),
     ).toMatchObject({ decisionRevision: 2 });
     await savePolicy();
+  });
+  it("projects the complete delivery and rechecks receipt authority in a read-only snapshot", async () => {
+    await savePolicy(policy({ requirePreviewForAcceptance: true }));
+    await db
+      .update(githubPullRequests)
+      .set({ headSha: "a".repeat(40), syncedAt: new Date() })
+      .where(eq(githubPullRequests.repositoryId, repoId));
+    const secondRepo = newId("repo");
+    await db.insert(projectRepositories).values({
+      id: secondRepo,
+      orgId,
+      projectId,
+      owner: projectId,
+      name: "api",
+      role: "related",
+      defaultBranch: "main",
+    });
+    await db.insert(githubPullRequests).values({
+      id: newId("ghp"),
+      orgId,
+      projectId,
+      repositoryId: secondRepo,
+      number: 2,
+      title: "Second required change",
+      state: "open",
+      draft: false,
+      headRef: "feature",
+      baseRef: "main",
+      headSha: "b".repeat(40),
+      htmlUrl: `https://github.com/${projectId}/api/pull/2`,
+      ciState: "failure",
+      ciHeadSha: "b".repeat(40),
+      syncedAt: new Date(),
+    });
+    const value = await delivery();
+    await db
+      .update(stories)
+      .set({ title: `Review queue ${value.id}` })
+      .where(eq(stories.id, value.id));
+    const set = await post(
+      `${path(value.id)}/delivery`,
+      {
+        expected_revision: 1,
+        declared_complete: true,
+        pull_requests: [
+          { repository: `${projectId}/app`, number: 1, required: true, primary: true },
+          { repository: `${projectId}/api`, number: 2, required: true, primary: false },
+        ],
+        idempotency_key: randomUUID(),
+      },
+      headers(),
+    );
+    expect(set.statusCode, set.body).toBe(200);
+    const candidate = set.json<StoryDelivery>();
+    async function readQueue() {
+      const response = await app.inject({
+        url: `/v1/projects/${projectId}/attention/stories?category=deliveries&q=${value.id}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().counts).toEqual({ stories: 1, plans: 0, notices: 0, deliveries: 1 });
+      return response.json().items[0].delivery;
+    }
+    const beforeRequests = await db
+      .select()
+      .from(storyDeliveryAcceptanceRequests)
+      .where(eq(storyDeliveryAcceptanceRequests.storyId, value.id));
+    const enqueued = enqueue.mock.calls.length;
+    let observed = await readQueue();
+    expect(observed.candidate).toEqual(candidate.candidate);
+    expect(observed.pullRequests).toHaveLength(2);
+    expect(observed.pullRequests[1].checks).toMatchObject({ state: "failure", current: true });
+    expect(observed.blocked.code).toBe("workflow_preview_not_ready");
+    expect(observed.acceptanceReady).toBe(false);
+    expect(enqueue).toHaveBeenCalledTimes(enqueued);
+    expect(
+      await db
+        .select()
+        .from(storyDeliveryAcceptanceRequests)
+        .where(eq(storyDeliveryAcceptanceRequests.storyId, value.id)),
+    ).toEqual(beforeRequests);
+
+    const generation = candidate.candidate.revision;
+    if (!generation) throw Error("Missing candidate");
+    await db
+      .insert(storyPreviewGenerations)
+      .values({
+        orgId,
+        projectId,
+        storyId: value.id,
+        generation,
+        deliveryRevision: generation,
+        repositories: candidate.pullRequests.map((pull) => ({
+          repositoryId: pull.repositoryId,
+          repository: pull.repository,
+          pullNumber: pull.number,
+          headRef: pull.headRef,
+          headSha: pull.headSha ?? "",
+          primary: pull.primary,
+        })),
+        sourceObservedAt: new Date(),
+      })
+      .onConflictDoNothing();
+    await db
+      .insert(storyPreviewConvergences)
+      .values({
+        orgId,
+        projectId,
+        storyId: value.id,
+        state: "ready",
+        desiredGeneration: generation,
+        deployedGeneration: generation,
+        desiredObservedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: storyPreviewConvergences.storyId,
+        set: { state: "ready", desiredGeneration: generation, deployedGeneration: generation },
+      });
+    expect((await readQueue()).acceptanceReady).toBe(true);
+    const requested = await request(value.id, candidate, { cookie: writerCookie });
+    const reviewed = await review(value.id, requested.id, { cookie: writerCookie });
+    expect(
+      (await confirm(value.id, requested.id, reviewed.json().proof, { cookie: writerCookie }))
+        .statusCode,
+    ).toBe(200);
+    observed = await readQueue();
+    expect(observed.acceptance.status).toBe("current");
+    expect(observed.acceptanceReady).toBe(false);
+    await db
+      .update(storyPreviewConvergences)
+      .set({ state: "suspended" })
+      .where(eq(storyPreviewConvergences.storyId, value.id));
+    expect((await readQueue()).acceptance.status).toBe("current");
+
+    await db
+      .update(roles)
+      .set({ permissions: ["projects:read"] })
+      .where(eq(roles.id, writerRole));
+    expect((await readQueue()).acceptance.status).toBe("stale");
+    expect(
+      (
+        await app.inject({ url: `${path(value.id)}/delivery-acceptance`, headers: { cookie } })
+      ).json().status,
+    ).toBe("stale");
+    await db
+      .update(roles)
+      .set({ permissions: ["projects:read", "projects:write"] })
+      .where(eq(roles.id, writerRole));
+    await db.update(users).set({ status: "disabled" }).where(eq(users.id, writerId));
+    expect((await readQueue()).acceptance.status).toBe("stale");
+    await db.update(users).set({ status: "active" }).where(eq(users.id, writerId));
+    expect((await readQueue()).acceptance.status).toBe("current");
+
+    await db
+      .update(githubPullRequests)
+      .set({ headSha: "c".repeat(40) })
+      .where(eq(githubPullRequests.repositoryId, secondRepo));
+    observed = await readQueue();
+    expect(observed.candidate.revision).not.toBe(generation);
+    expect(observed.acceptance.status).toBe("stale");
+    expect(observed.preview.deployedGeneration).toBe(generation);
+    expect(observed.pullRequests[1].checks.current).toBe(false);
+    expect(observed.acceptanceReady).toBe(false);
+    const canonical = await app.inject({
+      url: `${path(value.id)}/delivery-acceptance`,
+      headers: { cookie },
+    });
+    expect(canonical.json().status).toBe(observed.acceptance.status);
+    const canonicalDelivery = await app.inject({
+      url: `${path(value.id)}/delivery`,
+      headers: { cookie },
+    });
+    expect(canonicalDelivery.json().candidate).toEqual(observed.candidate);
+    await savePolicy();
+  });
+
+  it("counts delivery stories beyond the old twenty-item overview and preserves whole pages", async () => {
+    await savePolicy();
+    const prefix = `Queue batch ${randomUUID()}`;
+    const ids: string[] = [];
+    for (let index = 0; index < 23; index++) {
+      const value = await delivery();
+      ids.push(value.id);
+      await db
+        .update(stories)
+        .set({ title: `${prefix} ${index}` })
+        .where(eq(stories.id, value.id));
+    }
+    const seen: string[] = [];
+    for (const offset of [0, 10, 20]) {
+      const response = await app.inject({
+        url: `/v1/projects/${projectId}/attention/stories?category=deliveries&q=${encodeURIComponent(prefix)}&offset=${offset}`,
+        headers: { cookie },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().total).toBe(23);
+      expect(response.json().counts.deliveries).toBe(23);
+      seen.push(...response.json().items.map((item: { storyId: string }) => item.storyId));
+    }
+    expect(new Set(seen)).toEqual(new Set(ids));
+    const deletedId = ids[0];
+    if (!deletedId) throw new Error("Missing test story");
+    await db.update(stories).set({ deletedAt: new Date() }).where(eq(stories.id, deletedId));
+    const response = await app.inject({
+      url: `/v1/projects/${projectId}/attention/stories?q=${encodeURIComponent(prefix)}`,
+      headers: { cookie },
+    });
+    expect(response.json().total).toBe(22);
   });
 });

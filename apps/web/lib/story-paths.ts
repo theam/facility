@@ -15,8 +15,9 @@ export function storyActivityPath(
   storyId: string,
   turnId: string,
   before?: number,
+  after?: number,
 ) {
-  return `${storyPath(projectId, storyId)}/turns/${encodeURIComponent(turnId)}/activity?limit=${STORY_PAGE_SIZE}${before === undefined ? "" : `&before=${before}`}`;
+  return `${storyPath(projectId, storyId)}/turns/${encodeURIComponent(turnId)}/activity?limit=${STORY_PAGE_SIZE}${before === undefined ? "" : `&before=${before}`}${after === undefined ? "" : `&after=${after}`}`;
 }
 export function storyTurnEventPath(
   projectId: string,

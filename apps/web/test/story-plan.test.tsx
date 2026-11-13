@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
-import type { PlanDecisionReview, StoryAgent, StoryPlan, StoryPlans } from "@facility/sdk";
+import type {
+  PlanDecisionReview,
+  StoryAgent,
+  StoryPlan,
+  StoryPlans,
+  StoryWorkflowStatus,
+} from "@facility/sdk";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanConfirmation } from "../components/story/plan-confirmation";
 import { StoryPlanPanel } from "../components/story/story-plan";
 import { PLAN_PROPOSAL_EVENT } from "../lib/story-plan-events";
+import type { PlanSelection } from "../lib/story-review-navigation";
+import { workflowFixture } from "./fixtures/workflow";
 
-const navigation = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 const at = "2026-10-21T10:00:00.000Z";
 const actor = { type: "user" as const, id: "person-a", name: "Ada" };
@@ -135,6 +143,14 @@ async function render(
   initial: StoryPlans | undefined = snapshot(),
   canWrite = true,
   catalog = agents,
+  defaults: {
+    defaultAgent?: string;
+    queuedAgents?: string[];
+    blockedReason?: string;
+    selection?: PlanSelection;
+    workflow?: StoryWorkflowStatus;
+    workflowError?: string;
+  } = {},
 ) {
   await act(async () =>
     root.render(
@@ -142,8 +158,13 @@ async function render(
         projectId="project-a"
         storyId="story-a"
         initial={initial}
+        selection={defaults.selection}
         agents={catalog}
-        defaultAgent="planner"
+        defaultAgent={defaults.defaultAgent ?? "planner"}
+        queuedAgents={defaults.queuedAgents}
+        blockedReason={defaults.blockedReason}
+        workflow={defaults.workflow}
+        workflowError={defaults.workflowError}
         canWrite={canWrite}
         userId="person-a"
       />,
@@ -181,17 +202,388 @@ function writes() {
 function body(index = 0) {
   return JSON.parse(writes()[index]?.[1]?.body ?? "{}");
 }
-async function proposeSource(markdown: string, storyId = "story-a") {
+async function proposeSource(markdown: string, storyId = "story-a", agentName?: string) {
   await act(async () => {
     window.dispatchEvent(
       new CustomEvent(PLAN_PROPOSAL_EVENT, {
-        detail: { projectId: "project-a", storyId, messageId: "msg-a", markdown },
+        detail: { projectId: "project-a", storyId, messageId: "msg-a", markdown, agentName },
       }),
     );
   });
 }
 
 describe("revision-bound plan UI", () => {
+  it("preserves an existing draft while reading a linked current plan", async () => {
+    const current = snapshot(3);
+    await render(current);
+    await click("Propose a revision");
+    await type("Unsent plan changes");
+    await render(current, true, agents, {
+      selection: { revision: 3, digest: current.plan?.digest, plan: current.plan ?? undefined },
+    });
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.textContent).toContain("Approve plan r3");
+    expect(container.textContent).not.toContain("Save plan proposal");
+    await render(current);
+    expect(textarea().value).toBe("Unsent plan changes");
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+  it("opens the editor on the current plan when proposing a revision from a linked plan", async () => {
+    const current = snapshot(1);
+    if (!current.plan) throw Error("Missing plan");
+    const selection = { revision: 1, digest: current.plan.digest, plan: current.plan };
+    await render(current, true, agents, { selection });
+    const link = [...container.querySelectorAll("a")].find(
+      (node) => node.textContent === "Propose a revision",
+    );
+    expect(link?.getAttribute("href")).toBe(
+      "/projects/project-a/stories/story-a?edit=plan#story-plan",
+    );
+    expect(container.querySelector("textarea")).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    window.history.replaceState({}, "", "/projects/project-a/stories/story-a?edit=plan#story-plan");
+    await render(current);
+    expect(textarea().value).toBe(current.plan.markdown);
+    expect(navigation.replace).toHaveBeenCalledWith(
+      "/projects/project-a/stories/story-a#story-plan",
+      {
+        scroll: false,
+      },
+    );
+    window.history.replaceState({}, "", "/");
+  });
+  it("does not open the editor for a reader or without the explicit marker", async () => {
+    window.history.replaceState({}, "", "/projects/project-a/stories/story-a?edit=plan");
+    await render(snapshot(1), false);
+    expect(container.querySelector("textarea")).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    window.history.replaceState({}, "", "/projects/project-a/stories/story-a");
+    await render(snapshot(1));
+    expect(container.querySelector("textarea")).toBeNull();
+    window.history.replaceState({}, "", "/");
+  });
+  it("keeps the linked original visible after live refresh advances the current plan", async () => {
+    const original = plan(1);
+    original.markdown = "Original linked scope";
+    original.source = { messageId: "msg-source", turnId: "turn-author", role: "agent" };
+    const selection = { revision: 1, digest: original.digest, plan: original };
+    await render({ ...snapshot(1), plan: original }, true, agents, { selection });
+    expect(button("Approve plan r1")).toBeDefined();
+    expect(container.querySelector('a[href*="messageId=msg-source"]')?.textContent).toBe(
+      "Open original message and author",
+    );
+    const newer = snapshot(2);
+    if (newer.plan) newer.plan.markdown = "New unreviewed scope";
+    await render(newer, true, agents, { selection });
+    expect(container.textContent).toContain("Original linked scope");
+    expect(container.textContent).not.toContain("New unreviewed scope");
+    expect(container.textContent).toContain("The current plan is r2");
+    expect(container.textContent).not.toContain("Approve plan r3");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+  it("does not replace a missing or mismatched linked revision with the current one", async () => {
+    await render(snapshot(2), true, agents, {
+      selection: { revision: 1, error: "Linked plan not found" },
+    });
+    expect(container.textContent).toContain("Linked plan not found");
+    expect(container.textContent).not.toContain("Implement and verify the change");
+    expect(container.textContent).not.toContain("Approve plan r3");
+    await render(snapshot(2), true, agents, {
+      selection: { revision: 2, digest: "e".repeat(64), plan: plan(2) },
+    });
+    expect(container.textContent).not.toContain("Approve plan r3");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("confirms a requested approval in place with the review's single-use proof", async () => {
+    const detail = review();
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (request?.method === "POST" && target.endsWith("/confirm"))
+        return Response.json(
+          { error: { message: "Stop after recording the call" } },
+          { status: 409 },
+        );
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`)) return Response.json(detail);
+      return Response.json(workflowFixture());
+    });
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    expect(navigation.push).not.toHaveBeenCalled();
+    const inline = container.querySelector('[aria-label="Confirm plan decision"]');
+    expect(inline?.textContent).toContain("Confirm plan approval");
+    expect(inline?.textContent).toContain("Requested decision");
+    expect(inline?.querySelector('[aria-label="Execution scope"]')).toBeNull();
+    const confirm = [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === "Approve plan r1",
+    );
+    await act(async () => confirm?.click());
+    const call = fetch.mock.calls.find(([url]) => String(url).endsWith("/confirm"));
+    expect(JSON.parse(call?.[1]?.body as string)).toMatchObject({ proof: detail.proof });
+    expect(container.textContent).toContain("Stop after recording the call");
+    await click("Cancel");
+    expect(container.querySelector('[aria-label="Confirm plan decision"]')).toBeNull();
+    expect(button("Approve plan r1")).toBeDefined();
+  });
+  it("offers approval again for an approved plan only when recovery needs it", async () => {
+    const approved = snapshot(1);
+    approved.state = { ...approved.state, status: "approved", decisionRevision: 1 };
+    const approveButton = () =>
+      [...container.querySelectorAll("button")].find(
+        (node) => node.textContent === "Approve plan r1",
+      );
+    await render(approved);
+    expect(approveButton()).toBeUndefined();
+    expect(button("Request changes")).toBeDefined();
+    await render(approved, true, agents, { blockedReason: "A current approval is required." });
+    expect(approveButton()).toBeDefined();
+  });
+  it("closes the inline confirmation once recorded and leaves the outcome to the plan", async () => {
+    const detail = review();
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (request?.method === "POST" && target.endsWith("/confirm")) return Response.json({});
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`)) return Response.json(detail);
+      return Response.json(workflowFixture());
+    });
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    const inline = container.querySelector('[aria-label="Confirm plan decision"]');
+    const confirm = [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === "Approve plan r1",
+    );
+    await act(async () => confirm?.click());
+    expect(container.querySelector('[aria-label="Confirm plan decision"]')).toBeNull();
+    expect(container.textContent).toContain("Approval recorded for plan r1.");
+    expect(container.textContent).not.toContain("Decision recorded");
+    expect(navigation.refresh).toHaveBeenCalled();
+  });
+  function inlineDecisions(detail = review()) {
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (request?.method === "POST" && target.endsWith("/confirm")) return Response.json({});
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`)) return Response.json(detail);
+      return Response.json(workflowFixture());
+    });
+  }
+  function inlineButton(text: string) {
+    const inline = container.querySelector('[aria-label="Confirm plan decision"]');
+    return [...(inline?.querySelectorAll("button") ?? [])].find(
+      (node) => node.textContent === text,
+    );
+  }
+  it("holds an inline approval to the confirmation page's scope checks and follows the story's workflow", async () => {
+    inlineDecisions();
+    await render(snapshot(1), true, agents, { workflowError: "Workflow read failed" });
+    await click("Approve plan r1");
+    expect(inlineButton("Approve plan r1")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Reload the execution scope before approving");
+    const blocked: StoryWorkflowStatus = {
+      ...workflowFixture(),
+      blockedReason: "Review the plan before recovery",
+      executionScope: {
+        observedAt: at,
+        planRevision: 1,
+        repositories: { matches: false, connectedCount: 2, missing: ["example/api"], removed: [] },
+        queuedWork: [],
+        hasMore: false,
+      },
+    };
+    // The story refreshes its workflow while the review stays open.
+    await render(snapshot(1), true, agents, { workflow: blocked });
+    expect(inlineButton("Approve plan r1")?.disabled).toBe(true);
+    expect(container.textContent).toContain("cancel the held turn in the conversation");
+    await render(snapshot(1), true, agents, { workflow: workflowFixture() });
+    expect(inlineButton("Approve plan r1")?.disabled).toBe(false);
+  });
+  it("asks for a fresh decision request after a review is cancelled instead of replaying it", async () => {
+    inlineDecisions();
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    await click("Cancel");
+    await click("Approve plan r1");
+    const requests = writes().filter(([url]) => String(url).endsWith("/plan/decisions"));
+    expect(requests).toHaveLength(2);
+    expect(body(1).idempotency_key).not.toBe(body(0).idempotency_key);
+  });
+  it("moves focus into the inline review and back to the decision or its outcome", async () => {
+    inlineDecisions();
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    const heading = container.querySelector('[aria-label="Confirm plan decision"] h3');
+    expect(heading?.textContent).toBe("Confirm plan approval");
+    expect(document.activeElement).toBe(heading);
+    expect(container.querySelector('[aria-label="Confirm plan decision"] h1')).toBeNull();
+    await click("Cancel");
+    expect(document.activeElement).toBe(button("Approve plan r1"));
+    await click("Approve plan r1");
+    await act(async () => inlineButton("Approve plan r1")?.click());
+    expect(document.activeElement?.textContent).toBe("Approval recorded for plan r1.");
+  });
+  it("stays busy until the requested review is read, so a reload cannot drop it", async () => {
+    const detail = review();
+    let release: (value: Response) => void = () => undefined;
+    fetch.mockImplementation(async (url: string, request?: { method?: string }) => {
+      const target = String(url);
+      if (request?.method === "POST" && target.endsWith("/plan/decisions"))
+        return Response.json({ request: { id: detail.request.id } });
+      if (target.endsWith(`/plan/decisions/${detail.request.id}`))
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      return Response.json(snapshot(1));
+    });
+    await render(snapshot(1));
+    await click("Approve plan r1");
+    expect(button("Loading…").disabled).toBe(true);
+    await act(async () => release(Response.json(detail)));
+    expect(container.querySelector('[aria-label="Confirm plan decision"]')).not.toBeNull();
+    expect(button("Reload plan").disabled).toBe(false);
+  });
+  it("requests only the exact linked current revision with the existing decision boundary", async () => {
+    fetch.mockResolvedValue(Response.json({ request: { id: "exact-request" } }));
+    const selected = plan(3);
+    await render({ ...snapshot(3), plan: selected }, true, agents, {
+      selection: { revision: 3, digest: selected.digest, plan: selected },
+    });
+    await click("Approve plan r3");
+    expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      expected_revision: 3,
+      expected_decision_revision: 0,
+      intent: "approve",
+    });
+    expect(navigation.push).toHaveBeenCalledWith(
+      "/projects/project-a/stories/story-a/plan/decisions/exact-request",
+    );
+  });
+  it("starts a source proposal with its author and all connected repositories, not the UI default", async () => {
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: [
+          { repository: "example/app", primary: true },
+          { repository: "example/api", primary: false },
+        ],
+        hasMore: false,
+        nextOffset: null,
+      }),
+    );
+    await render(snapshot(0), true, agents, { defaultAgent: "builder" });
+    await proposeSource("Plan from the planner", "story-a", "planner");
+    await click("Use this message");
+    expect(writes()).toHaveLength(0);
+    fetch.mockResolvedValueOnce(Response.json(snapshot()));
+    await click("Save plan proposal");
+    expect(body()).toMatchObject({
+      agents: ["planner"],
+      repositories: ["example/app", "example/api"],
+      source_message_id: "msg-a",
+    });
+  });
+
+  it("uses the held work's agents for a new recovery proposal and warns about an incompatible plan", async () => {
+    await render(snapshot(0), true, agents, {
+      defaultAgent: "builder",
+      queuedAgents: ["planner", "planner"],
+      blockedReason: "A current approval is required.",
+    });
+    await click("Propose a plan");
+    await type("Resume the held task");
+    fetch.mockResolvedValueOnce(Response.json(snapshot()));
+    await click("Save plan proposal");
+    expect(body().agents).toEqual(["planner"]);
+    expect(container.textContent).toContain("Pending approval");
+    expect(container.textContent).toContain("A current approval is required.");
+    expect(container.textContent).toContain("Waiting agents: planner");
+    await render(snapshot(), true, agents, { queuedAgents: ["builder"] });
+    expect(container.textContent).toContain("This plan does not include queued work for builder");
+  });
+
+  it("requires a deliberate agent choice when a source has no recorded agent or an unavailable one", async () => {
+    await render(snapshot(0));
+    await proposeSource("Source without a recorded turn");
+    await click("Use this message");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    await proposeSource("Former reviewer", "story-a", "removed-reviewer");
+    await click("Use this message");
+    expect(container.textContent).toContain("removed-reviewer · unavailable");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("preserves the chosen scope on revision, search, and subsequent list reads", async () => {
+    await render(snapshot());
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: [
+          { repository: "example/app", primary: true },
+          { repository: "example/api", primary: false },
+        ],
+        hasMore: false,
+        nextOffset: null,
+      }),
+    );
+    await click("Propose a revision");
+    await click("Find repositories");
+    fetch.mockResolvedValueOnce(Response.json(snapshot(2)));
+    await click("Save plan proposal");
+    expect(body().repositories).toEqual(["example/app"]);
+    expect(body().agents).toEqual(["planner"]);
+  });
+
+  it("retries the initial repository read before selecting the full scope", async () => {
+    fetch.mockResolvedValueOnce(
+      Response.json({ error: { message: "Repository read unavailable" } }, { status: 503 }),
+    );
+    await render(snapshot(0));
+    await click("Propose a plan");
+    await type("Recover the task");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: [
+          { repository: "example/app", primary: true },
+          { repository: "example/api", primary: false },
+        ],
+        hasMore: false,
+        nextOffset: null,
+      }),
+    );
+    await click("Retry repository list");
+    fetch.mockResolvedValueOnce(Response.json(snapshot()));
+    await click("Save plan proposal");
+    expect(body().repositories).toEqual(["example/app", "example/api"]);
+  });
+
+  it("does not silently select a truncated repository scope", async () => {
+    fetch.mockResolvedValueOnce(
+      Response.json({
+        items: Array.from({ length: 50 }, (_, index) => ({
+          repository: `example/repo-${index}`,
+          primary: index === 0,
+        })),
+        hasMore: true,
+        nextOffset: 50,
+      }),
+    );
+    await render(snapshot(0));
+    await click("Propose a plan");
+    await type("Scope requires review");
+    expect(button("Save plan proposal").disabled).toBe(true);
+    expect(container.textContent).toContain("No partial scope was selected automatically");
+    expect(writes()).toHaveLength(0);
+  });
+
   it("shows readable scope and receipt state without initiating requests or offering viewer mutations", async () => {
     await render(confirmed(), false);
     expect(container.textContent).toContain("Approved for this revision");
@@ -200,14 +592,14 @@ describe("revision-bound plan UI", () => {
     expect(container.textContent).toContain("approved on r1 by Ada");
     expect(
       [...container.querySelectorAll("button")].some((node) =>
-        /Propose|Review approval|Request changes/.test(node.textContent ?? ""),
+        /Propose|Approve plan r|Request changes/.test(node.textContent ?? ""),
       ),
     ).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("preserves a proposal after failure and retries with the same key and exact scope", async () => {
     await render(snapshot(0));
-    await click("Propose plan");
+    await click("Propose a plan");
     expect(document.activeElement).toBe(textarea());
     await type("  ## New plan\n\nPreserve this exact text.\n");
     fetch.mockResolvedValueOnce(
@@ -232,7 +624,7 @@ describe("revision-bound plan UI", () => {
   });
   it("requires an explicit action before replacing a draft with an exact source message", async () => {
     await render();
-    await click("Propose revision");
+    await click("Propose a revision");
     await type("Keep my draft");
     await proposeSource("Other story", "story-other");
     expect(container.textContent).not.toContain("Replace your current draft");
@@ -256,7 +648,7 @@ describe("revision-bound plan UI", () => {
     await click("Save plan proposal");
     expect(body()).not.toHaveProperty("source_message_id");
     expect(writes()).toHaveLength(1);
-    expect(container.textContent).toContain("Awaiting a decision on this revision");
+    expect(container.textContent).toContain("Pending approval");
   });
 
   it("keeps exact source attribution when an existing proposal is saved without editing", async () => {
@@ -264,7 +656,7 @@ describe("revision-bound plan UI", () => {
     if (!value.plan) throw Error("Missing fixture plan");
     value.plan.source = { messageId: "msg-original", turnId: null, role: "agent" };
     await render(value);
-    await click("Propose revision");
+    await click("Propose a revision");
     fetch.mockResolvedValueOnce(Response.json(value));
     await click("Save plan proposal");
     expect(body()).toMatchObject({
@@ -276,7 +668,7 @@ describe("revision-bound plan UI", () => {
   });
   it("preserves a draft across live refresh and requires an explicit new base after a conflict", async () => {
     await render();
-    await click("Propose revision");
+    await click("Propose a revision");
     await type("My scoped change");
     await render({ ...snapshot(2), generatedAt: "2026-10-21T10:01:00.000Z" });
     expect(textarea().value).toBe("My scoped change");
@@ -292,7 +684,7 @@ describe("revision-bound plan UI", () => {
       true,
       agents.filter((agent) => agent.name === "builder"),
     );
-    await click("Propose revision");
+    await click("Propose a revision");
     expect(button("Save plan proposal").disabled).toBe(true);
     const labels = [...container.querySelectorAll("label")];
     await act(async () =>
@@ -329,7 +721,7 @@ describe("revision-bound plan UI", () => {
       expected_decision_revision: 0,
     });
     fetch.mockResolvedValueOnce(Response.json({ request: { id: "dreq-next" } }));
-    await click("Review approval");
+    await click("Approve plan r1");
     expect(body(2).intent).toBe("approve");
     expect(body(2)).not.toHaveProperty("reason");
     expect(navigation.push).toHaveBeenCalledWith(
@@ -495,12 +887,126 @@ describe("interactive confirmation UI", () => {
       ),
     ).toBe(false);
   });
+  it("refreshes scope with the review and clears old recovery claims if the scope read fails", async () => {
+    const value = review();
+    const scope: StoryWorkflowStatus["executionScope"] = {
+      observedAt: at,
+      planRevision: 1,
+      repositories: { matches: true, connectedCount: 1, missing: [], removed: [] },
+      queuedWork: [],
+      hasMore: false,
+    };
+    await act(async () =>
+      root.render(
+        <PlanConfirmation
+          initial={value}
+          initialWorkflow={{ ...workflowFixture(), executionScope: scope }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("covers all 1 current repository");
+    fetch.mockImplementation(async (url: string) =>
+      url.endsWith("/workflow")
+        ? Response.json({ error: { message: "Scope temporarily unavailable" } }, { status: 503 })
+        : Response.json(value),
+    );
+    await click("Reload review");
+    expect(container.textContent).toContain("Execution scope unavailable");
+    expect(button("Approve plan r1").disabled).toBe(true);
+    expect(container.textContent).not.toContain("covers all 1 current repository");
+    fetch.mockImplementation(async (url: string) =>
+      url.endsWith("/workflow")
+        ? Response.json({
+            executionScope: {
+              ...scope,
+              repositories: {
+                matches: false,
+                connectedCount: 2,
+                missing: ["example/api"],
+                removed: [],
+              },
+            },
+          })
+        : Response.json(value),
+    );
+    await click("Reload review");
+    expect(container.textContent).not.toContain("Execution scope unavailable");
+    expect(container.textContent).toContain("Not covered: example/api");
+    expect(fetch.mock.calls.every(([, options]) => options.method === "GET")).toBe(true);
+  });
+  it("prevents an approval with mismatched recovery scope while preserving the request-changes route", async () => {
+    const value = review();
+    const scope: StoryWorkflowStatus["executionScope"] = {
+      observedAt: at,
+      planRevision: 1,
+      repositories: { matches: false, connectedCount: 2, missing: ["example/api"], removed: [] },
+      queuedWork: [],
+      hasMore: false,
+    };
+    await act(async () =>
+      root.render(
+        <PlanConfirmation
+          key="approval"
+          initial={value}
+          initialWorkflow={{
+            ...workflowFixture(),
+            executionScope: scope,
+            blockedReason: "Review the plan before recovery",
+          }}
+        />,
+      ),
+    );
+    expect(button("Approve plan r1").disabled).toBe(true);
+    expect(container.textContent).toContain(
+      "Correct the scope or agent configuration, or cancel the held turn",
+    );
+    await click("Approve plan r1");
+    expect(fetch).not.toHaveBeenCalled();
+    value.request.intent = "reject";
+    await act(async () =>
+      root.render(
+        <PlanConfirmation
+          key="changes"
+          initial={value}
+          initialWorkflow={{
+            ...workflowFixture(),
+            executionScope: scope,
+            blockedReason: "Review the plan before recovery",
+          }}
+        />,
+      ),
+    );
+    expect(button("Confirm changes to plan r1").disabled).toBe(false);
+  });
+  it("retains an approval receipt when observing execution fails and retries only the read", async () => {
+    fetch.mockImplementation(async (_url: string, options: RequestInit) =>
+      options.method === "POST"
+        ? Response.json(confirmed())
+        : Response.json(
+            { error: { message: "Temporary execution read failure" } },
+            { status: 503 },
+          ),
+    );
+    await renderReview();
+    await click("Approve plan r1");
+    expect(container.textContent).toContain("Approval recorded for plan r1 by Ada");
+    expect(container.textContent).toContain("Approval remains recorded");
+    expect(container.querySelector('a[href$="#conversation"]')).not.toBeNull();
+    const original = [...container.querySelectorAll("details")].find(
+      (item) => item.querySelector("summary")?.textContent === "Plan r1 and original scope",
+    );
+    expect(original?.open).toBe(false);
+    fetch.mockImplementation(async () => Response.json(workflowFixture()));
+    await click("Check execution again");
+    expect(container.textContent).toContain("Preparing or running");
+    expect(fetch.mock.calls.filter(([, options]) => options.method === "POST")).toHaveLength(1);
+  });
 });
 
 describe("newer plan drafts during save", () => {
   it("keeps a newer unsaved draft when an older proposal finishes saving", async () => {
     await render(snapshot(0));
-    await click("Propose plan");
+    await click("Propose a plan");
     await type("Submitted text A");
     let release: (value: Response) => void = () => {
       throw Error("No pending request");

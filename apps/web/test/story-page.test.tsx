@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { StoryWorkflowStatus } from "@facility/sdk";
+import type { StoryPlan, StoryWorkflowStatus } from "@facility/sdk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import StoryPage from "../app/(app)/projects/[projectId]/stories/[number]/page";
@@ -9,6 +9,9 @@ import type {
   StoryMessage,
   WorkspaceStoryBundle,
 } from "../lib/api";
+import { reviewCycleFixture } from "./fixtures/review-cycle";
+import { snapshot as completionSnapshot } from "./fixtures/story-completion";
+import { snapshot as deliverySnapshot } from "./fixtures/story-delivery";
 
 const mocks = vi.hoisted(() => ({
   bundle: {} as WorkspaceStoryBundle,
@@ -21,6 +24,10 @@ const mocks = vi.hoisted(() => ({
   } as StoryConversationPage,
   permissions: [] as string[],
   calls: [] as string[],
+  linkedPlan: null as StoryPlan | null,
+  requestedMessage: undefined as string | undefined,
+  workflowError: false,
+  reviewCycle: undefined as StoryWorkflowStatus["reviewCycle"],
 }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh() {} }),
@@ -39,43 +46,65 @@ vi.mock("../lib/api", async () => {
     ...actual,
     api: {
       workspaceStory: async () => record("story", { ok: true, data: mocks.bundle }),
-      workspaceStoryConversation: async () =>
-        record("conversation", { ok: true, data: mocks.conversation }),
+      workspaceStoryConversation: async (
+        _project: string,
+        _story: string,
+        _before?: number,
+        messageId?: string,
+      ) => {
+        mocks.requestedMessage = messageId;
+        return record("conversation", { ok: true, data: mocks.conversation });
+      },
+      storyPlanRevision: async (_project: string, _story: string, revision: number) =>
+        record(
+          `plan:${revision}`,
+          mocks.linkedPlan
+            ? { ok: true, data: mocks.linkedPlan }
+            : { ok: false, status: 404, message: "Plan not found" },
+        ),
       workspaceStoryEnvironment: async () =>
         record("environment", { ok: true, data: mocks.environment }),
       workspaceStoryConsultations: async () =>
         record("consultations", { ok: true, data: { items: [], total: 0, limit: 10, offset: 0 } }),
       storyWorkflow: async () =>
-        record("workflow", {
-          ok: true,
-          data: {
-            schemaVersion: 1,
-            orgId: "org",
-            projectId: "project",
-            storyId: "story",
-            policy: {
-              revision: 0,
-              policy: {
-                planApprovalAgents: [],
-                holdAfterFailure: false,
-                requireDeliveryAcceptance: false,
-                requirePreviewForAcceptance: false,
-              },
-            },
-            plan: { revision: 0, decisionRevision: 0, status: "none" },
-            queuedAgents: [],
-            blockedReason: null,
-            acceptance: {
-              schemaVersion: 1,
-              orgId: "org",
-              projectId: "project",
-              storyId: "story",
-              required: false,
-              status: "missing",
-              receipt: null,
-            },
-          } satisfies StoryWorkflowStatus,
-        }),
+        mocks.workflowError
+          ? record("workflow", {
+              ok: false,
+              status: 503,
+              offline: false,
+              message: "Workflow read failed",
+            })
+          : record("workflow", {
+              ok: true,
+              data: {
+                schemaVersion: 1,
+                orgId: "org",
+                projectId: "project",
+                storyId: "story",
+                policy: {
+                  revision: 0,
+                  policy: {
+                    planApprovalAgents: [],
+                    holdAfterFailure: false,
+                    requireDeliveryAcceptance: false,
+                    requirePreviewForAcceptance: false,
+                  },
+                },
+                plan: { revision: 0, decisionRevision: 0, status: "none" },
+                queuedAgents: [],
+                blockedReason: null,
+                reviewCycle: mocks.reviewCycle,
+                acceptance: {
+                  schemaVersion: 1,
+                  orgId: "org",
+                  projectId: "project",
+                  storyId: "story",
+                  required: false,
+                  status: "missing",
+                  receipt: null,
+                },
+              } satisfies StoryWorkflowStatus,
+            }),
       workspaceStoryActivity: async () => record("activity", unexpected),
       workspaceStoryTimeline: async () => record("timeline", unexpected),
       workspaceStoryTurnEvent: async () => record("event", unexpected),
@@ -111,6 +140,8 @@ function message(seq: number, overrides: Partial<StoryMessage>): StoryMessage {
 
 function setUp(permissions: string[] = []) {
   mocks.calls.length = 0;
+  mocks.workflowError = false;
+  mocks.reviewCycle = undefined;
   mocks.permissions = permissions;
   mocks.bundle = {
     story: {
@@ -269,9 +300,12 @@ function setUp(permissions: string[] = []) {
   };
 }
 
-async function render() {
+async function render(search: Record<string, string | string[]> = {}) {
   const html = renderToStaticMarkup(
-    await StoryPage({ params: Promise.resolve({ projectId: "project", number: "story" }) }),
+    await StoryPage({
+      params: Promise.resolve({ projectId: "project", number: "story" }),
+      searchParams: Promise.resolve(search),
+    }),
   );
   const root = document.createElement("div");
   root.innerHTML = html;
@@ -279,6 +313,55 @@ async function render() {
 }
 
 describe("story overview integration", () => {
+  it.each([
+    "correction",
+    "human_review",
+    "decision_required",
+  ] as const)("leads with the recorded review in %s while keeping conversation adjacent", async (phase) => {
+    setUp(["*"]);
+    mocks.reviewCycle = reviewCycleFixture();
+    mocks.reviewCycle.phase = phase;
+    const { root } = await render();
+    const workflow = root.querySelector('[data-story-section="workflow"]');
+    expect(workflow?.hasAttribute("hidden")).toBe(false);
+    expect(workflow?.getAttribute("aria-label")).toBe(
+      phase === "correction" ? null : "Your decision",
+    );
+    expect(root.querySelector('[aria-label="Recorded delivery review"]')).not.toBeNull();
+    const conversation = root.querySelector("#conversation");
+    expect(conversation).not.toBeNull();
+    expect(
+      (workflow?.compareDocumentPosition(conversation as Node) ?? 0) &
+        (phase === "correction"
+          ? Node.DOCUMENT_POSITION_PRECEDING
+          : Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBeTruthy();
+  });
+  it("loads only the requested plan revision and rejects mismatched or missing source reads", async () => {
+    setUp(["projects:write"]);
+    mocks.linkedPlan = {
+      revision: 2,
+      digest: "b".repeat(64),
+      markdown: "Exact older scope",
+      repositories: [],
+      agents: [],
+      proposedBy: { type: "user", id: "user", name: "Person" },
+      proposedAt: at,
+      source: null,
+    };
+    const selected = await render({ planRevision: "2", planDigest: "b".repeat(64) });
+    expect(mocks.calls).toContain("plan:2");
+    expect(selected.root.textContent).toContain("Exact older scope");
+    const mismatched = await render({ planRevision: "2", planDigest: "a".repeat(64) });
+    expect(mismatched.root.textContent).toContain("does not match this link");
+    expect(mismatched.root.textContent).not.toContain("Exact older scope");
+    const absent = await render({ messageId: "msg-not-in-response" });
+    expect(mocks.requestedMessage).toBe("msg-not-in-response");
+    expect(absent.root.textContent).toContain("requested source message was not returned");
+    expect(absent.root.querySelector('ol[aria-label="Conversation, newest first"]')).toBeNull();
+    mocks.linkedPlan = null;
+    expect((await render({ planRevision: "3" })).root.textContent).toContain("Plan not found");
+  });
   it("shows actionable delivery notices without recasting them as agent errors", async () => {
     setUp(["*"]);
     mocks.bundle.attention = [
@@ -303,6 +386,46 @@ describe("story overview integration", () => {
     );
     expect(attention?.textContent).not.toContain("The run reported an error");
     expect(attention?.textContent).not.toContain("Technical details");
+  });
+
+  it.each([
+    ["review_cycle_ready", "The pinned candidate is ready for human review."],
+    ["review_cycle_decision", "The permissions change exceeds the approved plan."],
+    ["review_cycle_decision", "The review limit is exhausted; a human decision is required."],
+  ])("presents %s as a human review with its recorded reason", async (kind, detail) => {
+    setUp(["*"]);
+    mocks.bundle.attention = [
+      {
+        id: "review-notice",
+        turnId: "turn_done",
+        kind,
+        title: "Review needs a human decision",
+        detail,
+        status: "open",
+        resolution: null,
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: at,
+      },
+    ];
+    const { root } = await render();
+    const attention = root.querySelector('[aria-label="Needs your attention"]');
+    if (!attention) throw new Error("Missing human review notice");
+    expect(attention?.textContent).toContain(detail);
+    expect(attention?.textContent).not.toContain("The run reported an error");
+    expect(attention?.textContent).not.toContain("Technical details");
+    expect([...attention.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "Dismiss",
+    ]);
+    expect(attention?.querySelector('a[href="#story-section-workflow"]')?.textContent).toBe(
+      "Review the candidate and findings",
+    );
+    expect(attention?.textContent).toContain("does not approve changes or restart work");
+    mocks.permissions = ["projects:read"];
+    const reader = (await render()).root.querySelector('[aria-label="Needs your attention"]');
+    expect(reader?.textContent).toContain(detail);
+    expect(reader?.querySelector("button")).toBeNull();
+    expect(reader?.querySelector('a[href="#story-section-workflow"]')).not.toBeNull();
   });
 
   it("renders state, the final response first, participants, and folded evidence for a reader", async () => {
@@ -360,20 +483,103 @@ describe("story overview integration", () => {
     for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')) {
       expect(root.querySelector(link.getAttribute("href") ?? "")).not.toBeNull();
     }
-    expect(root.textContent).not.toContain("suspend compute");
-    expect(root.textContent).not.toContain("send a task");
-    expect(root.textContent).not.toContain("open app");
+    expect(root.textContent).not.toContain("Suspend compute");
+    expect(root.textContent).not.toContain("Send a task");
+    expect(root.textContent).not.toContain("Ask without changes");
+    expect(root.textContent).not.toContain("Open app");
   });
 
   it("offers the everyday actions from the top for an executor", async () => {
     setUp(["workspaces:execute", "projects:write"]);
     const { root } = await render();
     const actions = root.querySelector('[aria-label="Story actions"]');
-    expect(actions?.textContent).toContain("send a task");
-    expect(actions?.textContent).toContain("open app ↗");
-    expect(actions?.textContent).toContain("maintenance");
-    expect(actions?.textContent).not.toContain("cancel turn");
+    expect(actions?.textContent).toContain("Send a task");
+    expect(actions?.textContent).toContain("Ask without changes");
+    expect(actions?.textContent).not.toContain("Open app");
+    // "Ask without changes" is the only link there: it reveals the consultation section
+    // on every click, even when the address already points to it.
+    expect(
+      [...(actions?.querySelectorAll("a") ?? [])].map((link) => link.getAttribute("href")),
+    ).toEqual(["#story-section-consultation"]);
+    expect(root.querySelector("#story-section-consultation")).not.toBeNull();
+    const conversation = root.querySelector("#conversation");
+    const list = conversation?.querySelector('ol[aria-label="Conversation, newest first"]');
+    expect(
+      ((actions as Node).compareDocumentPosition(list as Node) ?? 0) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const environment = root.querySelector('[aria-label="Environment actions"]');
+    expect(environment?.closest("header")).not.toBeNull();
+    expect(environment?.textContent).toContain("Open app ↗");
+    expect(environment?.textContent).toContain("More");
+    expect(actions?.textContent).not.toContain("Cancel turn");
     expect(root.querySelector("#story-composer")).toBeNull();
-    expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("send a task");
+    expect(root.querySelector('button[aria-expanded="false"]')?.textContent).toBe("Send a task");
+  });
+
+  it("keeps the plan and conversation together before delivery and environment controls", async () => {
+    setUp(["workspaces:execute", "projects:write"]);
+    const { root } = await render();
+    const plan = root.querySelector("#story-plan");
+    const conversation = root.querySelector("#conversation");
+    if (!conversation || !plan) throw new Error("Missing conversation or plan");
+    expect(plan.closest("[data-story-section]")?.hasAttribute("hidden")).toBe(false);
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Plan");
+    expect(
+      conversation.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(conversation?.querySelector('[aria-label="Story actions"]')).not.toBeNull();
+    expect(
+      conversation.compareDocumentPosition(
+        root.querySelector('[aria-label="Workflow status"]') as Node,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      conversation.compareDocumentPosition(root.querySelector("#workspace") as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+  it("puts the delivery before conversation and folds future controls without changing permissions", async () => {
+    setUp(["projects:read"]);
+    mocks.bundle.delivery = deliverySnapshot();
+    const { root } = await render();
+    const lead = root.querySelector('[aria-label="Your decision"]');
+    expect(lead?.getAttribute("data-story-section")).toBe("delivery");
+    expect(lead?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
+    for (const key of ["plan", "environment"])
+      expect(root.querySelector(`[data-story-section="${key}"]`)?.hasAttribute("hidden")).toBe(
+        true,
+      );
+    expect(root.textContent).not.toContain("Edit PR set");
+    expect(root.textContent).not.toContain("Request delivery acceptance");
+  });
+
+  it("brings post-merge source and retention into focus without offering completion for an unlinked story", async () => {
+    setUp(["projects:write", "github:write"]);
+    mocks.bundle.delivery = deliverySnapshot();
+    mocks.bundle.completion = completionSnapshot();
+    mocks.bundle.completion.source = { kind: "other", state: "unavailable", url: null };
+    const { root } = await render();
+    const lead = root.querySelector('[aria-label="Your decision"]');
+    expect(lead?.getAttribute("data-story-section")).toBe("completion");
+    expect(lead?.nextElementSibling?.querySelector("#conversation")).not.toBeNull();
+    expect(lead?.textContent).toContain("No source issue linked");
+    expect(root.textContent).not.toContain("Complete source issue");
+    expect(root.textContent).toContain("storage retained");
+  });
+
+  it("keeps completion unavailable and workflow failures explicit on an archived legacy snapshot", async () => {
+    setUp(["projects:read"]);
+    mocks.bundle.story.status = "archived";
+    mocks.bundle.story.archivedAt = at;
+    mocks.workflowError = true;
+    const { root } = await render();
+    expect(root.querySelector('[aria-label="Your decision"]')).toBeNull();
+    const lead = root.querySelector('[data-story-section="completion"]');
+    expect(lead?.hasAttribute("hidden")).toBe(false);
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Delivery");
+    expect(lead?.textContent).toContain("Completion and retention details are unavailable");
+    expect(root.textContent).toContain("Workflow read failed");
+    expect(root.textContent).not.toContain("Delivery completed");
   });
 });

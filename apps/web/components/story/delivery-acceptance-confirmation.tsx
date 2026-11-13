@@ -7,7 +7,23 @@ import { useEffect, useRef, useState } from "react";
 import { clientApi } from "@/lib/client-api";
 import { formatTime } from "@/lib/story-presentation";
 
-export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryAcceptanceReview }) {
+/**
+ * Confirms one delivery acceptance request with its single-use proof. The same
+ * component serves the confirmation page that request links (including MCP
+ * requests) open, and the inline step on the story (`compact`), where
+ * `onConfirmed` hands the result back so the story shows the receipt once.
+ */
+export function DeliveryAcceptanceConfirmation({
+  initial,
+  compact = false,
+  onClose,
+  onConfirmed,
+}: {
+  initial: DeliveryAcceptanceReview;
+  compact?: boolean;
+  onClose?: () => void;
+  onConfirmed?: () => void;
+}) {
   const [review, setReview] = useState(initial),
     [receipt, setReceipt] = useState(initial.receipt);
   const [busy, setBusy] = useState(false),
@@ -15,7 +31,8 @@ export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryA
   const [expired, setExpired] = useState(() => Date.parse(initial.request.expiresAt) <= Date.now());
   const working = useRef(false),
     retry = useRef<{ proof: string; key: string } | null>(null),
-    sequence = useRef(0);
+    sequence = useRef(0),
+    heading = useRef<HTMLHeadingElement>(null);
   const storyPath = `/projects/${encodeURIComponent(initial.projectId)}/stories/${encodeURIComponent(initial.storyId)}`;
   const path = `/v1/projects/${encodeURIComponent(initial.projectId)}/workspace-stories/${encodeURIComponent(initial.storyId)}/delivery-acceptance/${encodeURIComponent(initial.request.id)}`;
   useEffect(() => {
@@ -30,6 +47,11 @@ export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryA
     },
     [],
   );
+  // Opening in place replaces the button that was clicked; move focus to the review.
+  useEffect(() => {
+    if (compact) heading.current?.focus();
+  }, [compact]);
+  const Heading = compact ? "h3" : "h1";
   async function reload() {
     if (working.current) return;
     working.current = true;
@@ -73,6 +95,10 @@ export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryA
       setError(result.message);
       return;
     }
+    if (onConfirmed) {
+      onConfirmed();
+      return;
+    }
     setReceipt(result.data.receipt);
   }
   const pending = review.request.status === "pending" && !!review.proof && !expired && !receipt;
@@ -80,13 +106,21 @@ export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryA
   return (
     <section
       aria-label="Confirm delivery acceptance"
-      className="flex min-w-0 flex-col gap-5 border border-(--line) p-4 sm:p-6"
+      className={
+        compact
+          ? "flex min-w-0 flex-col gap-4 rounded-lg border border-(--human)/30 bg-[#fffaeb] p-4"
+          : "flex min-w-0 flex-col gap-5 rounded-lg border border-(--line) p-4 sm:p-6"
+      }
     >
       <header className="flex flex-col gap-2">
-        <Eyebrow>delivery acceptance</Eyebrow>
-        <h1 className="text-[24px] font-semibold">
+        {compact ? null : <Eyebrow>delivery acceptance</Eyebrow>}
+        <Heading
+          ref={heading}
+          tabIndex={-1}
+          className={compact ? "text-[15px] font-semibold" : "text-[24px] font-semibold"}
+        >
           {receipt ? "Acceptance recorded" : "Review this exact delivery"}
-        </h1>
+        </Heading>
         <p className="text-sm text-(--mut)">
           Confirm only after reviewing the required PR heads below
           {candidate.planRevision ? ` and plan r${candidate.planRevision}` : ""}. New heads or
@@ -163,12 +197,20 @@ export function DeliveryAcceptanceConfirmation({ initial }: { initial: DeliveryA
             {busy ? "Confirming…" : "Accept this exact delivery"}
           </Button>
         ) : null}
-        <Button disabled={busy} onClick={() => void reload()}>
-          Reload review
-        </Button>
-        <Link href={storyPath} className="text-sm underline">
-          Open current story
-        </Link>
+        {compact ? (
+          <Button size="sm" disabled={busy} onClick={onClose}>
+            {receipt ? "Done" : "Cancel"}
+          </Button>
+        ) : (
+          <>
+            <Button disabled={busy} onClick={() => void reload()}>
+              Reload review
+            </Button>
+            <Link href={storyPath} className="text-sm underline">
+              Open current story
+            </Link>
+          </>
+        )}
       </div>
     </section>
   );

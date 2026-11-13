@@ -46,7 +46,7 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
         </p>
       </header>
 
-      <section className="grid gap-px border border-(--line) bg-(--line) sm:grid-cols-2 xl:grid-cols-5">
+      <section className="rounded-lg grid gap-px border border-(--line) bg-(--line) sm:grid-cols-2 xl:grid-cols-5">
         <MetricCell label="cost · 30d" value={spend.amount} hint={spend.note} />
         <MetricCell
           label="tokens · 30d"
@@ -74,7 +74,7 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
 
       <section className="flex flex-col gap-4">
         <Eyebrow>delivery analytics · 30d</Eyebrow>
-        <div className="grid gap-px border border-(--line) bg-(--line) sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg grid gap-px border border-(--line) bg-(--line) sm:grid-cols-2 xl:grid-cols-4">
           <MetricCell
             label="merged pull requests"
             value={String(data.analytics.mergedPullRequests)}
@@ -142,7 +142,7 @@ export default async function InsightsPage({ params }: { params: Promise<{ proje
 
       <section className="flex flex-col gap-4">
         <Eyebrow>recent control activity</Eyebrow>
-        <div className="border border-(--line)">
+        <div className="rounded-lg border border-(--line)">
           {data.recentAudit.length === 0 ? (
             <p className="p-5 text-[12px] text-(--dim)">No recorded project changes.</p>
           ) : (
@@ -191,7 +191,7 @@ function UsageTable({
   return (
     <section className="flex flex-col gap-3">
       <Eyebrow>{title}</Eyebrow>
-      <div className="border border-(--line)">
+      <div className="rounded-lg border border-(--line)">
         {rows.length === 0 ? (
           <p className="p-5 text-[12px] text-(--dim)">No measured usage.</p>
         ) : (

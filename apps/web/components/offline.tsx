@@ -3,7 +3,7 @@ import { Eyebrow } from "@facility/ui";
 /** Honest failure state — never fake data when the control plane is down. */
 export function Offline({ detail }: { detail?: string }) {
   return (
-    <div className="flex flex-col items-start gap-4 border border-(--line) bg-(--bg-subtle) p-8">
+    <div className="flex flex-col items-start gap-4 rounded-xl border border-(--line) bg-(--bg-subtle) p-8 shadow-(--shadow-card)">
       <Eyebrow>control plane unreachable</Eyebrow>
       <p className="max-w-md text-sm leading-relaxed text-(--mut)">
         The web app is up, but the Facility API did not answer
@@ -19,8 +19,8 @@ export function Offline({ detail }: { detail?: string }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <div className="border border-(--bad)/40 bg-(--bg-subtle) p-6">
-      <p className="font-mono text-[12px] text-(--bad)">{message}</p>
+    <div role="alert" className="rounded-xl border border-(--bad)/25 bg-[#fef3f2] px-5 py-4">
+      <p className="break-words text-sm text-(--bad)">{message}</p>
     </div>
   );
 }

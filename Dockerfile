@@ -8,8 +8,9 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
 # Keep a digest-pinned base while still making a reviewed Debian security
 # refresh invalidate BuildKit's cached package layer.
-ARG DEBIAN_SECURITY_REFRESH=20261105
+ARG DEBIAN_SECURITY_REFRESH=20261112
 ARG APT_MIN_VERSION=3.0.4
+ARG ZLIB_MIN_VERSION=1:1.3.dfsg+really1.3.1-1+deb13u1
 # The slim base has Node's bundled trust roots but not the system CA package.
 # Bootstrap HTTPS with those roots; apt then installs the maintained OS bundle.
 RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recursive:true}); fs.writeFileSync('/etc/ssl/certs/ca-certificates.crt', require('node:tls').rootCertificates.join('\\n'))" \
@@ -19,6 +20,7 @@ RUN node -e "const fs = require('node:fs'); fs.mkdirSync('/etc/ssl/certs', {recu
   && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt upgrade -y \
   && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge "$APT_MIN_VERSION" \
   && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg7.0)" ge "$APT_MIN_VERSION" \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' zlib1g)" ge "$ZLIB_MIN_VERSION" \
   && apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends ca-certificates curl \
   && curl --fail --silent --show-error --location --retry 3 \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
