@@ -42,27 +42,12 @@ const GithubPull = z.object({
   draft: z.literal(false),
   head: PullRef,
   base: PullRef,
-  changed_files: z.number().int().min(1).max(100),
+  changed_files: z.number().int().nonnegative(),
   labels: z
     .array(z.object({ name: z.string() }))
     .max(100)
     .optional(),
 });
-const ComparedFile = z.object({
-  filename: z.string().min(1).max(500),
-  previous_filename: z.string().min(1).max(500).optional(),
-  status: z.string(),
-  additions: z.number().int().nonnegative(),
-  deletions: z.number().int().nonnegative(),
-  patch: z.string().max(40_000),
-});
-const GithubCompare = z.object({
-  base_commit: z.object({ sha }),
-  merge_base_commit: z.object({ sha }),
-  status: z.enum(["ahead", "diverged"]),
-  files: z.array(ComparedFile).max(100),
-});
-
 export class ReviewCycleSource {
   readonly files: GithubConsultationSources;
 
@@ -180,14 +165,18 @@ export class ReviewCycleSource {
       pull_number: pull.number,
       request: { signal, timeout: 10_000 },
     };
-    const existing = (
-      await client.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
-        ...args,
-        per_page: 100,
-      })
-    ).data as Array<{ body?: string | null; html_url?: string }>;
-    const found = existing.find((review) => review.body?.includes(marker));
-    if (found) return found.html_url ?? pull.url;
+    for (let page = 1; page <= 30; page++) {
+      const existing = (
+        await client.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+          ...args,
+          per_page: 100,
+          page,
+        })
+      ).data as Array<{ body?: string | null; html_url?: string }>;
+      const found = existing.find((review) => review.body?.includes(marker));
+      if (found) return found.html_url ?? pull.url;
+      if (existing.length < 100) break;
+    }
     const created = await client.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
       ...args,
       commit_id: pull.headSha,
@@ -195,28 +184,6 @@ export class ReviewCycleSource {
       body,
     });
     return (created.data as { html_url?: string }).html_url ?? pull.url;
-  }
-
-  async diff(scope: WorkflowScope, pull: Pull, signal: AbortSignal) {
-    const comparison = GithubCompare.safeParse(
-      await this.get(undefined, scope, pull, { from: pull.baseSha, to: pull.headSha }, signal),
-    );
-    if (
-      !comparison.success ||
-      comparison.data.base_commit.sha !== pull.baseSha ||
-      comparison.data.files.length !== pull.changedFiles ||
-      comparison.data.files.some((file) => {
-        const lines = file.patch.split("\n");
-        return (
-          lines.filter((line) => line.startsWith("+")).length !== file.additions ||
-          lines.filter((line) => line.startsWith("-")).length !== file.deletions
-        );
-      })
-    )
-      throw new ReviewCycleStop(
-        "GitHub could not supply the complete pinned diff for a required PR.",
-      );
-    return comparison.data;
   }
 
   async fastForward(
@@ -465,19 +432,22 @@ export async function captureReviewCandidate(
       reason: "Waiting for CI evidence on all required heads.",
     };
   for (const requiredCheck of cycle.data.policy.requiredChecks ?? []) {
-    const pull = observed.find(
+    const repositoryPulls = observed.filter(
       (item) => item.repository.toLowerCase() === requiredCheck.repository.toLowerCase(),
     );
-    if (!pull)
+    if (!repositoryPulls.length)
       throw new ReviewCycleStop("A configured required check is outside the registered PR set.");
-    const check = pull.checks.runs.find((run) => run.name === requiredCheck.name);
-    if (check?.status !== "completed")
+    // Every required PR in that repository must pass the check on its own head.
+    const checks = repositoryPulls.map((pull) =>
+      pull.checks.runs.find((run) => run.name === requiredCheck.name),
+    );
+    if (checks.some((check) => check?.status !== "completed"))
       return {
         state: "waiting",
         candidate,
         reason: "Waiting for the configured required checks on the exact heads.",
       };
-    if (check.conclusion !== "success")
+    if (checks.some((check) => check?.conclusion !== "success"))
       throw new ReviewCycleStop("A configured required check did not succeed on its exact head.");
   }
   if (requirePreview && !previewEvidence) {
@@ -529,10 +499,17 @@ async function assertSameCode(
     const before = baseline.pullRequests.find(
       (item) => reviewPullKey(item) === reviewPullKey(pull),
     );
+    // GitHub refreshes a PR's base commit when its head is pushed, so the authorized
+    // correction may arrive on a newer commit of the same base branch.
     if (
       !before ||
-      workflowDigest(codeIdentity({ ...pull, headSha: before.headSha })) !==
-        workflowDigest(codeIdentity(before))
+      workflowDigest(
+        codeIdentity({
+          ...pull,
+          headSha: before.headSha,
+          baseSha: correcting ? before.baseSha : pull.baseSha,
+        }),
+      ) !== workflowDigest(codeIdentity(before))
     )
       throw new ReviewCycleStop("A required PR or base commit changed during the cycle.");
     if (before.headSha === pull.headSha) continue;

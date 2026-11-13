@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import {
   agentManifests,
@@ -12,7 +13,7 @@ import {
   turns,
   turnUsage,
 } from "@facility/db";
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
 import type { AgentCatalogService } from "../agents/catalog.js";
 import { reconciliationPage } from "../reconciliation.js";
 import { underDeadline } from "./consultation-sources.js";
@@ -31,6 +32,7 @@ import {
   reviewCorrectionPrompt,
   reviewDecision,
   reviewTurnInstructions,
+  transientGithubFailure,
 } from "./review-cycle-rules.js";
 import {
   assertDeliveryUnchanged,
@@ -44,13 +46,18 @@ import {
   isReviewActive,
   latestReviewCycle,
   type ReviewCycle,
+  reviewCycleProgress,
   saveReviewCycle,
+  UNPUBLISHED_REVIEW_PATH,
 } from "./review-cycle-state.js";
 import type { StoryWorkspaceService } from "./service.js";
 import { planExecutionStillAuthorized, readWorkflowPlan } from "./workflow-execution.js";
 import { lockWorkflowStory, readWorkflowPolicy, type WorkflowScope } from "./workflow-policy.js";
 
 type Turn = typeof turns.$inferSelect;
+type Publication = NonNullable<ReviewCycle["data"]["status"]["reviews"][number]["publication"]>;
+/** Longer than one publication attempt takes: each report's PRs in parallel, 15 s each. */
+const PUBLICATION_CLAIM_MS = 120_000;
 
 export class StoryReviewCycles {
   constructor(
@@ -92,14 +99,34 @@ export class StoryReviewCycles {
   }
 
   /** Leaves each recorded report on its pull requests as a comment review, outside the
-   * story lock, then records where it went (or why GitHub refused it) on the report. */
+   * story lock, then records where it went (or why GitHub refused it) on the report. One
+   * reconciliation claims the work at a time, and temporary GitHub failures are retried by
+   * later reconciliations until the cycle deadline. */
   private async publishReviews(scope: WorkflowScope) {
-    const cycle = await latestReviewCycle(this.db, scope);
-    if (!cycle) return;
+    const pending = await latestReviewCycle(this.db, scope);
+    if (!pending?.data.status.reviews.some((report) => !report.publication)) return;
+    const claimed = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowStory(tx, scope);
+      const cycle = await latestReviewCycle(tx, scope);
+      if (!cycle?.data.status.reviews.some((report) => !report.publication)) return undefined;
+      const now = Date.now();
+      if (cycle.data.publishing && Date.parse(cycle.data.publishing.until) > now) return undefined;
+      const claim = new Date(now + PUBLICATION_CLAIM_MS).toISOString();
+      cycle.data.publishing = { until: claim };
+      await saveReviewCycle(tx, cycle);
+      return { cycle, claim };
+    });
+    if (!claimed) return;
+    const { cycle, claim } = claimed;
+    const expired = cycle.deadline <= new Date();
+    const outcomes = new Map<string, Publication>();
     for (const [index, report] of cycle.data.status.reviews.entries()) {
       if (report.publication) continue;
+      let retry = false;
       const publication = await Promise.all(
         report.candidate.pullRequests.map(async (pull) => {
+          const target = { repository: pull.repository, number: pull.number };
           try {
             const url = await this.source.publishReview(
               cycle,
@@ -108,36 +135,38 @@ export class StoryReviewCycles {
               reviewCommentMarker(report.turnId, pull),
               AbortSignal.timeout(15_000),
             );
-            return {
-              repository: pull.repository,
-              number: pull.number,
-              state: "published" as const,
-              url,
-            };
+            return { ...target, state: "published" as const, url };
           } catch (error) {
+            const temporary = !(error instanceof ReviewCycleStop) && transientGithubFailure(error);
+            if (temporary && !expired) retry = true;
             return {
-              repository: pull.repository,
-              number: pull.number,
+              ...target,
               state: "failed" as const,
               reason:
                 error instanceof ReviewCycleStop
                   ? error.message
-                  : "GitHub did not accept the review.",
+                  : temporary
+                    ? "GitHub was unavailable until the review cycle's time limit."
+                    : "GitHub did not accept the review.",
             };
           }
         }),
       );
-      await this.db.transaction(async (rawTx) => {
-        const tx = rawTx as unknown as FacilityDb;
-        await lockWorkflowStory(tx, scope);
-        const latest = await latestReviewCycle(tx, scope);
-        if (latest?.originTurnId !== cycle.originTurnId) return;
-        const stored = latest.data.status.reviews.find((item) => item.turnId === report.turnId);
-        if (!stored || stored.publication) return;
-        stored.publication = publication;
-        await saveReviewCycle(tx, latest);
-      });
+      // A marker per report and PR keeps the next attempt from posting twice.
+      if (!retry) outcomes.set(report.turnId, publication);
     }
+    await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowStory(tx, scope);
+      const latest = await latestReviewCycle(tx, scope);
+      if (latest?.originTurnId !== cycle.originTurnId) return;
+      for (const stored of latest.data.status.reviews) {
+        const publication = outcomes.get(stored.turnId);
+        if (publication && !stored.publication) stored.publication = publication;
+      }
+      if (latest.data.publishing?.until === claim) delete latest.data.publishing;
+      await saveReviewCycle(tx, latest);
+    });
   }
 
   private async reconcilePass(scope: WorkflowScope): Promise<"done" | "again"> {
@@ -188,11 +217,7 @@ export class StoryReviewCycles {
         if (!cycle || cycle.originTurnId !== current.originTurnId || !isReviewActive(cycle.phase))
           return { next: "done" };
         // The evidence above was read for the cycle as it was; if it moved, read again.
-        if (
-          JSON.stringify([cycle.phase, cycle.data]) !==
-          JSON.stringify([current.phase, current.data])
-        )
-          return { next: "again" };
+        if (reviewCycleProgress(cycle) !== reviewCycleProgress(current)) return { next: "again" };
         const turn = cycle.data.status.activeTurnId
           ? await this.turn(tx, scope, cycle.data.status.activeTurnId)
           : undefined;
@@ -350,7 +375,10 @@ export class StoryReviewCycles {
         .from(storyReviewCycles)
         .where(
           and(
-            inArray(storyReviewCycles.phase, [...ACTIVE_REVIEW_PHASES]),
+            or(
+              inArray(storyReviewCycles.phase, [...ACTIVE_REVIEW_PHASES]),
+              sql`jsonb_path_exists(${storyReviewCycles.data}, ${UNPUBLISHED_REVIEW_PATH}::jsonpath)`,
+            ),
             after ? gt(storyReviewCycles.originTurnId, after) : undefined,
           ),
         )
@@ -463,15 +491,21 @@ export class StoryReviewCycles {
     );
   }
 
-  async revalidateBeforeExecution(cycle: ReviewCycle, signal: AbortSignal) {
-    try {
-      await this.refresh(cycle);
-      const context = await this.authority(this.db, cycle);
-      await this.assertCandidate(this.db, cycle, context.requirePreview, signal);
-    } catch (error) {
-      // The turn is already claimed; evidence that disappears now stops the cycle.
-      if (error instanceof ReviewEvidenceUnavailable) throw new ReviewCycleStop(error.message);
-      throw error;
+  async revalidateBeforeExecution(cycle: ReviewCycle, signal: AbortSignal, retryDelayMs = 5_000) {
+    // The turn is already claimed: a temporary GitHub failure is retried briefly, and
+    // evidence that stays unavailable stops the cycle.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.refresh(cycle);
+        const context = await this.authority(this.db, cycle);
+        await this.assertCandidate(this.db, cycle, context.requirePreview, signal);
+        return;
+      } catch (error) {
+        if (!(error instanceof ReviewEvidenceUnavailable)) throw error;
+        if (attempt === 3 || Date.now() + retryDelayMs >= cycle.deadline.getTime())
+          throw new ReviewCycleStop(error.message);
+        await sleep(retryDelayMs * attempt, undefined, { signal });
+      }
     }
   }
 

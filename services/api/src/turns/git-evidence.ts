@@ -247,7 +247,8 @@ export class TurnGitEvidenceService {
   }
 
   /** Puts back every checkout a read-only turn changed and returns their paths. A
-   * commit, branch switch, edit or new file counts as a change. */
+   * commit, branch switch, edit or new file counts as a change. A checkout that already
+   * had uncommitted work is reported but left as it is, so that work is never discarded. */
   async restoreCheckouts(
     workspace: WorkspaceLocator,
     before: Record<string, CheckoutState>,
@@ -259,7 +260,7 @@ export class TurnGitEvidenceService {
     );
     for (const cwd of changed) {
       const state = before[cwd];
-      if (!state) continue;
+      if (!state || state.status) continue;
       if (state.branch)
         await this.git(workspace, cwd, environment, ["checkout", "--force", state.branch]);
       await this.git(workspace, cwd, environment, ["reset", "--hard", state.head]);

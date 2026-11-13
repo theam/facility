@@ -1,14 +1,16 @@
+import { parseAgentManifest } from "@facility/agents";
 import {
   type DeliveryReviewResult,
   type ReviewCandidate,
   type ReviewFinding,
   StoryWorkflowPolicySchema,
 } from "@facility/core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   blocksDelivery,
   deliveryHeadsFromOutput,
   readReviewResult,
+  reviewCatalogProblem,
   reviewDecision,
   reviewResultJson,
   transientGithubFailure,
@@ -189,5 +191,35 @@ describe("temporary GitHub failures", () => {
     expect(transientGithubFailure(failure(403))).toBe(false);
     expect(transientGithubFailure(failure(422))).toBe(false);
     expect(transientGithubFailure(new Error("unexpected shape"))).toBe(false);
+  });
+});
+
+describe("cycle Reviewer catalog", () => {
+  const manifest = (name: string, extra = "") =>
+    parseAgentManifest(
+      `---\nname: ${name}\ndescription: Test ${name}\nengine: claude_code\nmodel: claude-sonnet-5\ntriggers:\n  - type: manual\n  - type: ui\n  - type: mcp\n${extra}---\nReview.\n`,
+      `.agents/${name}.md`,
+    );
+  const policy = { builderAgent: "builder", reviewerAgent: "pr-reviewer", timeoutMinutes: 120 };
+  it("accepts the standard Reviewer, which keeps reviewing other authors' PRs on GitHub", () => {
+    const github =
+      "  - type: github\n    name: pull-request-updated\n    event: pull_request\n    actions: [opened, synchronize, ready_for_review, review_requested]\n";
+    expect(
+      reviewCatalogProblem(policy, [manifest("builder"), manifest("pr-reviewer", github)]),
+    ).toBeNull();
+  });
+  it("refuses a scheduled Reviewer and a legacy address-review agent", () => {
+    const schedule =
+      '  - type: schedule\n    name: weekly\n    cron: "0 9 * * 1"\n    timezone: UTC\n';
+    expect(
+      reviewCatalogProblem(policy, [manifest("builder"), manifest("pr-reviewer", schedule)]),
+    ).toMatch(/schedule/);
+    expect(
+      reviewCatalogProblem(policy, [
+        manifest("builder"),
+        manifest("pr-reviewer"),
+        manifest("address-review"),
+      ]),
+    ).toMatch(/address-review/);
   });
 });

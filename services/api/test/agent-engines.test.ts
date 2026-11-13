@@ -241,8 +241,17 @@ describe("native agent engines", () => {
     expect(claudeArgs).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
     const allowed = claudeArgs[claudeArgs.indexOf("--allowedTools") + 1] ?? "";
     expect(allowed.split(",")).toEqual(CLAUDE_READ_ONLY_TOOLS);
-    expect(allowed).not.toMatch(/Edit|Write|git push|git commit|gh api/);
-    expect(claudeArgs[claudeArgs.indexOf("--disallowedTools") + 1]).toBe("Edit,Write,NotebookEdit");
+    expect(allowed).not.toMatch(/Edit|Write|git push|git commit|git fetch|gh api/);
+    // git can write any file through --output even under an allowed read prefix.
+    expect(claudeArgs[claudeArgs.indexOf("--disallowedTools") + 1]).toBe(
+      "Edit,Write,NotebookEdit,Bash(git * --output*)",
+    );
+    // Settings, hooks and MCP servers written into the workspace cannot widen the turn.
+    expect(claudeArgs[claudeArgs.indexOf("--setting-sources") + 1]).toBe("");
+    expect(JSON.parse(claudeArgs[claudeArgs.indexOf("--settings") + 1] ?? "{}")).toEqual({
+      disableAllHooks: true,
+    });
+    expect(claudeArgs).toContain("--strict-mcp-config");
 
     const codexOutput = `${JSON.stringify({ type: "thread.started", thread_id: "codex-review" })}\n`;
     const codexRuntime = new EngineRuntime({

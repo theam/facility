@@ -193,7 +193,8 @@ set -e
 exit "$status"`;
 
 /** Tools a read-only Claude Code turn may use without approval. Print mode cannot ask,
- * so every other tool call (edits, writes, other commands, MCP writes) is denied. */
+ * so every other tool call (edits, writes, other commands, MCP writes) is denied. Nothing
+ * that fetches from a remote is allowed: `git fetch` can run commands and reach any host. */
 export const CLAUDE_READ_ONLY_TOOLS = [
   "Read",
   "Grep",
@@ -204,12 +205,14 @@ export const CLAUDE_READ_ONLY_TOOLS = [
   "Bash(git status:*)",
   "Bash(git rev-parse:*)",
   "Bash(git ls-files:*)",
-  "Bash(git fetch:*)",
   "Bash(gh pr view:*)",
   "Bash(gh pr diff:*)",
   "Bash(gh pr checks:*)",
   "Bash(gh run view:*)",
 ];
+
+/** Denied even though an allowed prefix matches: git can write any file with `--output`. */
+export const CLAUDE_READ_ONLY_DENIED = ["Edit", "Write", "NotebookEdit", "Bash(git * --output*)"];
 
 export class ClaudeCodeEngine extends CliAgentEngine {
   readonly name = "claude_code" as const;
@@ -228,7 +231,14 @@ export class ClaudeCodeEngine extends CliAgentEngine {
             "--allowedTools",
             CLAUDE_READ_ONLY_TOOLS.join(","),
             "--disallowedTools",
-            "Edit,Write,NotebookEdit",
+            CLAUDE_READ_ONLY_DENIED.join(","),
+            // Files the reviewed code or an earlier turn could write must not widen the
+            // turn: no user, project or local settings, hooks or MCP servers apply.
+            "--setting-sources",
+            "",
+            "--settings",
+            JSON.stringify({ disableAllHooks: true }),
+            "--strict-mcp-config",
           ]
         : ["--permission-mode", "bypassPermissions"]),
       "--model",

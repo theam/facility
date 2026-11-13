@@ -1309,7 +1309,11 @@ export class StoryWorkspaceService {
           .where(and(eq(turns.storyId, input.storyId), inArray(turns.state, ["queued", "running"])))
           .limit(1)
       )[0];
-      if (active || (await activePreviewWriter(tx, input)) || (await reviewHoldsQueue(tx, input)))
+      if (
+        active ||
+        (await activePreviewWriter(tx, input)) ||
+        (await reviewHoldsQueue(tx, input, input.actor.type === "user"))
+      )
         return undefined;
       const message = (
         await tx
