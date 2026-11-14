@@ -120,7 +120,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       const p = principal(request);
       const body = request.body as { email: string; roleId: string };
       // Cannot add a member into a role more privileged than the caller.
-      await assertRoleAssignable(db, p, body.roleId);
+      const role = await assertRoleAssignable(db, p, body.roleId);
       const existing = (
         await db.select().from(users).where(eq(users.email, body.email)).limit(1)
       )[0];
@@ -133,16 +133,34 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
             .returning()
         )[0];
       if (!user) throw new ApiError(500, "insert_failed", "Could not create user");
-      return (
-        await db
-          .insert(orgMembers)
-          .values({ id: newId("member"), orgId: p.orgId, userId: user.id, roleId: body.roleId })
-          .onConflictDoUpdate({
-            target: [orgMembers.orgId, orgMembers.userId],
-            set: { roleId: body.roleId, updatedAt: new Date() },
-          })
-          .returning()
-      )[0];
+      return db.transaction(async (tx) => {
+        // Adding an existing member replaces their role, so it keeps the same
+        // last-owner guarantee as PATCH /v1/members/:userId.
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${`facility:last-owner:${p.orgId}`}, 0))`,
+        );
+        const current = (
+          await tx
+            .select({ roleName: roles.name })
+            .from(orgMembers)
+            .innerJoin(roles, eq(orgMembers.roleId, roles.id))
+            .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, user.id)))
+            .limit(1)
+        )[0];
+        if (leavesOwnerRole(current?.roleName, role.name)) {
+          await assertAnotherOwner(tx, p.orgId, user.id);
+        }
+        return (
+          await tx
+            .insert(orgMembers)
+            .values({ id: newId("member"), orgId: p.orgId, userId: user.id, roleId: body.roleId })
+            .onConflictDoUpdate({
+              target: [orgMembers.orgId, orgMembers.userId],
+              set: { roleId: body.roleId, updatedAt: new Date() },
+            })
+            .returning()
+        )[0];
+      });
     },
   );
 
@@ -183,7 +201,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
             .limit(1)
         )[0];
         if (!nextRole) throw notFound("Role not found");
-        if (current.roleName === "owner" && nextRole.name !== "owner") {
+        if (leavesOwnerRole(current.roleName, nextRole.name)) {
           await assertAnotherOwner(tx, p.orgId, userId);
         }
         const row = (
@@ -221,7 +239,9 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
             .limit(1)
         )[0];
         if (!current) throw notFound("Member not found");
-        if (current.roleName === "owner") await assertAnotherOwner(tx, p.orgId, userId);
+        if (leavesOwnerRole(current.roleName, undefined)) {
+          await assertAnotherOwner(tx, p.orgId, userId);
+        }
         await tx
           .delete(orgMembers)
           .where(and(eq(orgMembers.orgId, p.orgId), eq(orgMembers.userId, userId)));
@@ -438,6 +458,11 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       return { ok: true };
     },
   );
+}
+
+/** A role change or removal that takes a member out of the owner role. */
+export function leavesOwnerRole(currentRole: string | undefined, nextRole: string | undefined) {
+  return currentRole === "owner" && nextRole !== "owner";
 }
 
 async function assertAnotherOwner(
