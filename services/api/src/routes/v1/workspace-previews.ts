@@ -206,9 +206,58 @@ function rewriteLocation(location: string, sessionId: string, upstream: URL) {
   return location;
 }
 
-function rewriteHtml(html: string, sessionId: string) {
-  const prefix = `/workspace-preview/${encodeURIComponent(sessionId)}/`;
-  return html.replace(/\b(href|src|action)=(['"])\/(?!\/)/gi, `$1=$2${prefix}`);
+export function rewriteHtml(html: string, sessionId: string) {
+  const prefix = `/workspace-preview/${encodeURIComponent(sessionId)}`;
+  const rewritten = html.replace(/\b(href|src|action)=(['"])\/(?!\/)/gi, `$1=$2${prefix}/`);
+  // ponytail: regex insertion like the attribute rewrite above; an HTML parser if pages defeat it.
+  const shim = `<script>${previewRequestShim(prefix)}</script>`;
+  const opening = /<head\b[^>]*>/i.exec(rewritten) ?? /^\s*<!doctype[^>]*>/i.exec(rewritten);
+  const at = opening ? opening.index + opening[0].length : 0;
+  return `${rewritten.slice(0, at)}${shim}${rewritten.slice(at)}`;
+}
+
+/**
+ * Scripts resolve root-relative request URLs against the preview origin root, outside the
+ * session prefix. Route same-host fetch, XHR, EventSource and WebSocket URLs back under it.
+ */
+function previewRequestShim(prefix: string) {
+  // JSON keeps the prefix a string literal; escaping `<` keeps it from closing the script tag.
+  const literal = JSON.stringify(prefix).replaceAll("<", "\\u003c");
+  return `(() => {
+const prefix = ${literal};
+const fix = (input) => {
+  try {
+    const url = new URL(String(input), location.href);
+    if (url.host !== location.host || url.pathname === prefix || url.pathname.startsWith(prefix + "/")) return input;
+    url.pathname = prefix + url.pathname;
+    return url.href;
+  } catch {
+    return input;
+  }
+};
+const nativeFetch = window.fetch;
+if (nativeFetch) window.fetch = function (input, init) {
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    const href = fix(input.url);
+    return nativeFetch.call(this, href === input.url ? input : new Request(href, input), init);
+  }
+  return nativeFetch.call(this, fix(input), init);
+};
+if (window.XMLHttpRequest) {
+  const open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    return open.call(this, method, fix(url), ...rest);
+  };
+}
+for (const name of ["WebSocket", "EventSource"]) {
+  const Native = window[name];
+  if (Native) window[name] = class extends Native {
+    constructor(url, ...rest) {
+      super(fix(url), ...rest);
+    }
+  };
+}
+})();`;
 }
 
 async function translate<T>(operation: () => Promise<T>): Promise<T> {
