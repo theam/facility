@@ -24,13 +24,26 @@ const ScheduleTrigger = z
   })
   .strict()
   .superRefine((trigger, context) => {
+    let expression: ReturnType<typeof cronParser.parseExpression>;
     try {
-      cronParser.parseExpression(trigger.cron, { tz: trigger.timezone });
+      expression = cronParser.parseExpression(trigger.cron, { tz: trigger.timezone });
     } catch (error) {
       context.addIssue({
         code: "custom",
         path: ["cron"],
         message: error instanceof Error ? error.message : "invalid cron expression or timezone",
+      });
+      return;
+    }
+    // cron-parser accepts an unknown zone while parsing and only fails once it computes an
+    // occurrence, which the scheduler does for every schedule of the project.
+    try {
+      expression.next();
+    } catch {
+      context.addIssue({
+        code: "custom",
+        path: ["timezone"],
+        message: "must be a valid IANA timezone",
       });
     }
   });
