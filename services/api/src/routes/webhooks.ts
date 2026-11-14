@@ -58,6 +58,28 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
             .where(eq(githubInstallations.installationId, installationNumber))
             .limit(1)
         )[0];
+        // Lifecycle events are the only signal GitHub sends when an installation is suspended,
+        // unsuspended or uninstalled, so they are applied even while the installation is
+        // suspended (otherwise `unsuspend` could never be received).
+        if (installation && eventType === "installation") {
+          const suspendedAt = installationSuspendedAt(payload, new Date());
+          if (suspendedAt !== undefined) {
+            await app.facilityDb
+              .update(githubInstallations)
+              .set({ suspendedAt })
+              .where(eq(githubInstallations.id, installation.id));
+            request.log.info(
+              {
+                delivery,
+                installationNumber,
+                action: payload.action,
+                suspended: suspendedAt !== null,
+              },
+              "github installation lifecycle applied",
+            );
+          }
+          return reply.status(202).send({ ok: true });
+        }
         if (!installation || installation.suspendedAt) {
           request.log.warn(
             { delivery, eventType, installationNumber },
@@ -122,6 +144,33 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
 export function githubWebhookRequiresWorker(eventType: string, payload: Record<string, unknown>) {
   if (eventType !== "workflow_run") return true;
   return payload.action === "completed";
+}
+
+/**
+ * The `suspended_at` an `installation` event leaves behind: a time (suspended or uninstalled),
+ * null (active again), or undefined (no change, e.g. `created` or `new_permissions_accepted`).
+ * For suspend/unsuspend, GitHub's own `installation.suspended_at` is used when present, so the
+ * stored time matches GitHub's record of the suspension.
+ */
+export function installationSuspendedAt(
+  payload: Record<string, unknown>,
+  now: Date,
+): Date | null | undefined {
+  const action = payload.action;
+  // Uninstalling keeps the row for audit history; every gate already treats it as suspended.
+  if (action === "deleted") return now;
+  if (action !== "suspend" && action !== "unsuspend") return undefined;
+  const installation = payload.installation;
+  const reported =
+    installation && typeof installation === "object" && !Array.isArray(installation)
+      ? (installation as Record<string, unknown>).suspended_at
+      : undefined;
+  if (reported === null) return null;
+  if (typeof reported === "string") {
+    const at = new Date(reported);
+    if (Number.isFinite(at.getTime())) return at;
+  }
+  return action === "suspend" ? now : null;
 }
 
 function githubInstallationNumber(payload: Record<string, unknown>) {
