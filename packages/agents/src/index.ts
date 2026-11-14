@@ -87,7 +87,25 @@ export const AgentManifestFrontmatterSchema = z
       })
       .strict()
       .default({}),
-    triggers: z.array(AgentTriggerSchema).min(1),
+    triggers: z
+      .array(AgentTriggerSchema)
+      .min(1)
+      .superRefine((triggers, context) => {
+        // The scheduler stores and claims one row per agent and schedule name. Two schedules
+        // sharing a name overwrite each other on every sync, so neither ever becomes due.
+        const scheduleNames = new Set<string>();
+        triggers.forEach((trigger, index) => {
+          if (trigger.type !== "schedule") return;
+          if (scheduleNames.has(trigger.name)) {
+            context.addIssue({
+              code: "custom",
+              path: [index, "name"],
+              message: `duplicate schedule trigger name ${trigger.name}`,
+            });
+          }
+          scheduleNames.add(trigger.name);
+        });
+      }),
   })
   .strict();
 
