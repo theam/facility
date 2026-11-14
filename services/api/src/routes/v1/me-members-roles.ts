@@ -3,6 +3,7 @@ import { apiKeys, orgMembers, orgs, roles, users } from "@facility/db";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { normalizedEmail } from "../../auth/identity-provider.js";
 import { ApiError, notFound } from "../../errors.js";
 import type { Principal } from "../../types.js";
 import {
@@ -121,15 +122,22 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       const body = request.body as { email: string; roleId: string };
       // Cannot add a member into a role more privileged than the caller.
       await assertRoleAssignable(db, p, body.roleId);
+      // GitHub login matches invitations case-insensitively, so one address must
+      // resolve to one user however its letters were typed.
+      const email = normalizedEmail(body.email);
       const existing = (
-        await db.select().from(users).where(eq(users.email, body.email)).limit(1)
+        await db
+          .select()
+          .from(users)
+          .where(eq(sql`lower(${users.email})`, email))
+          .limit(1)
       )[0];
       const user =
         existing ??
         (
           await db
             .insert(users)
-            .values({ id: newId("user"), email: body.email, status: "active" })
+            .values({ id: newId("user"), email, status: "active" })
             .returning()
         )[0];
       if (!user) throw new ApiError(500, "insert_failed", "Could not create user");

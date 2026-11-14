@@ -337,7 +337,7 @@ function requiredConfig(value: string | undefined): string {
   return value;
 }
 
-function normalizedEmail(value: { email: string } | string): string {
+export function normalizedEmail(value: { email: string } | string): string {
   return (typeof value === "string" ? value : value.email).trim().toLowerCase();
 }
 
