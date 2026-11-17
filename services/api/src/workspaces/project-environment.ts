@@ -14,6 +14,7 @@ import type {
 } from "../github/workspace-credentials.js";
 import { appendWorkspaceEvent } from "./events.js";
 import { isSafeGitBranch } from "./git-branch.js";
+import { recordRunning } from "./lifecycle.js";
 import { isPreviewBranch, PREVIEW_MANAGED_REF, previewBranchRefs } from "./preview-branch.js";
 import type {
   CreateWorkspace,
@@ -406,21 +407,15 @@ export class ProjectEnvironmentService {
       }
     }
     if (publish) {
-      await this.db
-        .update(workspaces)
-        .set({
-          endpoints,
-          state: "running",
-          error: null,
-          lastActivityAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(workspaces.orgId, preparedInput.orgId),
-            eq(workspaces.id, preparedInput.workspace.id),
-          ),
-        );
+      await recordRunning(
+        this.db,
+        {
+          orgId: preparedInput.orgId,
+          projectId: preparedInput.projectId,
+          workspaceId: preparedInput.workspace.id,
+        },
+        { endpoints },
+      );
       await appendWorkspaceEvent(
         this.db,
         preparedInput.workspace.id,

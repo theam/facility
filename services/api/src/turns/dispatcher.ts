@@ -41,6 +41,7 @@ import {
   lockWorkflowStory,
   readWorkflowPolicy,
 } from "../stories/workflow-policy.js";
+import { LIVE_WORKSPACE_STATES, recordRunning } from "../workspaces/lifecycle.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -218,16 +219,12 @@ export class TurnDispatcher {
         });
         // Persist wake intent before the provider call: its acknowledgement or
         // environment setup can fail after compute has already resumed.
-        await this.db
-          .update(workspaces)
-          .set({ state: "running", error: null, updatedAt: new Date() })
-          .where(
-            and(
-              eq(workspaces.orgId, input.orgId),
-              eq(workspaces.projectId, input.projectId),
-              eq(workspaces.id, workspace.id),
-            ),
-          );
+        await recordRunning(this.db, {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: story.id,
+          workspaceId: workspace.id,
+        });
         const recovered = await this.runtime.wake(workspaceLocator(workspace));
         credentialRenewal = new WorkspaceCredentialRenewal(
           this.runtime,
@@ -1083,7 +1080,7 @@ export class TurnDispatcher {
             eq(workspaces.orgId, orgId),
             eq(workspaces.projectId, projectId),
             eq(workspaces.storyId, storyId),
-            inArray(workspaces.state, ["creating", "running", "sleeping", "error"]),
+            inArray(workspaces.state, [...LIVE_WORKSPACE_STATES]),
           ),
         )
         .limit(1)

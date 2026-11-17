@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { authorizePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import { INPUT_FILE_MAX_BYTES, verifyInputBytes } from "../workspaces/input-files.js";
+import { recordRunning } from "../workspaces/lifecycle.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
 
 export type InputScope = { orgId: string; projectId: string; storyId: string };
@@ -523,10 +524,12 @@ export class StoryInputFileService {
     if (!active.computeRef || active.state !== "running")
       throw new ApiError(409, "workspace_unavailable", "Workspace is not running");
     if (state.state !== "running")
-      await db
-        .update(workspaces)
-        .set({ state: "running", lastActivityAt: new Date(), updatedAt: new Date() })
-        .where(eq(workspaces.id, workspace.id));
+      await recordRunning(db, {
+        orgId: workspace.orgId,
+        projectId: workspace.projectId,
+        storyId: workspace.storyId,
+        workspaceId: workspace.id,
+      });
     return { ...locator, expectedComputeRef: active.computeRef };
   }
 }

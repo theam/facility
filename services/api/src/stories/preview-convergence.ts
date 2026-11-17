@@ -19,6 +19,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-o
 import { authorizeWorkspaceExecution } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import { reconciliationPage } from "../reconciliation.js";
+import { recordRunning } from "../workspaces/lifecycle.js";
 import type { PreviewEndpoint } from "../workspaces/runtime.js";
 import { readStoryDelivery } from "./delivery.js";
 import { previewExecutionAuthorizer } from "./preview-execution.js";
@@ -946,25 +947,17 @@ export class StoryPreviewConvergenceService {
         input.setupChecksum &&
         input.endpoints
       ) {
-        const [published] = await tx
-          .update(workspaces)
-          .set({
-            endpoints: input.endpoints,
-            state: "running",
-            error: null,
-            setupChecksum: input.setupChecksum,
-            lastActivityAt: now,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(workspaces.orgId, scope.orgId),
-              eq(workspaces.projectId, scope.projectId),
-              eq(workspaces.storyId, scope.storyId),
-              eq(workspaces.id, input.workspaceId),
-            ),
-          )
-          .returning({ id: workspaces.id });
+        const published = await recordRunning(
+          tx,
+          {
+            orgId: scope.orgId,
+            projectId: scope.projectId,
+            storyId: scope.storyId,
+            workspaceId: input.workspaceId,
+          },
+          { endpoints: input.endpoints, setupChecksum: input.setupChecksum },
+          now,
+        );
         if (!published) throw new Error("preview_workspace_missing");
       }
       await tx

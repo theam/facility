@@ -31,6 +31,7 @@ import { ApiError } from "../errors.js";
 import type { GithubClientFactory } from "../github/client.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
 import { reconciliationPage } from "../reconciliation.js";
+import { isComputeSuspended } from "../workspaces/lifecycle.js";
 import { readStoryDelivery } from "./delivery.js";
 import { assertDeliveryAccepted } from "./delivery-acceptance.js";
 import type { StoryWorkspaceService } from "./service.js";
@@ -186,7 +187,7 @@ export class StoryCompletionService {
       notices: noticePolicyFromSettings(project.settings),
       retention: {
         workspaceState: workspace?.state ?? null,
-        computeSuspended: !workspace || ["sleeping", "destroyed"].includes(workspace.state),
+        computeSuspended: !workspace || isComputeSuspended(workspace.state),
         storageRetained: Boolean(workspace?.volumeRef) && workspace?.state !== "destroyed",
         archived: story.status === "archived" || story.archivedAt !== null,
         deleted: story.deletedAt !== null || workspace?.state === "destroyed",
