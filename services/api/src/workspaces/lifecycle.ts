@@ -151,3 +151,34 @@ async function write(
     .returning({ id: workspaces.id });
   return updated.length > 0;
 }
+
+/** The story whose workspace compute changed. */
+export type StoryScope = { orgId: string; projectId: string; storyId: string };
+
+/**
+ * Reacts when a story's workspace compute stops or starts, so state that
+ * depends on live compute (preview convergence) follows it immediately instead
+ * of waiting for a reconciliation pass. Callers notify after recording the new
+ * state. A caller that wakes compute inside a transaction may notify before it
+ * commits; an observer must not read that caller's uncommitted writes, and its
+ * own reconciliation of recorded state corrects a rollback.
+ */
+export type ComputeObserver = {
+  /**
+   * Compute was suspended. Rejects when work that depends on compute could not
+   * be stopped, so a caller that suspended on someone's request can report it;
+   * the observer's reconciliation retries the stop.
+   */
+  computeSuspended(scope: StoryScope): Promise<void>;
+  /**
+   * Compute is running again; safe to call when nothing was suspended. Never
+   * rejects: a missed resume only delays dependent work until reconciliation.
+   */
+  computeResumed(scope: StoryScope): Promise<void>;
+};
+
+/** For compositions with nothing that depends on live compute. */
+export const UNOBSERVED_COMPUTE: ComputeObserver = {
+  computeSuspended: async () => undefined,
+  computeResumed: async () => undefined,
+};

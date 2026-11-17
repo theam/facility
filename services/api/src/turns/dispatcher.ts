@@ -41,7 +41,12 @@ import {
   lockWorkflowStory,
   readWorkflowPolicy,
 } from "../stories/workflow-policy.js";
-import { LIVE_WORKSPACE_STATES, recordRunning } from "../workspaces/lifecycle.js";
+import {
+  type ComputeObserver,
+  LIVE_WORKSPACE_STATES,
+  recordRunning,
+  UNOBSERVED_COMPUTE,
+} from "../workspaces/lifecycle.js";
 import type {
   ProjectEnvironmentService,
   ProjectManifestSource,
@@ -71,6 +76,7 @@ export class TurnDispatcher {
     private readonly costs = new CostBudgetService(db),
     private readonly runtime?: WorkspaceRuntime,
     private readonly review?: { cycles: StoryReviewCycles },
+    private readonly compute: ComputeObserver = UNOBSERVED_COMPUTE,
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -226,6 +232,11 @@ export class TurnDispatcher {
           workspaceId: workspace.id,
         });
         const recovered = await this.runtime.wake(workspaceLocator(workspace));
+        await this.compute.computeResumed({
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: story.id,
+        });
         credentialRenewal = new WorkspaceCredentialRenewal(
           this.runtime,
           { ...workspaceLocator(workspace), expectedComputeRef: recovered.computeRef },

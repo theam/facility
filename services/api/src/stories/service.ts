@@ -32,6 +32,7 @@ import { readUsageJournal } from "../turns/usage-journal.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { shouldSuspendFailedWorkspace } from "../workspaces/failed-turn-policy.js";
 import {
+  type ComputeObserver,
   isComputeSuspended,
   LIVE_WORKSPACE_STATES,
   recordDeleting,
@@ -39,6 +40,7 @@ import {
   recordFailed,
   recordRunning,
   recordSleeping,
+  UNOBSERVED_COMPUTE,
   WORKSPACE_RECORD_STATES,
 } from "../workspaces/lifecycle.js";
 import type {
@@ -157,14 +159,7 @@ export class StoryWorkspaceService {
     private readonly runtime: WorkspaceRuntime,
     private readonly onTurnQueued: (turn: typeof turns.$inferSelect) => Promise<void> = async () =>
       undefined,
-    private readonly lifecycleHooks: {
-      onSuspend?: (scope: {
-        orgId: string;
-        projectId: string;
-        storyId: string;
-      }) => Promise<unknown>;
-      onResume?: (scope: { orgId: string; projectId: string; storyId: string }) => Promise<unknown>;
-    } = {},
+    private readonly compute: ComputeObserver = UNOBSERVED_COMPUTE,
   ) {}
 
   async start(input: StartStoryInput) {
@@ -330,6 +325,11 @@ export class StoryWorkspaceService {
         },
         { compute: { externalRef: handle.externalRef, volumeRef: handle.volumeRef } },
       );
+      await this.compute.computeResumed({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: aggregate.story.id,
+      });
       await appendWorkspaceEvent(this.db, aggregate.workspace.id, input.orgId, "workspace.ready", {
         provider: this.runtime.provider,
         computeRef: handle.computeRef,
@@ -1969,7 +1969,7 @@ export class StoryWorkspaceService {
       });
       return true;
     });
-    if (suspended) await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
+    if (suspended) await this.compute.computeSuspended({ orgId, projectId, storyId });
     return suspended;
   }
 
@@ -2018,7 +2018,7 @@ export class StoryWorkspaceService {
     await this.runtime.suspend(locatorFromRow(workspace));
     await recordSleeping(this.db, { orgId, projectId, storyId, workspaceId: workspace.id });
     await appendWorkspaceEvent(this.db, workspace.id, orgId, "workspace.suspended", {});
-    await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
+    await this.compute.computeSuspended({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -2049,7 +2049,7 @@ export class StoryWorkspaceService {
       await lockStory(tx, orgId, projectId, storyId);
       await this.restoreLocked(tx, orgId, projectId, storyId);
     });
-    await this.lifecycleHooks.onResume?.({ orgId, projectId, storyId });
+    await this.compute.computeResumed({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -2128,6 +2128,7 @@ export class StoryWorkspaceService {
 
   /** Reconcile only the exact mirrored source issue; never infer closure from a related PR. */
   async reconcileIssue(orgId: string, projectId: string, storyId: string) {
+    let suspended = false;
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, orgId, projectId, storyId);
@@ -2209,6 +2210,7 @@ export class StoryWorkspaceService {
         await appendWorkspaceEvent(tx, workspace.id, orgId, "workspace.suspended", {
           reason: "issue_closed",
         });
+        suspended = true;
       }
       if (story.status !== "done" || !story.completedAt)
         await tx
@@ -2219,6 +2221,19 @@ export class StoryWorkspaceService {
             updatedAt: new Date(),
           })
           .where(eq(stories.id, story.id));
+    });
+    if (!suspended) return;
+    // Nobody waits on issue reconciliation, and a failure must not stop the mirror
+    // pass for other stories; the observer's reconciliation retries the stop.
+    await this.compute.computeSuspended({ orgId, projectId, storyId }).catch((error) => {
+      console.warn(
+        JSON.stringify({
+          event: "workspace.suspend_notice_failed",
+          reason: "issue_closed",
+          storyId,
+          error: error instanceof Error ? error.message : "unknown_error",
+        }),
+      );
     });
   }
 

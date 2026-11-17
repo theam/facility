@@ -455,6 +455,40 @@ describe("story input file HTTP and domain boundaries", () => {
     expect(wake).toHaveBeenCalledOnce();
     wake.mockRestore();
   });
+  it("tells preview convergence that compute is back when an upload resumes it", async () => {
+    await prepare();
+    const [row] = await db.select().from(workspaces).where(eq(workspaces.storyId, scope.storyId));
+    if (!row?.externalRef) throw new Error("expected prepared workspace");
+    await runtime.suspend({
+      id: row.id,
+      externalRef: row.externalRef,
+      volumeRef: row.volumeRef,
+      image: "fixture",
+    });
+    const resume = vi.spyOn(domain.previewConvergence, "resume");
+    const allowed = await prepare({ resume: true });
+    expect((await upload(allowed)).statusCode).toBe(200);
+    expect(resume).toHaveBeenCalledWith(scope);
+    resume.mockRestore();
+  });
+  it("keeps a resumed upload successful when preview convergence cannot follow", async () => {
+    await prepare();
+    const [row] = await db.select().from(workspaces).where(eq(workspaces.storyId, scope.storyId));
+    if (!row?.externalRef) throw new Error("expected prepared workspace");
+    await runtime.suspend({
+      id: row.id,
+      externalRef: row.externalRef,
+      volumeRef: row.volumeRef,
+      image: "fixture",
+    });
+    const resume = vi
+      .spyOn(domain.previewConvergence, "resume")
+      .mockRejectedValue(new Error("queue unavailable"));
+    const allowed = await prepare({ resume: true });
+    expect((await upload(allowed)).statusCode).toBe(200);
+    expect(resume).toHaveBeenCalledOnce();
+    resume.mockRestore();
+  });
   it("consumes grants before buffering, rejects replay and bounds octet-stream bodies", async () => {
     const race = await prepare();
     const responses = await Promise.all([upload(race), upload(race)]);
