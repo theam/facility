@@ -103,6 +103,26 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
           .onConflictDoNothing()
           .returning({ id: githubWebhookEvents.id });
         if (inserted.length === 0) {
+          // The event row outlives a failed queue send, so replay its stored payload while unprocessed.
+          const existing = (
+            await app.facilityDb
+              .select({
+                eventType: githubWebhookEvents.eventType,
+                payload: githubWebhookEvents.payload,
+                processedAt: githubWebhookEvents.processedAt,
+              })
+              .from(githubWebhookEvents)
+              .where(eq(githubWebhookEvents.id, id))
+              .limit(1)
+          )[0];
+          if (!existing) {
+            throw new Error("GitHub webhook replay receipt could not be loaded");
+          }
+          if (
+            githubWebhookNeedsDispatch(existing.processedAt, existing.eventType, existing.payload)
+          ) {
+            await app.enqueue("github.webhook", { inboundEventId: id });
+          }
           return reply.status(202).send({ ok: true, replayed: true });
         }
         if (!githubWebhookRequiresWorker(eventType, payload)) {
@@ -122,6 +142,17 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
 export function githubWebhookRequiresWorker(eventType: string, payload: Record<string, unknown>) {
   if (eventType !== "workflow_run") return true;
   return payload.action === "completed";
+}
+
+export function githubWebhookNeedsDispatch(
+  processedAt: Date | null,
+  eventType: string,
+  payload: unknown,
+) {
+  if (processedAt !== null || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  return githubWebhookRequiresWorker(eventType, payload as Record<string, unknown>);
 }
 
 function githubInstallationNumber(payload: Record<string, unknown>) {
