@@ -13,6 +13,7 @@ import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { assertWorkspacePreviewAvailable } from "../origin-isolation.js";
 import type { AppConfig, Principal } from "../types.js";
+import { type ComputeObserver, UNOBSERVED_COMPUTE } from "./lifecycle.js";
 import {
   canViewPreview,
   equalPreviewSecret,
@@ -50,6 +51,7 @@ export class WorkspacePreviewService {
     private readonly credentials: GithubWorkspaceCredentialBroker,
     private readonly manifests: ProjectManifestSource,
     private readonly environment: ProjectEnvironmentService,
+    private readonly compute: ComputeObserver = UNOBSERVED_COMPUTE,
   ) {}
 
   async open(input: {
@@ -92,6 +94,11 @@ export class WorkspacePreviewService {
         .where(and(eq(stories.orgId, input.orgId), eq(stories.id, story.id)));
     }
     await this.runtime.wake(locator(workspace));
+    await this.compute.computeResumed({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: story.id,
+    });
     const environmentInput = {
       orgId: input.orgId,
       projectId: input.projectId,

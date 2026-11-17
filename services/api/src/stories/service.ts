@@ -31,6 +31,18 @@ import { appendTurnEvent } from "../turns/events.js";
 import { readUsageJournal } from "../turns/usage-journal.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { shouldSuspendFailedWorkspace } from "../workspaces/failed-turn-policy.js";
+import {
+  type ComputeObserver,
+  isComputeSuspended,
+  LIVE_WORKSPACE_STATES,
+  recordDeleting,
+  recordDestroyed,
+  recordFailed,
+  recordRunning,
+  recordSleeping,
+  UNOBSERVED_COMPUTE,
+  WORKSPACE_RECORD_STATES,
+} from "../workspaces/lifecycle.js";
 import type {
   CreateWorkspace,
   WorkspaceHandle,
@@ -147,14 +159,7 @@ export class StoryWorkspaceService {
     private readonly runtime: WorkspaceRuntime,
     private readonly onTurnQueued: (turn: typeof turns.$inferSelect) => Promise<void> = async () =>
       undefined,
-    private readonly lifecycleHooks: {
-      onSuspend?: (scope: {
-        orgId: string;
-        projectId: string;
-        storyId: string;
-      }) => Promise<unknown>;
-      onResume?: (scope: { orgId: string; projectId: string; storyId: string }) => Promise<unknown>;
-    } = {},
+    private readonly compute: ComputeObserver = UNOBSERVED_COMPUTE,
   ) {}
 
   async start(input: StartStoryInput) {
@@ -260,7 +265,7 @@ export class StoryWorkspaceService {
             and(
               eq(workspaces.orgId, input.orgId),
               eq(workspaces.storyId, story.id),
-              inArray(workspaces.state, ["creating", "running", "sleeping", "error"]),
+              inArray(workspaces.state, [...LIVE_WORKSPACE_STATES]),
             ),
           )
           .limit(1)
@@ -310,23 +315,21 @@ export class StoryWorkspaceService {
               ...workspaceInput(aggregate.workspace),
             })
           : await this.runtime.wake(locatorFromRow(aggregate.workspace));
-      await this.db
-        .update(workspaces)
-        .set({
-          externalRef: handle.externalRef,
-          volumeRef: handle.volumeRef,
-          state: "running",
-          error: null,
-          lastActivityAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(workspaces.orgId, input.orgId),
-            eq(workspaces.projectId, input.projectId),
-            eq(workspaces.id, aggregate.workspace.id),
-          ),
-        );
+      await recordRunning(
+        this.db,
+        {
+          orgId: input.orgId,
+          projectId: input.projectId,
+          storyId: aggregate.story.id,
+          workspaceId: aggregate.workspace.id,
+        },
+        { compute: { externalRef: handle.externalRef, volumeRef: handle.volumeRef } },
+      );
+      await this.compute.computeResumed({
+        orgId: input.orgId,
+        projectId: input.projectId,
+        storyId: aggregate.story.id,
+      });
       await appendWorkspaceEvent(this.db, aggregate.workspace.id, input.orgId, "workspace.ready", {
         provider: this.runtime.provider,
         computeRef: handle.computeRef,
@@ -1959,23 +1962,14 @@ export class StoryWorkspaceService {
         );
         return false;
       }
-      await tx
-        .update(workspaces)
-        .set({ state: "sleeping", updatedAt: new Date() })
-        .where(
-          and(
-            eq(workspaces.orgId, orgId),
-            eq(workspaces.projectId, projectId),
-            eq(workspaces.id, workspace.id),
-          ),
-        );
+      await recordSleeping(tx, { orgId, projectId, storyId, workspaceId: workspace.id });
       await appendWorkspaceEvent(tx, workspace.id, orgId, "workspace.suspended", {
         reason: "failed_turn",
         turnId: latest?.id,
       });
       return true;
     });
-    if (suspended) await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
+    if (suspended) await this.compute.computeSuspended({ orgId, projectId, storyId });
     return suspended;
   }
 
@@ -2022,12 +2016,9 @@ export class StoryWorkspaceService {
     const workspace = await this.activeWorkspace(orgId, projectId, storyId);
     if (!workspace || workspace.state === "destroyed") return this.get(orgId, projectId, storyId);
     await this.runtime.suspend(locatorFromRow(workspace));
-    await this.db
-      .update(workspaces)
-      .set({ state: "sleeping", updatedAt: new Date() })
-      .where(and(eq(workspaces.orgId, orgId), eq(workspaces.id, workspace.id)));
+    await recordSleeping(this.db, { orgId, projectId, storyId, workspaceId: workspace.id });
     await appendWorkspaceEvent(this.db, workspace.id, orgId, "workspace.suspended", {});
-    await this.lifecycleHooks.onSuspend?.({ orgId, projectId, storyId });
+    await this.compute.computeSuspended({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -2058,7 +2049,7 @@ export class StoryWorkspaceService {
       await lockStory(tx, orgId, projectId, storyId);
       await this.restoreLocked(tx, orgId, projectId, storyId);
     });
-    await this.lifecycleHooks.onResume?.({ orgId, projectId, storyId });
+    await this.compute.computeResumed({ orgId, projectId, storyId });
     return this.get(orgId, projectId, storyId);
   }
 
@@ -2081,15 +2072,11 @@ export class StoryWorkspaceService {
     if (workspace && workspace.state !== "destroyed") {
       const startedAt = performance.now();
       const handle = await this.runtime.wake(locatorFromRow(workspace));
-      await db
-        .update(workspaces)
-        .set({
-          state: "running",
-          externalRef: handle.externalRef,
-          volumeRef: handle.volumeRef,
-          updatedAt: new Date(),
-        })
-        .where(eq(workspaces.id, workspace.id));
+      await recordRunning(
+        db,
+        { orgId, projectId, storyId, workspaceId: workspace.id },
+        { compute: { externalRef: handle.externalRef, volumeRef: handle.volumeRef } },
+      );
       await appendWorkspaceEvent(db, workspace.id, orgId, "workspace.ready", {
         provider: this.runtime.provider,
         computeRef: handle.computeRef,
@@ -2141,6 +2128,7 @@ export class StoryWorkspaceService {
 
   /** Reconcile only the exact mirrored source issue; never infer closure from a related PR. */
   async reconcileIssue(orgId: string, projectId: string, storyId: string) {
+    let suspended = false;
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, orgId, projectId, storyId);
@@ -2215,16 +2203,14 @@ export class StoryWorkspaceService {
       // An issue event must not interrupt work already admitted. The next mirror pass retries.
       if (active || pending) return;
       const workspace = await this.activeWorkspace(orgId, projectId, storyId, false, tx);
-      if (workspace && !["sleeping", "destroyed"].includes(workspace.state)) {
+      if (workspace && !isComputeSuspended(workspace.state)) {
         // Keep the lock through suspension, as with failed-turn cleanup, so new work cannot race it.
         await this.runtime.suspend(locatorFromRow(workspace));
-        await tx
-          .update(workspaces)
-          .set({ state: "sleeping", updatedAt: new Date() })
-          .where(eq(workspaces.id, workspace.id));
+        await recordSleeping(tx, { orgId, projectId, storyId, workspaceId: workspace.id });
         await appendWorkspaceEvent(tx, workspace.id, orgId, "workspace.suspended", {
           reason: "issue_closed",
         });
+        suspended = true;
       }
       if (story.status !== "done" || !story.completedAt)
         await tx
@@ -2235,6 +2221,19 @@ export class StoryWorkspaceService {
             updatedAt: new Date(),
           })
           .where(eq(stories.id, story.id));
+    });
+    if (!suspended) return;
+    // Nobody waits on issue reconciliation, and a failure must not stop the mirror
+    // pass for other stories; the observer's reconciliation retries the stop.
+    await this.compute.computeSuspended({ orgId, projectId, storyId }).catch((error) => {
+      console.warn(
+        JSON.stringify({
+          event: "workspace.suspend_notice_failed",
+          reason: "issue_closed",
+          storyId,
+          error: error instanceof Error ? error.message : "unknown_error",
+        }),
+      );
     });
   }
 
@@ -2297,13 +2296,16 @@ export class StoryWorkspaceService {
     if (!workspace || workspace.state === "destroyed") {
       return this.get(input.orgId, input.projectId, input.storyId);
     }
+    const workspaceRef = {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      storyId: input.storyId,
+      workspaceId: workspace.id,
+    };
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
-      await tx
-        .update(workspaces)
-        .set({ state: "deleting", updatedAt: new Date() })
-        .where(and(eq(workspaces.orgId, input.orgId), eq(workspaces.id, workspace.id)));
+      await recordDeleting(tx, workspaceRef);
       await tx
         .update(previewSessions)
         .set({ revokedAt: new Date(), updatedAt: new Date() })
@@ -2333,10 +2335,7 @@ export class StoryWorkspaceService {
             eq(storyInputFiles.workspaceId, workspace.id),
           ),
         );
-      await tx
-        .update(workspaces)
-        .set({ state: "destroyed", destroyedAt: now, updatedAt: now })
-        .where(and(eq(workspaces.orgId, input.orgId), eq(workspaces.id, workspace.id)));
+      await recordDestroyed(tx, workspaceRef, now);
       await tx
         .update(stories)
         .set({ status: "archived", deletedAt: now, archivedAt: now, updatedAt: now })
@@ -2357,9 +2356,9 @@ export class StoryWorkspaceService {
     db: FacilityDb = this.db,
   ) {
     await scopedStory(db, orgId, projectId, storyId);
-    const states = includeDeleting
-      ? ["creating", "running", "sleeping", "error", "deleting", "destroyed"]
-      : ["creating", "running", "sleeping", "error"];
+    const states: readonly string[] = includeDeleting
+      ? WORKSPACE_RECORD_STATES
+      : LIVE_WORKSPACE_STATES;
     return (
       await db
         .select()
@@ -2386,10 +2385,11 @@ export class StoryWorkspaceService {
     const detail = error instanceof Error ? error.message : String(error);
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
-      await tx
-        .update(workspaces)
-        .set({ state: "error", error: detail, updatedAt: new Date() })
-        .where(and(eq(workspaces.orgId, input.orgId), eq(workspaces.id, workspaceId)));
+      await recordFailed(
+        tx,
+        { orgId: input.orgId, projectId: input.projectId, storyId, workspaceId },
+        detail,
+      );
       await tx
         .update(stories)
         .set({ status: "attention", updatedAt: new Date() })

@@ -44,6 +44,7 @@ import { TurnGitEvidenceService } from "../src/turns/git-evidence.js";
 import { LiveTurnEvents } from "../src/turns/live-events.js";
 import { recoverInterruptedTurns, recoverQueuedTurns } from "../src/worker.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import type { ComputeObserver, StoryScope } from "../src/workspaces/lifecycle.js";
 import {
   ProjectEnvironmentService,
   type ProjectManifestSource,
@@ -275,6 +276,13 @@ environment:
 
   let storiesService: StoryWorkspaceService;
   let dispatcher: TurnDispatcher;
+  const resumedCompute: StoryScope[] = [];
+  const computeObserver: ComputeObserver = {
+    computeSuspended: async () => undefined,
+    computeResumed: async (scope) => {
+      resumedCompute.push(scope);
+    },
+  };
 
   beforeAll(async () => {
     await migrate(databaseUrl);
@@ -362,6 +370,8 @@ environment:
       new TurnGitEvidenceService(db, runtime),
       undefined,
       runtime,
+      undefined,
+      computeObserver,
     );
   });
 
@@ -477,6 +487,39 @@ environment:
     expect(
       await runtime.read(firstRequest.workspace, `repos/${owner}/${repository}/agent-work`),
     ).toBe("turn-1turn-2");
+  });
+
+  it("tells the compute observer when a turn wakes sleeping compute", async () => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "github",
+      externalId: `issue-wake-${suffix}`,
+      title: "Wake for a follow-up",
+      agent: builder,
+      message: "Do the first part",
+      messageDedupeKey: `wake-start-${suffix}`,
+      actor: { type: "user", id: "user_test" },
+      workspace: { image: "facility-runner:test", ports: [{ service: "app", port: 3000 }] },
+    });
+    if (!started.queued.turn) throw new Error("expected initial queued turn");
+    await dispatcher.dispatch({ orgId, projectId, turnId: started.queued.turn.id });
+    await storiesService.suspend(orgId, projectId, started.story.id);
+    resumedCompute.length = 0;
+
+    const followUp = await storiesService.queueMessage({
+      orgId,
+      projectId,
+      storyId: started.story.id,
+      body: "Do the second part",
+      dedupeKey: `wake-follow-up-${suffix}`,
+      agent: builder,
+      actor: { type: "user", id: "user_test" },
+      trigger: { type: "manual" },
+    });
+    if (!followUp.turn) throw new Error("expected follow-up turn");
+    await dispatcher.dispatch({ orgId, projectId, turnId: followUp.turn.id });
+    expect(resumedCompute).toEqual([{ orgId, projectId, storyId: started.story.id }]);
   });
 
   it("blocks an exhausted project budget before invoking the agent engine", async () => {

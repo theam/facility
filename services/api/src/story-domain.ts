@@ -30,6 +30,7 @@ import { AgentEngineRegistry, ClaudeCodeEngine, CodexEngine } from "./turns/engi
 import { TurnGitEvidenceService } from "./turns/git-evidence.js";
 import type { AppConfig } from "./types.js";
 import { DockerWorkspaceRuntime } from "./workspaces/docker.js";
+import type { ComputeObserver } from "./workspaces/lifecycle.js";
 import { WorkspacePreviewService } from "./workspaces/preview.js";
 import {
   GithubProjectManifestSource,
@@ -106,6 +107,26 @@ export function createStoryDomain(input: {
     undefined,
     (scope) => retirePreviewWriter(input.db, runtime, scope),
   );
+  const previewsFollowCompute: ComputeObserver = {
+    computeSuspended: async (scope) => {
+      await previewConvergence.suspend(scope);
+    },
+    // A missed resume only delays the preview; reconcileLifecycle resumes it
+    // from recorded workspace state within a minute.
+    computeResumed: async (scope) => {
+      try {
+        await previewConvergence.resume(scope);
+      } catch (error) {
+        console.warn(
+          JSON.stringify({
+            event: "preview.resume_notice_failed",
+            storyId: scope.storyId,
+            error: error instanceof Error ? error.message : "unknown_error",
+          }),
+        );
+      }
+    },
+  };
   const stories = new StoryWorkspaceService(
     input.db,
     runtime,
@@ -116,10 +137,7 @@ export function createStoryDomain(input: {
         turnId: turn.id,
       });
     },
-    {
-      onSuspend: (scope) => previewConvergence.suspend(scope),
-      onResume: (scope) => previewConvergence.resume(scope),
-    },
+    previewsFollowCompute,
   );
   const reviewSource = new ReviewCycleSource(input.db, githubFactory);
   const reviewCycles = new StoryReviewCycles(
@@ -170,6 +188,7 @@ export function createStoryDomain(input: {
     costs,
     runtime,
     { cycles: reviewCycles },
+    previewsFollowCompute,
   );
   const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
     input.db,
@@ -187,6 +206,7 @@ export function createStoryDomain(input: {
     credentials,
     projectManifests,
     environment,
+    previewsFollowCompute,
   );
   const scheduler = new AgentScheduler(
     input.db,
@@ -210,6 +230,7 @@ export function createStoryDomain(input: {
       runtime,
       input.config.secretMasterKey,
       input.config.storyInputProjectMaxBytes,
+      previewsFollowCompute,
     ),
     runtime,
     stories,

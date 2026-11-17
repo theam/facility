@@ -8,6 +8,7 @@ import {
 } from "../github/preview-pull-merge.js";
 import type { GithubWorkspaceCredentialBroker } from "../github/workspace-credentials.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
+import { LIVE_WORKSPACE_STATES, recordSleeping } from "../workspaces/lifecycle.js";
 import { PREVIEW_MANAGED_REF, previewBranchRefs } from "../workspaces/preview-branch.js";
 import { previewGitCommand } from "../workspaces/preview-git-command.js";
 import type {
@@ -109,7 +110,7 @@ export class StoryPreviewConvergenceExecutor {
             eq(workspaces.orgId, scope.orgId),
             eq(workspaces.projectId, scope.projectId),
             eq(workspaces.storyId, scope.storyId),
-            inArray(workspaces.state, ["creating", "running", "sleeping", "error"]),
+            inArray(workspaces.state, [...LIVE_WORKSPACE_STATES]),
           ),
         )
         .orderBy(desc(workspaces.createdAt))
@@ -319,16 +320,12 @@ export class StoryPreviewConvergenceExecutor {
     const current = await this.convergence.read(scope);
     if (current?.state !== "suspended") return;
     await this.runtime.suspend(workspace);
-    await this.db
-      .update(workspaces)
-      .set({ state: "sleeping", updatedAt: new Date() })
-      .where(
-        and(
-          eq(workspaces.orgId, scope.orgId),
-          eq(workspaces.projectId, scope.projectId),
-          eq(workspaces.id, workspaceId),
-        ),
-      );
+    await recordSleeping(this.db, {
+      orgId: scope.orgId,
+      projectId: scope.projectId,
+      storyId: scope.storyId,
+      workspaceId,
+    });
   }
 }
 

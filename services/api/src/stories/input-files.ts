@@ -5,6 +5,11 @@ import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { authorizePrincipal } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import { INPUT_FILE_MAX_BYTES, verifyInputBytes } from "../workspaces/input-files.js";
+import {
+  type ComputeObserver,
+  recordRunning,
+  UNOBSERVED_COMPUTE,
+} from "../workspaces/lifecycle.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
 
 export type InputScope = { orgId: string; projectId: string; storyId: string };
@@ -80,6 +85,7 @@ export class StoryInputFileService {
     private readonly runtime: WorkspaceRuntime,
     private readonly secret: string,
     private readonly projectMaxBytes = 250 * 1024 * 1024,
+    private readonly compute: ComputeObserver = UNOBSERVED_COMPUTE,
   ) {}
 
   async list(scope: InputScope) {
@@ -522,11 +528,19 @@ export class StoryInputFileService {
     const active = state.state === "running" ? state : await this.runtime.wake(locator);
     if (!active.computeRef || active.state !== "running")
       throw new ApiError(409, "workspace_unavailable", "Workspace is not running");
-    if (state.state !== "running")
-      await db
-        .update(workspaces)
-        .set({ state: "running", lastActivityAt: new Date(), updatedAt: new Date() })
-        .where(eq(workspaces.id, workspace.id));
+    if (state.state !== "running") {
+      await recordRunning(db, {
+        orgId: workspace.orgId,
+        projectId: workspace.projectId,
+        storyId: workspace.storyId,
+        workspaceId: workspace.id,
+      });
+      await this.compute.computeResumed({
+        orgId: workspace.orgId,
+        projectId: workspace.projectId,
+        storyId: workspace.storyId,
+      });
+    }
     return { ...locator, expectedComputeRef: active.computeRef };
   }
 }
