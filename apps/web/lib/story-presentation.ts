@@ -11,7 +11,15 @@ export function storyActivity(bundle: Pick<WorkspaceStoryBundle, "story" | "turn
   const running = bundle.turns.find((turn) => turn.state === "running");
   const queued = bundle.turns.find((turn) => turn.state === "queued");
   if (running) return { label: `${running.agentName} is running`, active: true };
-  if (queued) return { label: `${queued.agentName} is queued`, active: false };
+  if (queued) {
+    return {
+      label:
+        queued.triggerType === "followup"
+          ? `${queued.agentName} is waiting to follow up`
+          : `${queued.agentName} is queued`,
+      active: false,
+    };
+  }
   if (bundle.attention.some((item) => item.status === "open"))
     return { label: "Needs your attention", active: false };
   if (bundle.story.status === "done") return { label: "Completed", active: false };
@@ -59,23 +67,35 @@ export type Exchange = {
   request: StoryMessage | null;
   response: StoryMessage | null;
   extra: StoryMessage[];
+  followupResponse: StoryMessage | null;
   latestSeq: number;
 };
+
+export function exchangeKey(message: StoryMessage) {
+  const turnId = message.turn?.followupOf ?? message.turnId;
+  return turnId ? `turn:${turnId}` : `message:${message.id}`;
+}
 
 export function groupExchanges(messages: StoryMessage[]): Exchange[] {
   const byKey = new Map<string, Exchange>();
   for (const message of newestMessages(messages)) {
-    const key = message.turnId ? `turn:${message.turnId}` : `message:${message.id}`;
+    const key = exchangeKey(message);
     const exchange = byKey.get(key) ?? {
       key,
       turn: null,
       request: null,
       response: null,
       extra: [],
+      followupResponse: null,
       latestSeq: 0,
     };
-    exchange.turn ??= message.turn;
     exchange.latestSeq = Math.max(exchange.latestSeq, message.seq);
+    if (message.turn?.followupOf && message.role === "agent") {
+      exchange.followupResponse ??= message;
+      byKey.set(key, exchange);
+      continue;
+    }
+    exchange.turn ??= message.turn;
     if (message.role === "agent" && !exchange.response) exchange.response = message;
     else if (message.role !== "agent" && !exchange.request) exchange.request = message;
     else exchange.extra.push(message);
@@ -120,6 +140,14 @@ export function runStatus(
   }
   switch (turn.state) {
     case "queued":
+      if (turn.followupOf && turn.scheduledFor)
+        return {
+          state: "queued",
+          label: "Waiting…",
+          tone: "info",
+          pulse: false,
+          detail: turn.followupReason ?? null,
+        };
       return {
         state: "queued",
         label: "Queued",

@@ -215,6 +215,45 @@ describe("native agent engines", () => {
     expect(runtime.command?.args).toEqual(expect.arrayContaining(["codex-thread", "continue"]));
   });
 
+  it.each([
+    "claude_code",
+    "codex",
+  ] as const)("injects the turn tool for %s on a native resume without putting the token in arguments", async (name) => {
+    const output =
+      name === "codex"
+        ? { type: "thread.started", thread_id: "session" }
+        : { type: "system", subtype: "init", session_id: "session" };
+    const turnTools = {
+      url: "https://facility.example/internal/turn-tools",
+      token: "scoped-test-token",
+    };
+    const runtime = new EngineRuntime({
+      exitCode: 0,
+      stdout: `${JSON.stringify(output)}\n`,
+      stderr: "",
+      durationMs: 1,
+    });
+    const engine = name === "codex" ? new CodexEngine(runtime) : new ClaudeCodeEngine(runtime);
+    const request = {
+      turnId: "turn_followup",
+      manifest: manifest(name),
+      workspace,
+      prompt: "continue",
+      cwd: ".",
+      nativeSessionId: "session",
+      turnTools,
+    };
+    await engine.run(request);
+    expect(runtime.command?.env?.FACILITY_TURN_TOOL_TOKEN).toBe(turnTools.token);
+    const args = runtime.command?.args ?? [];
+    expect(args).toContain(name === "codex" ? "resume" : "--resume");
+    expect(args.join(" ")).toContain(turnTools.url);
+    expect(args.join(" ")).not.toContain(turnTools.token);
+    await engine.run({ ...request, readOnly: true });
+    expect(runtime.command?.env?.FACILITY_TURN_TOOL_TOKEN).toBeUndefined();
+    expect(runtime.command?.args?.join(" ")).not.toContain(turnTools.url);
+  });
+
   it("restricts read-only turns to reading tools and Codex's read-only sandbox", async () => {
     const claudeOutput = `${JSON.stringify({
       type: "result",

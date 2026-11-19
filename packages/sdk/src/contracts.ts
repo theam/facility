@@ -358,6 +358,7 @@ export type WorkspaceStoryBundle = {
   conversation: { id: string; summary: string | null } | null;
   turns: Array<{
     id: string;
+    triggerType?: string;
     agentName: string;
     engine: string;
     model: string;
@@ -424,6 +425,10 @@ export type StoryTurnSummary = {
   createdAt: string;
   startedAt: string | null;
   endedAt: string | null;
+  followupOf?: string;
+  scheduledFor?: string;
+  followupReason?: string;
+  followup?: StoryTurnSummary;
 };
 export type StoryMessageContent = {
   /**

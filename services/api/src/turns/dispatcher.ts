@@ -1,6 +1,7 @@
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
+  agentManifests,
   attentionItems,
   engineSessions,
   type FacilityDb,
@@ -49,6 +50,15 @@ import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.j
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
+import {
+  authorizeFollowupActor,
+  FOLLOWUP_TRIGGER,
+  followupExpired,
+  isInteractiveTurn,
+  readFollowup,
+  storyCanFollowUp,
+  turnToolToken,
+} from "./followup.js";
 import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
 import { TurnHealthMonitor } from "./health-monitor.js";
 import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
@@ -70,6 +80,7 @@ export class TurnDispatcher {
     private readonly costs = new CostBudgetService(db),
     private readonly runtime?: WorkspaceRuntime,
     private readonly review?: { cycles: StoryReviewCycles },
+    private readonly turnTools?: { apiUrl: string; secret: string; insecureDev: boolean },
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -175,6 +186,13 @@ export class TurnDispatcher {
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
       currentWorkspace = workspaceLocator(workspace);
+      const followup =
+        turn.triggerType === FOLLOWUP_TRIGGER ? await readFollowup(this.db, turn) : undefined;
+      if (
+        turn.triggerType === FOLLOWUP_TRIGGER &&
+        (!storyCanFollowUp(story) || followup?.workspaceId !== workspace.id)
+      )
+        throw new Error("The original story or workspace is no longer available for follow-up.");
       const manifest = AgentManifestSchema.parse(turn.manifest);
       if (manifest.hash !== turn.manifestHash || manifest.name !== turn.agentName) {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
@@ -314,6 +332,8 @@ export class TurnDispatcher {
         )
           throw new ReviewCycleStop("The correction must resume the original Builder session.");
       }
+      if (followup && session?.lastTurnId !== turn.triggerKey)
+        throw new Error("The original native session is no longer available to resume.");
       const engineSessionId = session?.id ?? newId("esess");
       // Each automatic review starts from a fresh context in the Reviewer's session
       // record; every other turn resumes its agent's native session.
@@ -410,7 +430,8 @@ export class TurnDispatcher {
       }, turn.id);
       const engine = this.engines.get(manifest.engine);
       const requestMessage = messages.find(
-        (message) => message.turnId === turn.id && message.role === "user",
+        (message) =>
+          message.turnId === (followup ? turn.triggerKey : turn.id) && message.role === "user",
       );
       const attached =
         (requestMessage?.metadata as { attachments?: InputFileReference[] })?.attachments ?? [];
@@ -439,6 +460,27 @@ export class TurnDispatcher {
           : "";
       const reviewInstruction =
         reviewing && cycle ? `\n\n${await this.review?.cycles.reviewContract(cycle)}` : "";
+      const toolUrl = this.turnTools
+        ? new URL("/internal/turn-tools", this.turnTools.apiUrl)
+        : undefined;
+      const toolToken =
+        this.turnTools &&
+        toolUrl &&
+        !toolUrl.username &&
+        !toolUrl.password &&
+        (toolUrl.protocol === "https:" ||
+          (toolUrl.protocol === "http:" && this.turnTools.insecureDev)) &&
+        isInteractiveTurn(turn) &&
+        !cycle &&
+        turn.startedAt
+          ? turnToolToken(this.turnTools.secret, turn.id, turn.startedAt)
+          : undefined;
+      if (toolToken) secrets.push(toolToken);
+      const followupInstruction = followup
+        ? `\n\n# Scheduled follow-up\nRecheck the pending work in this same assignment and report the outcome. This was requested earlier by this agent.\n${followup.context}`
+        : toolToken
+          ? "\n\nIf waiting for background work prevents finishing this assignment, use Facility's schedule_followup tool. Give a short user-visible reason and the non-secret context and job references needed for the next check. End the turn only after the tool confirms persistence, and tell the user what you are waiting for. This permits one follow-up for this assignment."
+          : "";
       const engineRequest = {
         turnId: turn.id,
         manifest,
@@ -448,13 +490,15 @@ export class TurnDispatcher {
             manifest,
             story,
             conversation.summary,
-            messages,
+            followup ? messages.filter((message) => message.turnId !== null) : messages,
             turn.id,
             attention,
             inputFiles,
           ) +
           deliveryInstruction +
-          reviewInstruction,
+          reviewInstruction +
+          followupInstruction,
+        turnTools: toolUrl && toolToken ? { url: toolUrl.toString(), token: toolToken } : undefined,
         cwd: prepared.primaryCwd,
         nativeSessionId: resumedSessionId,
         // The Reviewer keeps its engine credentials and the read-only GitHub token,
@@ -630,7 +674,10 @@ export class TurnDispatcher {
         await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
         return { claimed: true as const, state: "canceled" as const };
       }
-      const retryAfter = !engineStarted && !cycle ? githubRateLimitRetryAt(error) : undefined;
+      const retryAfter =
+        !engineStarted && !cycle && turn.triggerType !== FOLLOWUP_TRIGGER
+          ? githubRateLimitRetryAt(error)
+          : undefined;
       if (retryAfter) {
         const deferred = await this.db
           .update(turns)
@@ -744,7 +791,8 @@ export class TurnDispatcher {
           .limit(1);
         if (!existing) return null;
         const scope = { orgId: input.orgId, projectId: input.projectId, storyId: existing.storyId };
-        if (existing.triggerType === REVIEW_TRIGGER) await lockWorkflowStory(tx, scope);
+        if ([REVIEW_TRIGGER, FOLLOWUP_TRIGGER].includes(existing.triggerType))
+          await lockWorkflowStory(tx, scope);
         else await lockWorkflowExecution(tx, scope, existing.agentName);
         const [queued] = await tx
           .select()
@@ -760,6 +808,38 @@ export class TurnDispatcher {
           .limit(1);
         if (queued?.state !== "queued" || (queued.retryAfter && queued.retryAfter > new Date()))
           return null;
+        if (queued.triggerType === FOLLOWUP_TRIGGER) {
+          const [story] = await tx
+            .select()
+            .from(stories)
+            .where(
+              and(
+                eq(stories.orgId, scope.orgId),
+                eq(stories.projectId, scope.projectId),
+                eq(stories.id, scope.storyId),
+              ),
+            )
+            .limit(1);
+          if (!story || !storyCanFollowUp(story) || followupExpired(queued.scheduledFor))
+            throw new ReviewCycleStop("The follow-up expired or the story was closed.");
+          await authorizeFollowupActor(tx, queued);
+          const [current] = await tx
+            .select({ hash: agentManifests.contentHash })
+            .from(agentManifests)
+            .where(
+              and(
+                eq(agentManifests.orgId, scope.orgId),
+                eq(agentManifests.projectId, scope.projectId),
+                eq(agentManifests.name, queued.agentName),
+              ),
+            )
+            .for("share")
+            .limit(1);
+          if (current?.hash !== queued.manifestHash)
+            throw new ReviewCycleStop(
+              "The scheduled agent's manifest changed or is no longer available.",
+            );
+        }
         if (queued.triggerType === "github" || queued.triggerType === "schedule") {
           const { policy } = await readWorkflowPolicy(tx, scope);
           if (
@@ -803,7 +883,8 @@ export class TurnDispatcher {
             !(error instanceof ApiError && error.code.startsWith("workflow_"))
           )
             throw error;
-          if (reviewCycle) throw new ReviewCycleStop(error.message);
+          if (reviewCycle || queued.triggerType === FOLLOWUP_TRIGGER)
+            throw new ReviewCycleStop(error.message);
           const retryAfter = new Date(Date.now() + 30_000);
           await tx
             .update(turns)
@@ -916,7 +997,14 @@ export class TurnDispatcher {
       if (admitted.kind === "held") return admitted;
       return admitted;
     } catch (error) {
-      if (!(error instanceof BudgetPolicyError || error instanceof ReviewCycleStop)) throw error;
+      if (
+        !(
+          error instanceof BudgetPolicyError ||
+          error instanceof ReviewCycleStop ||
+          (error instanceof ApiError && error.code.startsWith("followup_"))
+        )
+      )
+        throw error;
       const queued = await this.turn(input.orgId, input.projectId, input.turnId);
       if (queued && queued.state === "queued") {
         await this.storiesService.failTurn({ ...input, error: error.message });

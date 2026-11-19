@@ -26,7 +26,7 @@ action from the state string. Attention items are retained as history after retr
 
 | State | Meaning |
 | --- | --- |
-| `queued` | The persisted message is waiting for dispatch. |
+| `queued` | A persisted request or scheduled follow-up is waiting for dispatch. |
 | `running` | A worker has claimed the turn and the engine is active. |
 | `succeeded` | The engine completed normally. |
 | `failed` | Dispatch, environment preparation, or engine execution failed. |
@@ -35,6 +35,36 @@ action from the state string. Attention items are retained as history after retr
 Only one queued or running turn is permitted per story. Later messages remain pending in
 conversation order and are promoted after the active turn settles. Retrying creates another
 attempt; it does not erase the failed turn.
+
+## Agent progress and follow-ups
+
+The conversation shows saved agent updates under the original request as the engine emits them.
+Open **Run details** for commands, tool activity, and other execution evidence.
+
+Interactive Claude Code and Codex turns with a current execution authorizer have a built-in
+`schedule_followup` tool. Use it when an assignment depends on asynchronous work. Supply
+`delay_seconds` (30 to 3,600), a short user-visible `reason`, and `context` with the next action
+and any non-secret job references. Keep links, credentials, and command output out of the handoff.
+Wait for the tool's confirmed timestamp before wrapping up the turn.
+
+After the current turn succeeds, the conversation shows **Waiting…** and the next check time.
+The worker checks due follow-ups on its normal recovery tick and on startup. Facility resumes the
+same agent's native session in the same retained workspace and displays its updates and response
+under the original request. Scheduling keeps the workspace awake. A workspace suspended while
+waiting wakes through normal dispatch.
+
+A request can schedule one automatic follow-up. Facility checks the original authorizer, agent
+identity, workflow gates, and budget again at admission. It stops attempting dispatch 15 minutes
+after the due time. A follow-up that fails requires a person to continue the assignment. Use
+**Cancel** while waiting, or send a new request to take over. Archiving cancels a pending
+follow-up and restoring the story leaves it canceled. A closed story is ineligible for dispatch.
+Read-only Reviewer turns and the automatic review cycle retain their existing workflow.
+
+The runner needs network access to the API's `/internal/turn-tools` path. By default it uses
+`PUBLIC_URL` over HTTPS. Set `FACILITY_RUNNER_API_URL` on the worker if runners use a separate
+reachable API origin. For isolated local development with `FACILITY_INSECURE_DEV=1`, Docker
+Desktop can use `http://host.docker.internal:4400`. Use a host address reachable from the
+workspace on other Docker installations.
 
 ## Turn evidence
 

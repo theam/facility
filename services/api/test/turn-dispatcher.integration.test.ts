@@ -12,10 +12,13 @@ import {
   engineSessions,
   githubInstallations,
   migrate,
+  orgMembers,
   orgs,
   projectBudgets,
   projectRepositories,
   projects,
+  roles,
+  stories,
   storyEvidenceEvents,
   storyInputFiles,
   storyMessages,
@@ -23,12 +26,16 @@ import {
   turnGitEvidence,
   turns,
   turnUsage,
+  users,
   workspaces,
 } from "@facility/db";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { and, asc, eq, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/catalog.js";
+import { buildApp } from "../src/app.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
@@ -83,6 +90,10 @@ describe("turn dispatcher end to end", async () => {
   const projectId = newId("proj");
   const installationRowId = newId("ghi");
   const queuedTurns: string[] = [];
+  const authorizedActor = { type: "user" as const, id: newId("user") };
+  const roleId = newId("role");
+  const masterKey = Buffer.alloc(32, 8).toString("base64");
+  let app: Awaited<ReturnType<typeof buildApp>>;
   const budgetHandoffRepositories = new Map<string, string>();
   let rejectEnqueue = false;
   let credentialFailure: unknown;
@@ -132,8 +143,12 @@ environment:
     blockUntilCanceled = false;
     blockingStarted = false;
     observedCancellation = false;
+    beforeNextRun?: (request: AgentTurnRequest) => Promise<void>;
     async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
       this.requests.push(request);
+      const beforeRun = this.beforeNextRun;
+      this.beforeNextRun = undefined;
+      await beforeRun?.(request);
       if (this.liveFailureGate) {
         const gate = this.liveFailureGate;
         this.liveFailureGate = undefined;
@@ -338,10 +353,32 @@ environment:
           : projectManifest;
       },
     };
+    await db
+      .insert(users)
+      .values({ id: authorizedActor.id, email: `followup-${suffix}@example.test` });
+    await db
+      .insert(roles)
+      .values({ id: roleId, orgId, name: "Operator", permissions: ["workspaces:execute"] });
+    await db
+      .insert(orgMembers)
+      .values({ id: newId("member"), orgId, userId: authorizedActor.id, roleId });
+    const catalog = new AgentCatalogService(db, catalogSource);
+    await catalog.sync(orgId, projectId);
+    app = await buildApp({
+      databaseUrl,
+      secretMasterKey: masterKey,
+      port: 0,
+      publicUrl: "http://127.0.0.1",
+      workspaceImage: "facility-runner:test",
+      workspaceDriver: "docker",
+      facilityInsecureDev: true,
+      logLevel: "silent",
+    });
+    const apiUrl = await app.listen({ port: 0, host: "127.0.0.1" });
     dispatcher = new TurnDispatcher(
       db,
       storiesService,
-      new AgentCatalogService(db, catalogSource),
+      catalog,
       new GithubWorkspaceCredentialBroker(db, async () => {
         if (credentialFailure) throw credentialFailure;
         return {
@@ -362,10 +399,13 @@ environment:
       new TurnGitEvidenceService(db, runtime),
       undefined,
       runtime,
+      undefined,
+      { apiUrl, secret: masterKey, insecureDev: true },
     );
   });
 
   afterAll(async () => {
+    await app?.close();
     await client.end();
     await rm(root, { recursive: true, force: true });
   });
@@ -2171,6 +2211,271 @@ Review the request.
     expect(engine.requests.at(-1)?.prompt).toContain(`/workspace/.facility/inputs/${file.id}`);
     expect(engine.requests.at(-1)?.prompt).toContain(file.name);
   }, 20_000);
+
+  const handoff = {
+    delay_seconds: 90,
+    reason: "Waiting for the build to finish",
+    context: "Check build job synthetic-job-42.",
+  };
+
+  async function withTurnTool(request: AgentTurnRequest, call: (tool: Client) => Promise<void>) {
+    if (!request.turnTools) throw new Error("Expected the built-in tool on the native turn");
+    const tool = new Client({ name: "synthetic-engine", version: "1.0.0" });
+    await tool.connect(
+      new StreamableHTTPClientTransport(new URL(request.turnTools.url), {
+        requestInit: { headers: { authorization: `Bearer ${request.turnTools.token}` } },
+      }),
+    );
+    try {
+      await call(tool);
+    } finally {
+      await tool.close();
+    }
+  }
+
+  async function startFollowup(mode: string) {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `followup-${mode}-${suffix}`,
+      title: "Check a synthetic asynchronous job",
+      agent: reviewer,
+      message: "Track the job to completion",
+      messageDedupeKey: `followup-${mode}`,
+      actor: authorizedActor,
+      workspace: { image: "facility-runner:test" },
+    });
+    const initial = started.queued.turn;
+    if (!initial || !started.workspace) throw new Error("Expected an initial turn and workspace");
+    const scope = { orgId, projectId, storyId: started.story.id };
+    engine.beforeNextRun = async (request) => {
+      if (mode === "resume") {
+        request.onEvent?.({
+          engine: "codex",
+          type: "item.completed",
+          data: { item: { type: "reasoning", text: "Not for the conversation" } },
+        });
+        request.onEvent?.({
+          engine: "codex",
+          type: "item.completed",
+          data: { item: { type: "agent_message", text: "Checking the build now." } },
+        });
+        await vi.waitFor(async () => {
+          const progress = await storiesService.turnActivity(
+            orgId,
+            projectId,
+            scope.storyId,
+            initial.id,
+            { view: "progress", after: 0 },
+          );
+          expect(progress.turn.state).toBe("running");
+          expect(progress.items.map((item) => item.text)).toEqual(["Checking the build now."]);
+        });
+      }
+      await withTurnTool(request, async (tool) => {
+        expect((await tool.listTools()).tools.map(({ name }) => name)).toEqual([
+          "schedule_followup",
+        ]);
+        const invalid = await tool.callTool({
+          name: "schedule_followup",
+          arguments: { ...handoff, storyId: "a-different-story" },
+        });
+        expect(invalid.isError).toBe(true);
+        const secret = await tool.callTool({
+          name: "schedule_followup",
+          arguments: { ...handoff, reason: "Bearer example" },
+        });
+        expect(secret.isError).toBe(true);
+        const results = await Promise.all(
+          [1, 2].map(() => tool.callTool({ name: "schedule_followup", arguments: handoff })),
+        );
+        expect(results[0]?.isError).toBeFalsy();
+        expect(results[1]).toEqual(results[0]);
+        // A different input must not replace the already confirmed deadline or handoff.
+        const duplicate = await tool.callTool({
+          name: "schedule_followup",
+          arguments: { ...handoff, context: "Different work" },
+        });
+        expect(duplicate.isError).toBe(true);
+      });
+      const persisted = await db
+        .select()
+        .from(turnEvents)
+        .where(
+          and(eq(turnEvents.turnId, initial.id), eq(turnEvents.type, "turn.followup_requested")),
+        );
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.data).toMatchObject({
+        reason: handoff.reason,
+        context: handoff.context,
+      });
+    };
+    expect(await dispatcher.dispatch({ orgId, projectId, turnId: initial.id })).toMatchObject({
+      state: "succeeded",
+    });
+    const [queued] = await db
+      .select()
+      .from(turns)
+      .where(and(eq(turns.storyId, started.story.id), eq(turns.triggerType, "followup")));
+    expect(queued).toMatchObject({
+      ...scope,
+      state: "queued",
+      triggerKey: initial.id,
+      agentName: reviewer.name,
+      manifestHash: reviewer.hash,
+      conversationId: initial.conversationId,
+    });
+    if (!queued) throw new Error("Expected a persisted follow-up");
+    return { scope, initial, queued, workspace: started.workspace };
+  }
+
+  async function due(turnId: string, minutes = 0) {
+    const now = new Date(Date.now() - minutes * 60_000 - 1_000);
+    await db.update(turns).set({ scheduledFor: now, retryAfter: now }).where(eq(turns.id, turnId));
+  }
+
+  it("recovers one due follow-up in the original session and wakes the retained workspace", async () => {
+    const { scope, initial, queued, workspace } = await startFollowup("resume");
+    const previous = engine.requests.at(-1);
+    if (!previous) throw new Error("Expected the original engine request");
+    expect(await dispatcher.dispatch({ ...scope, turnId: queued.id })).toEqual({ claimed: false });
+    const conversation = await storiesService.conversationPage(orgId, projectId, scope.storyId, {
+      order: "desc",
+      limit: 1,
+    });
+    expect(conversation.messages[0]?.turn?.followup).toMatchObject({
+      id: queued.id,
+      state: "queued",
+      followupReason: handoff.reason,
+    });
+    expect(JSON.stringify(conversation)).not.toContain(handoff.context);
+    expect((await storiesService.get(orgId, projectId, scope.storyId)).workspace?.state).toBe(
+      "running",
+    );
+    await storiesService.suspend(orgId, projectId, scope.storyId);
+    const wake = vi.spyOn(runtime, "wake");
+    const newWorkspace = vi.spyOn(runtime, "create");
+    await due(queued.id);
+    const recovered: string[] = [];
+    // A restarted scheduler has only the database. Its delivery may be repeated,
+    // but the dispatcher may claim this durable run only once.
+    await Promise.all(
+      [1, 2].map(() =>
+        recoverQueuedTurns(db, async (_queue, event) => {
+          if (event.turnId === queued.id) recovered.push(String(event.turnId));
+        }),
+      ),
+    );
+    expect(recovered).toEqual([queued.id, queued.id]);
+    const before = engine.requests.length;
+    const results = await Promise.all(
+      [1, 2].map(() => dispatcher.dispatch({ ...scope, turnId: queued.id })),
+    );
+    expect(results.filter((result) => result.claimed)).toHaveLength(1);
+    expect(results).toContainEqual(expect.objectContaining({ state: "succeeded" }));
+    expect(engine.requests).toHaveLength(before + 1);
+    expect(engine.requests.at(-1)).toMatchObject({
+      workspace: { id: workspace.id, volumeRef: workspace.volumeRef },
+      nativeSessionId: "codex-pr-reviewer-session",
+      manifest: { name: reviewer.name },
+      turnTools: undefined,
+    });
+    expect(engine.requests.at(-1)?.prompt).toContain(handoff.context);
+    expect(engine.requests.at(-1)?.prompt).toContain("Track the job to completion");
+    expect(wake).toHaveBeenCalledWith(expect.objectContaining({ id: workspace.id }));
+    expect(newWorkspace).not.toHaveBeenCalled();
+    wake.mockRestore();
+    newWorkspace.mockRestore();
+    expect(await dispatcher.dispatch({ ...scope, turnId: queued.id })).toEqual({ claimed: false });
+    const reloaded = await storiesService.conversationPage(orgId, projectId, scope.storyId, {
+      order: "desc",
+      limit: 1,
+    });
+    expect(reloaded.messages[0]?.turn).toMatchObject({ id: queued.id, followupOf: initial.id });
+    expect(
+      reloaded.related.some((message) => message.role === "user" && message.turnId === initial.id),
+    ).toBe(true);
+    await withTurnTool(previous, async (tool) => {
+      const replay = await tool.callTool({ name: "schedule_followup", arguments: handoff });
+      expect(replay.isError).toBe(true);
+    });
+  }, 20_000);
+
+  it.each([
+    "canceled",
+    "superseded",
+    "archived",
+    "closed",
+    "expired",
+    "revoked",
+    "budget",
+  ] as const)("does not wake or run a %s follow-up", async (mode) => {
+    const { scope, queued } = await startFollowup(mode);
+    if (mode === "canceled")
+      await storiesService.cancelTurn({ ...scope, turnId: queued.id, actor: authorizedActor });
+    if (mode === "superseded") {
+      const next = await storiesService.queueMessage({
+        ...scope,
+        body: "Use my latest direction",
+        dedupeKey: "superseding-message",
+        agent: builder,
+        actor: authorizedActor,
+        trigger: { type: "ui" },
+      });
+      expect(next.turn?.id).toBeDefined();
+    }
+    if (mode === "archived") {
+      await storiesService.archive(orgId, projectId, scope.storyId);
+      await storiesService.restore(orgId, projectId, scope.storyId);
+    }
+    if (mode === "closed")
+      await db
+        .update(stories)
+        .set({ status: "done", completedAt: new Date() })
+        .where(eq(stories.id, scope.storyId));
+    if (mode === "revoked")
+      await db.update(roles).set({ permissions: [] }).where(eq(roles.id, roleId));
+    if (mode === "budget")
+      await db
+        .insert(projectBudgets)
+        .values({
+          id: newId("bud"),
+          orgId,
+          projectId,
+          monthlyLimitCents: 0,
+          enabled: true,
+        })
+        .onConflictDoUpdate({
+          target: projectBudgets.projectId,
+          set: { monthlyLimitCents: 0, enabled: true },
+        });
+    await due(queued.id, mode === "expired" ? 16 : 0);
+    const before = engine.requests.length;
+    const wake = vi.spyOn(runtime, "wake");
+    try {
+      const result = await dispatcher.dispatch({ ...scope, turnId: queued.id });
+      expect(engine.requests).toHaveLength(before);
+      expect(wake).not.toHaveBeenCalled();
+      expect(result).toMatchObject(
+        ["canceled", "superseded", "archived"].includes(mode)
+          ? { claimed: false }
+          : { claimed: true, state: "failed" },
+      );
+    } finally {
+      wake.mockRestore();
+      if (mode === "revoked")
+        await db
+          .update(roles)
+          .set({ permissions: ["workspaces:execute"] })
+          .where(eq(roles.id, roleId));
+      if (mode === "budget")
+        await db
+          .update(projectBudgets)
+          .set({ enabled: false })
+          .where(eq(projectBudgets.projectId, projectId));
+    }
+  }, 15_000);
 });
 
 async function waitFor(predicate: () => boolean) {

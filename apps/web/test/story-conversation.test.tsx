@@ -49,7 +49,7 @@ function exchange(seq: number, id: string, state: StoryTurnSummary["state"] = "s
     turnId: id,
     turn: run,
     author: { kind: "agent", id: "codex:s", name: "builder", handle: null, avatarUrl: null },
-    content: { kind: "final_response", progressMessages: 1, reportedModel: null },
+    content: { kind: "final_response", progressMessages: 0, reportedModel: null },
   });
   return { request, response };
 }
@@ -437,4 +437,109 @@ describe("run activity", () => {
     expect(container.textContent).toContain("Start of this run.");
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+});
+
+it("keeps live progress, a wait, and the follow-up result under the same request", async () => {
+  const initial = exchange(1, "turn-original", "running");
+  initial.response.content = { ...initial.response.content, progressMessages: 1 };
+  const waiting = {
+    ...turn("turn-followup", "queued"),
+    followupOf: "turn-original",
+    triggerType: "followup",
+    scheduledFor: "2026-09-10T00:20:00Z",
+    followupReason: "Waiting for the build to finish",
+    startedAt: null,
+    endedAt: null,
+  };
+  const running = { ...waiting, state: "running", startedAt: at };
+  const finished = { ...running, state: "succeeded", endedAt: at };
+  let followupState: StoryTurnSummary = waiting;
+  let showFinal = false;
+  const fetcher = vi.fn(async (url: string) => {
+    const followup = String(url).includes("turn-followup");
+    const after = Number(new URL(url, "http://example.test").searchParams.get("after"));
+    const run = followup ? followupState : initial.request.turn;
+    const progress = followup
+      ? run?.state === "queued"
+        ? []
+        : ["Checked the finished build", ...(showFinal ? ["Build passed"] : [])]
+      : ["Started the build"];
+    return new Response(
+      JSON.stringify({
+        turn: run,
+        order: "asc",
+        items: progress
+          .map((text, index) => ({
+            seq: index + 1,
+            turn_id: run?.id,
+            kind: "message",
+            text,
+          }))
+          .filter((item) => item.seq > after),
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const render = async (data: StoryConversationPage) => {
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={data}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+  };
+  await render(page([initial.request]));
+  expect(exchangeTexts()[0]).toContain("Started the build");
+  expect(exchangeTexts()[0]).not.toContain("Build passed");
+  expect(container.querySelector("details[open]")).toBeNull();
+
+  const source = turn("turn-original");
+  const withFollowup = (followup: StoryTurnSummary) => {
+    const decorated = { ...source, followup };
+    return [
+      { ...initial.response, body: "I will check again.", turn: decorated },
+      { ...initial.request, turn: decorated },
+    ];
+  };
+  await render(page(withFollowup(waiting)));
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]).toContain("Waiting…");
+  expect(exchangeTexts()[0]).toContain("Waiting for the build to finish");
+  expect(exchangeTexts()[0]).toContain("Next check");
+  expect(exchangeTexts()[0]).not.toContain("Completed");
+
+  followupState = running;
+  await render(page(withFollowup(running)));
+  expect(exchangeTexts()[0]).toContain("Checked the finished build");
+  expect(exchangeTexts()[0]).toContain("Running");
+
+  followupState = finished;
+  showFinal = true;
+  const result = {
+    ...initial.response,
+    id: "followup-result",
+    seq: 3,
+    body: "Build passed",
+    turn: finished,
+    turnId: finished.id,
+  };
+  const reloaded = page([result, ...withFollowup(finished)]);
+  await render(reloaded);
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]?.match(/Build passed/g)).toHaveLength(1);
+
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(reloaded);
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]).toContain("Started the build");
+  expect(exchangeTexts()[0]).toContain("Checked the finished build");
+  expect(exchangeTexts()[0]?.match(/Build passed/g)).toHaveLength(1);
 });

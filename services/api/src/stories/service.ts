@@ -23,11 +23,23 @@ import {
   users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
-import { ACTIVITY_NOISE_TYPES, PROGRESS_NOISE_TYPES, presentTurnEvent } from "../turns/activity.js";
+import {
+  ACTIVITY_NOISE_TYPES,
+  PROGRESS_NOISE_TYPES,
+  presentTurnEvent,
+  presentTurnProgress,
+} from "../turns/activity.js";
 import { stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
+import {
+  cancelPendingFollowup,
+  FOLLOWUP_REQUESTED,
+  FOLLOWUP_TRIGGER,
+  type FollowupRequest,
+  queueFollowup,
+} from "../turns/followup.js";
 import { readUsageJournal } from "../turns/usage-journal.js";
 import { appendWorkspaceEvent } from "../workspaces/events.js";
 import { shouldSuspendFailedWorkspace } from "../workspaces/failed-turn-policy.js";
@@ -105,6 +117,10 @@ export type ConversationTurn = {
   createdAt: Date;
   startedAt: Date | null;
   endedAt: Date | null;
+  followupOf?: string;
+  scheduledFor?: Date;
+  followupReason?: string;
+  followup?: ConversationTurn;
 };
 
 export type ConversationContent = {
@@ -426,6 +442,11 @@ export class StoryWorkspaceService {
 
     const attachments = await validateInputFileReferences(tx, input, input.attachmentIds);
 
+    if (
+      input.actor.type === "user" ||
+      (input.actor.type === "service" && input.trigger.type === "mcp")
+    )
+      await cancelPendingFollowup(tx, story);
     const activeTurn = (
       await tx
         .select()
@@ -510,8 +531,9 @@ export class StoryWorkspaceService {
   }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
-      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
-      await lockStory(tx, input.orgId, input.projectId, turn.storyId);
+      const initial = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
+      await lockStory(tx, input.orgId, input.projectId, initial.storyId);
+      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId, true);
       const story = await scopedStory(tx, input.orgId, input.projectId, turn.storyId);
       if (turn.state === "succeeded") {
         await reconcileTurnBranch(tx, story, turn);
@@ -568,7 +590,8 @@ export class StoryWorkspaceService {
         .where(and(eq(stories.orgId, input.orgId), eq(stories.id, turn.storyId)));
       if (!completed) throw new StoryServiceError("turn_not_found", "completed turn not found");
       await reconcileTurnBranch(tx, story, completed);
-      await seedReviewCycle(tx, completed, input.output, Boolean(input.attention));
+      const waiting = !input.attention && (await queueFollowup(tx, completed, story));
+      if (!waiting) await seedReviewCycle(tx, completed, input.output, Boolean(input.attention));
       return completed;
     });
   }
@@ -576,8 +599,9 @@ export class StoryWorkspaceService {
   async failTurn(input: { orgId: string; projectId: string; turnId: string; error: string }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
-      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
-      await lockStory(tx, input.orgId, input.projectId, turn.storyId);
+      const initial = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
+      await lockStory(tx, input.orgId, input.projectId, initial.storyId);
+      const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId, true);
       const story = await scopedStory(tx, input.orgId, input.projectId, turn.storyId);
       if (["succeeded", "failed", "canceled"].includes(turn.state)) return turn;
       const failed = (
@@ -1556,8 +1580,35 @@ export class StoryWorkspaceService {
     const contiguous = rows.slice(0, limit);
     const oldest = contiguous.at(-1);
     const pageTurnIds = [...new Set(contiguous.map((row) => row.turnId).filter(isString))];
+    const turnRows = pageTurnIds.length
+      ? await this.db
+          .select()
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, orgId),
+              eq(turns.projectId, projectId),
+              eq(turns.storyId, storyId),
+              or(
+                inArray(turns.id, pageTurnIds),
+                and(
+                  eq(turns.triggerType, FOLLOWUP_TRIGGER),
+                  inArray(turns.triggerKey, pageTurnIds),
+                ),
+              ),
+            ),
+          )
+      : [];
+    const relatedTurnIds = [
+      ...new Set([
+        ...pageTurnIds,
+        ...turnRows.flatMap((turn) =>
+          turn.triggerType === FOLLOWUP_TRIGGER && turn.triggerKey ? [turn.triggerKey] : [],
+        ),
+      ]),
+    ];
     const related =
-      options.order === "desc" && hasMore && oldest && pageTurnIds.length > 0
+      options.order === "desc" && hasMore && oldest && relatedTurnIds.length > 0
         ? await this.db
             .select()
             .from(storyMessages)
@@ -1566,15 +1617,22 @@ export class StoryWorkspaceService {
                 eq(storyMessages.orgId, orgId),
                 eq(storyMessages.projectId, projectId),
                 eq(storyMessages.storyId, storyId),
-                inArray(storyMessages.turnId, pageTurnIds),
+                inArray(storyMessages.turnId, relatedTurnIds),
                 lt(storyMessages.seq, oldest.seq),
               ),
             )
             .orderBy(desc(storyMessages.seq))
             .limit(40)
         : [];
+    const turnById = new Map(turnRows.map((turn) => [turn.id, turn]));
+    const missingIds = relatedTurnIds.filter((id) => !turnById.has(id));
+    const followups = turnRows.flatMap((turn) =>
+      turn.triggerType === FOLLOWUP_TRIGGER && turn.triggerKey
+        ? [{ origin: turn.triggerKey, turn }]
+        : [],
+    );
+    const originIds = followups.map(({ origin }) => origin);
     const page = [...contiguous, ...related];
-    const turnIds = [...new Set(page.map((row) => row.turnId).filter(isString))];
     const userIds = [
       ...new Set(
         page
@@ -1583,8 +1641,8 @@ export class StoryWorkspaceService {
           .map((actor) => actor.id),
       ),
     ];
-    const [turnRows, userRows] = await Promise.all([
-      turnIds.length === 0
+    const [missingTurns, userRows, requests] = await Promise.all([
+      missingIds.length === 0
         ? Promise.resolve([])
         : this.db
             .select()
@@ -1594,7 +1652,7 @@ export class StoryWorkspaceService {
                 eq(turns.orgId, orgId),
                 eq(turns.projectId, projectId),
                 eq(turns.storyId, storyId),
-                inArray(turns.id, turnIds),
+                inArray(turns.id, missingIds),
               ),
             ),
       userIds.length === 0
@@ -1608,8 +1666,31 @@ export class StoryWorkspaceService {
             })
             .from(users)
             .where(inArray(users.id, userIds)),
+      originIds.length === 0
+        ? Promise.resolve([])
+        : this.db
+            .select({ turnId: turnEvents.turnId, data: turnEvents.data })
+            .from(turnEvents)
+            .where(
+              and(
+                eq(turnEvents.orgId, orgId),
+                eq(turnEvents.projectId, projectId),
+                eq(turnEvents.storyId, storyId),
+                eq(turnEvents.type, FOLLOWUP_REQUESTED),
+                inArray(turnEvents.turnId, originIds),
+              ),
+            ),
     ]);
-    const turnById = new Map(turnRows.map((turn) => [turn.id, turn]));
+    for (const turn of missingTurns) turnById.set(turn.id, turn);
+    const reasonById = new Map(
+      requests.map(({ turnId, data }) => [turnId, (data as FollowupRequest).reason]),
+    );
+    const followupById = new Map(
+      followups.map(({ origin, turn }) => [
+        origin,
+        { ...conversationTurn(turn), followupReason: reasonById.get(origin) },
+      ]),
+    );
     const userById = new Map(userRows.map((user) => [user.id, user]));
     const enrich = (row: typeof storyMessages.$inferSelect) => {
       const turn = row.turnId ? (turnById.get(row.turnId) ?? null) : null;
@@ -1617,7 +1698,15 @@ export class StoryWorkspaceService {
       return {
         ...row,
         author: conversationAuthor(row, turn, userById),
-        turn: turn ? conversationTurn(turn) : null,
+        turn: turn
+          ? {
+              ...conversationTurn(turn),
+              ...(followupById.has(turn.id) ? { followup: followupById.get(turn.id) } : {}),
+              ...(turn.triggerKey && turn.triggerType === FOLLOWUP_TRIGGER
+                ? { followupReason: reasonById.get(turn.triggerKey) }
+                : {}),
+            }
+          : null,
         content: conversationContent(row.role, metadata),
         attachments: metadata.attachments ?? [],
       };
@@ -1642,7 +1731,7 @@ export class StoryWorkspaceService {
     projectId: string,
     storyId: string,
     turnId: string,
-    options: { before?: number; after?: number; limit?: number } = {},
+    options: { before?: number; after?: number; limit?: number; view?: "progress" } = {},
   ) {
     if (options.before !== undefined && options.after !== undefined)
       throw new StoryServiceError("invalid_activity_cursor", "Use before or after, not both", 400);
@@ -1659,7 +1748,19 @@ export class StoryWorkspaceService {
           eq(turnEvents.projectId, projectId),
           eq(turnEvents.storyId, storyId),
           eq(turnEvents.turnId, turnId),
-          notInArray(turnEvents.type, [...ACTIVITY_NOISE_TYPES]),
+          options.view === "progress"
+            ? or(
+                and(
+                  eq(turnEvents.type, "engine.assistant"),
+                  sql`jsonb_typeof(${turnEvents.data}->'message'->'content') = 'array'`,
+                  sql`jsonb_path_exists(${turnEvents.data}, '$.message.content[*] ? (@.type == "text")')`,
+                ),
+                and(
+                  eq(turnEvents.type, "engine.item.completed"),
+                  sql`${turnEvents.data}->'item'->>'type' = 'agent_message'`,
+                ),
+              )
+            : notInArray(turnEvents.type, [...ACTIVITY_NOISE_TYPES]),
           options.before === undefined ? undefined : lt(turnEvents.seq, options.before),
           options.after === undefined ? undefined : gt(turnEvents.seq, options.after),
         ),
@@ -1667,13 +1768,17 @@ export class StoryWorkspaceService {
       .orderBy(options.after === undefined ? desc(turnEvents.seq) : asc(turnEvents.seq))
       .limit(limit + 1);
     const hasMore = rows.length > limit;
-    const items = rows.slice(0, limit).map(presentTurnEvent);
+    const entries = rows.slice(0, limit);
+    const items =
+      options.view === "progress"
+        ? entries.flatMap((entry) => presentTurnProgress(entry) ?? [])
+        : entries.map(presentTurnEvent);
     return {
       turn: conversationTurn(turn),
       order: options.after === undefined ? ("desc" as const) : ("asc" as const),
       items,
       hasMore,
-      nextCursor: hasMore ? (items.at(-1)?.seq ?? null) : null,
+      nextCursor: hasMore ? (entries.at(-1)?.seq ?? null) : null,
     };
   }
 
@@ -2037,6 +2142,7 @@ export class StoryWorkspaceService {
       await lockStory(tx, orgId, projectId, storyId);
       const story = await scopedStory(tx, orgId, projectId, storyId);
       if (story.status !== "archived") {
+        await cancelPendingFollowup(tx, story);
         await tx
           .update(stories)
           .set({
@@ -2545,6 +2651,9 @@ function conversationTurn(turn: typeof turns.$inferSelect): ConversationTurn {
     createdAt: turn.createdAt,
     startedAt: turn.startedAt,
     endedAt: turn.endedAt,
+    ...(turn.triggerType === FOLLOWUP_TRIGGER && turn.triggerKey && turn.scheduledFor
+      ? { followupOf: turn.triggerKey, scheduledFor: turn.retryAfter ?? turn.scheduledFor }
+      : {}),
   };
 }
 
