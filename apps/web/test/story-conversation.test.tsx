@@ -543,3 +543,65 @@ it("keeps live progress, a wait, and the follow-up result under the same request
   expect(exchangeTexts()[0]).toContain("Checked the finished build");
   expect(exchangeTexts()[0]?.match(/Build passed/g)).toHaveLength(1);
 });
+
+it("loads all completed progress when a background tab becomes visible", async () => {
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  try {
+    const { request, response } = exchange(1, "turn-completed");
+    response.content.progressMessages = 2;
+    const fetcher = vi.fn(async (url: string) => {
+      const after = Number(new URL(url, "http://example.test").searchParams.get("after"));
+      return new Response(
+        JSON.stringify({
+          turn: request.turn,
+          order: "asc",
+          items: [
+            {
+              kind: "message",
+              turn_id: "turn-completed",
+              seq: after + 1,
+              text: after === 0 ? "First saved update" : "Second saved update",
+            },
+          ],
+          has_more: after === 0,
+          next_cursor: after === 0 ? 1 : null,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={page([response, request])}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+
+    async function setVisible(visible: boolean) {
+      await act(async () => {
+        visibility.mockReturnValue(visible ? "visible" : "hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    }
+    await setVisible(true);
+    expect(exchangeTexts()[0]).toContain("First saved update");
+    await setVisible(false);
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await setVisible(true);
+    expect(exchangeTexts()[0]).toContain("Second saved update");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await setVisible(false);
+    await setVisible(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});

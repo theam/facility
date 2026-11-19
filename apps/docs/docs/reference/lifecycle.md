@@ -53,11 +53,11 @@ same agent's native session in the same retained workspace and displays its upda
 under the original request. Scheduling keeps the workspace awake. A workspace suspended while
 waiting wakes through normal dispatch.
 
-A request can schedule one automatic follow-up. Facility checks the original authorizer, agent
-identity, workflow gates, and budget again at admission. It stops attempting dispatch 15 minutes
-after the due time. A follow-up that fails requires a person to continue the assignment. Use
-**Cancel** while waiting, or send a new request to take over. Archiving cancels a pending
-follow-up and restoring the story leaves it canceled. A closed story is ineligible for dispatch.
+A request can schedule one automatic follow-up. Facility checks the original authorizer,
+agent identity, plan authorization, and budget again at admission. It stops attempting dispatch
+15 minutes after the due time. A follow-up that fails requires a person to continue the assignment.
+Use **Cancel** while waiting, or send a new request to take over. Archiving the story cancels a
+pending follow-up. A closed story or inactive project is ineligible for dispatch.
 Read-only Reviewer turns and the automatic review cycle retain their existing workflow.
 
 The runner needs network access to the API's `/internal/turn-tools` path. By default it uses

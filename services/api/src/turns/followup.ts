@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { newId } from "@facility/core";
 import {
   type FacilityDb,
+  projects,
   stories,
   storyMessages,
   turnEvents,
@@ -55,11 +56,19 @@ function followupActor(turn: Pick<Turn, "createdBy">) {
   return undefined;
 }
 
-export async function authorizeFollowupActor(db: FacilityDb, turn: Turn) {
+export async function authorizeFollowupExecution(db: FacilityDb, turn: Turn) {
   const actor = followupActor(turn);
   if (!actor)
     throw new ApiError(403, "followup_actor_invalid", "Follow-up requires a current authorizer");
   await authorizeWorkspaceExecution(db, turn, actor, "followup_authorization_revoked");
+  const [project] = await db
+    .select({ status: projects.status })
+    .from(projects)
+    .where(and(eq(projects.orgId, turn.orgId), eq(projects.id, turn.projectId)))
+    .for("share")
+    .limit(1);
+  if (project?.status !== "active")
+    throw new ApiError(409, "followup_project_inactive", "The project is inactive");
 }
 
 export function turnToolToken(secret: string, turnId: string, startedAt: Date) {
@@ -133,7 +142,7 @@ export async function registerFollowup(
       );
     if (!story || !storyCanFollowUp(story))
       throw new ApiError(409, "followup_story_closed", "This story cannot accept follow-ups");
-    await authorizeFollowupActor(tx, turn);
+    await authorizeFollowupExecution(tx, turn);
     if (!(await planExecutionStillAuthorized(tx, turn, turn)))
       throw new ApiError(403, "followup_plan_revoked", "The turn's workflow authorization changed");
     const existing = await readFollowup(tx, turn);
@@ -171,7 +180,7 @@ export async function registerFollowup(
     );
     if (
       [...Object.values(variables), ...injectedValues].some(
-        (value) => value.length >= 6 && handoff.includes(value),
+        (value) => value !== "" && (input.reason.includes(value) || input.context.includes(value)),
       )
     )
       throw new ApiError(

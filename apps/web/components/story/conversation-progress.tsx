@@ -30,9 +30,10 @@ export function ConversationProgress({
     let observedState = state;
     let alive = true;
     let busy = false;
+    let complete = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function read() {
-      if (busy || document.visibilityState === "hidden") return;
+      if (complete || busy || document.visibilityState === "hidden") return;
       busy = true;
       const after = cursor.current;
       const result = await clientApi<StoryTurnActivityPage>(
@@ -47,6 +48,7 @@ export function ConversationProgress({
         const newest = items.at(-1)?.seq ?? after;
         const next = has_more && next_cursor !== null && next_cursor > after ? next_cursor : null;
         more = next !== null;
+        complete = !active && !more;
         cursor.current = next ?? newest;
         if (active && turn.state !== observedState) {
           observedState = turn.state;
@@ -66,7 +68,7 @@ export function ConversationProgress({
       void read();
     }
     void read();
-    if (active) document.addEventListener("visibilitychange", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearTimeout(timer);

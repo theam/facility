@@ -34,6 +34,7 @@ import {
   authorizePlanExecution,
   type PlanExecutionAuthorization,
   planExecutionStillAuthorized,
+  readPlanExecutionReceipt,
   recordPlanExecution,
   WorkflowGateError,
 } from "../stories/workflow-execution.js";
@@ -41,6 +42,7 @@ import {
   lockWorkflowExecution,
   lockWorkflowStory,
   readWorkflowPolicy,
+  workflowDigest,
 } from "../stories/workflow-policy.js";
 import type {
   ProjectEnvironmentService,
@@ -51,7 +53,7 @@ import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
 import {
-  authorizeFollowupActor,
+  authorizeFollowupExecution,
   FOLLOWUP_TRIGGER,
   followupExpired,
   isInteractiveTurn,
@@ -822,7 +824,7 @@ export class TurnDispatcher {
             .limit(1);
           if (!story || !storyCanFollowUp(story) || followupExpired(queued.scheduledFor))
             throw new ReviewCycleStop("The follow-up expired or the story was closed.");
-          await authorizeFollowupActor(tx, queued);
+          await authorizeFollowupExecution(tx, queued);
           const [current] = await tx
             .select({ hash: agentManifests.contentHash })
             .from(agentManifests)
@@ -934,6 +936,17 @@ export class TurnDispatcher {
               ),
             );
           return { kind: "held" as const, code: error.code, error: error.message };
+        }
+        if (queued.triggerType === FOLLOWUP_TRIGGER) {
+          if (!queued.triggerKey)
+            throw new ApiError(409, "followup_origin_missing", "The original turn is unavailable");
+          const original = await readPlanExecutionReceipt(tx, scope, queued.triggerKey);
+          if (workflowDigest(original) !== workflowDigest(authorization))
+            throw new ApiError(
+              409,
+              "followup_plan_changed",
+              "The original plan authorization changed. Start this work with a new request.",
+            );
         }
         const claimed = (
           await tx

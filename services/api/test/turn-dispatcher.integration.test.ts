@@ -56,6 +56,7 @@ import {
   type ProjectManifestSource,
   parseProjectManifest,
 } from "../src/workspaces/project-environment.js";
+import { WorkspaceVariablesService } from "../src/workspaces/variables.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@localhost:5461/facility_test";
@@ -2287,6 +2288,30 @@ Review the request.
           arguments: { ...handoff, reason: "Bearer example" },
         });
         expect(secret.isError).toBe(true);
+        if (mode === "resume") {
+          const variables = new WorkspaceVariablesService(db, masterKey);
+          const projectScope = { orgId, projectId };
+          const current = await variables.projectMetadata(projectScope);
+          const configured = await variables.updateProject(projectScope, {
+            revision: current.revision,
+            variables: { JOB_PIN: "6789" },
+          });
+          try {
+            for (const field of ["reason", "context"]) {
+              const managedSecret = await tool.callTool({
+                name: "schedule_followup",
+                arguments: { ...handoff, [field]: "Waiting for status 6789." },
+              });
+              expect(managedSecret.isError).toBe(true);
+              expect(JSON.stringify(managedSecret)).not.toContain("6789");
+            }
+          } finally {
+            await variables.updateProject(projectScope, {
+              revision: configured.revision,
+              variables: { JOB_PIN: null },
+            });
+          }
+        }
         const results = await Promise.all(
           [1, 2].map(() => tool.callTool({ name: "schedule_followup", arguments: handoff })),
         );
@@ -2406,6 +2431,7 @@ Review the request.
     "canceled",
     "superseded",
     "archived",
+    "inactive project",
     "closed",
     "expired",
     "revoked",
@@ -2429,6 +2455,8 @@ Review the request.
       await storiesService.archive(orgId, projectId, scope.storyId);
       await storiesService.restore(orgId, projectId, scope.storyId);
     }
+    if (mode === "inactive project")
+      await db.update(projects).set({ status: "archived" }).where(eq(projects.id, projectId));
     if (mode === "closed")
       await db
         .update(stories)
@@ -2464,6 +2492,8 @@ Review the request.
       );
     } finally {
       wake.mockRestore();
+      if (mode === "inactive project")
+        await db.update(projects).set({ status: "active" }).where(eq(projects.id, projectId));
       if (mode === "revoked")
         await db
           .update(roles)
