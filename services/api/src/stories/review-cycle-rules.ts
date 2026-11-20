@@ -104,20 +104,27 @@ export function reviewResultJson(output: string) {
  * read-only mode runs: the turn starts in the primary checkout, Claude Code may run git
  * only there (it denies `cd`, `git -C` and `git fetch`), and Codex's sandbox has no network. */
 export function reviewReadingInstructions(engine: AgentManifest["engine"], primary: string) {
-  const start = `Your turn starts in the primary checkout, repos/${primary}. Each pull request's checkout is relative to the workspace root, so another checkout is at ../../<owner>/<name> from there.`;
-  if (engine === "codex")
-    return [
-      start,
-      "In each checkout run `git diff <baseSha>...<headSha>` and `git log`, and read the surrounding code, consumers and tests beyond the diff.",
-      "Your read-only sandbox has no network, so GitHub's CLI and fetching cannot work. Take pull request state and CI from the candidate below, and report a commit missing locally as missing evidence.",
-    ].join(" ");
-  return [
-    start,
-    "Git runs only in the primary checkout: changing directory, git's -C option, fetching and --output are denied, so do not retry them.",
-    "There, run `git diff <baseSha>...<headSha>` and `git log`, and add `--submodule=diff` to see changes inside the submodules it pins.",
-    "For every pull request use `gh pr view`, `gh pr diff` and `gh pr checks` with `--repo <repository>`, and `gh run view` for CI logs. Read the files of any checkout directly, including the surrounding code, consumers and tests beyond the diff.",
-    "When a commit is missing locally, rely on `gh pr diff` and say which evidence came from GitHub.",
-  ].join(" ");
+  const start = `Your turn starts in the primary checkout, repos/${primary}. Each pull request's checkout is relative to the workspace root, so another checkout is at ../../<owner>/<name> from there. Facility verifies only the primary checkout's head: another checkout may hold a different commit.`;
+  switch (engine) {
+    case "codex":
+      return [
+        start,
+        "In each checkout confirm `git rev-parse HEAD` against the pull request's headSha, then run `git diff <baseSha>...<headSha>` and `git log`, and read the surrounding code, consumers and tests beyond the diff.",
+        "Your read-only sandbox has no network, so GitHub's CLI and fetching cannot work. Take pull request CI from the candidate below, and report a commit missing locally as missing evidence.",
+      ].join(" ");
+    case "claude_code":
+      return [
+        start,
+        "Git runs only in the primary checkout: changing directory, git's -C option, fetching and --output are denied, so do not retry them.",
+        "There, run `git diff <baseSha>...<headSha>` and `git log`, and add `--submodule=diff` to see changes inside the submodules it pins.",
+        "For every pull request use `gh pr view`, `gh pr diff` and `gh pr checks` with `--repo <repository>`, and `gh run view` with the same option for CI logs. Read the surrounding code, consumers and tests beyond the diff directly; for another repository, take its changes from `gh pr diff`, since its checkout may not be at headSha.",
+        "When a commit is missing locally, rely on `gh pr diff` and say which evidence came from GitHub.",
+      ].join(" ");
+    default: {
+      const unknown: never = engine;
+      throw new Error(`No read-only review instructions for engine ${String(unknown)}`);
+    }
+  }
 }
 
 /** What a native, read-only Reviewer turn receives on top of its own prompt. */
@@ -134,6 +141,10 @@ export function reviewTurnInstructions(input: {
     baseSha: pull.baseSha,
     headSha: pull.headSha,
     checkout: `repos/${pull.repository}`,
+    checks: {
+      state: pull.checks.state,
+      runs: pull.checks.runs.map(({ name, status, conclusion }) => ({ name, status, conclusion })),
+    },
   }));
   return [
     "## Automatic delivery review",
@@ -143,13 +154,19 @@ export function reviewTurnInstructions(input: {
       input.candidate.pullRequests.find((pull) => pull.primary)?.repository ??
         "<primary repository>",
     )}`,
-    "Review all required PRs as one delivery against the approved plan. Account for each acceptance criterion with a stable criterion ID, and use it as a finding's requirement when it is violated. Trace consumers, security boundaries, existing data and regressions; report missing essential evidence.",
+    "Review all required PRs as one delivery against the approved plan. Account for each acceptance criterion with a stable criterion ID, and use it as a finding's requirement when it is violated. Trace consumers, security boundaries, existing data and regressions.",
+    "Facility admitted this candidate only after CI succeeded on every exact head, and after a preview of this exact candidate when the project requires one; the candidate below records both. Do not report them as missing. Any missingEvidence entry or unverified criterion stops the cycle for a person instead of a correction, so use them only for evidence an acceptance criterion needs that you cannot establish.",
+    "Attach every finding to one of the candidate's pull requests, with a path in that repository; report a problem elsewhere on the primary pull request. A finding on any other repository or number invalidates the review.",
     "Use open for new or persisting findings. In round 2 include every previous finding by ID and use resolved only with evidence on the new heads. Use P2 with category suggestion for non-blocking feedback. Use requires_decision for a fix outside the approved scope or a decision the Builder cannot make.",
     "Report CI and anything you reproduced as observations bound to the candidate; distinguish static reading from reproduced behaviour.",
     "End your final response with exactly one <facility-review> block containing one JSON object that follows this schema. Copy candidate.id and each required repository, PR number, baseSha and headSha into reviewedPulls.",
     JSON.stringify(z.toJSONSchema(DeliveryReviewResultSchema)),
     "### Candidate",
-    JSON.stringify({ id: input.candidate.id, pullRequests: repositories }),
+    JSON.stringify({
+      id: input.candidate.id,
+      pullRequests: repositories,
+      preview: input.candidate.preview,
+    }),
     `### Approved plan r${input.plan.revision} (decision ${input.plan.decisionRevision})`,
     input.plan.markdown,
     ...(input.previous ? ["### Previous review result", JSON.stringify(input.previous)] : []),

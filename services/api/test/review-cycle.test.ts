@@ -199,8 +199,25 @@ describe("native read-only review contract", () => {
   it("does not send a Codex Reviewer to the network its sandbox blocks", () => {
     const text = contract("codex");
     expect(commands(text).length).toBeGreaterThan(0);
-    for (const command of commands(text)) expect(command).toMatch(/^git (diff|log)\b/);
+    for (const command of commands(text)) expect(command).toMatch(/^git (diff|log|rev-parse)\b/);
     expect(text).toContain("no network");
+  });
+
+  it("gives the Reviewer the CI and preview evidence that admitted the candidate", () => {
+    const prompt = reviewTurnInstructions({
+      candidate: {
+        ...candidate,
+        preview: { generation: "e".repeat(64), observedAt: "2026-01-01T00:00:00Z" },
+      },
+      plan: { revision: 1, decisionRevision: 1, markdown: "Plan" },
+      engine: "claude_code",
+    });
+    const shown = JSON.parse(prompt.split("### Candidate\n\n")[1]?.split("\n\n")[0] ?? "");
+    expect(shown.pullRequests[0].checks).toEqual({ state: "success", runs: [] });
+    expect(shown.preview.generation).toBe("e".repeat(64));
+    // Missing evidence and findings outside the candidate end the cycle, so the contract says so.
+    expect(prompt).toContain("Do not report them as missing");
+    expect(prompt).toContain("Attach every finding to one of the candidate's pull requests");
   });
 });
 

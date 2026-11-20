@@ -88,8 +88,10 @@ context for each review. It explores the code beyond the diff: it reads the chec
 `git diff`, `git log`, `gh pr view` and `gh pr diff`, and follows consumers, tests and security
 boundaries. The turn starts in the primary checkout. A Claude Code Reviewer runs git only there,
 with `--submodule=diff` for submodules it pins, and reads other repositories' pull requests with
-`gh --repo` and their files directly. Facility's review instructions name only the commands the
-Reviewer's engine allows. Reading is enforced in layers:
+`gh pr diff --repo`; a Codex Reviewer has no network and works from the local checkouts and the CI
+Facility recorded. Facility's review instructions name only the commands the Reviewer's engine
+allows, and include the CI and preview evidence that admitted the candidate. Reading is enforced in
+layers:
 
 - **The engine.** Claude Code receives reading tools only; every other tool, including edits,
   other commands, `git fetch` and git's `--output`, is denied. User, project and local settings,
