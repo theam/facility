@@ -67,12 +67,12 @@ export type Exchange = {
   request: StoryMessage | null;
   response: StoryMessage | null;
   extra: StoryMessage[];
-  followupResponse: StoryMessage | null;
+  followups: Array<{ turn: StoryTurnSummary; response: StoryMessage | null }>;
   latestSeq: number;
 };
 
 export function exchangeKey(message: StoryMessage) {
-  const turnId = message.turn?.followupOf ?? message.turnId;
+  const turnId = message.turn?.followupRootId ?? message.turn?.followupOf ?? message.turnId;
   return turnId ? `turn:${turnId}` : `message:${message.id}`;
 }
 
@@ -86,12 +86,19 @@ export function groupExchanges(messages: StoryMessage[]): Exchange[] {
       request: null,
       response: null,
       extra: [],
-      followupResponse: null,
+      followups: [],
       latestSeq: 0,
     };
     exchange.latestSeq = Math.max(exchange.latestSeq, message.seq);
-    if (message.turn?.followupOf && message.role === "agent") {
-      exchange.followupResponse ??= message;
+    let followup = message.turn?.followupOf ? message.turn : message.turn?.followup;
+    while (followup) {
+      const existing = exchange.followups.find(({ turn }) => turn.id === followup?.id);
+      const response = message.turnId === followup.id && message.role === "agent" ? message : null;
+      if (existing) existing.response ??= response;
+      else exchange.followups.push({ turn: followup, response });
+      followup = followup.followup;
+    }
+    if (message.turn?.followupOf) {
       byKey.set(key, exchange);
       continue;
     }
@@ -102,7 +109,14 @@ export function groupExchanges(messages: StoryMessage[]): Exchange[] {
     byKey.set(key, exchange);
   }
   return [...byKey.values()]
-    .map((exchange) => ({ ...exchange, extra: newestMessages(exchange.extra).reverse() }))
+    .map((exchange) => ({
+      ...exchange,
+      extra: newestMessages(exchange.extra).reverse(),
+      followups: exchange.followups.sort(
+        (a, b) =>
+          a.turn.createdAt.localeCompare(b.turn.createdAt) || a.turn.id.localeCompare(b.turn.id),
+      ),
+    }))
     .sort((a, b) => b.latestSeq - a.latestSeq);
 }
 

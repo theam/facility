@@ -1050,6 +1050,7 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
       id: originalId,
       triggerType: "manual",
       state: "succeeded",
+      startedAt: now,
       endedAt: now,
     });
     await recordPlanExecution(db, scope, originalId, authorization);

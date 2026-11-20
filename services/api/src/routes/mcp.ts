@@ -57,7 +57,7 @@ export async function registerMcpRoutes(app: FastifyInstance, config: AppConfig)
         "schedule_followup",
         {
           description:
-            "Schedule one continuation of this turn's assignment after asynchronous work. Wait for confirmation before ending the turn. Include only a short public reason and non-secret job references. A person can cancel it or send a new request.",
+            "Schedule the next check in this assignment. Keep one check pending at a time and wait for confirmation before ending the current turn. Use a short public reason and non-secret job references. A person can cancel it or send a new request.",
           inputSchema: followupToolInput,
           annotations: { idempotentHint: true, destructiveHint: false },
         },

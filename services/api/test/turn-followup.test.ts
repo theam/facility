@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  canScheduleFollowup,
   followupExpired,
   followupToolInput,
+  MAX_FOLLOWUP_WAKEUPS,
+  mayScheduleNextFollowup,
   turnToolToken,
   verifyTurnToolToken,
 } from "../src/turns/followup.js";
@@ -39,5 +42,15 @@ describe("native turn follow-up requests", () => {
     expect(followupToolInput.safeParse({ ...request, orgId: "org_other" }).success).toBe(false);
     expect(followupExpired(start, new Date(start.getTime() + 15 * 60_000 - 1))).toBe(false);
     expect(followupExpired(start, new Date(start.getTime() + 15 * 60_000))).toBe(true);
+  });
+
+  it("reserves only a single next check within the original assignment window", () => {
+    const expiresAt = new Date(start.getTime() + 4 * 60 * 60_000);
+    const chain = { rootTurnId: turnId, wakeups: MAX_FOLLOWUP_WAKEUPS - 1, expiresAt };
+    expect(canScheduleFollowup(chain, new Date(expiresAt.getTime() - 1))).toBe(true);
+    expect(canScheduleFollowup(chain, expiresAt)).toBe(false);
+    expect(mayScheduleNextFollowup(chain, new Date(expiresAt.getTime() - 30_001))).toBe(true);
+    expect(mayScheduleNextFollowup(chain, new Date(expiresAt.getTime() - 30_000))).toBe(false);
+    expect(canScheduleFollowup({ ...chain, wakeups: MAX_FOLLOWUP_WAKEUPS }, start)).toBe(false);
   });
 });

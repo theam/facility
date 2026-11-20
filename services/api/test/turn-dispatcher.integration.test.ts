@@ -47,6 +47,11 @@ import {
   type AgentTurnRequest,
   type AgentTurnResult,
 } from "../src/turns/engines.js";
+import {
+  FOLLOWUP_WINDOW_HOURS,
+  MAX_FOLLOWUP_WAKEUPS,
+  registerFollowup,
+} from "../src/turns/followup.js";
 import { TurnGitEvidenceService } from "../src/turns/git-evidence.js";
 import { LiveTurnEvents } from "../src/turns/live-events.js";
 import { recoverInterruptedTurns, recoverQueuedTurns } from "../src/worker.js";
@@ -2364,6 +2369,8 @@ Review the request.
     const { scope, initial, queued, workspace } = await startFollowup("resume");
     const previous = engine.requests.at(-1);
     if (!previous) throw new Error("Expected the original engine request");
+    // A workflow update may clear retryAfter. The scheduled check must still wait.
+    await db.update(turns).set({ retryAfter: null }).where(eq(turns.id, queued.id));
     expect(await dispatcher.dispatch({ ...scope, turnId: queued.id })).toEqual({ claimed: false });
     const conversation = await storiesService.conversationPage(orgId, projectId, scope.storyId, {
       order: "desc",
@@ -2404,7 +2411,7 @@ Review the request.
       workspace: { id: workspace.id, volumeRef: workspace.volumeRef },
       nativeSessionId: "codex-pr-reviewer-session",
       manifest: { name: reviewer.name },
-      turnTools: undefined,
+      turnTools: expect.objectContaining({ token: expect.any(String) }),
     });
     expect(engine.requests.at(-1)?.prompt).toContain(handoff.context);
     expect(engine.requests.at(-1)?.prompt).toContain("Track the job to completion");
@@ -2427,6 +2434,93 @@ Review the request.
     });
   }, 20_000);
 
+  it("chains one pending check at a time in the same assignment and stops at the wake-up limit", async () => {
+    const { scope, initial, queued, workspace } = await startFollowup("chain");
+    const [root] = await db.select().from(turns).where(eq(turns.id, initial.id));
+    if (!root?.startedAt) throw new Error("Expected the root start time");
+    const expiresAt = new Date(root.startedAt.getTime() + FOLLOWUP_WINDOW_HOURS * 60 * 60_000);
+    let nextId = queued.id;
+    let previousId = initial.id;
+    let context = handoff.context;
+    for (let wakeup = 1; wakeup <= MAX_FOLLOWUP_WAKEUPS; wakeup++) {
+      const turnId = nextId;
+      const final = wakeup === MAX_FOLLOWUP_WAKEUPS;
+      const nextInput = { ...handoff, context: `Check synthetic job again after check ${wakeup}.` };
+      await due(turnId);
+      engine.beforeNextRun = async (request) => {
+        expect(request.nativeSessionId).toBe("codex-pr-reviewer-session");
+        expect(request.workspace.id).toBe(workspace.id);
+        expect(request.prompt).toContain(context);
+        expect(request.prompt).toContain("Track the job to completion");
+        if (final) {
+          expect(request.turnTools).toBeUndefined();
+          const [running] = await db.select().from(turns).where(eq(turns.id, turnId));
+          if (!running?.startedAt) throw new Error("Expected the running turn");
+          await expect(
+            registerFollowup(
+              db,
+              { turnId, startedAt: running.startedAt.getTime() },
+              nextInput,
+              masterKey,
+            ),
+          ).rejects.toMatchObject({ code: "followup_limit_reached" });
+          return;
+        }
+        await withTurnTool(request, async (tool) => {
+          const results = await Promise.all(
+            [1, 2].map(() => tool.callTool({ name: "schedule_followup", arguments: nextInput })),
+          );
+          expect(results[0]).toMatchObject({
+            content: [
+              {
+                text: expect.stringContaining(
+                  `"followups_remaining":${MAX_FOLLOWUP_WAKEUPS - wakeup - 1}`,
+                ),
+              },
+            ],
+          });
+          expect(JSON.stringify(results[0])).toContain(expiresAt.toISOString());
+          expect(results[1]).toEqual(results[0]);
+        });
+      };
+      expect(await dispatcher.dispatch({ ...scope, turnId })).toMatchObject({ state: "succeeded" });
+      expect(await dispatcher.dispatch({ ...scope, turnId })).toEqual({ claimed: false });
+      const steps = await db
+        .select()
+        .from(turns)
+        .where(and(eq(turns.storyId, scope.storyId), eq(turns.triggerType, "followup")));
+      expect(steps.find((step) => step.id === turnId)?.triggerKey).toBe(previousId);
+      const pending = steps.filter((step) => step.state === "queued");
+      expect(pending).toHaveLength(final ? 0 : 1);
+      expect(steps).toHaveLength(wakeup + (final ? 0 : 1));
+      if (final) {
+        const page = await storiesService.conversationPage(orgId, projectId, scope.storyId, {
+          order: "desc",
+          limit: 1,
+        });
+        expect(page.messages[0]?.turn).toMatchObject({
+          id: turnId,
+          followupOf: previousId,
+          followupRootId: initial.id,
+        });
+        const request = page.related.find(
+          (message) => message.role === "user" && message.turnId === initial.id,
+        );
+        expect(request).toBeDefined();
+        let run = request?.turn ?? undefined;
+        for (let index = 0; index < MAX_FOLLOWUP_WAKEUPS; index++) run = run?.followup;
+        expect(run?.id).toBe(turnId);
+      } else {
+        const next = pending[0];
+        if (!next) throw new Error("Expected the next check");
+        expect(next.triggerKey).toBe(turnId);
+        nextId = next.id;
+        previousId = turnId;
+        context = nextInput.context;
+      }
+    }
+  }, 30_000);
+
   it.each([
     "canceled",
     "superseded",
@@ -2434,10 +2528,12 @@ Review the request.
     "inactive project",
     "closed",
     "expired",
+    "assignment deadline",
+    "foreign predecessor",
     "revoked",
     "budget",
   ] as const)("does not wake or run a %s follow-up", async (mode) => {
-    const { scope, queued } = await startFollowup(mode);
+    const { scope, initial, queued } = await startFollowup(mode);
     if (mode === "canceled")
       await storiesService.cancelTurn({ ...scope, turnId: queued.id, actor: authorizedActor });
     if (mode === "superseded") {
@@ -2462,6 +2558,17 @@ Review the request.
         .update(stories)
         .set({ status: "done", completedAt: new Date() })
         .where(eq(stories.id, scope.storyId));
+    if (mode === "assignment deadline")
+      await db
+        .update(turns)
+        .set({
+          startedAt: new Date(Date.now() - (FOLLOWUP_WINDOW_HOURS + 1) * 60 * 60_000),
+        })
+        .where(eq(turns.id, initial.id));
+    if (mode === "foreign predecessor") {
+      const other = await startFollowup("different-story");
+      await db.update(turns).set({ triggerKey: other.initial.id }).where(eq(turns.id, queued.id));
+    }
     if (mode === "revoked")
       await db.update(roles).set({ permissions: [] }).where(eq(roles.id, roleId));
     if (mode === "budget")
@@ -2485,6 +2592,8 @@ Review the request.
       const result = await dispatcher.dispatch({ ...scope, turnId: queued.id });
       expect(engine.requests).toHaveLength(before);
       expect(wake).not.toHaveBeenCalled();
+      if (mode === "foreign predecessor")
+        expect(result).toMatchObject({ error: "The original assignment is unavailable" });
       expect(result).toMatchObject(
         ["canceled", "superseded", "archived"].includes(mode)
           ? { claimed: false }

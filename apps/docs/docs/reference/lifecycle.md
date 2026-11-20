@@ -53,9 +53,12 @@ same agent's native session in the same retained workspace and displays its upda
 under the original request. Scheduling keeps the workspace awake. A workspace suspended while
 waiting wakes through normal dispatch.
 
-A request can schedule one automatic follow-up. Facility checks the original authorizer,
-agent identity, plan authorization, and budget again at admission. It stops attempting dispatch
-15 minutes after the due time. A follow-up that fails requires a person to continue the assignment.
+Each turn can schedule its next check if work is still pending. An assignment can have one
+waiting follow-up at a time, up to five automatic wake-ups within four hours of the original turn
+starting. Facility checks the original authorizer, agent identity, plan authorization, and budget
+at each admission. Dispatch stops at the assignment deadline or 15 minutes after the check is due,
+whichever comes first. A running turn can finish after the deadline. A follow-up that fails requires
+a person to continue the assignment.
 Use **Cancel** while waiting, or send a new request to take over. Archiving the story cancels a
 pending follow-up. A closed story or inactive project is ineligible for dispatch.
 Read-only Reviewer turns and the automatic review cycle retain their existing workflow.

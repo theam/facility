@@ -211,14 +211,12 @@ function ExchangeCard({
   canProposePlan: boolean;
   focusedId?: string;
 }) {
-  const { turn, request, response } = exchange;
-  const followup = turn?.followup ?? exchange.followupResponse?.turn;
-  const latest = followup ?? turn;
+  const { turn, request, response, followups } = exchange;
+  const latest = followups.at(-1)?.turn ?? turn;
   const status = runStatus(latest ?? null, {
     waitingForReply: !!latest && waitingTurnIds.includes(latest.id),
   });
-  const agentName =
-    turn?.agentName ?? followup?.agentName ?? request?.requestedAgentName ?? "agent";
+  const agentName = turn?.agentName ?? latest?.agentName ?? request?.requestedAgentName ?? "agent";
   return (
     <article
       className="flex flex-col border-b border-(--line)"
@@ -247,25 +245,26 @@ function ExchangeCard({
           response={response}
           waitingForReply={!!turn && waitingTurnIds.includes(turn.id)}
           canExecute={canExecute}
-          canProposePlan={canProposePlan && !followup}
+          canProposePlan={canProposePlan && followups.length === 0}
           focusedId={focusedId}
-          hasFollowup={!!followup}
+          hasFollowup={followups.length > 0}
         />
       ) : null}
-      {followup ? (
+      {followups.map(({ turn: followup, response: followupResponse }) => (
         <RunBlock
           key={followup.id}
           projectId={projectId}
           storyId={storyId}
           agentName={agentName}
           turn={followup}
-          response={exchange.followupResponse}
+          response={followupResponse}
           waitingForReply={waitingTurnIds.includes(followup.id)}
           canExecute={canExecute}
-          canProposePlan={canProposePlan}
+          canProposePlan={canProposePlan && latest?.id === followup.id}
           focusedId={focusedId}
+          hasFollowup={latest?.id !== followup.id}
         />
-      ) : null}
+      ))}
     </article>
   );
 }

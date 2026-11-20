@@ -55,9 +55,13 @@ import { appendTurnEvent } from "./events.js";
 import {
   authorizeFollowupExecution,
   FOLLOWUP_TRIGGER,
+  FOLLOWUP_WINDOW_HOURS,
+  type FollowupChain,
   followupExpired,
-  isInteractiveTurn,
-  readFollowup,
+  MAX_FOLLOWUP_WAKEUPS,
+  mayScheduleNextFollowup,
+  readFollowupChain,
+  readFollowupRequest,
   storyCanFollowUp,
   turnToolToken,
 } from "./followup.js";
@@ -188,11 +192,14 @@ export class TurnDispatcher {
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
       currentWorkspace = workspaceLocator(workspace);
-      const followup =
-        turn.triggerType === FOLLOWUP_TRIGGER ? await readFollowup(this.db, turn) : undefined;
+      const followup = admission.followup;
+      const followupRequest =
+        followup && turn.triggerKey
+          ? await readFollowupRequest(this.db, turn, turn.triggerKey)
+          : undefined;
       if (
         turn.triggerType === FOLLOWUP_TRIGGER &&
-        (!storyCanFollowUp(story) || followup?.workspaceId !== workspace.id)
+        (!storyCanFollowUp(story) || followupRequest?.workspaceId !== workspace.id)
       )
         throw new Error("The original story or workspace is no longer available for follow-up.");
       const manifest = AgentManifestSchema.parse(turn.manifest);
@@ -433,7 +440,7 @@ export class TurnDispatcher {
       const engine = this.engines.get(manifest.engine);
       const requestMessage = messages.find(
         (message) =>
-          message.turnId === (followup ? turn.triggerKey : turn.id) && message.role === "user",
+          message.turnId === (followup?.rootTurnId ?? turn.id) && message.role === "user",
       );
       const attached =
         (requestMessage?.metadata as { attachments?: InputFileReference[] })?.attachments ?? [];
@@ -465,6 +472,8 @@ export class TurnDispatcher {
       const toolUrl = this.turnTools
         ? new URL("/internal/turn-tools", this.turnTools.apiUrl)
         : undefined;
+      const chain =
+        !cycle && toolUrl ? (followup ?? (await readFollowupChain(this.db, turn))) : undefined;
       const toolToken =
         this.turnTools &&
         toolUrl &&
@@ -472,16 +481,19 @@ export class TurnDispatcher {
         !toolUrl.password &&
         (toolUrl.protocol === "https:" ||
           (toolUrl.protocol === "http:" && this.turnTools.insecureDev)) &&
-        isInteractiveTurn(turn) &&
-        !cycle &&
+        chain &&
+        mayScheduleNextFollowup(chain) &&
         turn.startedAt
           ? turnToolToken(this.turnTools.secret, turn.id, turn.startedAt)
           : undefined;
       if (toolToken) secrets.push(toolToken);
-      const followupInstruction = followup
-        ? `\n\n# Scheduled follow-up\nRecheck the pending work in this same assignment and report the outcome. This was requested earlier by this agent.\n${followup.context}`
-        : toolToken
-          ? "\n\nIf waiting for background work prevents finishing this assignment, use Facility's schedule_followup tool. Give a short user-visible reason and the non-secret context and job references needed for the next check. End the turn only after the tool confirms persistence, and tell the user what you are waiting for. This permits one follow-up for this assignment."
+      const followupInstruction = followupRequest
+        ? `\n\n# Scheduled follow-up\nRecheck the pending work in this same assignment and report the outcome. This was requested earlier by this agent.\n${followupRequest.context}`
+        : "";
+      const scheduleInstruction = toolToken
+        ? `\n\nIf waiting for background work prevents finishing the assignment, call schedule_followup once for the next check. Give a short user-visible reason and non-secret job references. Wait for the tool to confirm before ending the turn. Automatic checks are limited to ${MAX_FOLLOWUP_WAKEUPS} within ${FOLLOWUP_WINDOW_HOURS} hours of the original turn.`
+        : followup
+          ? "\nThis assignment cannot schedule another automatic check. Report the current state if the work is still pending."
           : "";
       const engineRequest = {
         turnId: turn.id,
@@ -499,7 +511,8 @@ export class TurnDispatcher {
           ) +
           deliveryInstruction +
           reviewInstruction +
-          followupInstruction,
+          followupInstruction +
+          scheduleInstruction,
         turnTools: toolUrl && toolToken ? { url: toolUrl.toString(), token: toolToken } : undefined,
         cwd: prepared.primaryCwd,
         nativeSessionId: resumedSessionId,
@@ -519,6 +532,8 @@ export class TurnDispatcher {
           type: "turn.phase",
           data: { phase: "agent" },
         });
+        if (followup && new Date() >= followup.expiresAt)
+          throw new ApiError(409, "followup_expired", "The automatic follow-up window ended");
         engineStarted = true;
         result = await engine.run(engineRequest);
       } catch (error) {
@@ -748,6 +763,7 @@ export class TurnDispatcher {
         turn: typeof turns.$inferSelect;
         reservationId: string | null;
         reviewCycle?: ReviewCycle;
+        followup?: FollowupChain;
       }
   > {
     try {
@@ -810,7 +826,15 @@ export class TurnDispatcher {
           .limit(1);
         if (queued?.state !== "queued" || (queued.retryAfter && queued.retryAfter > new Date()))
           return null;
+        let followup: FollowupChain | undefined;
         if (queued.triggerType === FOLLOWUP_TRIGGER) {
+          followup = (await readFollowupChain(tx, queued)) ?? undefined;
+          if (!followup)
+            throw new ApiError(
+              409,
+              "followup_origin_missing",
+              "The original assignment is unavailable",
+            );
           const [story] = await tx
             .select()
             .from(stories)
@@ -822,7 +846,14 @@ export class TurnDispatcher {
               ),
             )
             .limit(1);
-          if (!story || !storyCanFollowUp(story) || followupExpired(queued.scheduledFor))
+          const now = new Date();
+          if (queued.scheduledFor && queued.scheduledFor > now) return null;
+          if (
+            !story ||
+            !storyCanFollowUp(story) ||
+            now >= followup.expiresAt ||
+            followupExpired(queued.scheduledFor, now)
+          )
             throw new ReviewCycleStop("The follow-up expired or the story was closed.");
           await authorizeFollowupExecution(tx, queued);
           const [current] = await tx
@@ -937,16 +968,16 @@ export class TurnDispatcher {
             );
           return { kind: "held" as const, code: error.code, error: error.message };
         }
-        if (queued.triggerType === FOLLOWUP_TRIGGER) {
-          if (!queued.triggerKey)
-            throw new ApiError(409, "followup_origin_missing", "The original turn is unavailable");
-          const original = await readPlanExecutionReceipt(tx, scope, queued.triggerKey);
+        if (followup) {
+          const original = await readPlanExecutionReceipt(tx, scope, followup.rootTurnId);
           if (workflowDigest(original) !== workflowDigest(authorization))
             throw new ApiError(
               409,
               "followup_plan_changed",
               "The original plan authorization changed. Start this work with a new request.",
             );
+          if (new Date() >= followup.expiresAt)
+            throw new ApiError(409, "followup_expired", "The automatic follow-up window ended");
         }
         const claimed = (
           await tx
@@ -998,7 +1029,7 @@ export class TurnDispatcher {
           model: claimed.model,
         });
         if (reviewCycle) await this.review?.cycles.recordStart(tx, reviewCycle, claimed.id);
-        return { kind: "running" as const, turn: claimed, reservationId, reviewCycle };
+        return { kind: "running" as const, turn: claimed, reservationId, reviewCycle, followup };
       });
       if (!admitted) {
         const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);

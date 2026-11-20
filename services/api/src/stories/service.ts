@@ -38,6 +38,7 @@ import {
   FOLLOWUP_REQUESTED,
   FOLLOWUP_TRIGGER,
   type FollowupRequest,
+  MAX_FOLLOWUP_WAKEUPS,
   queueFollowup,
 } from "../turns/followup.js";
 import { readUsageJournal } from "../turns/usage-journal.js";
@@ -118,6 +119,7 @@ export type ConversationTurn = {
   startedAt: Date | null;
   endedAt: Date | null;
   followupOf?: string;
+  followupRootId?: string;
   scheduledFor?: Date;
   followupReason?: string;
   followup?: ConversationTurn;
@@ -1580,33 +1582,34 @@ export class StoryWorkspaceService {
     const contiguous = rows.slice(0, limit);
     const oldest = contiguous.at(-1);
     const pageTurnIds = [...new Set(contiguous.map((row) => row.turnId).filter(isString))];
+    const turnScope = and(
+      eq(turns.orgId, orgId),
+      eq(turns.projectId, projectId),
+      eq(turns.storyId, storyId),
+    );
+    const predecessor = sql`case when ${turns.triggerType} = ${FOLLOWUP_TRIGGER} then ${turns.triggerKey} end`;
+    // Include the entire bounded chain even when the page starts at its last
+    // reply or when its newest run is still waiting and has no reply yet.
+    const linkedTurns = sql`
+      with recursive linked(id, predecessor, conversation_id) as (
+        select ${turns.id}, ${predecessor}, ${turns.conversationId}
+        from ${turns} where ${turnScope} and ${inArray(turns.id, pageTurnIds)}
+        union
+        select ${turns.id}, ${predecessor}, ${turns.conversationId}
+        from linked
+        join ${turns} on ${turns.conversationId} = linked.conversation_id
+          and (${turns.id} = linked.predecessor or ${predecessor} = linked.id)
+        where ${turnScope}
+      )
+      select id from linked
+    `;
     const turnRows = pageTurnIds.length
       ? await this.db
           .select()
           .from(turns)
-          .where(
-            and(
-              eq(turns.orgId, orgId),
-              eq(turns.projectId, projectId),
-              eq(turns.storyId, storyId),
-              or(
-                inArray(turns.id, pageTurnIds),
-                and(
-                  eq(turns.triggerType, FOLLOWUP_TRIGGER),
-                  inArray(turns.triggerKey, pageTurnIds),
-                ),
-              ),
-            ),
-          )
+          .where(and(turnScope, sql`${turns.id} in (${linkedTurns})`))
       : [];
-    const relatedTurnIds = [
-      ...new Set([
-        ...pageTurnIds,
-        ...turnRows.flatMap((turn) =>
-          turn.triggerType === FOLLOWUP_TRIGGER && turn.triggerKey ? [turn.triggerKey] : [],
-        ),
-      ]),
-    ];
+    const relatedTurnIds = turnRows.map((turn) => turn.id);
     const related =
       options.order === "desc" && hasMore && oldest && relatedTurnIds.length > 0
         ? await this.db
@@ -1622,10 +1625,9 @@ export class StoryWorkspaceService {
               ),
             )
             .orderBy(desc(storyMessages.seq))
-            .limit(40)
+            .limit(80)
         : [];
     const turnById = new Map(turnRows.map((turn) => [turn.id, turn]));
-    const missingIds = relatedTurnIds.filter((id) => !turnById.has(id));
     const followups = turnRows.flatMap((turn) =>
       turn.triggerType === FOLLOWUP_TRIGGER && turn.triggerKey
         ? [{ origin: turn.triggerKey, turn }]
@@ -1641,20 +1643,7 @@ export class StoryWorkspaceService {
           .map((actor) => actor.id),
       ),
     ];
-    const [missingTurns, userRows, requests] = await Promise.all([
-      missingIds.length === 0
-        ? Promise.resolve([])
-        : this.db
-            .select()
-            .from(turns)
-            .where(
-              and(
-                eq(turns.orgId, orgId),
-                eq(turns.projectId, projectId),
-                eq(turns.storyId, storyId),
-                inArray(turns.id, missingIds),
-              ),
-            ),
+    const [userRows, requests] = await Promise.all([
       userIds.length === 0
         ? Promise.resolve([])
         : this.db
@@ -1681,16 +1670,39 @@ export class StoryWorkspaceService {
               ),
             ),
     ]);
-    for (const turn of missingTurns) turnById.set(turn.id, turn);
     const reasonById = new Map(
       requests.map(({ turnId, data }) => [turnId, (data as FollowupRequest).reason]),
     );
-    const followupById = new Map(
-      followups.map(({ origin, turn }) => [
-        origin,
-        { ...conversationTurn(turn), followupReason: reasonById.get(origin) },
-      ]),
-    );
+    const successorById = new Map(followups.map(({ origin, turn }) => [origin, turn]));
+    function assignmentRoot(turn: typeof turns.$inferSelect) {
+      let root = turn;
+      for (
+        let depth = 0;
+        root.triggerType === FOLLOWUP_TRIGGER && depth < MAX_FOLLOWUP_WAKEUPS;
+        depth++
+      ) {
+        const previous = root.triggerKey ? turnById.get(root.triggerKey) : undefined;
+        if (!previous) break;
+        root = previous;
+      }
+      return root.id;
+    }
+    function conversationChain(
+      turn: typeof turns.$inferSelect,
+      rootId: string,
+      depth = 0,
+    ): ConversationTurn {
+      const next = successorById.get(turn.id);
+      return {
+        ...conversationTurn(turn),
+        ...(turn.triggerType === FOLLOWUP_TRIGGER && turn.triggerKey
+          ? { followupRootId: rootId, followupReason: reasonById.get(turn.triggerKey) }
+          : {}),
+        ...(next && depth < MAX_FOLLOWUP_WAKEUPS
+          ? { followup: conversationChain(next, rootId, depth + 1) }
+          : {}),
+      };
+    }
     const userById = new Map(userRows.map((user) => [user.id, user]));
     const enrich = (row: typeof storyMessages.$inferSelect) => {
       const turn = row.turnId ? (turnById.get(row.turnId) ?? null) : null;
@@ -1698,15 +1710,7 @@ export class StoryWorkspaceService {
       return {
         ...row,
         author: conversationAuthor(row, turn, userById),
-        turn: turn
-          ? {
-              ...conversationTurn(turn),
-              ...(followupById.has(turn.id) ? { followup: followupById.get(turn.id) } : {}),
-              ...(turn.triggerKey && turn.triggerType === FOLLOWUP_TRIGGER
-                ? { followupReason: reasonById.get(turn.triggerKey) }
-                : {}),
-            }
-          : null,
+        turn: turn ? conversationChain(turn, assignmentRoot(turn)) : null,
         content: conversationContent(row.role, metadata),
         attachments: metadata.attachments ?? [],
       };

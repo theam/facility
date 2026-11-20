@@ -605,3 +605,80 @@ it("loads all completed progress when a background tab becomes visible", async (
     vi.useRealTimers();
   }
 });
+
+it("keeps a second wait and its result in the original exchange", async () => {
+  const original = exchange(1, "turn-root");
+  const first = {
+    ...turn("turn-first"),
+    followupOf: "turn-root",
+    followupRootId: "turn-root",
+  };
+  const second = {
+    ...turn("turn-second", "queued"),
+    createdAt: "2026-09-10T00:03:00Z",
+    followupOf: "turn-first",
+    followupRootId: "turn-root",
+    followupReason: "The job is still running",
+    scheduledFor: "2026-09-10T00:04:00Z",
+    startedAt: null,
+    endedAt: null,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("{}", { status: 503 })),
+  );
+  const withSecond = (secondRun: StoryTurnSummary) => {
+    const firstRun = { ...first, followup: secondRun };
+    const originalRun = { ...turn("turn-root"), followup: firstRun };
+    return [
+      { ...original.request, turn: originalRun },
+      { ...original.response, body: "Started the job", turn: originalRun },
+      {
+        ...original.response,
+        id: "msg3",
+        seq: 3,
+        body: "First check complete",
+        turnId: first.id,
+        turn: firstRun,
+      },
+    ];
+  };
+  const render = async (data: StoryConversationPage) => {
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={data}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+  };
+  await render(page(withSecond(second)));
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]).toContain("First check complete");
+  expect(exchangeTexts()[0]).toContain("The job is still running");
+  expect(exchangeTexts()[0]?.match(/Waiting…/g)).toHaveLength(1);
+  expect(exchangeTexts()[0]).not.toContain("Completed");
+
+  const completed = { ...second, state: "succeeded", startedAt: at, endedAt: at };
+  const result = {
+    ...original.response,
+    id: "msg4",
+    seq: 4,
+    body: "Job finished",
+    turnId: second.id,
+    turn: completed,
+  };
+  const reloaded = page([result], withSecond(completed), 4);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(reloaded);
+  const [onlyExchange] = exchangeTexts();
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(onlyExchange).toContain("Request 1");
+  expect(onlyExchange).toContain("First check complete");
+  expect(onlyExchange?.match(/Job finished/g)).toHaveLength(1);
+});

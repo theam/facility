@@ -426,6 +426,8 @@ export type StoryTurnSummary = {
   startedAt: string | null;
   endedAt: string | null;
   followupOf?: string;
+  /** Original assignment turn in story conversation pages. */
+  followupRootId?: string;
   scheduledFor?: string;
   followupReason?: string;
   followup?: StoryTurnSummary;

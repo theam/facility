@@ -19,12 +19,20 @@ import { appendTurnEvent } from "./events.js";
 
 export const FOLLOWUP_TRIGGER = "followup";
 export const FOLLOWUP_REQUESTED = "turn.followup_requested";
+export const MAX_FOLLOWUP_WAKEUPS = 5;
+export const FOLLOWUP_WINDOW_HOURS = 4;
+const MIN_FOLLOWUP_DELAY_SECONDS = 30;
 const TURN_TOKEN_LIFETIME_MS = 24 * 60 * 60_000;
 const DISPATCH_WINDOW_MS = 15 * 60_000;
 
 export const followupToolInput = z
   .object({
-    delay_seconds: z.number().int().min(30).max(3_600).describe("Time before the next check"),
+    delay_seconds: z
+      .number()
+      .int()
+      .min(MIN_FOLLOWUP_DELAY_SECONDS)
+      .max(3_600)
+      .describe("Time before the next check"),
     reason: z.string().trim().min(1).max(160).describe("Short explanation shown to the user"),
     context: z
       .string()
@@ -44,7 +52,7 @@ export type FollowupRequest = {
   workspaceId: string;
 };
 
-export function isInteractiveTurn(turn: Pick<Turn, "triggerType" | "createdBy">) {
+function isInteractiveTurn(turn: Pick<Turn, "triggerType" | "createdBy">) {
   return ["ui", "mcp", "manual"].includes(turn.triggerType) && Boolean(followupActor(turn));
 }
 
@@ -69,6 +77,54 @@ export async function authorizeFollowupExecution(db: FacilityDb, turn: Turn) {
     .limit(1);
   if (project?.status !== "active")
     throw new ApiError(409, "followup_project_inactive", "The project is inactive");
+}
+
+export type FollowupChain = {
+  rootTurnId: string;
+  wakeups: number;
+  expiresAt: Date;
+};
+
+/** Follow only settled predecessors in the same assignment. Older follow-ups
+ * already use triggerKey for their predecessor, so they share this boundary. */
+export async function readFollowupChain(db: FacilityDb, turn: Turn): Promise<FollowupChain | null> {
+  let origin = turn;
+  let wakeups = 0;
+  while (origin.triggerType === FOLLOWUP_TRIGGER) {
+    if (!origin.triggerKey || ++wakeups > MAX_FOLLOWUP_WAKEUPS) return null;
+    const [previous] = await db
+      .select()
+      .from(turns)
+      .where(
+        and(
+          eq(turns.id, origin.triggerKey),
+          eq(turns.orgId, turn.orgId),
+          eq(turns.projectId, turn.projectId),
+          eq(turns.storyId, turn.storyId),
+          eq(turns.conversationId, turn.conversationId),
+          eq(turns.agentName, turn.agentName),
+          eq(turns.manifestHash, turn.manifestHash),
+          eq(turns.state, "succeeded"),
+        ),
+      )
+      .limit(1);
+    if (!previous) return null;
+    origin = previous;
+  }
+  if (!isInteractiveTurn(origin) || !origin.startedAt) return null;
+  return {
+    rootTurnId: origin.id,
+    wakeups,
+    expiresAt: new Date(origin.startedAt.getTime() + FOLLOWUP_WINDOW_HOURS * 60 * 60_000),
+  };
+}
+
+export function canScheduleFollowup(chain: FollowupChain, dueAt: Date) {
+  return chain.wakeups < MAX_FOLLOWUP_WAKEUPS && dueAt < chain.expiresAt;
+}
+
+export function mayScheduleNextFollowup(chain: FollowupChain, now = new Date()) {
+  return canScheduleFollowup(chain, new Date(now.getTime() + MIN_FOLLOWUP_DELAY_SECONDS * 1_000));
 }
 
 export function turnToolToken(secret: string, turnId: string, startedAt: Date) {
@@ -125,8 +181,7 @@ export async function registerFollowup(
     if (
       turn?.state !== "running" ||
       turn.startedAt?.getTime() !== grant.startedAt ||
-      now.getTime() - grant.startedAt >= TURN_TOKEN_LIFETIME_MS ||
-      !isInteractiveTurn(turn)
+      now.getTime() - grant.startedAt >= TURN_TOKEN_LIFETIME_MS
     ) {
       throw new ApiError(409, "followup_turn_inactive", "This turn cannot schedule a follow-up");
     }
@@ -145,7 +200,10 @@ export async function registerFollowup(
     await authorizeFollowupExecution(tx, turn);
     if (!(await planExecutionStillAuthorized(tx, turn, turn)))
       throw new ApiError(403, "followup_plan_revoked", "The turn's workflow authorization changed");
-    const existing = await readFollowup(tx, turn);
+    const chain = await readFollowupChain(tx, turn);
+    if (!chain)
+      throw new ApiError(409, "followup_origin_missing", "The original assignment is unavailable");
+    const existing = await readFollowupRequest(tx, turn);
     if (existing) {
       if (existing.reason !== input.reason || existing.context !== input.context)
         throw new ApiError(
@@ -153,8 +211,19 @@ export async function registerFollowup(
           "followup_already_requested",
           "This turn already confirmed a follow-up",
         );
-      return { due_at: existing.dueAt };
+      return {
+        due_at: existing.dueAt,
+        expires_at: chain.expiresAt.toISOString(),
+        followups_remaining: MAX_FOLLOWUP_WAKEUPS - chain.wakeups - 1,
+      };
     }
+    const dueAt = new Date(now.getTime() + input.delay_seconds * 1_000);
+    if (!canScheduleFollowup(chain, dueAt))
+      throw new ApiError(
+        409,
+        "followup_limit_reached",
+        "This assignment has reached its automatic follow-up limit",
+      );
     const [workspace] = await tx
       .select({ id: workspaces.id })
       .from(workspaces)
@@ -188,9 +257,8 @@ export async function registerFollowup(
         "followup_content_invalid",
         "Use a brief reason and non-secret references without links",
       );
-    const dueAt = new Date(now.getTime() + input.delay_seconds * 1_000).toISOString();
     const data: FollowupRequest = {
-      dueAt,
+      dueAt: dueAt.toISOString(),
       reason: input.reason,
       context: input.context,
       workspaceId: workspace.id,
@@ -203,13 +271,15 @@ export async function registerFollowup(
       type: FOLLOWUP_REQUESTED,
       data,
     });
-    return { due_at: dueAt };
+    return {
+      due_at: data.dueAt,
+      expires_at: chain.expiresAt.toISOString(),
+      followups_remaining: MAX_FOLLOWUP_WAKEUPS - chain.wakeups - 1,
+    };
   });
 }
 
-export async function readFollowup(db: FacilityDb, turn: Turn) {
-  const origin = turn.triggerType === FOLLOWUP_TRIGGER ? turn.triggerKey : turn.id;
-  if (!origin) return undefined;
+export async function readFollowupRequest(db: FacilityDb, turn: Turn, requestedByTurnId = turn.id) {
   const [request] = await db
     .select({ data: turnEvents.data })
     .from(turnEvents)
@@ -218,7 +288,7 @@ export async function readFollowup(db: FacilityDb, turn: Turn) {
         eq(turnEvents.orgId, turn.orgId),
         eq(turnEvents.projectId, turn.projectId),
         eq(turnEvents.storyId, turn.storyId),
-        eq(turnEvents.turnId, origin),
+        eq(turnEvents.turnId, requestedByTurnId),
         eq(turnEvents.type, FOLLOWUP_REQUESTED),
       ),
     )
@@ -228,9 +298,10 @@ export async function readFollowup(db: FacilityDb, turn: Turn) {
 
 /** Settle the predecessor and create its only successor in the same transaction. */
 export async function queueFollowup(db: FacilityDb, turn: Turn, story: Story, now = new Date()) {
-  if (!isInteractiveTurn(turn)) return false;
-  const request = await readFollowup(db, turn);
+  if (turn.triggerType !== FOLLOWUP_TRIGGER && !isInteractiveTurn(turn)) return false;
+  const request = await readFollowupRequest(db, turn);
   if (!request) return false;
+  const chain = await readFollowupChain(db, turn);
   const scheduledFor = new Date(request.dueAt);
   const [pending] = await db
     .select({ id: storyMessages.id })
@@ -243,7 +314,13 @@ export async function queueFollowup(db: FacilityDb, turn: Turn, story: Story, no
       ),
     )
     .limit(1);
-  const canceled = !!pending || !storyCanFollowUp(story) || followupExpired(scheduledFor, now);
+  const canceled =
+    !!pending ||
+    !storyCanFollowUp(story) ||
+    !chain ||
+    !canScheduleFollowup(chain, scheduledFor) ||
+    followupExpired(scheduledFor, now) ||
+    now >= chain.expiresAt;
   await db.insert(turns).values({
     id: newId("turn"),
     orgId: turn.orgId,
