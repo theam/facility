@@ -1353,7 +1353,6 @@
                   "type": "object",
                   "properties": {
                     "theme": {
-                      "nullable": true,
                       "type": "string",
                       "enum": [
                         "system",

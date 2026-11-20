@@ -21,10 +21,10 @@ import {
   OrgSchema,
   PageQuery,
   type PageQueryValue,
-  PreferencesSchema,
   principal,
   publicRow,
   RoleSchema,
+  SavedPreferencesSchema,
   assertProjectInOrg as sharedAssertProjectInOrg,
   ThemePreferenceSchema,
   type V1RouteContext,
@@ -69,14 +69,15 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     },
   );
 
-  // A person's own appearance; it follows them on every device.
+  // A person's own appearance; it follows them on every device. Any member may change
+  // their own preferences, so this write needs only the membership that reads the org.
   app.patch(
     "/v1/me/preferences",
     {
       config: { permission: "org:read" },
       schema: {
         body: z.object({ theme: ThemePreferenceSchema }).strict(),
-        response: { 200: PreferencesSchema },
+        response: { 200: SavedPreferencesSchema },
       },
     },
     async (request) => {

@@ -132,11 +132,7 @@ function NavSections({
         <NavLinks items={orgNav()} onNavigate={onNavigate} />
         <div className="flex flex-col gap-2">
           <SectionLabel>platform</SectionLabel>
-          <NavLinks
-            items={orgPlatformNav()}
-            label="Organization settings"
-            onNavigate={onNavigate}
-          />
+          <NavLinks items={orgPlatformNav()} label="Platform" onNavigate={onNavigate} />
         </div>
       </div>
     );

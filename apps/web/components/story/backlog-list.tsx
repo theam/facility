@@ -251,7 +251,7 @@ function BacklogRow({
           {canStart && item.kind === "issue" && item.phase === "not_started" ? (
             <Link
               href={startHref}
-              className="rounded-md border border-(--accent) bg-(--accent)/25 px-2 py-0.5 text-(--ink) hover:bg-(--accent)"
+              className="rounded-md border border-(--accent) bg-(--accent)/25 px-2 py-0.5 text-(--ink) hover:bg-(--accent) hover:text-(--on-accent)"
             >
               Start
             </Link>

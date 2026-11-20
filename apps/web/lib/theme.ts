@@ -15,12 +15,18 @@ export function themeAttribute(value: unknown): "light" | "dark" | undefined {
   return value === "light" || value === "dark" ? value : undefined;
 }
 
-/** Applies a preference in this browser, now and on the next page load. */
-export function applyTheme(theme: ThemePreference | null) {
+/** Shows a preference on this page only, for example while the person is choosing. */
+export function previewTheme(theme: ThemePreference | null) {
   const root = document.documentElement;
   const attribute = themeAttribute(theme);
   if (attribute) root.dataset.theme = attribute;
   else delete root.dataset.theme;
+}
+
+/** Applies a saved preference in this browser, now and on the next page load. A null
+ * preference forgets it, so the next page follows the system. */
+export function applyTheme(theme: ThemePreference | null) {
+  previewTheme(theme);
   const secure = window.location.protocol === "https:" ? "; Secure" : "";
   // biome-ignore lint/suspicious/noDocumentCookie: a synchronous write must land before the next navigation renders on the server
   document.cookie = theme

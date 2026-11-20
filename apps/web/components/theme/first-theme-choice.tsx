@@ -3,7 +3,7 @@
 import { Button } from "@facility/ui";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { applyTheme, type ThemePreference } from "@/lib/theme";
+import { applyTheme, previewTheme, type ThemePreference } from "@/lib/theme";
 import { saveTheme } from "./save-theme";
 import { ThemeChoice } from "./theme-choice";
 
@@ -30,6 +30,7 @@ export function FirstThemeChoice() {
       setError(result.message);
       return;
     }
+    applyTheme(result.data.theme);
     dialog.current?.close?.();
     setDone(true);
     router.refresh();
@@ -42,7 +43,7 @@ export function FirstThemeChoice() {
       onCancel={(event) => {
         event.preventDefault();
         setTheme("system");
-        applyTheme("system");
+        previewTheme("system");
         void save("system");
       }}
       className="m-auto max-h-[calc(100dvh-2rem)] w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-(--line-strong) bg-(--bg-subtle) p-6 text-(--ink) shadow-(--shadow-lift) backdrop:bg-(--overlay)"
@@ -59,10 +60,10 @@ export function FirstThemeChoice() {
         </div>
         <ThemeChoice
           value={theme}
-          disabled={busy}
+          busy={busy}
           onChange={(value) => {
             setTheme(value);
-            applyTheme(value);
+            previewTheme(value);
           }}
         />
         {error ? (

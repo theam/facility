@@ -1,6 +1,7 @@
 "use client";
 
 import { cx } from "@facility/ui";
+import { useId } from "react";
 import type { ThemePreference } from "@/lib/theme";
 
 const OPTIONS: Array<{ value: ThemePreference; label: string; hint: string }> = [
@@ -29,7 +30,12 @@ function Preview({ value }: { value: ThemePreference }) {
         className="absolute left-2 top-2 h-3 w-10 rounded-sm"
         style={{ background: value === "dark" ? "#161b22" : "#ffffff" }}
       />
-      <span className="absolute bottom-2 left-2 size-2 rounded-full bg-(--accent)" />
+      <span
+        className="absolute bottom-2 left-2 h-1.5 w-14 rounded-full"
+        style={{
+          background: value === "light" ? "#d0d5dd" : value === "dark" ? "#353d48" : "#8b949e",
+        }}
+      />
     </span>
   );
 }
@@ -38,16 +44,19 @@ function Preview({ value }: { value: ThemePreference }) {
 export function ThemeChoice({
   value,
   onChange,
-  disabled,
+  busy,
   legend = "Theme",
 }: {
   value: ThemePreference;
   onChange: (value: ThemePreference) => void;
-  disabled?: boolean;
+  /** Saving stays interactive: arrow keys keep moving while a save is pending. */
+  busy?: boolean;
   legend?: string;
 }) {
+  // Two choosers can be on one page (the first-visit dialog over the profile).
+  const name = useId();
   return (
-    <fieldset disabled={disabled} className="@container flex min-w-0 flex-col gap-3">
+    <fieldset aria-busy={busy || undefined} className="@container flex min-w-0 flex-col gap-3">
       <legend className="sr-only">{legend}</legend>
       <div className="grid min-w-0 gap-3 @md:grid-cols-3">
         {OPTIONS.map((option) => {
@@ -56,7 +65,7 @@ export function ThemeChoice({
             <label
               key={option.value}
               className={cx(
-                "flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border bg-(--bg-subtle) p-3 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-(--focus)",
+                "flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border bg-(--bg-subtle) p-3",
                 checked ? "border-(--ink)" : "border-(--line-strong) hover:border-(--mut)",
               )}
             >
@@ -64,11 +73,11 @@ export function ThemeChoice({
               <span className="flex items-start gap-2">
                 <input
                   type="radio"
-                  name="theme"
+                  name={name}
                   value={option.value}
                   checked={checked}
                   onChange={() => onChange(option.value)}
-                  className="mt-1 accent-(--ink) focus-visible:outline-none"
+                  className="mt-1 accent-(--ink)"
                 />
                 <span className="flex min-w-0 flex-col">
                   <span className="text-sm font-medium text-(--ink)">{option.label}</span>

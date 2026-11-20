@@ -2609,8 +2609,8 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        /** @enum {string|null} */
-                        theme: "system" | "light" | "dark" | null;
+                        /** @enum {string} */
+                        theme: "system" | "light" | "dark";
                     };
                 };
             };

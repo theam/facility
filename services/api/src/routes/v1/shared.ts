@@ -55,6 +55,9 @@ export const PreferencesSchema = z.object({
   theme: ThemePreferenceSchema.nullable(),
 });
 
+/** The saved appearance: after a change it is always a concrete choice. */
+export const SavedPreferencesSchema = z.object({ theme: ThemePreferenceSchema });
+
 export const MeSchema = z.object({
   principal: PrincipalSchema,
   org: OrgSchema.nullable(),

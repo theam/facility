@@ -30,6 +30,8 @@
    * Yellow stays a fill (dots, badges, the wordmark); text about agent work
    * uses --accent-ink so it stays readable on either canvas. */
   --accent: #ffd923;
+  /* text on a solid yellow fill, dark on either canvas */
+  --on-accent: #111827;
   --accent-ink: light-dark(#8a6800, #ffd923);
   --accent-soft: light-dark(
     color-mix(in srgb, #ffd923 35%, #ffffff),

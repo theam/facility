@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { cookies } from "next/headers";
+import { api, SESSION_COOKIE } from "@/lib/api";
 import { THEME_COOKIE, themeAttribute } from "@/lib/theme";
 import "./globals.css";
 
@@ -31,18 +32,36 @@ export const metadata: Metadata = {
     "The platform that governs your AI SDLC. Agents build. People decide twice. Everything gets measured.",
 };
 
-export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f6f8" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0c10" },
-  ],
-  width: "device-width",
-  initialScale: 1,
-};
+const THEME_COLORS = { light: "#f5f6f8", dark: "#0a0c10" } as const;
+
+/** An explicit choice on this browser, else the account's when signed in: the theme the
+ * server renders on the first paint. Undefined follows the operating system. */
+async function renderedTheme() {
+  const jar = await cookies();
+  if (jar.has(THEME_COOKIE)) return themeAttribute(jar.get(THEME_COOKIE)?.value);
+  if (!jar.has(SESSION_COOKIE)) return undefined;
+  // A new device: the session's own /v1/me read, shared with the app layout.
+  const me = await api.me();
+  return me.ok ? themeAttribute(me.data.preferences?.theme) : undefined;
+}
+
+export async function generateViewport(): Promise<Viewport> {
+  const theme = await renderedTheme();
+  return {
+    themeColor: theme
+      ? THEME_COLORS[theme]
+      : [
+          { media: "(prefers-color-scheme: light)", color: THEME_COLORS.light },
+          { media: "(prefers-color-scheme: dark)", color: THEME_COLORS.dark },
+        ],
+    width: "device-width",
+    initialScale: 1,
+  };
+}
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // An explicit choice renders on the first paint; otherwise CSS follows the system.
-  const theme = themeAttribute((await cookies()).get(THEME_COOKIE)?.value);
+  const theme = await renderedTheme();
   // Extensions such as Grammarly inject body attributes before React hydrates.
   return (
     <html lang="en" data-theme={theme} className={`${plexMono.variable} ${plexSans.variable}`}>

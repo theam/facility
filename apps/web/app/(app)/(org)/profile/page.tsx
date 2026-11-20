@@ -45,7 +45,9 @@ export default async function ProfilePage() {
         {preferences ? (
           <AppearanceSetting initial={preferences.theme} />
         ) : (
-          <p className="text-sm text-(--mut)">API keys have no appearance settings.</p>
+          <p className="text-sm text-(--mut)">
+            Appearance settings are not available for this sign-in.
+          </p>
         )}
       </section>
     </div>
