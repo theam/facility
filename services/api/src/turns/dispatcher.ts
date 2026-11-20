@@ -438,7 +438,9 @@ export class TurnDispatcher {
           ? `\n\n${REVIEW_DELIVERY_INSTRUCTIONS}`
           : "";
       const reviewInstruction =
-        reviewing && cycle ? `\n\n${await this.review?.cycles.reviewContract(cycle)}` : "";
+        reviewing && cycle
+          ? `\n\n${await this.review?.cycles.reviewContract(cycle, manifest.engine)}`
+          : "";
       const engineRequest = {
         turnId: turn.id,
         manifest,

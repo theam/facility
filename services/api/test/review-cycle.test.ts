@@ -13,8 +13,10 @@ import {
   reviewCatalogProblem,
   reviewDecision,
   reviewResultJson,
+  reviewTurnInstructions,
   transientGithubFailure,
 } from "../src/stories/review-cycle-rules.js";
+import { CLAUDE_READ_ONLY_DENIED, CLAUDE_READ_ONLY_TOOLS } from "../src/turns/engines.js";
 
 const candidate: ReviewCandidate = {
   id: "c".repeat(64),
@@ -164,6 +166,41 @@ describe("native read-only review contract", () => {
         "<facility-review>{}</facility-review><facility-review>{}</facility-review>",
       ),
     ).toBeNull();
+  });
+
+  // The commands the contract tells the Reviewer to run, written in backticks.
+  const commands = (text: string) =>
+    [...text.matchAll(/`((?:git|gh) [^`]*)`/g)].map((match) => match[1] as string);
+  const contract = (engine: "claude_code" | "codex") =>
+    reviewTurnInstructions({
+      candidate,
+      plan: { revision: 1, decisionRevision: 1, markdown: "Plan" },
+      engine,
+    }).split("### Candidate")[0] as string;
+
+  it("tells a Claude Code Reviewer to run only commands its read-only allowlist permits", () => {
+    const prefixes = CLAUDE_READ_ONLY_TOOLS.flatMap((tool) => {
+      const match = /^Bash\((.+):\*\)$/.exec(tool);
+      return match ? [match[1] as string] : [];
+    });
+    const deniedOutput = CLAUDE_READ_ONLY_DENIED.includes("Bash(git * --output*)");
+    const text = contract("claude_code");
+    expect(commands(text).length).toBeGreaterThan(0);
+    for (const command of commands(text)) {
+      const allowed = prefixes.some((prefix) => command.startsWith(prefix));
+      expect({ command, allowed }).toEqual({ command, allowed: true });
+      expect(deniedOutput && /^git .*--output/.test(command)).toBe(false);
+    }
+    // A turn starts in the primary checkout, and git cannot change directory or fetch.
+    expect(text).toContain("repos/example/app");
+    expect(text).toMatch(/--repo <repository>/);
+  });
+
+  it("does not send a Codex Reviewer to the network its sandbox blocks", () => {
+    const text = contract("codex");
+    expect(commands(text).length).toBeGreaterThan(0);
+    for (const command of commands(text)) expect(command).toMatch(/^git (diff|log)\b/);
+    expect(text).toContain("no network");
   });
 });
 

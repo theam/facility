@@ -100,11 +100,32 @@ export function reviewResultJson(output: string) {
   return (blocks[0]?.[1] ?? output).trim();
 }
 
+/** How a read-only Reviewer can reach the code. It must name only what that engine's
+ * read-only mode runs: the turn starts in the primary checkout, Claude Code may run git
+ * only there (it denies `cd`, `git -C` and `git fetch`), and Codex's sandbox has no network. */
+export function reviewReadingInstructions(engine: AgentManifest["engine"], primary: string) {
+  const start = `Your turn starts in the primary checkout, repos/${primary}. Each pull request's checkout is relative to the workspace root, so another checkout is at ../../<owner>/<name> from there.`;
+  if (engine === "codex")
+    return [
+      start,
+      "In each checkout run `git diff <baseSha>...<headSha>` and `git log`, and read the surrounding code, consumers and tests beyond the diff.",
+      "Your read-only sandbox has no network, so GitHub's CLI and fetching cannot work. Take pull request state and CI from the candidate below, and report a commit missing locally as missing evidence.",
+    ].join(" ");
+  return [
+    start,
+    "Git runs only in the primary checkout: changing directory, git's -C option, fetching and --output are denied, so do not retry them.",
+    "There, run `git diff <baseSha>...<headSha>` and `git log`, and add `--submodule=diff` to see changes inside the submodules it pins.",
+    "For every pull request use `gh pr view`, `gh pr diff` and `gh pr checks` with `--repo <repository>`, and `gh run view` for CI logs. Read the files of any checkout directly, including the surrounding code, consumers and tests beyond the diff.",
+    "When a commit is missing locally, rely on `gh pr diff` and say which evidence came from GitHub.",
+  ].join(" ");
+}
+
 /** What a native, read-only Reviewer turn receives on top of its own prompt. */
 export function reviewTurnInstructions(input: {
   candidate: ReviewCandidate;
   plan: { revision: number; decisionRevision: number; markdown: string };
   previous?: DeliveryReviewResult;
+  engine: AgentManifest["engine"];
 }) {
   const repositories = input.candidate.pullRequests.map((pull) => ({
     repository: pull.repository,
@@ -117,7 +138,11 @@ export function reviewTurnInstructions(input: {
   return [
     "## Automatic delivery review",
     "You are the read-only Reviewer of this story's delivery. You cannot edit files, commit, push, deploy, comment or approve; Facility rejects any change you make to a checkout and stops the cycle. Facility publishes your result on each pull request for you.",
-    "Inspect the code itself: in each checkout run `git diff <baseSha>...<headSha>` and `git log`, read the surrounding code, consumers and tests beyond the diff, and use `gh pr view`, `gh pr diff` and `gh pr checks` for the pull request and its CI. Fetch a missing commit with `git fetch origin <sha>`.",
+    `Inspect the code itself. ${reviewReadingInstructions(
+      input.engine,
+      input.candidate.pullRequests.find((pull) => pull.primary)?.repository ??
+        "<primary repository>",
+    )}`,
     "Review all required PRs as one delivery against the approved plan. Account for each acceptance criterion with a stable criterion ID, and use it as a finding's requirement when it is violated. Trace consumers, security boundaries, existing data and regressions; report missing essential evidence.",
     "Use open for new or persisting findings. In round 2 include every previous finding by ID and use resolved only with evidence on the new heads. Use P2 with category suggestion for non-blocking feedback. Use requires_decision for a fix outside the approved scope or a decision the Builder cannot make.",
     "Report CI and anything you reproduced as observations bound to the candidate; distinguish static reading from reproduced behaviour.",

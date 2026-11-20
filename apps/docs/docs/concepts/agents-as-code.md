@@ -86,7 +86,10 @@ invalid evidence stops the cycle for a person.
 The Reviewer runs like the Builder, as a native turn in the story workspace, with a fresh
 context for each review. It explores the code beyond the diff: it reads the checkouts, runs
 `git diff`, `git log`, `gh pr view` and `gh pr diff`, and follows consumers, tests and security
-boundaries. Reading is enforced in layers:
+boundaries. The turn starts in the primary checkout. A Claude Code Reviewer runs git only there,
+with `--submodule=diff` for submodules it pins, and reads other repositories' pull requests with
+`gh --repo` and their files directly. Facility's review instructions name only the commands the
+Reviewer's engine allows. Reading is enforced in layers:
 
 - **The engine.** Claude Code receives reading tools only; every other tool, including edits,
   other commands, `git fetch` and git's `--output`, is denied. User, project and local settings,

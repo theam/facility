@@ -458,7 +458,7 @@ export class StoryReviewCycles {
   }
 
   /** The review contract a native Reviewer turn receives for the pinned candidate. */
-  async reviewContract(cycle: ReviewCycle) {
+  async reviewContract(cycle: ReviewCycle, engine: AgentManifest["engine"]) {
     const candidate = cycle.data.status.candidate;
     const context = await readWorkflowPlan(this.db, cycle);
     if (!candidate || !context.plan || !context.decision)
@@ -471,6 +471,7 @@ export class StoryReviewCycles {
         markdown: context.plan.markdown,
       },
       previous: cycle.data.status.reviews.at(-1)?.result,
+      engine,
     });
   }
 
