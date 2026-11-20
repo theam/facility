@@ -7,6 +7,7 @@ export type NavIconName =
   | "audit"
   | "overview"
   | "product"
+  | "profile"
   | "projects"
   | "runs"
   | "settings"
@@ -44,6 +45,12 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <path d="M3 1.75h7l3 3v9.5H3z" />
       <path d="M10 1.75v3h3M5.5 7.5h5m-5 3h5" />
+    </>
+  ),
+  profile: (
+    <>
+      <circle cx="8" cy="5.25" r="2.75" />
+      <path d="M2.75 14c0-2.9 2.35-4.75 5.25-4.75s5.25 1.85 5.25 4.75" />
     </>
   ),
   projects: (

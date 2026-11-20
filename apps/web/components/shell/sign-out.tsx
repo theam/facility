@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { applyTheme } from "@/lib/theme";
 
 /**
  * Sign-out as a client action: a plain HTML form posts urlencoded, which the
@@ -20,6 +21,8 @@ export function SignOutButton() {
         void fetch("/api/auth/logout", { method: "POST" })
           .catch(() => undefined)
           .finally(() => {
+            // The next person on this browser starts from the system theme.
+            applyTheme(null);
             router.push("/login");
             router.refresh();
           });

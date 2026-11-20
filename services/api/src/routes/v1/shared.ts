@@ -48,10 +48,21 @@ export const PrincipalSchema = z.object({
   permissions: z.array(z.string()),
 });
 
+export const ThemePreferenceSchema = z.enum(["system", "light", "dark"]);
+/** A signed-in person's own settings; API keys have none. */
+export const PreferencesSchema = z.object({
+  /** Null until the person chooses; the app then follows the operating system. */
+  theme: ThemePreferenceSchema.nullable(),
+});
+
+/** The saved appearance: after a change it is always a concrete choice. */
+export const SavedPreferencesSchema = z.object({ theme: ThemePreferenceSchema });
+
 export const MeSchema = z.object({
   principal: PrincipalSchema,
   org: OrgSchema.nullable(),
   permissions: z.array(z.string()),
+  preferences: PreferencesSchema.nullable(),
 });
 
 export const RoleSchema = z.object({

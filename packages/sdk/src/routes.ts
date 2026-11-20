@@ -57,6 +57,7 @@ export const FACILITY_V1_ROUTES = [
   "GET /v1/projects/:projectId/workspace-stories/:storyId/turns/:turnId/events/:seq",
   "GET /v1/projects/:projectId/workspace-stories/:storyId/workflow",
   "GET /v1/roles",
+  "PATCH /v1/me/preferences",
   "PATCH /v1/members/:userId",
   "PATCH /v1/org",
   "PATCH /v1/projects/:projectId",

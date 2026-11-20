@@ -3,43 +3,70 @@
  * The one law: --accent (#FFD923) marks agent work. Focus has its own blue. */
 
 :root {
-  /* surfaces — a light canvas with white cards, as calm as a report */
-  --bg: #f5f6f8;
-  --bg-subtle: #ffffff;
-  --card: #eef0f3;
+  /* Each value is light-dark(light, dark). The scheme follows the operating
+   * system unless the person chose one: <html data-theme="light|dark">. */
+  color-scheme: light dark;
+
+  /* surfaces — a light canvas with white cards, as calm as a report; in dark,
+   * the brand's void canvas with raised cards */
+  --bg: light-dark(#f5f6f8, #0a0c10);
+  --bg-subtle: light-dark(#ffffff, #161b22);
+  --card: light-dark(#eef0f3, #11161d);
 
   /* ink */
-  --ink: #111827;
-  --mut: #4b5563;
-  --dim: #5f6774;
+  --ink: light-dark(#111827, #f0f3f6);
+  --mut: light-dark(#4b5563, #b7bfc8);
+  --dim: light-dark(#5f6774, #9aa3ad);
+  /* text on a solid ink fill (primary buttons, selected chips) */
+  --on-ink: light-dark(#ffffff, #0a0c10);
+  --ink-hover: light-dark(#1f2937, #d0d7de);
 
   /* hairlines */
-  --line: #e4e7ec;
-  --line-strong: #d0d5dd;
-  --control-line: #8b95a1;
+  --line: light-dark(#e4e7ec, #262c36);
+  --line-strong: light-dark(#d0d5dd, #353d48);
+  --control-line: light-dark(#8b95a1, #8b949e);
 
   /* semantics — agents are yellow, human decisions amber, machines gray.
    * Yellow stays a fill (dots, badges, the wordmark); text about agent work
-   * uses --accent-ink so it stays readable on light surfaces. */
+   * uses --accent-ink so it stays readable on either canvas. */
   --accent: #ffd923;
-  --accent-ink: #8a6800;
-  --accent-soft: color-mix(in srgb, var(--accent) 35%, var(--bg-subtle));
-  --human: #b45309;
-  --ok: #047857;
-  --bad: #b42318;
-  --info: #2563eb;
-  --focus: #2563eb;
-  --code: #344054;
-  --machine: #6b7280;
+  /* text on a solid yellow fill, dark on either canvas */
+  --on-accent: #111827;
+  --accent-ink: light-dark(#8a6800, #ffd923);
+  --accent-soft: light-dark(
+    color-mix(in srgb, #ffd923 35%, #ffffff),
+    color-mix(in srgb, #ffd923 18%, #161b22)
+  );
+  --human: light-dark(#b45309, #e8a656);
+  --ok: light-dark(#047857, #3fb950);
+  --bad: light-dark(#b42318, #ff7b72);
+  --info: light-dark(#2563eb, #58a6ff);
+  --focus: light-dark(#2563eb, #58a6ff);
+  --code: light-dark(#344054, #c9d1d9);
+  --machine: light-dark(#6b7280, #8b949e);
+
+  /* tinted backgrounds for status pills and notices */
+  --ok-soft: light-dark(#ecfdf3, color-mix(in srgb, #3fb950 14%, #161b22));
+  --bad-soft: light-dark(#fef3f2, color-mix(in srgb, #ff7b72 14%, #161b22));
+  --human-soft: light-dark(#fffaeb, color-mix(in srgb, #e8a656 14%, #161b22));
+  --info-soft: light-dark(#eff6ff, color-mix(in srgb, #58a6ff 14%, #161b22));
+  --agent-soft: light-dark(#fff8d6, color-mix(in srgb, #ffd923 14%, #161b22));
+  --overlay: light-dark(rgba(16, 24, 40, 0.35), rgba(1, 4, 9, 0.65));
 
   /* Cards sit on the canvas with a hairline and a whisper of shadow. Floating
    * surfaces lift further. */
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-lift: 0 12px 32px rgba(16, 24, 40, 0.14);
-  --shadow-agent-lift: 0 12px 32px rgba(16, 24, 40, 0.14),
+  --shadow-card: 0 1px 2px light-dark(rgba(16, 24, 40, 0.05), rgba(1, 4, 9, 0.6));
+  --shadow-lift: 0 12px 32px light-dark(rgba(16, 24, 40, 0.14), rgba(1, 4, 9, 0.7));
+  --shadow-agent-lift: var(--shadow-lift),
     0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+}
 
+:root[data-theme="light"] {
   color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 /* The outline surrounds the control; its gap separates it from filled buttons.

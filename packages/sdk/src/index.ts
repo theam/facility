@@ -6,8 +6,10 @@ import type {
   FacilityRouteResponse,
   Me,
   PageQuery,
+  Preferences,
   Project,
   QueryParams,
+  UpdatePreferencesRequest,
 } from "./contracts.js";
 
 export type * from "./contracts.js";
@@ -124,6 +126,11 @@ export class FacilityClient {
 
   me(): Promise<Me> {
     return this.get("/v1/me");
+  }
+
+  /** A signed-in person's own settings, such as their appearance. */
+  updatePreferences(body: UpdatePreferencesRequest): Promise<Preferences> {
+    return this.patch("/v1/me/preferences", body);
   }
 
   projects(query?: PageQuery): Promise<Project[]> {

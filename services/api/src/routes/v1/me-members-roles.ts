@@ -24,12 +24,24 @@ import {
   principal,
   publicRow,
   RoleSchema,
+  SavedPreferencesSchema,
   assertProjectInOrg as sharedAssertProjectInOrg,
+  ThemePreferenceSchema,
   type V1RouteContext,
 } from "./shared.js";
 
 export async function registerMeMembersRolesRoutes(app: FastifyInstance, context: V1RouteContext) {
   const { db } = context;
+  const preferences = async (p: Principal) => {
+    if (p.type !== "user" || !p.userId) return null;
+    const [user] = await db
+      .select({ theme: users.theme })
+      .from(users)
+      .where(eq(users.id, p.userId))
+      .limit(1);
+    const theme = ThemePreferenceSchema.safeParse(user?.theme);
+    return { theme: theme.success ? theme.data : null };
+  };
   const assertProjectInOrg = (
     p: Principal,
     projectId: string | null | undefined,
@@ -48,7 +60,33 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
     async (request) => {
       const p = principal(request);
       const org = (await db.select().from(orgs).where(eq(orgs.id, p.orgId)).limit(1))[0];
-      return { principal: p, org: org ?? null, permissions: p.permissions };
+      return {
+        principal: p,
+        org: org ?? null,
+        permissions: p.permissions,
+        preferences: await preferences(p),
+      };
+    },
+  );
+
+  // A person's own appearance; it follows them on every device. Any member may change
+  // their own preferences, so this write needs only the membership that reads the org.
+  app.patch(
+    "/v1/me/preferences",
+    {
+      config: { permission: "org:read" },
+      schema: {
+        body: z.object({ theme: ThemePreferenceSchema }).strict(),
+        response: { 200: SavedPreferencesSchema },
+      },
+    },
+    async (request) => {
+      const p = principal(request);
+      if (p.type !== "user" || !p.userId)
+        throw new ApiError(403, "preferences_user_only", "Only a signed-in person has preferences");
+      const { theme } = request.body as { theme: z.infer<typeof ThemePreferenceSchema> };
+      await db.update(users).set({ theme, updatedAt: new Date() }).where(eq(users.id, p.userId));
+      return { theme };
     },
   );
 

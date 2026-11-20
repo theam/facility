@@ -95,7 +95,7 @@ export function DisconnectRepository({
             I understand the connection and synchronized data will be removed.
           </label>
           {error ? (
-            <p role="alert" className="text-sm text-red-600">
+            <p role="alert" className="text-sm text-(--bad)">
               {error}
             </p>
           ) : null}

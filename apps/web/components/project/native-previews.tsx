@@ -94,7 +94,7 @@ export function NativePreviews({
         </div>
       )}
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-(--bad)">
           {error}
         </p>
       )}

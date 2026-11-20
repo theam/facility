@@ -136,6 +136,8 @@ export type QueryParams = Record<string, QueryValue>;
 export type PageQuery = { limit?: number; offset?: number };
 
 export type Me = FacilityGeneratedResponse<"GET", "/v1/me">;
+export type Preferences = FacilityGeneratedResponse<"PATCH", "/v1/me/preferences">;
+export type UpdatePreferencesRequest = FacilityGeneratedBody<"PATCH", "/v1/me/preferences">;
 export type Principal = Me["principal"];
 export type Org = FacilityGeneratedResponse<"GET", "/v1/org">;
 export type Project = FacilityGeneratedResponse<"GET", "/v1/projects/{projectId}">;

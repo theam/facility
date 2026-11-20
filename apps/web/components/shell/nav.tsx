@@ -24,7 +24,10 @@ export function orgNav(): NavItem[] {
 
 /** Cross-project operator surfaces — secondary by design. */
 export function orgPlatformNav(): NavItem[] {
-  return [{ href: "/settings", icon: "settings", label: "Organization settings" }];
+  return [
+    { href: "/settings", icon: "settings", label: "Organization settings" },
+    { href: "/profile", icon: "profile", label: "Your profile" },
+  ];
 }
 
 /** The project world: everything scoped to the project in focus. */
@@ -129,11 +132,7 @@ function NavSections({
         <NavLinks items={orgNav()} onNavigate={onNavigate} />
         <div className="flex flex-col gap-2">
           <SectionLabel>platform</SectionLabel>
-          <NavLinks
-            items={orgPlatformNav()}
-            label="Organization settings"
-            onNavigate={onNavigate}
-          />
+          <NavLinks items={orgPlatformNav()} label="Platform" onNavigate={onNavigate} />
         </div>
       </div>
     );

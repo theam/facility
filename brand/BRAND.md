@@ -54,6 +54,23 @@ values live in `packages/ui/src/tokens.css`:
 | information / focus | `#2563EB` | links, information and keyboard outlines |
 | agent text | `#8A6800` | text about agent work; yellow itself stays a fill |
 
+The dark theme uses the brand's void canvas and raised dark cards. Each token
+holds both values with `light-dark()`: the application follows the operating
+system until a person chooses light or dark in their profile.
+
+| role | dark value |
+|---|---|
+| canvas / card / fill | `#0A0C10` / `#161B22` / `#11161D` |
+| ink / secondary / dim | `#F0F3F6` / `#B7BFC8` / `#9AA3AD` |
+| hairline / strong / control | `#262C36` / `#353D48` / `#8B949E` |
+| human / success / failure | `#E8A656` / `#3FB950` / `#FF7B72` |
+| information / focus | `#58A6FF` |
+| agent text | `#FFD923` (yellow stays the agent fill as well) |
+
+Text on a solid ink fill uses `--on-ink`, and status pills use the `-soft`
+tints, so neither assumes a light canvas. Every text colour above passes WCAG AA
+on the dark canvas, cards, fills and its own tint.
+
 Status is shown with rounded pills (tinted background, dot and label) and key
 figures with metric cards: an uppercase label, a large number and one line of
 context.
