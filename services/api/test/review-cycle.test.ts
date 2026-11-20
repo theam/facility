@@ -13,8 +13,10 @@ import {
   reviewCatalogProblem,
   reviewDecision,
   reviewResultJson,
+  reviewTurnInstructions,
   transientGithubFailure,
 } from "../src/stories/review-cycle-rules.js";
+import { CLAUDE_READ_ONLY_DENIED, CLAUDE_READ_ONLY_TOOLS } from "../src/turns/engines.js";
 
 const candidate: ReviewCandidate = {
   id: "c".repeat(64),
@@ -164,6 +166,58 @@ describe("native read-only review contract", () => {
         "<facility-review>{}</facility-review><facility-review>{}</facility-review>",
       ),
     ).toBeNull();
+  });
+
+  // The commands the contract tells the Reviewer to run, written in backticks.
+  const commands = (text: string) =>
+    [...text.matchAll(/`((?:git|gh) [^`]*)`/g)].map((match) => match[1] as string);
+  const contract = (engine: "claude_code" | "codex") =>
+    reviewTurnInstructions({
+      candidate,
+      plan: { revision: 1, decisionRevision: 1, markdown: "Plan" },
+      engine,
+    }).split("### Candidate")[0] as string;
+
+  it("tells a Claude Code Reviewer to run only commands its read-only allowlist permits", () => {
+    const prefixes = CLAUDE_READ_ONLY_TOOLS.flatMap((tool) => {
+      const match = /^Bash\((.+):\*\)$/.exec(tool);
+      return match ? [match[1] as string] : [];
+    });
+    const deniedOutput = CLAUDE_READ_ONLY_DENIED.includes("Bash(git * --output*)");
+    const text = contract("claude_code");
+    expect(commands(text).length).toBeGreaterThan(0);
+    for (const command of commands(text)) {
+      const allowed = prefixes.some((prefix) => command.startsWith(prefix));
+      expect({ command, allowed }).toEqual({ command, allowed: true });
+      expect(deniedOutput && /^git .*--output/.test(command)).toBe(false);
+    }
+    // A turn starts in the primary checkout, and git cannot change directory or fetch.
+    expect(text).toContain("repos/example/app");
+    expect(text).toMatch(/--repo <repository>/);
+  });
+
+  it("does not send a Codex Reviewer to the network its sandbox blocks", () => {
+    const text = contract("codex");
+    expect(commands(text).length).toBeGreaterThan(0);
+    for (const command of commands(text)) expect(command).toMatch(/^git (diff|log|rev-parse)\b/);
+    expect(text).toContain("no network");
+  });
+
+  it("gives the Reviewer the CI and preview evidence that admitted the candidate", () => {
+    const prompt = reviewTurnInstructions({
+      candidate: {
+        ...candidate,
+        preview: { generation: "e".repeat(64), observedAt: "2026-01-01T00:00:00Z" },
+      },
+      plan: { revision: 1, decisionRevision: 1, markdown: "Plan" },
+      engine: "claude_code",
+    });
+    const shown = JSON.parse(prompt.split("### Candidate\n\n")[1]?.split("\n\n")[0] ?? "");
+    expect(shown.pullRequests[0].checks).toEqual({ state: "success", runs: [] });
+    expect(shown.preview.generation).toBe("e".repeat(64));
+    // Missing evidence and findings outside the candidate end the cycle, so the contract says so.
+    expect(prompt).toContain("Do not report them as missing");
+    expect(prompt).toContain("Attach every finding to one of the candidate's pull requests");
   });
 });
 
