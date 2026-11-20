@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { FirstThemeChoice } from "@/components/theme/first-theme-choice";
+import { ThemeSync } from "@/components/theme/theme-sync";
 import { api } from "@/lib/api";
 
 /**
@@ -27,5 +29,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     );
   }
 
-  return children;
+  // A person's appearance follows them; until they choose, it follows the system.
+  const preferences = me.data.preferences;
+  return (
+    <>
+      {children}
+      {preferences ? <ThemeSync theme={preferences.theme} /> : null}
+      {preferences && preferences.theme === null ? <FirstThemeChoice /> : null}
+    </>
+  );
 }

@@ -19,7 +19,7 @@ export function Offline({ detail }: { detail?: string }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <div role="alert" className="rounded-xl border border-(--bad)/25 bg-[#fef3f2] px-5 py-4">
+    <div role="alert" className="rounded-xl border border-(--bad)/25 bg-(--bad-soft) px-5 py-4">
       <p className="break-words text-sm text-(--bad)">{message}</p>
     </div>
   );

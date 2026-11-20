@@ -1,5 +1,6 @@
 import { PillTag } from "@facility/ui";
 import Image from "next/image";
+import Link from "next/link";
 import { SignOutButton } from "@/components/shell/sign-out";
 import { ProjectSwitcher } from "@/components/shell/switcher";
 import type { Me, Project } from "@/lib/api";
@@ -22,9 +23,10 @@ export function Topbar({
       </div>
       <div className="flex items-center gap-4">
         <span className="hidden text-[11px] font-medium text-(--dim) xl:inline">⌘K</span>
-        <span
-          className="flex items-center gap-2 font-mono text-[11px] text-(--dim)"
-          title={me.principal.email}
+        <Link
+          href="/profile"
+          className="flex items-center gap-2 font-mono text-[11px] text-(--dim) hover:text-(--ink)"
+          title={me.principal.email ? `Your profile · ${me.principal.email}` : "Your profile"}
         >
           {me.principal.avatarUrl ? (
             <Image
@@ -38,7 +40,7 @@ export function Topbar({
             />
           ) : null}
           {me.principal.githubLogin ? `@${me.principal.githubLogin}` : me.principal.email}
-        </span>
+        </Link>
         <SignOutButton />
       </div>
     </header>

@@ -108,7 +108,7 @@ export function DeliveryAcceptanceConfirmation({
       aria-label="Confirm delivery acceptance"
       className={
         compact
-          ? "flex min-w-0 flex-col gap-4 rounded-lg border border-(--human)/30 bg-[#fffaeb] p-4"
+          ? "flex min-w-0 flex-col gap-4 rounded-lg border border-(--human)/30 bg-(--human-soft) p-4"
           : "flex min-w-0 flex-col gap-5 rounded-lg border border-(--line) p-4 sm:p-6"
       }
     >

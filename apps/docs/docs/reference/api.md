@@ -25,7 +25,11 @@ rejects attempts to use that origin as another control-plane host.
 
 ## Organization and access
 
-- `/v1/me` returns the resolved principal and effective membership.
+- `/v1/me` returns the resolved principal and effective membership. For a signed-in person it
+  also returns `preferences.theme` (`system`, `light`, `dark`, or `null` until they choose);
+  API keys receive `preferences: null`.
+- `PATCH /v1/me/preferences` changes the signed-in person's own appearance. API keys receive
+  `403 preferences_user_only`.
 - `/v1/org` reads or updates organization settings.
 - `/v1/members` and `/v1/members/:userId` manage membership.
 - `/v1/roles` and `/v1/roles/:roleId` manage roles.

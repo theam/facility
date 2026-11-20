@@ -253,7 +253,7 @@ function chipClass(selected: boolean) {
   return cx(
     "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-medium transition-colors",
     selected
-      ? "border-(--ink) bg-(--ink) text-white"
+      ? "border-(--ink) bg-(--ink) text-(--on-ink)"
       : "border-(--line) bg-(--bg-subtle) text-(--mut) hover:text-(--ink)",
   );
 }

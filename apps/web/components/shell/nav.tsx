@@ -24,7 +24,10 @@ export function orgNav(): NavItem[] {
 
 /** Cross-project operator surfaces — secondary by design. */
 export function orgPlatformNav(): NavItem[] {
-  return [{ href: "/settings", icon: "settings", label: "Organization settings" }];
+  return [
+    { href: "/settings", icon: "settings", label: "Organization settings" },
+    { href: "/profile", icon: "profile", label: "Your profile" },
+  ];
 }
 
 /** The project world: everything scoped to the project in focus. */

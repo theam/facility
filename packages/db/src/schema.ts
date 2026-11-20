@@ -41,6 +41,8 @@ export const users = pgTable("users", {
   name: text("name"),
   avatarUrl: text("avatar_url"),
   status: text("status").notNull().default("active"),
+  /** "system", "light" or "dark"; null until the person chooses. */
+  theme: text("theme"),
   ...timestamps,
 });
 

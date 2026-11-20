@@ -74,11 +74,11 @@ export function KpiCard({
 }
 
 const pillTones = {
-  ok: "bg-[#ecfdf3] text-(--ok)",
-  bad: "bg-[#fef3f2] text-(--bad)",
-  human: "bg-[#fffaeb] text-(--human)",
-  info: "bg-[#eff6ff] text-(--info)",
-  agent: "bg-[#fff8d6] text-(--accent-ink)",
+  ok: "bg-(--ok-soft) text-(--ok)",
+  bad: "bg-(--bad-soft) text-(--bad)",
+  human: "bg-(--human-soft) text-(--human)",
+  info: "bg-(--info-soft) text-(--info)",
+  agent: "bg-(--agent-soft) text-(--accent-ink)",
   neutral: "bg-(--card) text-(--mut)",
 } as const;
 

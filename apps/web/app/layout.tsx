@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
+import { cookies } from "next/headers";
+import { THEME_COOKIE, themeAttribute } from "@/lib/theme";
 import "./globals.css";
 
 const plexMono = localFont({
@@ -30,15 +32,20 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f5f6f8",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f5f6f8" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0c10" },
+  ],
   width: "device-width",
   initialScale: 1,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // An explicit choice renders on the first paint; otherwise CSS follows the system.
+  const theme = themeAttribute((await cookies()).get(THEME_COOKIE)?.value);
   // Extensions such as Grammarly inject body attributes before React hydrates.
   return (
-    <html lang="en" className={`${plexMono.variable} ${plexSans.variable}`}>
+    <html lang="en" data-theme={theme} className={`${plexMono.variable} ${plexSans.variable}`}>
       <body suppressHydrationWarning className="min-h-dvh">
         {children}
       </body>

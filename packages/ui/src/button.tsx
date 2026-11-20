@@ -35,7 +35,7 @@ function classesFor(variant: Variant, size: Size, tone?: Tone, className?: strin
     return cx(
       base,
       sizes[size],
-      "border border-(--bad)/40 bg-(--bad)/5 text-(--bad) hover:bg-(--bad) hover:text-white",
+      "border border-(--bad)/40 bg-(--bad)/5 text-(--bad) hover:bg-(--bad) hover:text-(--on-ink)",
       className,
     );
   }
@@ -51,7 +51,7 @@ function classesFor(variant: Variant, size: Size, tone?: Tone, className?: strin
     return cx(
       base,
       sizes[size],
-      "border border-transparent bg-(--ink) text-white shadow-(--shadow-card) hover:bg-[#1f2937]",
+      "border border-transparent bg-(--ink) text-(--on-ink) shadow-(--shadow-card) hover:bg-(--ink-hover)",
       className,
     );
   }
