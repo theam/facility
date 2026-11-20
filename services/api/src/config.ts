@@ -39,6 +39,7 @@ const EnvSchema = z
     PORT: z.coerce.number().int().positive().default(4400),
     PUBLIC_URL: z.string().url().default("http://localhost:4400"),
     WEB_URL: z.string().url().optional(),
+    FACILITY_RUNNER_API_URL: OptionalUrl,
     FACILITY_PREVIEW_URL: OptionalUrl,
     FACILITY_PREVIEW_SITES: z.string().optional(),
     FACILITY_NATIVE_PREVIEWS: z.enum(["0", "1"]).default("0"),
@@ -87,6 +88,22 @@ const EnvSchema = z
     NODE_ENV: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    if (env.FACILITY_RUNNER_API_URL) {
+      const url = new URL(env.FACILITY_RUNNER_API_URL);
+      if (
+        url.username ||
+        url.password ||
+        url.hash ||
+        url.search ||
+        (url.protocol !== "https:" &&
+          !(url.protocol === "http:" && env.FACILITY_INSECURE_DEV === "1"))
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["FACILITY_RUNNER_API_URL"],
+          message: "Use an HTTPS API URL reachable from workspaces",
+        });
+    }
     if (env.FACILITY_NATIVE_PREVIEWS === "1") {
       if (env.FACILITY_WORKSPACE_DRIVER !== "vercel")
         ctx.addIssue({
@@ -293,6 +310,7 @@ export function readConfig(env = process.env): AppConfig {
     secretMasterKey: parsed.SECRET_MASTER_KEY,
     port: parsed.PORT,
     publicUrl: parsed.PUBLIC_URL,
+    runnerApiUrl: parsed.FACILITY_RUNNER_API_URL,
     webUrl,
     previewUrl: parsed.FACILITY_PREVIEW_URL?.replace(/\/$/, ""),
     nativePreviews: parsed.FACILITY_NATIVE_PREVIEWS === "1",
