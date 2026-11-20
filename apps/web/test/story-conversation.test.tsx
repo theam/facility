@@ -117,7 +117,9 @@ describe("story conversation paging", () => {
     expect(transcript?.textContent).toMatch(
       /Native message 1[\s\S]*Native message 2[\s\S]*Native message 3[\s\S]*Native message 4/,
     );
-    expect(transcript?.querySelector("button")).toBeNull();
+    expect(
+      [...(transcript?.querySelectorAll("button") ?? [])].map((button) => button.textContent),
+    ).not.toContain("Cancel turn");
   });
 
   it("reads newest first, with the latest exchange on top and older pages below", async () => {

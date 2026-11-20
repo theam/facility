@@ -11,21 +11,35 @@ import {
   stories,
   storyConversations,
   storyMessages,
+  storyPreviewConvergences,
   turnEvents,
   turns,
   users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { manifestFromProjection } from "../agents/catalog.js";
 import { ApiError } from "../errors.js";
-import { BudgetPolicyError, CostBudgetService } from "../insights/costs.js";
+import {
+  BudgetPolicyError,
+  CostBudgetService,
+  releaseOpenTurnReservation,
+} from "../insights/costs.js";
 import { isGithubIssueStory, resolveDefaultAgent } from "../stories/phase.js";
+import { REVIEW_TRIGGER } from "../stories/review-cycle-rules.js";
+import { reviewHoldsQueue } from "../stories/review-cycle-state.js";
+import {
+  authorizePlanExecution,
+  planExecutionStillAuthorized,
+  recordPlanExecution,
+} from "../stories/workflow-execution.js";
+import { lockWorkflowStory } from "../stories/workflow-policy.js";
 import type { StoryDomain } from "../story-domain.js";
 import { credentialSecrets } from "../turns/dispatcher.js";
-import { buildPrompt } from "../turns/prompt.js";
-import type { AgentTurnUsage } from "../turns/engines.js";
+import { type AgentTurnUsage, stopInterruptedEngineProcess } from "../turns/engines.js";
 import { appendTurnEvent } from "../turns/events.js";
+import { TURN_LEASE_TIMEOUT_MS } from "../turns/lease-heartbeat.js";
+import { buildPrompt } from "../turns/prompt.js";
 import { redactEvent, redactString } from "../turns/redaction.js";
 import type { Principal } from "../types.js";
 import type { WorkspaceLocator } from "../workspaces/runtime.js";
@@ -91,8 +105,10 @@ export async function assertSessionPrincipal(db: FacilityDb, actor: Principal, p
           eq(orgMembers.orgId, actor.orgId),
           eq(orgMembers.userId, actor.userId),
           eq(users.status, "active"),
+          or(isNull(roles.orgId), eq(roles.orgId, actor.orgId)),
         ),
       )
+      .for("share")
       .limit(1)
   )[0];
   if (
@@ -366,7 +382,44 @@ export class StorySessionService {
     }
     return this.db.transaction(async (raw) => {
       const tx = raw as unknown as FacilityDb;
-      await lockSession(tx, scope);
+      await lockWorkflowStory(tx, scope);
+      await assertSessionPrincipal(tx, actor, "sessions:control");
+      if (old?.triggerType === REVIEW_TRIGGER || (!old && latest?.triggerType === REVIEW_TRIGGER))
+        throw new ApiError(
+          409,
+          "session_review_read_only",
+          "Automatic Reviewer sessions are read-only; send a task to the implementation agent before attaching",
+        );
+      if (await reviewHoldsQueue(tx, scope, false))
+        throw new ApiError(
+          409,
+          "session_review_held",
+          "Resolve the current review decision in the web before entering an interactive session",
+        );
+      const preview = (
+        await tx
+          .select({ storyId: storyPreviewConvergences.storyId })
+          .from(storyPreviewConvergences)
+          .where(
+            and(
+              eq(storyPreviewConvergences.orgId, scope.orgId),
+              eq(storyPreviewConvergences.projectId, scope.projectId),
+              eq(storyPreviewConvergences.storyId, scope.storyId),
+              eq(storyPreviewConvergences.state, "applying"),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (preview)
+        throw new ApiError(
+          409,
+          "session_preview_active",
+          "Wait for preview convergence to finish before attaching",
+        );
+      const authorization = await authorizePlanExecution(tx, scope, manifest, {
+        type: "user",
+        id: actor.userId,
+      });
       await this.assertConnection(tx, scope, actor, client);
       const active = await this.holder(scope, tx);
       if (expectedTurnId && active?.id !== expectedTurnId)
@@ -465,6 +518,7 @@ export class StorySessionService {
           })
           .returning()
       )[0]!;
+      await recordPlanExecution(tx, scope, turn.id, authorization);
       await tx
         .update(sessionWaiters)
         .set({ waiting: false })
@@ -724,6 +778,10 @@ export class StorySessionService {
     let finished = false;
     await this.db.transaction(async (raw) => {
       const tx = raw as unknown as FacilityDb;
+      const projectLock = await tx.execute(
+        sql`SELECT pg_try_advisory_xact_lock(hashtext(${`${scope.orgId}:${scope.projectId}`})) AS acquired`,
+      );
+      if (!projectLock[0]?.acquired) return;
       const locked = await tx.execute(
         sql`SELECT pg_try_advisory_xact_lock(hashtext(${`facility:story:${scope.orgId}:${scope.projectId}:${scope.storyId}`})) AS acquired`,
       );
@@ -753,6 +811,8 @@ export class StorySessionService {
       } catch {
         denial = "permission_revoked";
       }
+      if (!denial && !(await planExecutionStillAuthorized(tx, scope, turn)))
+        denial = "workflow_authorization_revoked";
       if (owner) state.lastAttachedAt = new Date().toISOString();
       const detached =
         Date.now() - Date.parse(state.lastAttachedAt) >= state.timeoutMinutes * 60_000;
@@ -782,19 +842,8 @@ export class StorySessionService {
       }
       if (state.status !== "ready") {
         if (state.previousTurnId) {
-          const ended = (
-            await tx
-              .select()
-              .from(turnEvents)
-              .where(
-                and(
-                  eq(turnEvents.turnId, state.previousTurnId),
-                  inArray(turnEvents.type, ["turn.canceled", "turn.succeeded", "turn.failed"]),
-                ),
-              )
-              .limit(1)
-          )[0];
-          if (!ended) return;
+          if (!(await this.confirmPreviousTurn(tx, scope, state.previousTurnId))) return;
+          state = { ...state, previousTurnId: undefined };
         }
         try {
           state = await this.startLocked(tx, scope, turn, state);
@@ -858,7 +907,13 @@ export class StorySessionService {
           });
       }
       try {
-        await new CostBudgetService(tx).assertTurnAllowed(scope.orgId, scope.projectId, turn.model);
+        await new CostBudgetService(tx).assertTurnAllowed(
+          scope.orgId,
+          scope.projectId,
+          turn.model,
+          new Date(),
+          turn.id,
+        );
       } catch (error) {
         if (!(error instanceof BudgetPolicyError)) throw error;
         await appendTurnEvent(tx, {
@@ -904,13 +959,20 @@ export class StorySessionService {
     state: InteractiveState,
   ) {
     const manifest = AgentManifestSchema.parse(turn.manifest);
-    await new CostBudgetService(tx).assertTurnAllowed(scope.orgId, scope.projectId, manifest.model);
+    await new CostBudgetService(tx).assertTurnAllowed(
+      scope.orgId,
+      scope.projectId,
+      manifest.model,
+      new Date(),
+      turn.id,
+    );
     const workspace = await this.workspace(tx, scope);
     if (state.status === "prepared") {
       const probe = JSON.parse(await this.command(workspace, "probe", turn.id)) as {
         started: boolean;
+        interrupted?: boolean;
       };
-      if (!probe.started) {
+      if (!probe.started && !probe.interrupted) {
         if (!state.launchEnvironment) throw new Error("Prepared native launch is unavailable");
         const launch = JSON.parse(await open(state.launchEnvironment, this.secretMasterKey)) as {
           environment: Record<string, string>;
@@ -943,6 +1005,11 @@ export class StorySessionService {
       });
       return state;
     }
+    await new CostBudgetService(tx).reserveTurn(tx, {
+      ...scope,
+      turnId: turn.id,
+      model: manifest.model,
+    });
     const story = await this.story(scope, tx);
     const [credential, project] = await Promise.all([
       this.domain.credentials.issue(scope.orgId, scope.projectId, {}, tx),
@@ -1024,6 +1091,9 @@ export class StorySessionService {
             conversation?.summary ?? null,
             messagesForNativeResume(history.reverse(), state.nativeSessionId),
             turn.id,
+            [],
+            [],
+            "fixed",
           ),
           args: interactiveArguments(
             manifest,
@@ -1161,7 +1231,14 @@ export class StorySessionService {
       state.baseline ?? emptyUsage(),
       turn.model,
     );
-    if (hasNativeUsage(turn.engine, snapshot.records))
+    const reportedUsage = hasNativeUsage(turn.engine, snapshot.records);
+    const interrupted = snapshot.interrupted || (snapshot.exited && state.agentState === "working");
+    const mayHaveSpent =
+      interrupted ||
+      snapshot.records
+        .slice(state.baselineRecords ?? 0)
+        .some((record) => nativeMessage(turn.engine, record)?.role === "user");
+    if (reportedUsage || (snapshot.exited && mayHaveSpent))
       await new CostBudgetService(tx).record({
         ...scope,
         turnId: turn.id,
@@ -1169,15 +1246,55 @@ export class StorySessionService {
         engine: turn.engine,
         model: accounting.model,
         priceBookCostCents: accounting.costCents,
-        usage: usageSince(
-          nativeUsage(turn.engine, snapshot.records),
-          state.baseline ?? emptyUsage(),
-        ),
+        usage: reportedUsage
+          ? usageSince(nativeUsage(turn.engine, snapshot.records), state.baseline ?? emptyUsage())
+          : undefined,
         durationMs: Date.now() - (turn.startedAt ?? turn.createdAt).getTime(),
         status: "succeeded",
         cumulative: true,
+        complete: !interrupted && reportedUsage,
       });
     return { ...state, imported: snapshot.records.length, importedAt: new Date().toISOString() };
+  }
+
+  private async confirmPreviousTurn(tx: FacilityDb, scope: SessionScope, turnId: string) {
+    const events = await tx
+      .select({ type: turnEvents.type, data: turnEvents.data })
+      .from(turnEvents)
+      .where(
+        and(
+          eq(turnEvents.orgId, scope.orgId),
+          eq(turnEvents.projectId, scope.projectId),
+          eq(turnEvents.storyId, scope.storyId),
+          eq(turnEvents.turnId, turnId),
+          inArray(turnEvents.type, [
+            "turn.canceled",
+            "turn.succeeded",
+            "turn.failed",
+            "turn.worker_interrupted",
+          ]),
+        ),
+      )
+      .limit(10);
+    if (
+      events.some(
+        (event) =>
+          event.type !== "turn.worker_interrupted" ||
+          ["stopped", "absent", "stale-marker"].includes(
+            String((event.data as { processCleanup?: unknown }).processCleanup),
+          ),
+      )
+    )
+      return true;
+    return this.domain.stories.recoverInterruptedTurn(
+      {
+        ...scope,
+        turnId,
+        staleBefore: new Date(Date.now() - TURN_LEASE_TIMEOUT_MS),
+        includeCanceled: true,
+      },
+      tx,
+    );
   }
 
   private async finishLocked(
@@ -1188,32 +1305,22 @@ export class StorySessionService {
     actor: Principal,
   ) {
     let state = interactiveState(turn)!;
-    if (state.previousTurnId) {
-      const acknowledgement = (
-        await tx
-          .select({ seq: turnEvents.seq })
-          .from(turnEvents)
-          .where(
-            and(
-              eq(turnEvents.orgId, scope.orgId),
-              eq(turnEvents.projectId, scope.projectId),
-              eq(turnEvents.storyId, scope.storyId),
-              eq(turnEvents.turnId, state.previousTurnId),
-              inArray(turnEvents.type, ["turn.canceled", "turn.succeeded", "turn.failed"]),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!acknowledgement)
-        throw new ApiError(
-          409,
-          "session_cancellation_pending",
-          "The Facility worker has not confirmed cancellation. The session slot was retained; wait for it to stop before taking over or leaving.",
-        );
-    }
+    if (state.previousTurnId && !(await this.confirmPreviousTurn(tx, scope, state.previousTurnId)))
+      throw new ApiError(
+        409,
+        "session_cancellation_pending",
+        "The Facility worker has not confirmed cancellation. The session slot was retained; wait for it to stop before taking over or leaving.",
+      );
     if (state.baseline !== undefined) {
       const workspace = await this.workspace(tx, scope);
       await this.command(workspace, "stop", turn.id);
+      const stopped = await stopInterruptedEngineProcess(this.domain.runtime, workspace, turn.id);
+      if (!["stopped", "absent", "stale-marker"].includes(stopped))
+        throw new ApiError(
+          409,
+          "session_stop_unconfirmed",
+          "The native writer has not stopped; ownership was retained",
+        );
       state = await this.importLocked(
         tx,
         scope,
@@ -1222,6 +1329,7 @@ export class StorySessionService {
         await this.read(workspace, turn, state),
       );
     }
+    await releaseOpenTurnReservation(tx, { ...scope, turnId: turn.id });
     state.launchEnvironment = undefined;
     await tx
       .update(turns)

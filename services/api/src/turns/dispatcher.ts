@@ -12,7 +12,7 @@ import {
   turns,
   workspaces,
 } from "@facility/db";
-import { and, asc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { type AgentCatalogService, manifestFromProjection } from "../agents/catalog.js";
 import { ApiError } from "../errors.js";
 import { githubRateLimitRetryAt } from "../github/rate-limit.js";
@@ -506,7 +506,10 @@ export class TurnDispatcher {
             manifest,
             story,
             conversation.summary,
-            followup ? messages.filter((message) => message.turnId !== null) : messages,
+            messagesForNativeResume(
+              followup ? messages.filter((message) => message.turnId !== null) : messages,
+              resumedSessionId,
+            ),
             turn.id,
             attention,
             inputFiles,

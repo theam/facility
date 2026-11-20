@@ -70,6 +70,12 @@ does not imply terminal control. MCP, GitHub events and schedules queue without
 taking over. Cancel, suspend, archive and deletion cannot bypass an interactive
 holder; leave or take over first.
 
+Project workflow rules also apply to terminal entry. Approve the current plan
+for the exact agent and repositories before attaching when approval is required.
+Revoking that delegation closes the session. Automatic Reviewers remain
+read-only; resolve their review decision in the web before entering. Wait for
+an active preview update to finish before opening another workspace writer.
+
 Vercel workspaces answer that interactive sessions are **not supported yet** and
 retain the read-only view of Facility turns. Live terminal mirroring for another
 person, shells, web terminals and file uploads are follow-up work.
@@ -99,8 +105,10 @@ already present in the resumed session is omitted from the next Facility
 turn's shared-conversation prompt. Budgets are checked before entry and after
 imports; exhaustion closes the session. Model changes use each response's recorded
 model and appear as `mixed` in a turn's aggregate when necessary. Unknown prices
-remain unavailable. A project with unpriced usage cannot admit more budgeted work
-in that month, because its remaining allowance cannot be calculated safely.
+remain unavailable, and any previously confirmed charge is retained as a lower
+bound. An enabled budget blocks new work while any usage remains unconfirmed,
+including after a calendar rollover. The session retains its remaining budget
+reservation until its native writer is confirmed stopped.
 At a UTC month boundary the session closes for reattachment, so a retained turn
 cannot continue spending against the previous budget period.
 Entry, watching, takeover and exit are audited with users and durations.
@@ -111,6 +119,12 @@ Restore workspace access and retry reconciliation. Native journals are bounded
 to 32 MiB per import in this release. Treat journal files as accounting evidence;
 terminal access has the same broad workspace and GitHub maintainer capabilities
 as an automated agent turn.
+
+A takeover whose Facility worker disappeared waits for its heartbeat lease to
+expire, then confirms native process cleanup before proceeding. A container
+restart invalidates its old terminal markers using both the kernel boot ID and
+PID 1's start time. It retains native journals for final import; an interrupted
+request with missing usage remains unconfirmed instead of becoming a zero bill.
 
 Long-session GitHub credential renewal is not included yet: installation tokens
 can expire during a session. Leave and reattach to prepare new credentials.

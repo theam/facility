@@ -11,6 +11,7 @@ export function buildPrompt(
   turnId: string,
   attention: Array<typeof attentionItems.$inferSelect> = [],
   attachments: InputFileReference[] = [],
+  githubCredentials: "renewable" | "fixed" = "renewable",
 ) {
   const currentMessage = messages.find(
     (message) => message.turnId === turnId && message.role === "user",
@@ -56,7 +57,9 @@ export function buildPrompt(
         )}`
       : "",
     "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
-    "Use git and gh (including gh api) for GitHub operations. Facility renews their scoped credentials during the turn. A missing GH_TOKEN environment variable does not mean GitHub access is unavailable; do not replace the managed credential helper or gh configuration with a token copied earlier in the session.",
+    githubCredentials === "renewable"
+      ? "Use git and gh (including gh api) for GitHub operations. Facility renews their scoped credentials during the turn. A missing GH_TOKEN environment variable does not mean GitHub access is unavailable; do not replace the managed credential helper or gh configuration with a token copied earlier in the session."
+      : "Use git and gh (including gh api) for GitHub operations. Interactive sessions receive scoped credentials on entry. If they expire, leave and attach again to prepare fresh credentials.",
     "Keep doing any remaining authorized work. If you have reached a decision that truly needs a human before you can or may continue, end with exactly <facility-needs-attention>the specific decision or question</facility-needs-attention>. Do not use it for progress, a scheduled wait, or a recoverable failure.",
     "When the requested work is finished and the result is ready for the human to review, end with exactly <facility-ready-for-review>what the human should review in this result</facility-ready-for-review>. This is not a blocker or approval. Do not use it for intermediate results, scheduled follow-ups, routine status updates, or deliveries that already have a plan or pull request review to act on. Use at most one of these markers per response.",
   ]

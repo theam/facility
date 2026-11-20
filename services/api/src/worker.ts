@@ -14,9 +14,8 @@ import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
 import { configureTurnQueue } from "./turn-queue.js";
 import { FOLLOWUP_TRIGGER } from "./turns/followup.js";
+import { TURN_LEASE_TIMEOUT_MS } from "./turns/lease-heartbeat.js";
 import { ecsTaskProtection, WorkerTurnGuard } from "./worker-task-protection.js";
-
-const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
 
 export async function startWorker() {
   const config = readConfig();

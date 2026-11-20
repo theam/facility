@@ -884,17 +884,22 @@ export class StoryWorkspaceService {
     return this.get(input.orgId, input.projectId, input.storyId);
   }
 
-  async recoverInterruptedTurn(input: {
-    orgId: string;
-    projectId: string;
-    turnId: string;
-    staleBefore: Date;
-  }) {
+  async recoverInterruptedTurn(
+    input: {
+      orgId: string;
+      projectId: string;
+      turnId: string;
+      staleBefore: Date;
+      includeCanceled?: boolean;
+    },
+    db = this.db,
+  ) {
     let processCleanup = "workspace unavailable";
-    const recovered = await this.db.transaction(async (rawTx) => {
+    const recovered = await db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       const turn = await scopedTurn(tx, input.orgId, input.projectId, input.turnId);
       await lockStory(tx, input.orgId, input.projectId, turn.storyId);
+      if (turn.triggerType === "interactive") return undefined;
       const story = await scopedStory(tx, input.orgId, input.projectId, turn.storyId);
       const now = new Date();
       const updated = (
@@ -911,7 +916,9 @@ export class StoryWorkspaceService {
               eq(turns.orgId, input.orgId),
               eq(turns.projectId, input.projectId),
               eq(turns.id, input.turnId),
-              eq(turns.state, "running"),
+              input.includeCanceled
+                ? inArray(turns.state, ["running", "canceled"])
+                : eq(turns.state, "running"),
               lte(turns.updatedAt, input.staleBefore),
             ),
           )
@@ -960,6 +967,12 @@ export class StoryWorkspaceService {
             "The native writer has not stopped",
             409,
           );
+      } else if (input.includeCanceled) {
+        throw new StoryServiceError(
+          "turn_cleanup_unconfirmed",
+          "The previous native writer's workspace is unavailable; ownership was retained",
+          409,
+        );
       }
 
       // Book uncertainty before committing failure or admitting a successor. A
@@ -990,14 +1003,30 @@ export class StoryWorkspaceService {
           complete: false,
         });
       await releaseOpenTurnReservation(tx, input);
-      await tx
-        .update(stories)
-        .set({
-          status: lifecycleStatusAfterTurn(story.status, "attention"),
-          activeAgentName: null,
-          updatedAt: now,
-        })
-        .where(and(eq(stories.orgId, input.orgId), eq(stories.id, turn.storyId)));
+      const successor = (
+        await tx
+          .select({ id: turns.id })
+          .from(turns)
+          .where(
+            and(
+              eq(turns.orgId, input.orgId),
+              eq(turns.projectId, input.projectId),
+              eq(turns.storyId, turn.storyId),
+              inArray(turns.state, ["queued", "running"]),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!successor) {
+        await tx
+          .update(stories)
+          .set({
+            status: lifecycleStatusAfterTurn(story.status, "attention"),
+            activeAgentName: null,
+            updatedAt: now,
+          })
+          .where(and(eq(stories.orgId, input.orgId), eq(stories.id, turn.storyId)));
+      }
       await tx.insert(attentionItems).values({
         id: newId("attn"),
         orgId: input.orgId,
@@ -1015,7 +1044,7 @@ export class StoryWorkspaceService {
 
     try {
       const evidence = (
-        await this.db
+        await db
           .select({ workspaceId: turnGitEvidence.workspaceId })
           .from(turnGitEvidence)
           .where(
@@ -1028,7 +1057,7 @@ export class StoryWorkspaceService {
           .limit(1)
       )[0];
       const workspace = (
-        await this.db
+        await db
           .select()
           .from(workspaces)
           .where(
@@ -1050,7 +1079,7 @@ export class StoryWorkspaceService {
             recovered.id,
             recovered.engine,
           );
-          await new CostBudgetService(this.db).record({
+          await new CostBudgetService(db).record({
             orgId: input.orgId,
             projectId: input.projectId,
             storyId: recovered.storyId,
@@ -1067,11 +1096,12 @@ export class StoryWorkspaceService {
           });
         }
       }
-    } catch (error) {
-      processCleanup =
-        error instanceof Error ? `cleanup failed: ${error.message}` : "cleanup failed";
+    } catch {
+      console.error(
+        JSON.stringify({ event: "turn.usage_reconciliation_failed", turnId: recovered.id }),
+      );
     }
-    await appendTurnEvent(this.db, {
+    await appendTurnEvent(db, {
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: recovered.storyId,

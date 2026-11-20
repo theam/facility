@@ -2,8 +2,9 @@ import type { FacilityDb } from "@facility/db";
 import { describe, expect, it, vi } from "vitest";
 import { type BudgetState, CostBudgetService } from "../src/insights/costs.js";
 
-function service(state: BudgetState["state"], enabled = true) {
-  const costs = new CostBudgetService({} as FacilityDb);
+function service(state: BudgetState["state"], enabled = true, ownReservation = 0) {
+  const query = { from: () => query, where: async () => [{ total: ownReservation }] };
+  const costs = new CostBudgetService({ select: () => query } as unknown as FacilityDb);
   const reading = {
     state,
     budget:
@@ -45,6 +46,24 @@ describe("budget accounting admission", () => {
     ).rejects.toMatchObject({ code: "budget_model_unpriced" });
     await expect(
       service("exceeded").assertTurnAllowed("org_test", "proj_test", "gpt-5.5"),
+    ).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+  it("allows an interactive holder to consume its own hold without admitting another writer", async () => {
+    const costs = service("exceeded", true, 50_000);
+    await expect(
+      costs.assertTurnAllowed("org_test", "proj_test", "gpt-5.5", new Date(), "turn_held"),
+    ).resolves.toMatchObject({ state: "exceeded" });
+    await expect(costs.assertTurnAllowed("org_test", "proj_test", "gpt-5.5")).rejects.toMatchObject(
+      { code: "budget_exceeded" },
+    );
+    await expect(
+      service("exceeded").assertTurnAllowed(
+        "org_test",
+        "proj_test",
+        "gpt-5.5",
+        new Date(),
+        "turn_other",
+      ),
     ).rejects.toMatchObject({ code: "budget_exceeded" });
   });
 });

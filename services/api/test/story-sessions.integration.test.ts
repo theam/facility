@@ -3,11 +3,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
-import { generateApiKey, newId, seal } from "@facility/core";
 import {
+  generateApiKey,
+  newId,
+  reservationCents,
+  StoryWorkflowPolicySchema,
+  seal,
+} from "@facility/core";
+import {
+  agentManifests,
   apiKeys,
   attentionItems,
   auditEvents,
+  budgetReservations,
   createDb,
   engineSessions,
   type FacilityDb,
@@ -15,17 +23,21 @@ import {
   orgMembers,
   orgs,
   projectBudgets,
+  projectRepositories,
   projects,
   roles,
   stories,
   storyMessages,
+  storyPreviewConvergences,
+  storyPreviewGenerations,
   turnEvents,
   turns,
   turnUsage,
   users,
+  workspaces,
 } from "@facility/db";
 import { and, eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, mintSessionCookie } from "../src/app.js";
 import type { Snapshot } from "../src/sessions/native.js";
 import {
@@ -33,6 +45,14 @@ import {
   type SessionScope,
   StorySessionService,
 } from "../src/sessions/service.js";
+import {
+  confirmStoryPlanDecision,
+  proposeStoryPlan,
+  requestStoryPlanDecision,
+  reviewStoryPlanDecision,
+} from "../src/stories/plans.js";
+import { readPlanExecutionReceipt } from "../src/stories/workflow-execution.js";
+import { WORKFLOW_POLICY_SETTING } from "../src/stories/workflow-policy.js";
 import { createStoryDomain, type StoryDomain } from "../src/story-domain.js";
 import { appendTurnEvent } from "../src/turns/events.js";
 import type { AppConfig, Principal } from "../src/types.js";
@@ -60,6 +80,7 @@ describe("interactive story sessions with durable ownership and accounting", {
   const otherOrgId = newId("org");
   const otherProjectId = newId("proj");
   const roleId = newId("role");
+  const repositoryId = newId("repo");
   const userIds = [newId("user"), newId("user")];
   const person = (index = 0): Principal => ({
     type: "user",
@@ -76,6 +97,7 @@ describe("interactive story sessions with durable ownership and accounting", {
   const running = new Set<string>();
   let stopFails = false;
   let launchAckFails = false;
+  let cleanupFails = false;
   let root: string;
   let domain: StoryDomain;
   const config: AppConfig = {
@@ -101,6 +123,7 @@ describe("interactive story sessions with durable ownership and accounting", {
       expose: fake.expose.bind(fake),
       suspend: fake.suspend.bind(fake),
       destroy: fake.destroy.bind(fake),
+      retireCompute: fake.retireCompute.bind(fake),
       terminal: async () => ({
         write(data) {
           terminalWrites.push(data.toString());
@@ -112,6 +135,13 @@ describe("interactive story sessions with durable ownership and accounting", {
         onClose() {},
       }),
       exec: async (_workspace, command) => {
+        if (command.command === "node" && command.env?.FACILITY_INTERRUPTED_TURN_ID)
+          return {
+            exitCode: cleanupFails ? 1 : 0,
+            stdout: cleanupFails ? "" : "absent",
+            stderr: "",
+            durationMs: 0,
+          };
         if (command.command !== "facility-session") throw new Error("Unexpected external command");
         const [operation, turnId] = command.args!;
         if (operation === "start") {
@@ -155,7 +185,11 @@ describe("interactive story sessions with durable ownership and accounting", {
           if (snapshot) snapshot.exited = true;
         }
         let stdout = "";
-        if (operation === "probe") stdout = JSON.stringify({ started: running.has(turnId!) });
+        if (operation === "probe")
+          stdout = JSON.stringify({
+            started: running.has(turnId!),
+            interrupted: snapshots.get(turnId!)?.interrupted,
+          });
         if (operation === "read") {
           const input = JSON.parse(command.env!.FACILITY_SESSION_READ!);
           const snapshot = input.empty
@@ -202,6 +236,31 @@ describe("interactive story sessions with durable ownership and accounting", {
       .insert(orgs)
       .values({ id: orgId, name: "Session tests", slug: `sessions-${randomUUID()}` });
     await db.insert(projects).values({ id: projectId, orgId, name: "Demo", slug: "demo" });
+    await db.insert(projectRepositories).values({
+      id: repositoryId,
+      orgId,
+      projectId,
+      owner: "acme",
+      name: "demo",
+      role: "primary",
+      defaultBranch: "main",
+    });
+    await db.insert(agentManifests).values({
+      id: newId("amf"),
+      orgId,
+      projectId,
+      name: manifest.name,
+      manifest,
+      commitSha: "a".repeat(40),
+      path: "builder.md",
+      contentHash: manifest.hash,
+    });
+    vi.spyOn(domain.catalog, "refreshSnapshot").mockResolvedValue({
+      manifests: [manifest],
+      repositoryId,
+      commitSha: "a".repeat(40),
+      observedAt: new Date(),
+    });
     await db
       .insert(orgs)
       .values({ id: otherOrgId, name: "Other tenant", slug: `other-${randomUUID()}` });
@@ -221,13 +280,29 @@ describe("interactive story sessions with durable ownership and accounting", {
       .values(userIds.map((id) => ({ id: newId("member"), orgId, userId: id, roleId })));
   }, 30_000);
 
+  beforeEach(async () => {
+    cleanupFails = false;
+    await db.update(projects).set({ settings: {} }).where(eq(projects.id, projectId));
+    await db.delete(budgetReservations).where(eq(budgetReservations.orgId, orgId));
+    await db.delete(turnUsage).where(eq(turnUsage.orgId, orgId));
+  });
+
   afterAll(async () => {
     if (domain) {
       for (const table of [
         "audit_events",
         "api_keys",
         "session_waiters",
+        "budget_reservations",
         "turn_usage",
+        "story_evidence_events",
+        "story_plan_states",
+        "story_plan_decisions",
+        "story_plan_requests",
+        "story_plan_repository_refs",
+        "story_plan_revisions",
+        "story_preview_convergences",
+        "story_preview_generations",
         "engine_sessions",
         "attention_items",
         "turn_events",
@@ -241,6 +316,8 @@ describe("interactive story sessions with durable ownership and accounting", {
         "project_budgets",
         "org_members",
         "roles",
+        "agent_manifests",
+        "project_repositories",
         "projects",
       ])
         for (const scopedOrgId of [orgId, otherOrgId])
@@ -293,6 +370,250 @@ describe("interactive story sessions with durable ownership and accounting", {
       .where(eq(turns.id, turn.id));
     await domain.sessions.tick(scope);
   }
+
+  it("requires plan approval, records its receipt and closes after delegation is revoked", async () => {
+    const scope = await fresh();
+    const policy = StoryWorkflowPolicySchema.parse({ planApprovalAgents: [manifest.name] });
+    await db
+      .update(projects)
+      .set({ settings: { [WORKFLOW_POLICY_SETTING]: { revision: 1, policy } } })
+      .where(eq(projects.id, projectId));
+    const connection = clientIdentity();
+    await domain.sessions.lease(scope, person(), connection, true);
+    await expect(domain.sessions.enter(scope, person(), connection)).rejects.toMatchObject({
+      code: "workflow_plan_approval_required",
+    });
+    expect(await domain.sessions.holder(scope)).toBeNull();
+    const actor = { type: "user" as const, id: userIds[0]!, name: "Session user" };
+    const options = { webUrl: "https://facility.example" };
+    await proposeStoryPlan(
+      db,
+      domain.catalog,
+      scope,
+      {
+        expected_revision: 0,
+        markdown: "Implement the bounded change and verify it",
+        repositories: ["acme/demo"],
+        agents: [manifest.name],
+        idempotency_key: randomUUID(),
+      },
+      actor,
+      options,
+    );
+    const requested = await requestStoryPlanDecision(
+      db,
+      scope,
+      {
+        expected_revision: 1,
+        expected_decision_revision: 0,
+        intent: "approve",
+        idempotency_key: randomUUID(),
+      },
+      actor,
+      options,
+    );
+    const human = { id: actor.id, name: actor.name, sessionCookie: "fixture-session" };
+    const review = await reviewStoryPlanDecision(
+      db,
+      scope,
+      requested.request.id,
+      human,
+      config.secretMasterKey,
+      options,
+    );
+    if (!review.proof) throw Error("Missing approval proof");
+    await confirmStoryPlanDecision(
+      db,
+      scope,
+      requested.request.id,
+      review.proof,
+      human,
+      config.secretMasterKey,
+      options,
+    );
+    const turn = await domain.sessions.enter(scope, person(), connection);
+    if (!turn) throw Error("Missing authorized interactive turn");
+    await domain.sessions.tick(scope);
+    await domain.sessions.tick(scope);
+    expect(await readPlanExecutionReceipt(db, scope, turn.id)).toMatchObject({
+      planRevision: 1,
+      authorizerId: actor.id,
+      repositoryIds: [repositoryId],
+    });
+    expect(running.has(turn.id)).toBe(true);
+    await db
+      .update(roles)
+      .set({ permissions: ["sessions:observe", "sessions:control", "projects:write"] })
+      .where(eq(roles.id, roleId));
+    await domain.sessions.tick(scope);
+    expect(await domain.sessions.holder(scope)).toBeNull();
+    expect(running.has(turn.id)).toBe(false);
+    const events = await db
+      .select()
+      .from(turnEvents)
+      .where(and(eq(turnEvents.turnId, turn.id), eq(turnEvents.type, "session.closed")));
+    expect(events[0]?.data).toMatchObject({ reason: "workflow_authorization_revoked" });
+  });
+
+  it("does not turn a native read-only Reviewer into an interactive writer", async () => {
+    const scope = await fresh();
+    const queued = await domain.stories.queueMessage({
+      ...scope,
+      body: "Review",
+      dedupeKey: randomUUID(),
+      agent: manifest,
+      actor: { type: "system", id: "test" },
+      trigger: { type: "schedule" },
+    });
+    await db
+      .update(turns)
+      .set({ triggerType: "review_cycle" })
+      .where(eq(turns.id, queued.turn!.id));
+    const connection = clientIdentity();
+    await domain.sessions.lease(scope, person(), connection, true);
+    await expect(
+      domain.sessions.enter(scope, person(), connection, queued.turn!.id),
+    ).rejects.toMatchObject({ code: "session_review_read_only" });
+    expect((await domain.sessions.holder(scope))?.id).toBe(queued.turn!.id);
+  });
+
+  it("waits for the preview writer lease before taking ownership", async () => {
+    const scope = await fresh();
+    const generation = "a".repeat(64);
+    await db.insert(storyPreviewGenerations).values({
+      ...scope,
+      generation,
+      deliveryRevision: "b".repeat(64),
+      repositories: [
+        {
+          repositoryId,
+          repository: "acme/demo",
+          pullNumber: 1,
+          headRef: "feature",
+          headSha: "c".repeat(40),
+          primary: true,
+        },
+      ],
+      sourceObservedAt: new Date(),
+    });
+    await db.insert(storyPreviewConvergences).values({
+      ...scope,
+      desiredGeneration: generation,
+      desiredObservedAt: new Date(),
+      state: "applying",
+      leaseToken: randomUUID(),
+      leaseGeneration: generation,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+    const connection = clientIdentity();
+    await domain.sessions.lease(scope, person(), connection, true);
+    await expect(domain.sessions.enter(scope, person(), connection)).rejects.toMatchObject({
+      code: "session_preview_active",
+    });
+    expect(await domain.sessions.holder(scope)).toBeNull();
+    await db
+      .update(storyPreviewConvergences)
+      .set({ state: "ready", leaseToken: null, leaseGeneration: null, leaseExpiresAt: null })
+      .where(eq(storyPreviewConvergences.storyId, scope.storyId));
+    expect((await domain.sessions.enter(scope, person(), connection))?.triggerType).toBe(
+      "interactive",
+    );
+  });
+
+  it("keeps the remaining budget hold during imports and releases it only after stop", async () => {
+    const scope = await fresh();
+    const estimate = reservationCents(manifest.model, "turn")!;
+    await db.insert(projectBudgets).values({
+      id: newId("bud"),
+      orgId,
+      projectId,
+      enabled: true,
+      monthlyLimitCents: Math.ceil(estimate),
+    });
+    const opened = await open(scope);
+    snapshots.get(opened.turn.id)!.records.push({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: { total_token_usage: { input_tokens: 100, output_tokens: 10 } },
+      },
+    });
+    await importNow(scope);
+    const [usage] = await db.select().from(turnUsage).where(eq(turnUsage.turnId, opened.turn.id));
+    const [hold] = await db
+      .select()
+      .from(budgetReservations)
+      .where(eq(budgetReservations.turnId, opened.turn.id));
+    expect(hold?.state).toBe("open");
+    expect(hold!.reservedCents + usage!.costCents!).toBeCloseTo(estimate, 8);
+    expect(usage?.createdAt).toEqual(opened.turn.createdAt);
+    await importNow(scope);
+    expect(
+      (
+        await db
+          .select()
+          .from(budgetReservations)
+          .where(eq(budgetReservations.turnId, opened.turn.id))
+      )[0]?.reservedCents,
+    ).toBe(hold?.reservedCents);
+    expect((await domain.sessions.holder(scope))?.id).toBe(opened.turn.id);
+    stopFails = true;
+    await expect(domain.sessions.release(scope, person(), opened.connection)).rejects.toThrow(
+      "stop failed",
+    );
+    expect(
+      (
+        await db
+          .select()
+          .from(budgetReservations)
+          .where(eq(budgetReservations.turnId, opened.turn.id))
+      )[0]?.state,
+    ).toBe("open");
+    stopFails = false;
+    await domain.sessions.release(scope, person(), opened.connection);
+    expect(
+      await db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.turnId, opened.turn.id)),
+    ).toHaveLength(0);
+    const next = clientIdentity();
+    await domain.sessions.lease(scope, person(), next, true);
+    const nextTurn = await domain.sessions.enter(scope, person(), next);
+    await domain.sessions.tick(scope);
+    expect(interactiveState((await domain.sessions.holder(scope))!)?.closeReason).toBe(
+      "budget_exceeded",
+    );
+    expect(running.has(nextTurn!.id)).toBe(false);
+  });
+
+  it("records uncertainty after compute loss without fabricating a completed zero-cost session", async () => {
+    const scope = await fresh();
+    const opened = await open(scope);
+    const snapshot = snapshots.get(opened.turn.id)!;
+    snapshot.records.push({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "A request before compute was lost" }],
+      },
+    });
+    snapshot.exited = true;
+    snapshot.interrupted = true;
+    await importNow(scope);
+    expect(await domain.sessions.holder(scope)).toBeNull();
+    const [usage] = await db.select().from(turnUsage).where(eq(turnUsage.turnId, opened.turn.id));
+    expect(usage).toMatchObject({ priced: false, costCents: null, source: "unpriced" });
+    await db
+      .insert(projectBudgets)
+      .values({ id: newId("bud"), orgId, projectId, enabled: true, monthlyLimitCents: 1_000_000 });
+    const next = clientIdentity();
+    await domain.sessions.lease(scope, person(), next, true);
+    await expect(domain.sessions.enter(scope, person(), next)).rejects.toMatchObject({
+      code: "budget_usage_unconfirmed",
+    });
+  });
 
   it("arbitrates simultaneous entrants and gives a waiting CLI priority over messages", async () => {
     const scope = await fresh();
@@ -480,6 +801,105 @@ describe("interactive story sessions with durable ownership and accounting", {
     expect(running.has(next!.id)).toBe(true);
   });
 
+  async function takeOverMissingWorker() {
+    const scope = await fresh();
+    const queued = await domain.stories.queueMessage({
+      ...scope,
+      body: "An interrupted task",
+      dedupeKey: randomUUID(),
+      agent: manifest,
+      actor: { type: "system", id: "test" },
+      trigger: { type: "schedule" },
+    });
+    const prior = queued.turn!;
+    await db
+      .update(turns)
+      .set({ state: "running", startedAt: new Date() })
+      .where(eq(turns.id, prior.id));
+    const connection = clientIdentity();
+    await domain.sessions.lease(scope, person(), connection, false);
+    const next = await domain.sessions.enter(scope, person(), connection, prior.id);
+    await db
+      .update(turns)
+      .set({ updatedAt: new Date(Date.now() - 180_000) })
+      .where(eq(turns.id, prior.id));
+    return { scope, prior, next: next!, connection };
+  }
+
+  it("recovers a canceled predecessor whose worker disappeared before acknowledgement", async () => {
+    const { scope, prior, next, connection } = await takeOverMissingWorker();
+    await domain.sessions.tick(scope);
+    await domain.sessions.tick(scope);
+    expect(running.has(next.id)).toBe(true);
+    const events = await db
+      .select()
+      .from(turnEvents)
+      .where(and(eq(turnEvents.turnId, prior.id), eq(turnEvents.type, "turn.worker_interrupted")));
+    expect(events).toHaveLength(1);
+    expect(events[0]?.data).toMatchObject({ processCleanup: "absent" });
+    expect(
+      interactiveState((await domain.sessions.holder(scope))!)?.previousTurnId,
+    ).toBeUndefined();
+    expect((await domain.stories.get(orgId, projectId, scope.storyId)).story.activeAgentName).toBe(
+      manifest.name,
+    );
+    await domain.sessions.release(scope, person(), connection);
+    expect(await domain.sessions.holder(scope)).toBeNull();
+  });
+
+  it("keeps the slot when an expired worker's native writer cannot be confirmed stopped", async () => {
+    const { scope, prior, next } = await takeOverMissingWorker();
+    cleanupFails = true;
+    await expect(domain.sessions.tick(scope)).rejects.toMatchObject({
+      code: "turn_cleanup_unconfirmed",
+    });
+    expect((await domain.sessions.holder(scope))?.id).toBe(next.id);
+    expect(running.has(next.id)).toBe(false);
+    expect((await db.select().from(turns).where(eq(turns.id, prior.id)))[0]?.state).toBe(
+      "canceled",
+    );
+    expect(
+      await db
+        .select()
+        .from(turnEvents)
+        .where(
+          and(eq(turnEvents.turnId, prior.id), eq(turnEvents.type, "turn.worker_interrupted")),
+        ),
+    ).toHaveLength(0);
+    cleanupFails = false;
+    await domain.sessions.tick(scope);
+    await domain.sessions.tick(scope);
+    expect(running.has(next.id)).toBe(true);
+  });
+
+  it("retains the takeover slot when the dead worker's workspace cannot be located", async () => {
+    const { scope, next } = await takeOverMissingWorker();
+    await db
+      .update(workspaces)
+      .set({ externalRef: null })
+      .where(eq(workspaces.storyId, scope.storyId));
+    await expect(domain.sessions.tick(scope)).rejects.toMatchObject({
+      code: "turn_cleanup_unconfirmed",
+    });
+    expect((await domain.sessions.holder(scope))?.id).toBe(next.id);
+    expect(running.has(next.id)).toBe(false);
+  });
+
+  it("can release a pending takeover after confirming a dead worker without launching a new process", async () => {
+    const { scope, prior, next, connection } = await takeOverMissingWorker();
+    await domain.sessions.release(scope, person(), connection);
+    expect(await domain.sessions.holder(scope)).toBeNull();
+    expect(running.has(next.id)).toBe(false);
+    expect(
+      await db
+        .select()
+        .from(turnEvents)
+        .where(
+          and(eq(turnEvents.turnId, prior.id), eq(turnEvents.type, "turn.worker_interrupted")),
+        ),
+    ).toHaveLength(1);
+  });
+
   it("recovers a lost native launch acknowledgement without resetting its accounting boundary", async () => {
     const scope = await fresh();
     const opened = await open(scope);
@@ -507,6 +927,40 @@ describe("interactive story sessions with durable ownership and accounting", {
       (await db.select().from(turnUsage).where(eq(turnUsage.turnId, active.id)))[0]?.inputTokens,
     ).toBe(100);
     expect(await restarted.owns(scope, person(), opened.connection, active.id)).toBe(true);
+  });
+
+  it("imports a prepared launch interrupted by compute loss instead of starting another native session", async () => {
+    const scope = await fresh();
+    const opened = await open(scope);
+    const snapshot = snapshots.get(opened.turn.id)!;
+    snapshot.records.push({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: { total_token_usage: { input_tokens: 100, output_tokens: 10 } },
+      },
+    });
+    snapshot.exited = true;
+    snapshot.interrupted = true;
+    running.delete(opened.turn.id);
+    const active = (await domain.sessions.holder(scope))!;
+    await db
+      .update(turns)
+      .set({
+        state: "queued",
+        interactive: { ...interactiveState(active), status: "prepared", importedAt: undefined },
+      })
+      .where(eq(turns.id, active.id));
+    await new StorySessionService(db, domain, config.secretMasterKey).tick(scope);
+    expect(snapshots.get(opened.turn.id)).toBe(snapshot);
+    expect(await domain.sessions.holder(scope)).toBeNull();
+    expect(
+      (await db.select().from(turnUsage).where(eq(turnUsage.turnId, opened.turn.id)))[0],
+    ).toMatchObject({ inputTokens: 100, outputTokens: 10, priced: false });
+    expect(
+      (await db.select().from(engineSessions).where(eq(engineSessions.storyId, scope.storyId)))[0]
+        ?.nativeSessionId,
+    ).toBe(snapshot.nativeSessionId);
   });
 
   it("recovers the exact prepared credentials for redaction after launch succeeds but its acknowledgement is lost", async () => {
@@ -565,6 +1019,87 @@ describe("interactive story sessions with durable ownership and accounting", {
     } finally {
       await single.client.end();
     }
+  });
+
+  it("does not grant session access through a role from another tenant", async () => {
+    const scope = await fresh();
+    const foreignRole = newId("role");
+    await db
+      .insert(roles)
+      .values({ id: foreignRole, orgId: otherOrgId, name: foreignRole, permissions: ["*"] });
+    await db
+      .update(orgMembers)
+      .set({ roleId: foreignRole })
+      .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userIds[0]!)));
+    try {
+      await expect(
+        domain.sessions.lease(scope, person(), clientIdentity(), true),
+      ).rejects.toMatchObject({ code: "session_forbidden" });
+      await expect(domain.sessions.enter(scope, person(), clientIdentity())).rejects.toMatchObject({
+        code: "session_forbidden",
+      });
+      expect(await domain.sessions.holder(scope)).toBeNull();
+    } finally {
+      await db
+        .update(orgMembers)
+        .set({ roleId })
+        .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userIds[0]!)));
+    }
+  });
+
+  it("serializes terminal input with permission revocation", async () => {
+    const scope = await fresh();
+    const opened = await open(scope);
+    let entered!: () => void;
+    let resume!: () => void;
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const permit = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const output: string[] = [];
+    const writing = domain.sessions.write(
+      scope,
+      person(),
+      opened.connection,
+      opened.turn.id,
+      async () => {
+        entered();
+        await permit;
+        output.push("authorized");
+      },
+    );
+    await inside;
+    let revoked = false;
+    const revoking = db
+      .update(roles)
+      .set({ permissions: ["sessions:observe"] })
+      .where(eq(roles.id, roleId))
+      .then(() => {
+        revoked = true;
+      });
+    try {
+      await vi.waitFor(
+        async () => {
+          const rows = await db.execute(
+            sql`SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event_type = 'Lock' AND query LIKE '%roles%') AS blocked`,
+          );
+          expect(rows[0]?.blocked).toBe(true);
+        },
+        { timeout: 5000 },
+      );
+      expect(revoked).toBe(false);
+    } finally {
+      resume();
+      await Promise.all([writing, revoking]);
+    }
+    await expect(
+      domain.sessions.write(scope, person(), opened.connection, opened.turn.id, () => {
+        output.push("revoked");
+      }),
+    ).rejects.toMatchObject({ code: "session_forbidden" });
+    expect(output).toEqual(["authorized"]);
   });
 
   it("rejects API keys, forged tenant scope, observer control and stale connections", async () => {
@@ -954,11 +1489,11 @@ describe("interactive story sessions with durable ownership and accounting", {
     expect(await domain.sessions.holder(scope)).toBeNull();
     expect(
       (await db.select().from(turnUsage).where(eq(turnUsage.turnId, opened.turn.id)))[0],
-    ).toMatchObject({ priced: false, costCents: null });
+    ).toMatchObject({ priced: false, costCents: priced.costCents });
     const next = clientIdentity();
     await domain.sessions.lease(scope, person(), next, true);
     await expect(domain.sessions.enter(scope, person(), next)).rejects.toMatchObject({
-      code: "budget_model_unpriced",
+      code: "budget_usage_unconfirmed",
     });
   });
 

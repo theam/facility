@@ -37,7 +37,13 @@ export class CostBudgetService {
     });
   }
 
-  async assertTurnAllowed(orgId: string, projectId: string, model: string, now = new Date()) {
+  async assertTurnAllowed(
+    orgId: string,
+    projectId: string,
+    model: string,
+    now = new Date(),
+    reservationTurnId?: string,
+  ) {
     const state = await this.budgetState(orgId, projectId, now);
     if (!state.budget?.enabled) return state;
     if (state.state === "unconfirmed") {
@@ -52,32 +58,29 @@ export class CostBudgetService {
         `Model ${model} has no price entry, so the project budget cannot safely account for this turn`,
       );
     }
-    if (state.spentCents >= state.budget.monthlyLimitCents) {
+    const ownReservation = reservationTurnId
+      ? Number(
+          (
+            await this.db
+              .select({ total: sql<number>`coalesce(sum(${budgetReservations.reservedCents}), 0)` })
+              .from(budgetReservations)
+              .where(
+                and(
+                  eq(budgetReservations.orgId, orgId),
+                  eq(budgetReservations.projectId, projectId),
+                  eq(budgetReservations.turnId, reservationTurnId),
+                  eq(budgetReservations.state, "open"),
+                ),
+              )
+          )[0]?.total ?? 0,
+        )
+      : 0;
+    if (state.spentCents - ownReservation >= state.budget.monthlyLimitCents) {
       throw new BudgetPolicyError(
         "budget_exceeded",
         exhaustedMessage(state.spentCents, state.budget.monthlyLimitCents),
       );
     }
-    const unpriced = (
-      await this.db
-        .select({ id: turnUsage.id })
-        .from(turnUsage)
-        .where(
-          and(
-            eq(turnUsage.orgId, orgId),
-            eq(turnUsage.projectId, projectId),
-            eq(turnUsage.priced, false),
-            gte(turnUsage.createdAt, state.windowStart),
-            lt(turnUsage.createdAt, state.windowEnd),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (unpriced)
-      throw new BudgetPolicyError(
-        "budget_model_unpriced",
-        "This project has unpriced usage in the current month; its budget cannot safely admit more work",
-      );
     return state;
   }
 
@@ -206,6 +209,8 @@ export class CostBudgetService {
     status: "succeeded" | "failed";
     /** False means these counters are only a lower bound, never a zero-cost completion. */
     complete?: boolean;
+    cumulative?: boolean;
+    priceBookCostCents?: number | null;
   }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
@@ -220,17 +225,82 @@ export class CostBudgetService {
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
       };
-      const calculated = input.usage
-        ? costCents({
-            model: input.model,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cacheReadTokens: usage.cacheReadTokens,
-            cacheWriteTokens: usage.cacheWriteTokens,
-          })
-        : null;
+      const previous = input.cumulative
+        ? (
+            await tx
+              .select()
+              .from(turnUsage)
+              .where(
+                and(
+                  eq(turnUsage.orgId, input.orgId),
+                  eq(turnUsage.projectId, input.projectId),
+                  eq(turnUsage.storyId, input.storyId),
+                  eq(turnUsage.turnId, input.turnId),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : undefined;
+      let cumulativeCreatedAt: Date | undefined;
+      if (input.cumulative) {
+        const active = (
+          await tx
+            .select({ id: turns.id, createdAt: turns.createdAt })
+            .from(turns)
+            .where(
+              and(
+                eq(turns.orgId, input.orgId),
+                eq(turns.projectId, input.projectId),
+                eq(turns.storyId, input.storyId),
+                eq(turns.id, input.turnId),
+                eq(turns.triggerType, "interactive"),
+                inArray(turns.state, ["queued", "running"]),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (!active)
+          throw new BudgetPolicyError(
+            "budget_session_closed",
+            "Only the active interactive turn can import cumulative usage",
+          );
+        cumulativeCreatedAt = active.createdAt;
+        if (
+          previous &&
+          (["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const).some(
+            (key) => usage[key] < previous[key],
+          )
+        )
+          throw new BudgetPolicyError(
+            "budget_usage_regressed",
+            "Cumulative native usage counters regressed",
+          );
+      }
+      const calculated = !input.usage
+        ? null
+        : input.priceBookCostCents !== undefined
+          ? input.priceBookCostCents
+          : costCents({
+              model: input.model,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              cacheReadTokens: usage.cacheReadTokens,
+              cacheWriteTokens: usage.cacheWriteTokens,
+            });
       const providerCost = finiteNonNegative(usage.reportedCostCents);
-      const cost = providerCost ?? calculated;
+      const measuredCost = providerCost ?? calculated;
+      if (
+        input.cumulative &&
+        measuredCost !== null &&
+        previous?.costCents !== null &&
+        previous?.costCents !== undefined &&
+        measuredCost < previous.costCents
+      )
+        throw new BudgetPolicyError(
+          "budget_usage_regressed",
+          "Cumulative native usage charge regressed",
+        );
+      const cost = measuredCost ?? previous?.costCents ?? null;
       const values: typeof turnUsage.$inferInsert = {
         id: newId("evt"),
         orgId: input.orgId,
@@ -245,7 +315,7 @@ export class CostBudgetService {
         cacheReadTokens: usage.cacheReadTokens,
         cacheWriteTokens: usage.cacheWriteTokens,
         costCents: cost,
-        priced: input.complete !== false && cost !== null,
+        priced: input.complete !== false && measuredCost !== null,
         source:
           input.complete === false
             ? "unpriced"
@@ -256,26 +326,52 @@ export class CostBudgetService {
                 : "unpriced",
         durationMs: Math.min(2_147_483_647, Math.max(0, Math.round(input.durationMs))),
         status: input.status,
+        ...(cumulativeCreatedAt ? { createdAt: cumulativeCreatedAt } : {}),
       };
       const insert = tx.insert(turnUsage).values(values);
       const { id: _id, ...settled } = values;
       // A late live dispatcher can also settle the recovery placeholder. Never
       // overwrite an already priced charge. Confirmed usage enters the budget
       // when it is accounted, just like an ordinary live-worker completion.
-      const write = input.usage
-        ? insert.onConflictDoUpdate({
-            target: turnUsage.turnId,
-            set: { ...settled, ...(values.priced ? { createdAt: new Date() } : {}) },
-            setWhere: and(
-              eq(turnUsage.orgId, input.orgId),
-              eq(turnUsage.projectId, input.projectId),
-              eq(turnUsage.storyId, input.storyId),
-              eq(turnUsage.priced, false),
-            ),
-          })
-        : insert.onConflictDoNothing({ target: turnUsage.turnId });
+      const write =
+        input.usage || input.cumulative
+          ? insert.onConflictDoUpdate({
+              target: turnUsage.turnId,
+              set: {
+                ...settled,
+                ...(values.priced && !input.cumulative ? { createdAt: new Date() } : {}),
+              },
+              setWhere: and(
+                eq(turnUsage.orgId, input.orgId),
+                eq(turnUsage.projectId, input.projectId),
+                eq(turnUsage.storyId, input.storyId),
+                ...(input.cumulative ? [] : [eq(turnUsage.priced, false)]),
+              ),
+            })
+          : insert.onConflictDoNothing({ target: turnUsage.turnId });
       const row = (await write.returning())[0];
-      await releaseOpenTurnReservation(tx, input);
+      if (input.cumulative) {
+        if (!row)
+          throw new BudgetPolicyError(
+            "budget_usage_conflict",
+            "Native usage could not be imported in its scoped turn",
+          );
+        const delta = Math.max(0, (row.costCents ?? 0) - (previous?.costCents ?? 0));
+        if (delta > 0)
+          await tx
+            .update(budgetReservations)
+            .set({
+              reservedCents: sql`greatest(0, ${budgetReservations.reservedCents} - ${delta})`,
+            })
+            .where(
+              and(
+                eq(budgetReservations.orgId, input.orgId),
+                eq(budgetReservations.projectId, input.projectId),
+                eq(budgetReservations.turnId, input.turnId),
+                eq(budgetReservations.state, "open"),
+              ),
+            );
+      } else await releaseOpenTurnReservation(tx, input);
       return row ?? null;
     });
   }

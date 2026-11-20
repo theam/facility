@@ -23,6 +23,104 @@ import { consultationDatabaseUrl, consultationTestEnvironment } from "./fixtures
 const enabled = process.env.FACILITY_E2E_DOCKER === "1";
 
 describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
+  it("invalidates native terminal markers after container restart and compute replacement", async () => {
+    const runtime = new DockerWorkspaceRuntime(new Docker());
+    const workspace = await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image: process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized",
+    });
+    const run = async (
+      target: WorkspaceLocator,
+      operation: string,
+      turnId: string,
+      stdin?: string,
+    ) => {
+      const result = await runtime.exec(target, {
+        command: "facility-session",
+        args: [operation, turnId],
+        stdin,
+        env: { PATH: "/workspace/.facility/session-fixture-bin:/usr/local/bin:/usr/bin:/bin" },
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const launch = JSON.stringify({
+      engine: "codex",
+      cwd: "/workspace",
+      args: [],
+      instructions: "Fixture only",
+    });
+    try {
+      const setup = await runtime.exec(workspace, {
+        command: "node",
+        args: [
+          "-e",
+          `
+          const fs = require('node:fs');
+          fs.mkdirSync('/workspace/.facility/session-fixture-bin', {recursive:true});
+          fs.writeFileSync('/workspace/.facility/session-fixture-bin/codex', '#!/usr/bin/env node\\nprocess.stdin.resume(); process.on("SIGTERM", () => process.exit(0));\\n', {mode:0o700});
+          fs.mkdirSync('/workspace/.facility/codex/sessions', {recursive:true});
+          fs.writeFileSync('/workspace/.facility/codex/sessions/retained.jsonl', '{"type":"session_meta","payload":{"id":"retained"}}\\n');
+        `,
+        ],
+      });
+      expect(setup.exitCode, setup.stderr).toBe(0);
+      const first = "turn_dockerrestart";
+      await run(workspace, "start", first, launch);
+      expect(JSON.parse(await run(workspace, "probe", first))).toEqual({
+        started: true,
+        interrupted: false,
+      });
+      const replica = new DockerWorkspaceRuntime(new Docker());
+      const reconnected = await replica.exec(workspace, {
+        command: "facility-session",
+        args: ["probe", first],
+      });
+      expect(JSON.parse(reconnected.stdout)).toEqual({ started: true, interrupted: false });
+      await runtime.suspend(workspace);
+      const restarted = await runtime.wake(workspace);
+      expect(JSON.parse(await run(restarted, "probe", first))).toEqual({
+        started: false,
+        interrupted: true,
+      });
+      await run(restarted, "stop", first);
+      const second = "turn_dockerreplacement";
+      await run(restarted, "start", second, launch);
+      expect(JSON.parse(await run(restarted, "probe", second))).toEqual({
+        started: true,
+        interrupted: false,
+      });
+      await runtime.retireCompute({ ...restarted, expectedComputeRef: restarted.computeRef });
+      const replacement = await runtime.wake(workspace);
+      expect(replacement.computeRef).not.toBe(restarted.computeRef);
+      expect(JSON.parse(await run(replacement, "probe", second))).toEqual({
+        started: false,
+        interrupted: true,
+      });
+      await run(replacement, "stop", second);
+      const retained = await runtime.exec(replacement, {
+        command: "facility-session",
+        args: ["read", second],
+        env: {
+          FACILITY_SESSION_READ: JSON.stringify({
+            engine: "codex",
+            nativeSessionId: "retained",
+            notBefore: 0,
+          }),
+        },
+      });
+      expect(retained.exitCode, retained.stderr).toBe(0);
+      expect(JSON.parse(retained.stdout)).toMatchObject({
+        exited: true,
+        interrupted: true,
+        nativeSessionId: "retained",
+        records: [{ type: "session_meta", payload: { id: "retained" } }],
+      });
+    } finally {
+      await runtime.destroy(workspace);
+    }
+  }, 180_000);
+
   it("retains private input files outside Git through suspension and compute replacement", async () => {
     const runtime = new DockerWorkspaceRuntime(new Docker());
     const workspace = await runtime.create({
@@ -560,14 +658,14 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
       expect(write.exitCode, write.stderr).toBe(0);
 
       const terminalSocket = "/workspace/.facility/interactive/turn_dockerfixture/tty";
-      const native = await runtime.exec(workspace, {
+      const nativeTerminal = await runtime.exec(workspace, {
         command: "sh",
         args: [
           "-lc",
           'mkdir -p .facility/interactive/turn_dockerfixture && dtach -n .facility/interactive/turn_dockerfixture/tty -E sh -c \'echo $$ > /workspace/.facility/interactive/turn_dockerfixture/pid; while IFS= read -r line; do printf "native:%s:" "$line"; stty size; done\'',
         ],
       });
-      expect(native.exitCode, native.stderr).toBe(0);
+      expect(nativeTerminal.exitCode, nativeTerminal.stderr).toBe(0);
       let terminalOutput = "";
       let terminal = await runtime.terminal(workspace, {
         socket: terminalSocket,

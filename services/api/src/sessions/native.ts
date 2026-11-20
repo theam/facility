@@ -20,6 +20,7 @@ export const NativeSnapshot = z.object({
     .nullable(),
   bytes: z.number().int().nonnegative(),
   exited: z.boolean(),
+  interrupted: z.boolean().optional(),
 });
 export type Snapshot = z.infer<typeof NativeSnapshot>;
 export const emptyUsage = (): AgentTurnUsage => ({

@@ -1,3 +1,5 @@
+export const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
+
 /** Keep lease failures observable without logging database errors or flooding job logs. */
 export class TurnLeaseHeartbeat {
   private readonly timer: ReturnType<typeof setInterval>;

@@ -17,6 +17,10 @@ let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

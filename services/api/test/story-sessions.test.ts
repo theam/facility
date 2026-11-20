@@ -27,6 +27,7 @@ function membership(permissions: string[], active = true) {
     from: () => chain,
     innerJoin: () => chain,
     where: () => chain,
+    for: () => chain,
     limit: async () => (active ? [{ permissions }] : []),
   };
   return { select: () => chain } as unknown as FacilityDb;

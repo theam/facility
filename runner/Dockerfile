@@ -403,6 +403,7 @@ RUN package_manager="$(node -p "require('/tmp/facility-root-package.json').packa
 
 COPY --chown=root:root --chmod=0555 runner/facility-git-credential.mjs /usr/local/bin/facility-git-credential
 COPY --chown=root:root --chmod=0555 runner/facility-session.mjs /usr/local/bin/facility-session
+COPY --chown=root:root --chmod=0555 runner/facility-session-state.mjs /usr/local/bin/facility-session-state.mjs
 COPY --chown=root:root --chmod=0555 runner/facility-session-hook.mjs /usr/local/bin/facility-session-hook
 COPY --chown=root:root --chmod=0555 runner/facility-preview-gateway.mjs /usr/local/bin/facility-preview-gateway
 RUN mkdir -p /workspace \

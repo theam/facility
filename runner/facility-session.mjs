@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { processStat, sessionProcess } from "./facility-session-state.mjs";
 
 const [operation, turnId] = process.argv.slice(2);
 if (!/^turn_[a-z0-9]+$/.test(turnId ?? "")) throw new Error("Invalid turn identity");
@@ -9,6 +19,12 @@ const directory = `/workspace/.facility/interactive/${turnId}`;
 const socket = `${directory}/tty`;
 const configPath = `${directory}/launch.json`;
 const config = () => JSON.parse(readFileSync(configPath, "utf8"));
+const engineMarkers = join(dirname(process.env.HOME), "engine-processes");
+const state = sessionProcess(directory);
+function clearEngineMarkers() {
+  for (const suffix of [".pid", ".native.pid"])
+    rmSync(join(engineMarkers, `${turnId}${suffix}`), { force: true });
+}
 
 if (operation === "start") {
   const payload = readFileSync(0, "utf8");
@@ -18,6 +34,15 @@ if (operation === "start") {
   if (!["claude_code", "codex"].includes(input.engine) || !Array.isArray(input.args))
     throw new Error("Invalid engine launch");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (state.interrupted && !state.stale) {
+    writeFileSync(`${directory}/exit`, "interrupted", { mode: 0o600 });
+    process.exit(0);
+  }
+  if (state.stale) {
+    for (const file of ["tty", "pid", "process.json", "exit"])
+      rmSync(join(directory, file), { force: true });
+    clearEngineMarkers();
+  }
   if (!existsSync(socket) && !existsSync(`${directory}/exit`)) {
     writeFileSync(`${directory}/instructions.md`, String(input.instructions ?? ""), {
       mode: 0o600,
@@ -38,13 +63,15 @@ if (operation === "start") {
       writeFileSync(hooksPath, JSON.stringify(existing), { mode: 0o600 });
     }
     const { instructions: _instructions, ...configuration } = input;
-    writeFileSync(configPath, JSON.stringify(configuration), { mode: 0o600 });
+    writeFileSync(configPath, JSON.stringify({ ...configuration, containerStartId: state.epoch }), {
+      mode: 0o600,
+    });
     const started = spawnSync(
       "dtach",
       ["-n", socket, "-E", process.execPath, process.argv[1], "run", turnId],
       {
         cwd: input.cwd,
-        env: { ...process.env, FACILITY_SESSION_DIRECTORY: directory },
+        env: { ...process.env, FACILITY_SESSION_DIRECTORY: directory, FACILITY_TURN_ID: turnId },
         encoding: "utf8",
         timeout: 10_000,
       },
@@ -61,13 +88,29 @@ if (operation === "start") {
       throw new Error("Native terminal launch has not been acknowledged");
   }
 } else if (operation === "probe") {
-  console.log(JSON.stringify({ started: existsSync(socket) || existsSync(`${directory}/exit`) }));
+  console.log(
+    JSON.stringify({
+      started: !state.stale && Boolean(state.pid || state.exited),
+      interrupted: Boolean(state.interrupted),
+    }),
+  );
 } else if (operation === "run") {
+  if (state.stale) throw new Error("Native launch belongs to an earlier container start");
   const input = config();
   const child = spawn(input.engine === "codex" ? "codex" : "claude", input.args, {
     stdio: "inherit",
   });
   writeFileSync(`${directory}/pid`, String(child.pid), { mode: 0o600 });
+  const stat = processStat(readFileSync(`/proc/${child.pid}/stat`, "utf8"));
+  writeFileSync(
+    `${directory}/process.json.tmp`,
+    JSON.stringify({ pid: child.pid, start: stat.start }),
+    { mode: 0o600 },
+  );
+  renameSync(`${directory}/process.json.tmp`, `${directory}/process.json`);
+  mkdirSync(engineMarkers, { recursive: true, mode: 0o700 });
+  writeFileSync(join(engineMarkers, `${turnId}.pid`), String(process.pid), { mode: 0o600 });
+  writeFileSync(join(engineMarkers, `${turnId}.native.pid`), String(stat.group), { mode: 0o600 });
   // SIGTERM lets the native agent flush its session before the slot is released.
   process.on("SIGTERM", () => child.kill("SIGTERM"));
   process.on("SIGINT", () => child.kill("SIGINT"));
@@ -80,14 +123,16 @@ if (operation === "start") {
     process.exit(code ?? 1);
   });
 } else if (operation === "stop") {
+  if (state.stale || state.interrupted) {
+    if (state.stale) clearEngineMarkers();
+    writeFileSync(`${directory}/exit`, "interrupted", { mode: 0o600 });
+    process.exit(0);
+  }
   if (existsSync(socket) && !existsSync(`${directory}/pid`) && !existsSync(`${directory}/exit`))
     throw new Error("Native terminal is still starting; retry shutdown before releasing ownership");
   if (existsSync(`${directory}/pid`) && !existsSync(`${directory}/exit`)) {
-    const pid = Number(readFileSync(`${directory}/pid`, "utf8"));
-    if (!Number.isSafeInteger(pid) || pid < 2) throw new Error("Invalid native process");
-    const environment = readFileSync(`/proc/${pid}/environ`, "utf8");
-    if (!environment.split("\0").includes(`FACILITY_SESSION_DIRECTORY=${directory}`))
-      throw new Error("Native process identity changed");
+    const pid = state.pid;
+    if (!pid) throw new Error("Cannot verify native process identity");
     process.kill(pid, "SIGTERM");
     const deadline = Date.now() + 10_000;
     while (!existsSync(`${directory}/exit`) && Date.now() < deadline)
@@ -126,7 +171,8 @@ if (operation === "start") {
     hooks: [],
     bytes: 0,
     nativeSessionId: input.nativeSessionId ?? null,
-    exited: existsSync(`${directory}/exit`),
+    exited: state.exited,
+    interrupted: Boolean(state.interrupted),
   };
   if (file) {
     if (statSync(file).size > 32 * 1024 * 1024)
