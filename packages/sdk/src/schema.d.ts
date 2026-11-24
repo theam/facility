@@ -14824,6 +14824,7 @@ export interface operations {
     getWorkspaceStoryTurnActivity: {
         parameters: {
             query?: {
+                view?: "progress";
                 before?: number;
                 after?: number;
                 limit?: number;

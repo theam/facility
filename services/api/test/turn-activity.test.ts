@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ACTIVITY_TEXT_LIMIT, presentTurnEvent } from "../src/turns/activity.js";
+import {
+  ACTIVITY_TEXT_LIMIT,
+  presentTurnEvent,
+  presentTurnProgress,
+} from "../src/turns/activity.js";
 import {
   ClaudeEventParser,
   CodexEventParser,
@@ -234,4 +238,36 @@ describe("turn activity presentation", () => {
     const stored = presentTurnEvent(event("engine.assistant", { truncated: true, payload: "{…" }));
     expect(stored).toMatchObject({ truncated: true, title: "engine assistant (stored truncated)" });
   });
+});
+
+it("projects only agent prose to the conversation", () => {
+  expect(
+    presentTurnProgress(
+      event("engine.assistant", {
+        message: {
+          content: [
+            { type: "thinking", thinking: "Private reasoning" },
+            { type: "text", text: "I started the build." },
+            { type: "tool_use", input: { command: "private command" } },
+          ],
+        },
+      }),
+    ),
+  ).toMatchObject({ kind: "message", text: "I started the build." });
+  for (const type of ["reasoning", "command_execution", "mcp_tool_call"]) {
+    expect(
+      presentTurnProgress(
+        event("engine.item.completed", {
+          item: { type, text: "Private detail" },
+        }),
+      ),
+    ).toBeNull();
+  }
+  expect(
+    presentTurnProgress(
+      event("engine.item.completed", {
+        item: { type: "agent_message", text: "The build is running." },
+      }),
+    ),
+  ).toMatchObject({ text: "The build is running." });
 });

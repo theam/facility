@@ -7,6 +7,8 @@ import type {
 import { ENGINE_PROCESS_CLEANUP } from "./engine-process-cleanup.js";
 import { ENGINE_USAGE_PROCESS } from "./usage-journal.js";
 
+const TURN_TOOL_TOKEN_ENV = "FACILITY_TURN_TOOL_TOKEN";
+
 export type AgentTurnRequest = {
   turnId: string;
   manifest: AgentManifest;
@@ -20,6 +22,7 @@ export type AgentTurnRequest = {
   readOnly?: boolean;
   signal?: AbortSignal;
   environment?: Record<string, string>;
+  turnTools?: { url: string; token: string };
   onEvent?: (event: AgentTurnEvent) => void;
 };
 
@@ -99,6 +102,9 @@ abstract class CliAgentEngine implements AgentEngine {
         cwd: request.cwd,
         env: {
           ...(request.environment ?? {}),
+          ...(request.turnTools && !request.readOnly
+            ? { [TURN_TOOL_TOKEN_ENV]: request.turnTools.token }
+            : {}),
           FACILITY_TURN_ID: request.turnId,
           FACILITY_ENGINE: this.name,
         },
@@ -244,6 +250,19 @@ export class ClaudeCodeEngine extends CliAgentEngine {
       "--model",
       request.manifest.model,
     ];
+    if (request.turnTools && !request.readOnly)
+      args.push(
+        "--mcp-config",
+        JSON.stringify({
+          mcpServers: {
+            facility_turn: {
+              type: "http",
+              url: request.turnTools.url,
+              headers: { Authorization: `Bearer \${${TURN_TOOL_TOKEN_ENV}}` },
+            },
+          },
+        }),
+      );
     if (request.maxBudgetUsd !== undefined)
       args.push("--max-budget-usd", request.maxBudgetUsd.toFixed(6));
     if (request.nativeSessionId) args.push("--resume", request.nativeSessionId);
@@ -264,6 +283,13 @@ export class CodexEngine extends CliAgentEngine {
       "--model",
       request.manifest.model,
     ];
+    if (request.turnTools && !request.readOnly)
+      shared.push(
+        "-c",
+        `mcp_servers.facility_turn.url=${JSON.stringify(request.turnTools.url)}`,
+        "-c",
+        `mcp_servers.facility_turn.bearer_token_env_var=${JSON.stringify(TURN_TOOL_TOKEN_ENV)}`,
+      );
     const effort = request.manifest.options.reasoning_effort;
     if (effort) shared.push("-c", `model_reasoning_effort=${JSON.stringify(effort)}`);
     const args = request.nativeSessionId

@@ -1,6 +1,7 @@
 import { type AgentManifest, AgentManifestSchema } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
+  agentManifests,
   attentionItems,
   engineSessions,
   type FacilityDb,
@@ -33,6 +34,7 @@ import {
   authorizePlanExecution,
   type PlanExecutionAuthorization,
   planExecutionStillAuthorized,
+  readPlanExecutionReceipt,
   recordPlanExecution,
   WorkflowGateError,
 } from "../stories/workflow-execution.js";
@@ -40,6 +42,7 @@ import {
   lockWorkflowExecution,
   lockWorkflowStory,
   readWorkflowPolicy,
+  workflowDigest,
 } from "../stories/workflow-policy.js";
 import type {
   ProjectEnvironmentService,
@@ -49,6 +52,19 @@ import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.j
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
+import {
+  authorizeFollowupExecution,
+  FOLLOWUP_TRIGGER,
+  FOLLOWUP_WINDOW_HOURS,
+  type FollowupChain,
+  followupExpired,
+  MAX_FOLLOWUP_WAKEUPS,
+  mayScheduleNextFollowup,
+  readFollowupChain,
+  readFollowupRequest,
+  storyCanFollowUp,
+  turnToolToken,
+} from "./followup.js";
 import type { StartedGitEvidence, TurnGitEvidenceService } from "./git-evidence.js";
 import { TurnHealthMonitor } from "./health-monitor.js";
 import { TurnLeaseHeartbeat } from "./lease-heartbeat.js";
@@ -70,6 +86,7 @@ export class TurnDispatcher {
     private readonly costs = new CostBudgetService(db),
     private readonly runtime?: WorkspaceRuntime,
     private readonly review?: { cycles: StoryReviewCycles },
+    private readonly turnTools?: { apiUrl: string; secret: string; insecureDev: boolean },
   ) {}
 
   async dispatch(input: { orgId: string; projectId: string; turnId: string }) {
@@ -175,6 +192,16 @@ export class TurnDispatcher {
       if (!workspace || !conversation)
         throw new Error("story workspace or conversation is missing");
       currentWorkspace = workspaceLocator(workspace);
+      const followup = admission.followup;
+      const followupRequest =
+        followup && turn.triggerKey
+          ? await readFollowupRequest(this.db, turn, turn.triggerKey)
+          : undefined;
+      if (
+        turn.triggerType === FOLLOWUP_TRIGGER &&
+        (!storyCanFollowUp(story) || followupRequest?.workspaceId !== workspace.id)
+      )
+        throw new Error("The original story or workspace is no longer available for follow-up.");
       const manifest = AgentManifestSchema.parse(turn.manifest);
       if (manifest.hash !== turn.manifestHash || manifest.name !== turn.agentName) {
         throw new Error("turn agent manifest snapshot does not match its recorded identity");
@@ -314,6 +341,8 @@ export class TurnDispatcher {
         )
           throw new ReviewCycleStop("The correction must resume the original Builder session.");
       }
+      if (followup && session?.lastTurnId !== turn.triggerKey)
+        throw new Error("The original native session is no longer available to resume.");
       const engineSessionId = session?.id ?? newId("esess");
       // Each automatic review starts from a fresh context in the Reviewer's session
       // record; every other turn resumes its agent's native session.
@@ -410,7 +439,8 @@ export class TurnDispatcher {
       }, turn.id);
       const engine = this.engines.get(manifest.engine);
       const requestMessage = messages.find(
-        (message) => message.turnId === turn.id && message.role === "user",
+        (message) =>
+          message.turnId === (followup?.rootTurnId ?? turn.id) && message.role === "user",
       );
       const attached =
         (requestMessage?.metadata as { attachments?: InputFileReference[] })?.attachments ?? [];
@@ -439,6 +469,32 @@ export class TurnDispatcher {
           : "";
       const reviewInstruction =
         reviewing && cycle ? `\n\n${await this.review?.cycles.reviewContract(cycle)}` : "";
+      const toolUrl = this.turnTools
+        ? new URL("/internal/turn-tools", this.turnTools.apiUrl)
+        : undefined;
+      const chain =
+        !cycle && toolUrl ? (followup ?? (await readFollowupChain(this.db, turn))) : undefined;
+      const toolToken =
+        this.turnTools &&
+        toolUrl &&
+        !toolUrl.username &&
+        !toolUrl.password &&
+        (toolUrl.protocol === "https:" ||
+          (toolUrl.protocol === "http:" && this.turnTools.insecureDev)) &&
+        chain &&
+        mayScheduleNextFollowup(chain) &&
+        turn.startedAt
+          ? turnToolToken(this.turnTools.secret, turn.id, turn.startedAt)
+          : undefined;
+      if (toolToken) secrets.push(toolToken);
+      const followupInstruction = followupRequest
+        ? `\n\n# Scheduled follow-up\nRecheck the pending work in this same assignment and report the outcome. This was requested earlier by this agent.\n${followupRequest.context}`
+        : "";
+      const scheduleInstruction = toolToken
+        ? `\n\nIf waiting for background work prevents finishing the assignment, call schedule_followup once for the next check. Give a short user-visible reason and non-secret job references. Wait for the tool to confirm before ending the turn. Automatic checks are limited to ${MAX_FOLLOWUP_WAKEUPS} within ${FOLLOWUP_WINDOW_HOURS} hours of the original turn.`
+        : followup
+          ? "\nThis assignment cannot schedule another automatic check. Report the current state if the work is still pending."
+          : "";
       const engineRequest = {
         turnId: turn.id,
         manifest,
@@ -448,13 +504,16 @@ export class TurnDispatcher {
             manifest,
             story,
             conversation.summary,
-            messages,
+            followup ? messages.filter((message) => message.turnId !== null) : messages,
             turn.id,
             attention,
             inputFiles,
           ) +
           deliveryInstruction +
-          reviewInstruction,
+          reviewInstruction +
+          followupInstruction +
+          scheduleInstruction,
+        turnTools: toolUrl && toolToken ? { url: toolUrl.toString(), token: toolToken } : undefined,
         cwd: prepared.primaryCwd,
         nativeSessionId: resumedSessionId,
         // The Reviewer keeps its engine credentials and the read-only GitHub token,
@@ -473,6 +532,8 @@ export class TurnDispatcher {
           type: "turn.phase",
           data: { phase: "agent" },
         });
+        if (followup && new Date() >= followup.expiresAt)
+          throw new ApiError(409, "followup_expired", "The automatic follow-up window ended");
         engineStarted = true;
         result = await engine.run(engineRequest);
       } catch (error) {
@@ -630,7 +691,10 @@ export class TurnDispatcher {
         await this.activateQueuedSuccessor({ ...input, storyId: turn.storyId });
         return { claimed: true as const, state: "canceled" as const };
       }
-      const retryAfter = !engineStarted && !cycle ? githubRateLimitRetryAt(error) : undefined;
+      const retryAfter =
+        !engineStarted && !cycle && turn.triggerType !== FOLLOWUP_TRIGGER
+          ? githubRateLimitRetryAt(error)
+          : undefined;
       if (retryAfter) {
         const deferred = await this.db
           .update(turns)
@@ -699,6 +763,7 @@ export class TurnDispatcher {
         turn: typeof turns.$inferSelect;
         reservationId: string | null;
         reviewCycle?: ReviewCycle;
+        followup?: FollowupChain;
       }
   > {
     try {
@@ -744,7 +809,8 @@ export class TurnDispatcher {
           .limit(1);
         if (!existing) return null;
         const scope = { orgId: input.orgId, projectId: input.projectId, storyId: existing.storyId };
-        if (existing.triggerType === REVIEW_TRIGGER) await lockWorkflowStory(tx, scope);
+        if ([REVIEW_TRIGGER, FOLLOWUP_TRIGGER].includes(existing.triggerType))
+          await lockWorkflowStory(tx, scope);
         else await lockWorkflowExecution(tx, scope, existing.agentName);
         const [queued] = await tx
           .select()
@@ -760,6 +826,53 @@ export class TurnDispatcher {
           .limit(1);
         if (queued?.state !== "queued" || (queued.retryAfter && queued.retryAfter > new Date()))
           return null;
+        let followup: FollowupChain | undefined;
+        if (queued.triggerType === FOLLOWUP_TRIGGER) {
+          followup = (await readFollowupChain(tx, queued)) ?? undefined;
+          if (!followup)
+            throw new ApiError(
+              409,
+              "followup_origin_missing",
+              "The original assignment is unavailable",
+            );
+          const [story] = await tx
+            .select()
+            .from(stories)
+            .where(
+              and(
+                eq(stories.orgId, scope.orgId),
+                eq(stories.projectId, scope.projectId),
+                eq(stories.id, scope.storyId),
+              ),
+            )
+            .limit(1);
+          const now = new Date();
+          if (queued.scheduledFor && queued.scheduledFor > now) return null;
+          if (
+            !story ||
+            !storyCanFollowUp(story) ||
+            now >= followup.expiresAt ||
+            followupExpired(queued.scheduledFor, now)
+          )
+            throw new ReviewCycleStop("The follow-up expired or the story was closed.");
+          await authorizeFollowupExecution(tx, queued);
+          const [current] = await tx
+            .select({ hash: agentManifests.contentHash })
+            .from(agentManifests)
+            .where(
+              and(
+                eq(agentManifests.orgId, scope.orgId),
+                eq(agentManifests.projectId, scope.projectId),
+                eq(agentManifests.name, queued.agentName),
+              ),
+            )
+            .for("share")
+            .limit(1);
+          if (current?.hash !== queued.manifestHash)
+            throw new ReviewCycleStop(
+              "The scheduled agent's manifest changed or is no longer available.",
+            );
+        }
         if (queued.triggerType === "github" || queued.triggerType === "schedule") {
           const { policy } = await readWorkflowPolicy(tx, scope);
           if (
@@ -803,7 +916,8 @@ export class TurnDispatcher {
             !(error instanceof ApiError && error.code.startsWith("workflow_"))
           )
             throw error;
-          if (reviewCycle) throw new ReviewCycleStop(error.message);
+          if (reviewCycle || queued.triggerType === FOLLOWUP_TRIGGER)
+            throw new ReviewCycleStop(error.message);
           const retryAfter = new Date(Date.now() + 30_000);
           await tx
             .update(turns)
@@ -853,6 +967,17 @@ export class TurnDispatcher {
               ),
             );
           return { kind: "held" as const, code: error.code, error: error.message };
+        }
+        if (followup) {
+          const original = await readPlanExecutionReceipt(tx, scope, followup.rootTurnId);
+          if (workflowDigest(original) !== workflowDigest(authorization))
+            throw new ApiError(
+              409,
+              "followup_plan_changed",
+              "The original plan authorization changed. Start this work with a new request.",
+            );
+          if (new Date() >= followup.expiresAt)
+            throw new ApiError(409, "followup_expired", "The automatic follow-up window ended");
         }
         const claimed = (
           await tx
@@ -904,7 +1029,7 @@ export class TurnDispatcher {
           model: claimed.model,
         });
         if (reviewCycle) await this.review?.cycles.recordStart(tx, reviewCycle, claimed.id);
-        return { kind: "running" as const, turn: claimed, reservationId, reviewCycle };
+        return { kind: "running" as const, turn: claimed, reservationId, reviewCycle, followup };
       });
       if (!admitted) {
         const unclaimed = await this.turn(input.orgId, input.projectId, input.turnId);
@@ -916,7 +1041,14 @@ export class TurnDispatcher {
       if (admitted.kind === "held") return admitted;
       return admitted;
     } catch (error) {
-      if (!(error instanceof BudgetPolicyError || error instanceof ReviewCycleStop)) throw error;
+      if (
+        !(
+          error instanceof BudgetPolicyError ||
+          error instanceof ReviewCycleStop ||
+          (error instanceof ApiError && error.code.startsWith("followup_"))
+        )
+      )
+        throw error;
       const queued = await this.turn(input.orgId, input.projectId, input.turnId);
       if (queued && queued.state === "queued") {
         await this.storiesService.failTurn({ ...input, error: error.message });
