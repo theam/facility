@@ -18,22 +18,61 @@ try {
     const args = process.argv.slice(2);
     if (process.env.GH_HOST && process.env.GH_HOST !== 'github.com') fail();
     if (args.some(arg => /^https?:\/\//.test(arg) && !/^https:\/\/(api\.)?github\.com(\/|$)/.test(arg))) fail();
-    let explicit;
-    const targets = [];
+    // Only positional command targets select credentials. Option values are data,
+    // even when a body/title happens to contain a GitHub URL or look like -R.
+    const kind = args[0], action = args[1];
+    const urlActions = kind === 'pr'
+      ? ['checkout', 'checks', 'close', 'comment', 'diff', 'edit', 'lock', 'merge', 'ready', 'reopen', 'review', 'unlock', 'view']
+      : kind === 'issue' ? ['close', 'comment', 'delete', 'develop', 'edit', 'lock', 'pin', 'reopen', 'transfer', 'unlock', 'unpin', 'view'] : [];
+    const switches = kind === 'api' ? ['--paginate', '--slurp', '--silent', '--include', '-i', '--verbose']
+      : ({ create: ['--draft', '-d', '--fill', '-f', '--fill-first', '--fill-verbose', '--web', '-w', '--editor', '-e', '--dry-run'],
+          list: kind === 'pr' ? ['--draft', '-d', '--web', '-w'] : kind === 'run' ? ['--all', '-a'] : ['--web', '-w'],
+          view: ['--web', '-w', '--comments', '-c'], diff: ['--web', '-w', '--patch', '--stat', '--name-only'],
+          checks: ['--watch', '--fail-fast', '--required', '--web', '-w'], checkout: ['--detach', '--force', '-f', '--recurse-submodules'],
+          merge: ['--auto', '--disable-auto', '--admin', '--delete-branch', '-d', '--merge', '-m', '--squash', '-s', '--rebase', '-r'],
+          edit: ['--remove-milestone'],
+          review: ['--approve', '-a', '--request-changes', '-r', '--comment', '-c'], ready: ['--undo'],
+          comment: ['--edit-last', '--create-if-none', '--delete-last', '--yes'], close: ['--delete-branch', '-d'],
+          delete: ['--yes'], develop: ['--checkout', '-c', '--list', '-l'] })[action] || [];
     const normalize = input => String(input).replace(/^https:\/\/github\.com\//, '').replace(/^github\.com\//, '').replace(/\.git$/, '').toLowerCase();
+    const valueFlags = ['--body', '-b', '--body-file', '-F', '--title', '-t', '--json', '--jq', '-q', '--template',
+      '--author', '-A', '--assignee', '-a', '--label', '-l', '--base', '-B', '--head', '-H', '--reviewer', '-r',
+      '--project', '-p', '--milestone', '-m', '--state', '-s', '--limit', '-L', '--search', '-S', '--sort', '--order',
+      '--reason', '--branch', '--match-head-commit', '--subject', '--recover', '--interval', '-i',
+      '--add-label', '--remove-label', '--add-assignee', '--remove-assignee', '--add-reviewer', '--remove-reviewer',
+      '--add-project', '--remove-project', '--method', '-X', '--field', '-f', '--raw-field', '--input', '--header', '--cache'];
+    let explicit, target, ambiguous = false;
+    const positional = [];
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === '--hostname' && args[i + 1] !== 'github.com') fail();
-      if (arg.startsWith('--hostname=') && arg !== '--hostname=github.com') fail();
-      if (arg === '-R' || arg === '--repo') explicit = normalize(args[++i]);
+      if (arg === '--') { positional.push(...args.slice(i + 1)); break; }
+      if (arg === '--hostname') { if (args[++i] !== 'github.com') fail(); }
+      else if (arg.startsWith('--hostname=')) { if (arg !== '--hostname=github.com') fail(); }
+      else if (arg === '-R' || arg === '--repo') explicit = normalize(args[++i]);
       else if (arg.startsWith('--repo=')) explicit = normalize(arg.slice(7));
       else if (arg.startsWith('-R') && arg.length > 2) explicit = normalize(arg.slice(2));
-      const target = arg.match(/^https:\/\/github\.com\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i)
-        || (args[0] === 'api' && arg.match(/^(?:https:\/\/api\.github\.com\/|\/)?repos\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i));
-      if (target) targets.push(normalize(target[1]));
+      else if (arg.startsWith('-')) {
+        if (switches.includes(arg) || ['--help', '-h', '--version'].includes(arg)) continue;
+        if (valueFlags.includes(arg)) { i++; continue; }
+        if (arg.startsWith('--') && arg.includes('=')) continue;
+        if (!arg.startsWith('--') && arg.length > 2) {
+          if (valueFlags.includes(arg.slice(0, 2)) && !switches.includes(arg.slice(0, 2))) continue;
+          if ([...arg.slice(1)].every(flag => switches.includes('-' + flag))) continue;
+        }
+        ambiguous = true; break;
+      } else if (i >= (kind === 'api' ? 1 : 2)) positional.push(arg);
     }
-    if (new Set(targets).size > 1 || (explicit && targets.some(target => target !== explicit))) fail();
-    let repo = targets[0] || explicit || (process.env.GH_REPO && normalize(process.env.GH_REPO));
+    if (ambiguous && !process.env.GH_REPO) {
+      console.error('Facility cannot safely infer the repository for these gh options. Set GH_REPO=owner/repo explicitly.');
+      process.exit(1);
+    }
+    const first = String(positional[0]);
+    const match = kind === 'api'
+      ? first.match(/^(?:https:\/\/api\.github\.com\/|\/)?repos\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i)
+      : urlActions.includes(action) && first.match(/^https:\/\/github\.com\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i);
+    if (!ambiguous && match) target = normalize(match[1]);
+    if (explicit && target && explicit !== target) fail();
+    let repo = ambiguous ? normalize(process.env.GH_REPO) : target || explicit || (process.env.GH_REPO && normalize(process.env.GH_REPO));
     if (!repo) {
       const options = { encoding: 'utf8', timeout: 2000, maxBuffer: 8192, stdio: ['ignore', 'pipe', 'ignore'] };
       const remote = cp.spawnSync('git', ['remote', 'get-url', 'origin'], options);
@@ -47,7 +86,7 @@ try {
     }
     if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repo) || typeof value.tokens[repo] !== 'string') fail();
     if (typeof value.gh !== 'string' || !path.isAbsolute(value.gh) || path.resolve(value.gh) === path.resolve(process.argv[1])) fail();
-    const result = cp.spawnSync(value.gh, args, { stdio: 'inherit', env: { ...process.env, GH_REPO: repo, GH_TOKEN: value.tokens[repo], GITHUB_TOKEN: value.tokens[repo] } });
+    const result = cp.spawnSync(value.gh, args, { stdio: 'inherit', env: { ...process.env, GH_REPO: process.env.GH_REPO || repo, GH_TOKEN: value.tokens[repo], GITHUB_TOKEN: value.tokens[repo] } });
     process.exit(result.status === null ? 1 : result.status);
   }
   if (process.argv[2] !== 'get') process.exit(0);

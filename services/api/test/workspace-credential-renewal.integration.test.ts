@@ -238,6 +238,11 @@ it("routes gh by checkout, explicit repository, PR URL and API path with separat
     [["api", "repos/acme/app/issues"], "acme/app", "synthetic-first"],
     [["pr", "list", "-R", "acme/app"], "acme/app", "synthetic-first"],
     [["pr", "list", "-Racme/app"], "acme/app", "synthetic-first"],
+    [
+      ["pr", "create", "--draft", "--repo", "acme/app", "--title", "Test", "--body", "Test"],
+      "acme/app",
+      "synthetic-first",
+    ],
   ] as const) {
     const result = await runtime.exec(workspace, {
       command: "gh",
@@ -277,4 +282,84 @@ it("routes gh by checkout, explicit repository, PR URL and API path with separat
   });
   expect(foreign.exitCode).not.toBe(0);
   expect(foreign.stdout).not.toContain("synthetic-");
+});
+
+it("does not treat URLs in gh body, title or API field values as the destination", async () => {
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  await writeFile(
+    file,
+    JSON.stringify({ ...saved, tokens: { ...saved.tokens, "acme/related": "synthetic-related" } }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    realGh,
+    `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, repo: process.env.GH_REPO }));\n`,
+    { mode: 0o700 },
+  );
+  for (const args of [
+    ["issue", "create", "--title", "Test", "--body", "https://github.com/acme/related/issues/42"],
+    ["pr", "comment", "7", "--body", "https://github.com/acme/related/pull/42"],
+    ["issue", "create", "--title", "Test", "--body", "-Racme/related"],
+    ["issue", "create", "--title", "--repo=acme/related", "--body", "Test"],
+    ["pr", "comment", "--body", "https://github.com/acme/related/pull/42", "7"],
+    [
+      "issue",
+      "edit",
+      "--remove-milestone",
+      "--body",
+      "https://github.com/acme/related/issues/42",
+      "7",
+    ],
+    ["pr", "edit", "7", "--title", "https://github.com/acme/related/pull/42"],
+    [
+      "api",
+      "--method",
+      "POST",
+      "repos/acme/app/issues",
+      "-f",
+      "body=https://github.com/acme/related/issues/42",
+    ],
+  ]) {
+    const result = await runtime.exec(workspace, {
+      command: "gh",
+      args,
+      env: { ...environment, GH_REPO: "acme/app" },
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ repo: "acme/app", token: "synthetic-first" });
+  }
+  const view = await runtime.exec(workspace, {
+    command: "gh",
+    args: ["pr", "view", "--json", "title", "https://github.com/acme/related/pull/42"],
+    env: environment,
+  });
+  expect(view.exitCode, view.stderr).toBe(0);
+  expect(JSON.parse(view.stdout)).toEqual({ repo: "acme/related", token: "synthetic-related" });
+});
+
+it("does not guess option arity for unknown gh flags", async () => {
+  await writeFile(realGh, `#!${process.execPath}\nprocess.stdout.write(process.env.GH_REPO);\n`, {
+    mode: 0o700,
+  });
+  for (const flag of ["--future-toggle", "-z", "-wz"]) {
+    const args = [
+      "issue",
+      "edit",
+      flag,
+      "--body",
+      "https://github.com/acme/related/issues/42",
+      "7",
+    ];
+    const refused = await runtime.exec(workspace, { command: "gh", args, env: environment });
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("Set GH_REPO=owner/repo explicitly");
+    expect(refused.stdout).toBe("");
+    const explicit = await runtime.exec(workspace, {
+      command: "gh",
+      args,
+      env: { ...environment, GH_REPO: "acme/app" },
+    });
+    expect(explicit.exitCode, explicit.stderr).toBe(0);
+    expect(explicit.stdout).toBe("acme/app");
+  }
 });

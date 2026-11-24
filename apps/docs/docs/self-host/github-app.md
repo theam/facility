@@ -176,7 +176,9 @@ repositories. Only the review cycle's Reviewer turns receive a read-only token. 
 wrapper selects the token from an explicit repository flag, PR URL, API repository path, `GH_REPO`,
 or the current checkout's origin. It uses the primary repository outside a checkout and rejects
 targets outside the turn's connected repository map. This keeps related checkouts on their own App
-and credentials, including mixed legacy and ID-scoped repositories.
+and credentials, including mixed legacy and ID-scoped repositories. If an unfamiliar CLI option
+makes destination parsing ambiguous, set `GH_REPO=owner/repo` explicitly. Option values such as issue
+bodies and titles never select the repository, and the wrapper preserves an explicit `GH_REPO`.
 
 Installation tokens are short-lived and minted when work needs them. Revoking an installation or
 removing a repository stops future credentials and reconciliation; it does not erase existing
