@@ -232,7 +232,30 @@ export class ProjectEnvironmentService {
       projectId: string;
       workspaceId: string;
     }) => Promise<Record<string, string>> = async () => ({}),
+    private readonly githubFactory?: GithubClientFactory,
   ) {}
+
+  private async verifyRepository(repository: WorkspaceRepository) {
+    if (repository.githubRepositoryId == null) return;
+    if (!this.githubFactory || !repository.installationNumber)
+      throw new ProjectEnvironmentError(
+        "repository_identity_unavailable",
+        "Repository identity verification is unavailable",
+      );
+    const client = await this.githubFactory(
+      repository.installationNumber,
+      repository.githubRepositoryId,
+    );
+    const result = await client.rest.repos.get?.({
+      owner: repository.owner,
+      repo: repository.name,
+    });
+    if (result?.data.id !== repository.githubRepositoryId)
+      throw new ProjectEnvironmentError(
+        "repository_identity_changed",
+        "Repository identity changed before workspace preparation",
+      );
+  }
 
   async prepare(
     input: EnvironmentInput & {
@@ -242,9 +265,12 @@ export class ProjectEnvironmentService {
     },
   ) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
+    for (const repository of input.credentials.repositories)
+      await this.verifyRepository(repository);
     const preparedInput = await this.withDeclaredEnvironment(input);
     await this.run(preparedInput, "mkdir -p repos", ".", "environment.repositories");
     for (const repository of preparedInput.credentials.repositories) {
+      await this.verifyRepository(repository);
       await this.runCommand(
         preparedInput,
         "mkdir",
@@ -292,6 +318,7 @@ export class ProjectEnvironmentService {
       );
       if (repository.role === "primary") await this.ensureBranch(preparedInput, repository, cwd);
       else await this.leavePreviewBranch(preparedInput, repository, cwd);
+      await this.verifyRepository(repository);
     }
 
     const setupChecksum = await this.setupChecksum(preparedInput);
@@ -332,6 +359,8 @@ export class ProjectEnvironmentService {
   /** Reuse the agent's files and data; preview access must never prepare Git or reseed. */
   async startPrepared(input: EnvironmentInput & { setupChecksum: string }) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
+    for (const repository of input.credentials.repositories)
+      await this.verifyRepository(repository);
     const preparedInput = await this.withDeclaredEnvironment(input);
     const ready = preparedInput.manifest.environment.ready;
     const alreadyReady = ready
@@ -346,6 +375,8 @@ export class ProjectEnvironmentService {
     input: EnvironmentInput & { previousSetupChecksum?: string | null; sourceFingerprint?: string },
   ) {
     assertRepositoryContract(input.manifest, input.credentials.repositories);
+    for (const repository of input.credentials.repositories)
+      await this.verifyRepository(repository);
     const preparedInput = await this.withDeclaredEnvironment(input);
     if (preparedInput.manifest.environment.stop) {
       await this.run(

@@ -92,6 +92,7 @@ export function createStoryDomain(input: {
     undefined,
     undefined,
     (scope) => variables.values(scope),
+    githubFactory,
   );
   const previewConvergence = new StoryPreviewConvergenceService(
     input.db,

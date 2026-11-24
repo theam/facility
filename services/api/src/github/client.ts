@@ -6,6 +6,7 @@ import { installationConfig } from "./connections.js";
 import { createGithubGitIdentityLoader, type GithubGitIdentity } from "./git-identity.js";
 
 export type Octokit = {
+  readonly boundRepositoryId?: number;
   request?: (route: string, args?: Record<string, unknown>) => Promise<{ data: unknown }>;
   /** App-authenticated lookup: public repository visibility is not installation membership. */
   repositoryInstallationId?: (owner: string, repo: string) => Promise<number>;
@@ -45,6 +46,62 @@ export type Octokit = {
     };
   };
 };
+
+/** GitHub may allow public reads outside a token's scope. Bind every repository request as well. */
+export function bindGithubRepositoryClient(client: Octokit, repositoryId: number): Octokit {
+  const request = client.request;
+  const get = client.rest.repos.get;
+  if (!get) throw new Error("GitHub repository identity lookup unavailable");
+  const metadata = async (args: Record<string, unknown>) => {
+    if (typeof args.owner !== "string" || typeof args.repo !== "string")
+      throw new Error("A bound GitHub client requires a repository");
+    const result = await get({
+      owner: args.owner,
+      repo: args.repo,
+      ...(args.request ? { request: args.request } : {}),
+    });
+    if (result.data.id !== repositoryId) throw new Error("GitHub repository identity changed");
+    return result;
+  };
+  const guarded =
+    <T>(operation: (args: Record<string, unknown>) => Promise<T>) =>
+    async (args: Record<string, unknown>) => {
+      await metadata(args);
+      return operation(args);
+    };
+  return {
+    boundRepositoryId: repositoryId,
+    request: request
+      ? async (route, args = {}) => {
+          await metadata(args);
+          return request(route, args);
+        }
+      : undefined,
+    repositoryInstallationId: client.repositoryInstallationId,
+    rest: {
+      git: {
+        getCommit: guarded(client.rest.git.getCommit),
+        createBlob: guarded(client.rest.git.createBlob),
+        createTree: guarded(client.rest.git.createTree),
+        createCommit: guarded(client.rest.git.createCommit),
+        createRef: guarded(client.rest.git.createRef),
+        updateRef: guarded(client.rest.git.updateRef),
+      },
+      repos: {
+        get: metadata,
+        getBranch: guarded(client.rest.repos.getBranch),
+        getContent: guarded(client.rest.repos.getContent),
+        createInOrg: async () => {
+          throw new Error("A bound GitHub client cannot create repositories");
+        },
+      },
+      pulls: {
+        create: guarded(client.rest.pulls.create),
+        list: client.rest.pulls.list ? guarded(client.rest.pulls.list) : undefined,
+      },
+    },
+  };
+}
 
 export type GithubClientFactory = (
   installationId: number,
@@ -124,7 +181,7 @@ export function createGithubClientFactory(config: AppConfig, db?: FacilityDb): G
       });
       return result.data.id;
     };
-    return client;
+    return repositoryId == null ? client : bindGithubRepositoryClient(client, repositoryId);
   };
 }
 
@@ -218,7 +275,11 @@ export class FacilityGithubClient {
 
   /** Re-check before each operation: an old slug can be reused after a transfer. */
   private async assertRepositoryIdentity() {
-    if (this.repo.githubRepositoryId == null) return; // Existing unpinned installations stay compatible.
+    if (
+      this.repo.githubRepositoryId == null ||
+      this.octokit.boundRepositoryId === this.repo.githubRepositoryId
+    )
+      return; // Existing unpinned installations stay compatible.
     if (!this.octokit.rest.repos.get)
       throw new Error("GitHub repository identity lookup unavailable");
     const response = await this.octokit.rest.repos.get({

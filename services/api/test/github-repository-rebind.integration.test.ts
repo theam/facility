@@ -400,3 +400,56 @@ it("keeps mirror writes behind the same repository row fence as rebind", async (
       .where(eq(projectRepositories.id, repoId));
   }
 });
+
+it("takes the project row before the repository row so disconnect cannot deadlock with a new issue", async () => {
+  const held = latch(),
+    mirrorStarted = latch(),
+    release = latch();
+  const disconnectFence = db.transaction(async (tx) => {
+    await tx.select().from(projects).where(eq(projects.id, projectId)).for("update");
+    held.resolve();
+    await mirrorStarted.promise;
+    try {
+      await vi.waitFor(
+        async () => {
+          const rows = await db.execute(
+            sql`select count(*)::int as waiting from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like '%"projects"%' and query like '%for key share%'`,
+          );
+          expect(rows[0]?.waiting).toBeGreaterThan(0);
+        },
+        { timeout: 2000 },
+      );
+      // A mirror that had taken repo FOR SHARE first would make this fail immediately.
+      await tx
+        .select()
+        .from(projectRepositories)
+        .where(eq(projectRepositories.id, repoId))
+        .for("update", { noWait: true });
+    } finally {
+      release.resolve();
+    }
+  });
+  await held.promise;
+  const mirror = new GithubMirrorService(db, async () => provider());
+  const pending = mirror.handleWebhook({
+    id: `gh_${crypto.randomUUID()}`,
+    orgId,
+    projectId,
+    repositoryId: repoId,
+    installationId: oldInstallation,
+    eventType: "issues",
+    payload: {
+      repository: { id: 456, name: "app", owner: { login: owner } },
+      issue: {
+        number: 322,
+        title: "New issue",
+        html_url: "https://github.test/issues/322",
+        state: "open",
+      },
+    },
+  });
+  mirrorStarted.resolve();
+  await release.promise;
+  await disconnectFence;
+  expect((await pending).mirrored).toBe(1);
+});

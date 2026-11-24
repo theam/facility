@@ -569,7 +569,10 @@ export class StoryCompletionService {
       await this.mutate(scope, async (service) => {
         const fresh = await service.read(scope);
         assertCandidate(fresh, claimed.candidateRevision);
+        const currentTarget = await service.repositoryById(scope, claimed.repositoryId);
         if (
+          currentTarget.installationId !== target.installationId ||
+          currentTarget.githubRepositoryId !== target.githubRepositoryId ||
           fresh.integration.policy.mode !== "repository_dispatch" ||
           fresh.integration.eventId !== claimed.eventId ||
           fresh.integration.repository !== `${target.owner}/${target.name}`

@@ -76,6 +76,13 @@ export class GithubMirrorService {
     const onPullObserved = this.onPullObserved;
     const result = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      // Disconnect locks the project first. Match that order before acquiring the repo lock;
+      // otherwise new mirror rows' project FKs could deadlock with disconnect.
+      await tx
+        .select({ id: projects.id })
+        .from(projects)
+        .where(and(eq(projects.orgId, repository.orgId), eq(projects.id, repository.projectId)))
+        .for("key share");
       // Rebind takes FOR UPDATE on this same row. A shared row lock protects provenance
       // without blocking observations behind a completion request holding the project lock.
       await tx

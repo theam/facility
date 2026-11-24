@@ -132,6 +132,15 @@ vi.mock("@octokit/app", () => ({
 }));
 vi.mock("@octokit/rest", () => ({
   Octokit: class {
+    rest = {
+      git: {},
+      pulls: {},
+      repos: {
+        get: async ({ owner, repo }: { owner: string; repo: string }) => ({
+          data: { id: 123, name: repo, owner: { login: owner } },
+        }),
+      },
+    };
     async request(_route: string, args: { username: string }) {
       return { data: { id: 42, login: args.username, type: "Bot" } };
     }

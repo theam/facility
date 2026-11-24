@@ -159,7 +159,10 @@ switch cannot start a turn under the new App. Nested reconciliation runs after t
 commits, without keeping a database connection open during provider calls.
 
 For repositories with a recorded immutable ID, API and workspace tokens use GitHub repository-ID
-scopes, executable configuration checks the same identity, and signed deliveries must carry that ID.
+scopes, every repository API request checks the same identity, and signed deliveries must carry that ID.
+Workspace preparation also verifies every checkout before and after fetching, and before executing
+project setup or preview commands. This is required even for public repositories: public reads can
+succeed independently of a token's selected repositories.
 Reusing an old repository name therefore does not transfer its Facility privileges or history to a
 replacement. Legacy rows without an ID retain their existing name-based behavior; verify and record
 their historical identity before transferring them. Legacy and ID-scoped workspace credentials are

@@ -19,6 +19,7 @@ import {
 import { and, desc, eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { GithubClientFactory, Octokit } from "../src/github/client.js";
 import type {
   GithubWorkspaceCredentialBroker,
   GithubWorkspaceCredentials,
@@ -150,6 +151,94 @@ environment:
     await rm(root, { recursive: true, force: true });
   });
 
+  it("rejects a related repository whose public slug is reused before or during fetch", async () => {
+    const retained = await runtime.create({ id: newId("ws"), image: "facility-runner:test" });
+    const identityStory = newId("story");
+    await db.insert(stories).values({
+      id: identityStory,
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: identityStory,
+      title: "Identity regression",
+      createdBy: {},
+    });
+    await db.insert(workspaces).values({
+      id: retained.id,
+      orgId,
+      projectId,
+      storyId: identityStory,
+      provider: "fake",
+      externalRef: retained.externalRef,
+      volumeRef: retained.volumeRef,
+      state: "running",
+    });
+    const scoped = {
+      ...credentials,
+      repositories: credentials.repositories.map((repository, index) => ({
+        ...repository,
+        githubRepositoryId: 123 + index,
+        installationNumber: 1,
+      })),
+    };
+    let replaced = true;
+    const factory: GithubClientFactory = async () =>
+      ({
+        rest: {
+          repos: {
+            get: async ({ repo }: Record<string, unknown>) => ({
+              data: { id: repo === "app" ? 123 : replaced ? 999 : 124, name: String(repo) },
+            }),
+          },
+        },
+      }) as unknown as Octokit;
+    const environment = new ProjectEnvironmentService(
+      db,
+      runtime,
+      `file://${remotes}`,
+      undefined,
+      undefined,
+      factory,
+    );
+    const input = {
+      orgId,
+      projectId,
+      workspace: retained,
+      manifest,
+      credentials: scoped,
+      branch: "feature/identity",
+    };
+    await expect(environment.prepare(input)).rejects.toMatchObject({
+      code: "repository_identity_changed",
+    });
+    replaced = false;
+    const exec = runtime.exec.bind(runtime);
+    const spy = vi.spyOn(runtime, "exec").mockImplementation(async (workspace, command) => {
+      const result = await exec(workspace, command);
+      if (
+        command.command === "git" &&
+        command.args?.[0] === "fetch" &&
+        command.cwd === "repos/acme/shared"
+      )
+        replaced = true;
+      return result;
+    });
+    try {
+      await expect(environment.prepare(input)).rejects.toMatchObject({
+        code: "repository_identity_changed",
+      });
+      const setup = await exec(retained, {
+        command: "test",
+        args: ["-e", "repos/acme/app/.setup-count"],
+      });
+      expect(setup.exitCode).not.toBe(0);
+      await expect(environment.refreshPrepared(input)).rejects.toMatchObject({
+        code: "repository_identity_changed",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it("configures each checkout with the identity of its own GitHub App", async () => {
     const retained = await runtime.create({ id: newId("ws"), image: "facility-runner:test" });
     const identityStoryId = newId("story");

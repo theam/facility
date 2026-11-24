@@ -5,6 +5,8 @@ import { repositoryDevelopmentBranch } from "./development-branch.js";
 import type { GithubGitIdentity } from "./git-identity.js";
 
 export type WorkspaceRepository = {
+  githubRepositoryId?: number | null;
+  installationNumber?: number;
   owner: string;
   name: string;
   defaultBranch: string;
@@ -169,6 +171,10 @@ export class GithubWorkspaceCredentialBroker {
       gitIdentity: primaryCredential.gitIdentity,
       repositories: await Promise.all(
         repositories.map(async (repository) => ({
+          githubRepositoryId: repository.githubRepositoryId,
+          installationNumber: installations.find(
+            (installation) => installation.id === repository.installationId,
+          )?.installationId,
           owner: repository.owner,
           name: repository.name,
           defaultBranch: repository.defaultBranch,
