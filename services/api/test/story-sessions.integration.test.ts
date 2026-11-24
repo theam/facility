@@ -55,6 +55,7 @@ import { readPlanExecutionReceipt } from "../src/stories/workflow-execution.js";
 import { WORKFLOW_POLICY_SETTING } from "../src/stories/workflow-policy.js";
 import { createStoryDomain, type StoryDomain } from "../src/story-domain.js";
 import { appendTurnEvent } from "../src/turns/events.js";
+import { FOLLOWUP_REQUESTED, FOLLOWUP_TRIGGER } from "../src/turns/followup.js";
 import type { AppConfig, Principal } from "../src/types.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
 import { parseProjectManifest } from "../src/workspaces/project-environment.js";
@@ -613,6 +614,60 @@ describe("interactive story sessions with durable ownership and accounting", {
     await expect(domain.sessions.enter(scope, person(), next)).rejects.toMatchObject({
       code: "budget_usage_unconfirmed",
     });
+  });
+
+  it.each([
+    true,
+    false,
+  ])("gives a waiting CLI priority over native follow-ups (waiting: %s)", async (waiting) => {
+    const scope = await fresh();
+    const queued = await domain.stories.queueMessage({
+      ...scope,
+      body: "Check the job",
+      dedupeKey: randomUUID(),
+      agent: manifest,
+      actor: { type: "user", id: userIds[0]! },
+      trigger: { type: "ui" },
+    });
+    const prior = queued.turn!;
+    await db
+      .update(turns)
+      .set({ state: "running", startedAt: new Date() })
+      .where(eq(turns.id, prior.id));
+    const workspace = await domain.sessions.workspace(db, scope);
+    await appendTurnEvent(db, {
+      ...scope,
+      turnId: prior.id,
+      type: FOLLOWUP_REQUESTED,
+      data: {
+        dueAt: new Date(Date.now() + 60_000).toISOString(),
+        reason: "Check the running job",
+        context: "Inspect job 42",
+        workspaceId: workspace.id,
+      },
+    });
+    const connection = clientIdentity();
+    await domain.sessions.lease(scope, person(), connection, waiting);
+    await domain.stories.completeTurn({
+      ...scope,
+      turnId: prior.id,
+      output: "A background job is running.",
+      actor: { type: "system", id: "native" },
+    });
+    const [followup] = await db
+      .select()
+      .from(turns)
+      .where(and(eq(turns.storyId, scope.storyId), eq(turns.triggerType, FOLLOWUP_TRIGGER)));
+    expect(followup?.state).toBe(waiting ? "canceled" : "queued");
+    expect(followup?.triggerKey).toBe(prior.id);
+    if (waiting) {
+      expect(await domain.sessions.holder(scope)).toBeNull();
+      expect((await domain.sessions.enter(scope, person(), connection))?.triggerType).toBe(
+        "interactive",
+      );
+    } else {
+      expect((await domain.sessions.holder(scope))?.id).toBe(followup?.id);
+    }
   });
 
   it("arbitrates simultaneous entrants and gives a waiting CLI priority over messages", async () => {

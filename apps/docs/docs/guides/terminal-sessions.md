@@ -58,6 +58,8 @@ selected agent starts with its manifest instructions and story identity.
 Only one turn or person holds a story's session. A running Facility turn is
 rendered read-only. A waiting terminal gets the slot before queued messages.
 When another person holds it, this release shows their name and start time.
+Automatic native follow-ups also yield to a waiting terminal when the current
+turn ends; entering the terminal supersedes that scheduled check.
 Press **Ctrl+C** while watching to confirm takeover. The old process is stopped
 and its appended conversation and usage are imported before another native
 process starts. The old holder becomes a watcher. While you hold the session,

@@ -360,7 +360,6 @@ export type WorkspaceStoryBundle = {
   conversation: { id: string; summary: string | null } | null;
   turns: Array<{
     id: string;
-    triggerType?: string;
     agentName: string;
     engine: string;
     model: string;
