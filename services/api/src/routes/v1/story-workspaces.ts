@@ -19,12 +19,17 @@ import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { manifestFromProjection } from "../../agents/catalog.js";
+import { interactiveSessionCookie } from "../../auth/interactive-session.js";
 import { requirePermissions } from "../../auth/required-permissions.js";
 import { ApiError } from "../../errors.js";
 import { readStoryDelivery, replaceStoryDelivery } from "../../stories/delivery.js";
 import { IntegrationStateBody, updateIntegrationState } from "../../stories/integration-state.js";
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
-import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
+import {
+  provisionalTitle,
+  RESULT_REVIEW_ATTENTION,
+  resolveDefaultAgent,
+} from "../../stories/phase.js";
 import { readStoryPlans } from "../../stories/plans.js";
 import { FOLLOWUP_TRIGGER } from "../../turns/followup.js";
 import type { AppConfig } from "../../types.js";
@@ -490,7 +495,11 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
     app.post(
       `/v1/projects/:projectId/workspace-stories/:storyId/attention/:attentionId/${action}`,
       {
-        config: { permission: "workspaces:execute", idempotent: true },
+        config: {
+          permission: "workspaces:execute",
+          idempotent: true,
+          partitionIdempotencyByAuthSurface: action === "dismiss",
+        },
         schema: {
           params: AttentionParams,
           operationId: `${action}WorkspaceStoryAttention`,
@@ -510,7 +519,13 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
         };
         if (action === "retry")
           return storyResponse(await translate(() => domain.stories.retryAttention(input)));
-        await translate(() => domain.stories.dismissAttention(input));
+        const { dismissedAttentionKind, ...dismissed } = await translate(() =>
+          domain.stories.dismissAttention({
+            ...input,
+            interactiveUser: Boolean(interactiveSessionCookie(request)),
+          }),
+        );
+        if (dismissedAttentionKind === RESULT_REVIEW_ATTENTION) return storyResponse(dismissed);
         // Dismissing a review stop releases messages the cycle held, as any finished turn would.
         await domain.dispatcher
           .activateQueuedStorySuccessor({ orgId: actor.orgId, projectId, storyId })

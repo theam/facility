@@ -34,6 +34,7 @@ const AttentionItem = StoryReference.extend({
   id: z.string(),
   turnId: z.string().nullable(),
   kind: z.string(),
+  resultMessageId: z.string().nullable().optional(),
   title: z.string(),
   detail: z.string().nullable(),
   createdAt: DateValue,

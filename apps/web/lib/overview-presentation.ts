@@ -6,6 +6,7 @@ import type {
   ProjectOverview,
 } from "./api";
 import { errorSummary, isReviewNotice, safeExternalUrl } from "./story-presentation";
+import { storyReviewHref } from "./story-review-navigation";
 
 // Presentation decisions for the project overview, kept free of React so the
 // state interpretation is unit-testable. Server data stays untouched; these
@@ -124,7 +125,7 @@ export const ATTENTION_PREVIEW_LIMIT = 5;
 /**
  * The overview's attention block: the newest few things waiting on a person,
  * and how many there are in total. A budget alert stops every agent, so it
- * leads; everything else is newest first.
+ * leads; finished results come last. Within each group, show the newest first.
  */
 export function latestAttention(
   overview: Pick<ProjectOverview, "attention" | "review" | "spend">,
@@ -137,7 +138,10 @@ export function latestAttention(
     ...signals,
   ].sort(
     (left, right) =>
-      Number(left.at !== null) - Number(right.at !== null) || timeOf(right.at) - timeOf(left.at),
+      Number(left.at !== null) - Number(right.at !== null) ||
+      Number(left.item?.kind === "agent_ready_review") -
+        Number(right.item?.kind === "agent_ready_review") ||
+      timeOf(right.at) - timeOf(left.at),
   );
   return {
     entries: entries.slice(0, limit),
@@ -192,10 +196,18 @@ export function attentionNotice(
             label: "Reply in the story",
             href: `${storyHref(projectId, notice.storyId)}#story-composer`,
           }
-        : resultReview && !resolved
+        : resultReview
           ? {
-              label: "Review result",
-              href: `${storyHref(projectId, notice.storyId)}#story-attention`,
+              label: resolved ? "Open result" : "Review result",
+              href: notice.resultMessageId
+                ? storyReviewHref(
+                    projectId,
+                    notice.storyId,
+                    undefined,
+                    notice.resultMessageId,
+                    `message-${notice.resultMessageId}`,
+                  )
+                : `${storyHref(projectId, notice.storyId)}#story-attention`,
             }
           : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
     item: resolved ? null : notice,

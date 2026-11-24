@@ -7242,6 +7242,7 @@ export interface operations {
                                 id: string;
                                 turnId: string | null;
                                 kind: string;
+                                resultMessageId?: string | null;
                                 title: string;
                                 detail: string | null;
                                 /** Format: date-time */
@@ -7518,6 +7519,7 @@ export interface operations {
                             id: string;
                             turnId: string | null;
                             kind: string;
+                            resultMessageId?: string | null;
                             title: string;
                             detail: string | null;
                             /** Format: date-time */

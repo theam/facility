@@ -1,6 +1,7 @@
 import { readDecisionBrief } from "@facility/core";
 import { attentionItems, type FacilityDb, stories, storyPlanRevisions } from "@facility/db";
 import { and, asc, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
+import { resultMessageId } from "../stories/attention-result.js";
 import { readDeliveryBriefs } from "../stories/delivery-decision-brief.js";
 import { CostBudgetService } from "./costs.js";
 import { deliveryNeedsReview, readProjectDeliveryReviews } from "./project-delivery-reviews.js";
@@ -321,6 +322,7 @@ export class ProjectAttentionService {
           storyStatus: stories.status,
           turnId: attentionItems.turnId,
           kind: attentionItems.kind,
+          resultMessageId,
           title: attentionItems.title,
           detail: sql<string | null>`left(${attentionItems.detail}, ${DETAIL_EXCERPT}::int)`,
           status: attentionItems.status,
@@ -377,6 +379,7 @@ export class ProjectAttentionService {
           storyStatus: row.storyStatus as StoryStatus,
           turnId: row.turnId,
           kind: row.kind,
+          resultMessageId: row.resultMessageId,
           title: row.title,
           detail: row.detail,
           status: open ? ("open" as const) : ("resolved" as const),

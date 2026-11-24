@@ -49,6 +49,7 @@ import type {
   ProjectManifestSource,
 } from "../workspaces/project-environment.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
+import { agentOutcome } from "./agent-outcome.js";
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
@@ -613,7 +614,7 @@ export class TurnDispatcher {
           : undefined,
         readyForReview:
           !cycle && outcome.readyForReview
-            ? redactString(outcome.readyForReview, secrets)
+            ? redactString(outcome.readyForReview, secrets).slice(0, 1_000)
             : undefined,
         metadata: {
           content: "final_response",
@@ -1405,22 +1406,6 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
   return serialized.length <= 64_000
     ? value
     : { truncated: true, payload: `${serialized.slice(0, 63_900)}…` };
-}
-
-function agentOutcome(output: string): {
-  output: string;
-  attention?: string;
-  readyForReview?: string;
-} {
-  const match = /<facility-(needs-attention|ready-for-review)>([\s\S]*?)<\/facility-\1>\s*$/.exec(
-    output,
-  );
-  const detail = match?.[2]?.trim();
-  if (!match || !detail) return { output };
-  return {
-    output: output.slice(0, match.index).trim(),
-    ...(match[1] === "needs-attention" ? { attention: detail } : { readyForReview: detail }),
-  };
 }
 
 /** Credentials of the Reviewer's own engine; it loses every other declared project secret,

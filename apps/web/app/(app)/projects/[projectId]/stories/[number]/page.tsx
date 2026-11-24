@@ -213,12 +213,6 @@ export default async function StoryPage({
             );
             const failure =
               !reviewNotice && !resultReview && !deliveryNotice && item.kind !== "agent_waiting";
-            const resultMessage =
-              resultReview && conversation.ok
-                ? [...conversation.data.messages, ...(conversation.data.related ?? [])].find(
-                    (message) => message.turnId === item.turnId && message.role === "agent",
-                  )
-                : null;
             return (
               <div
                 key={item.id}
@@ -248,13 +242,13 @@ export default async function StoryPage({
                     <>
                       <Link
                         href={
-                          resultMessage
+                          item.resultMessageId
                             ? storyReviewHref(
                                 projectId,
                                 story.id,
                                 undefined,
-                                resultMessage.id,
-                                `message-${resultMessage.id}`,
+                                item.resultMessageId,
+                                `message-${item.resultMessageId}`,
                               )
                             : "#conversation"
                         }

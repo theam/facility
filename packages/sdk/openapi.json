@@ -11594,6 +11594,10 @@
                               "kind": {
                                 "type": "string"
                               },
+                              "resultMessageId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
                               "title": {
                                 "type": "string"
                               },
@@ -12534,6 +12538,10 @@
                             "type": "string"
                           },
                           "kind": {
+                            "type": "string"
+                          },
+                          "resultMessageId": {
+                            "nullable": true,
                             "type": "string"
                           },
                           "title": {
