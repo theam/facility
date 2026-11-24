@@ -24,6 +24,10 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import {
+  assertGithubRepositoryBinding,
+  type GithubRepositoryBinding,
+} from "../github/repository-binding.js";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
 import {
   ACTIVITY_NOISE_TYPES,
@@ -67,6 +71,7 @@ export type StoryActor = { type: "user" | "service" | "system"; id: string };
 export type StoryTitleSource = "user" | "github" | "schedule" | "pending" | "fallback";
 
 export type StartStoryInput = {
+  expectedGithubBinding?: GithubRepositoryBinding;
   orgId: string;
   projectId: string;
   repositoryId?: string;
@@ -144,6 +149,7 @@ export class StoryServiceError extends Error {
 }
 
 type QueuedMessageInput = {
+  expectedGithubBinding?: GithubRepositoryBinding;
   attachmentIds?: string[];
   orgId: string;
   projectId: string;
@@ -180,6 +186,7 @@ export class StoryWorkspaceService {
     const aggregate = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockIdentity(
         tx,
         `${input.orgId}:${input.projectId}:${input.repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
@@ -362,6 +369,7 @@ export class StoryWorkspaceService {
     }
 
     const queued = await this.queueMessage({
+      expectedGithubBinding: input.expectedGithubBinding,
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: aggregate.story.id,
@@ -380,6 +388,7 @@ export class StoryWorkspaceService {
     const queued = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       return this.storeMessage(tx, input, false);
     });
     if (!queued)
@@ -2213,6 +2222,7 @@ export class StoryWorkspaceService {
   }
 
   async markMerged(input: {
+    expectedGithubBinding?: GithubRepositoryBinding;
     orgId: string;
     projectId: string;
     storyId: string;
@@ -2222,6 +2232,8 @@ export class StoryWorkspaceService {
   }) {
     const complete = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       const complete = !isGithubIssueStory(story);
@@ -2253,9 +2265,16 @@ export class StoryWorkspaceService {
   }
 
   /** Reconcile only the exact mirrored source issue; never infer closure from a related PR. */
-  async reconcileIssue(orgId: string, projectId: string, storyId: string) {
+  async reconcileIssue(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    expectedGithubBinding?: GithubRepositoryBinding,
+  ) {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, { orgId, projectId });
+      await assertGithubRepositoryBinding(tx, { orgId, projectId }, expectedGithubBinding);
       await lockStory(tx, orgId, projectId, storyId);
       const story = await scopedStory(tx, orgId, projectId, storyId);
       if (
@@ -2352,6 +2371,7 @@ export class StoryWorkspaceService {
   }
 
   async associatePullRequest(input: {
+    expectedGithubBinding?: GithubRepositoryBinding;
     orgId: string;
     projectId: string;
     storyId: string;
@@ -2361,6 +2381,8 @@ export class StoryWorkspaceService {
   }) {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       if (

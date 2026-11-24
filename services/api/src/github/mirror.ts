@@ -19,37 +19,104 @@ import { appendStoryEvidence } from "../stories/evidence.js";
 import { isGithubIssueStory } from "../stories/phase.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import { FacilityGithubClient, type GithubClientFactory } from "./client.js";
+import {
+  assertGithubRepositoryBinding,
+  type GithubRepositoryBinding,
+  githubPayloadMatchesRepository,
+} from "./repository-binding.js";
 
 const BODY_LIMIT = 64 * 1024;
 const MAX_SYNC_PAGES = 10;
 
 type JsonObject = Record<string, unknown>;
 type RepositoryRow = typeof projectRepositories.$inferSelect;
+type MirrorStories = {
+  [K in "reconcileIssue" | "markMerged" | "associatePullRequest"]: (
+    ...args: Parameters<StoryWorkspaceService[K]>
+  ) => Promise<unknown>;
+};
+type WebhookInput = {
+  id: string;
+  orgId: string;
+  projectId?: string;
+  repositoryId?: string;
+  installationId?: string;
+  eventType: string;
+  payload: JsonObject;
+};
 
 export class GithubMirrorService {
   constructor(
     private readonly db: FacilityDb,
     private readonly githubFactory: GithubClientFactory,
-    private readonly storiesService?: StoryWorkspaceService,
+    private readonly storiesService?: MirrorStories,
     private readonly onPullObserved?: (
       repositoryId: string,
       pullNumber: number,
     ) => Promise<unknown>,
   ) {}
 
-  async handleWebhook(input: {
-    id: string;
-    orgId: string;
-    projectId?: string;
-    repositoryId?: string;
-    installationId?: string;
-    eventType: string;
-    payload: JsonObject;
-  }) {
+  async handleWebhook(input: WebhookInput) {
     const repository = await this.repositoryForPayload(input.orgId, input.payload, input);
     if (!repository) {
       return { mirrored: 0, branches: 0, reviews: 0, checks: 0, ciUpdated: 0 };
     }
+    const expected: GithubRepositoryBinding | undefined = repository.installationId
+      ? {
+          repositoryId: repository.id,
+          installationId: repository.installationId,
+          githubRepositoryId: repository.githubRepositoryId,
+        }
+      : undefined;
+    const effects: Array<() => Promise<unknown>> = [];
+    const defer = async (effect: () => Promise<unknown>) => {
+      effects.push(effect);
+    };
+    const service = this.storiesService;
+    const onPullObserved = this.onPullObserved;
+    const result = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      // Rebind takes FOR UPDATE on this same row. A shared row lock protects provenance
+      // without blocking observations behind a completion request holding the project lock.
+      await tx
+        .select({ id: projectRepositories.id })
+        .from(projectRepositories)
+        .where(
+          and(
+            eq(projectRepositories.orgId, repository.orgId),
+            eq(projectRepositories.id, repository.id),
+          ),
+        )
+        .for("share");
+      await assertGithubRepositoryBinding(tx, repository, expected);
+      const writer = new GithubMirrorService(
+        tx,
+        this.githubFactory,
+        service
+          ? {
+              reconcileIssue: (orgId, projectId, storyId) =>
+                defer(() => service.reconcileIssue(orgId, projectId, storyId, expected)),
+              markMerged: (args) =>
+                defer(() => service.markMerged({ ...args, expectedGithubBinding: expected })),
+              associatePullRequest: (args) =>
+                defer(() =>
+                  service.associatePullRequest({ ...args, expectedGithubBinding: expected }),
+                ),
+            }
+          : undefined,
+        onPullObserved
+          ? (repositoryId, pullNumber) => defer(() => onPullObserved(repositoryId, pullNumber))
+          : undefined,
+      );
+      return writer.applyWebhook(repository, input);
+    });
+    // Nested services acquire their own fences. No pool connection survives these awaits.
+    // Pull observers reconcile the committed mirror, rather than consuming the old payload.
+    for (const effect of effects) await effect();
+    return result;
+  }
+
+  private async applyWebhook(repository: RepositoryRow, input: WebhookInput) {
     let mirrored = 0;
     const branches = await this.applyBranchSignal(repository, input.eventType, input.payload);
     const issue = object(input.payload.issue);
@@ -109,8 +176,9 @@ export class GithubMirrorService {
       )[0];
       if (!installation || installation.suspendedAt) continue;
       const client = new FacilityGithubClient(
-        await this.githubFactory(installation.installationId),
+        await this.githubFactory(installation.installationId, repository.githubRepositoryId),
         {
+          githubRepositoryId: repository.githubRepositoryId,
           owner: repository.owner,
           repo: repository.name,
           defaultBranch: repository.defaultBranch,
@@ -216,7 +284,7 @@ export class GithubMirrorService {
     const owner = string(object(repository.owner).login) ?? fullName[0];
     const name = string(repository.name) ?? fullName[1];
     if (!owner || !name) return null;
-    return (
+    const matched =
       (
         await this.db
           .select()
@@ -234,8 +302,10 @@ export class GithubMirrorService {
             ),
           )
           .limit(1)
-      )[0] ?? null
-    );
+      )[0] ?? null;
+    return matched && githubPayloadMatchesRepository(matched.githubRepositoryId, payload)
+      ? matched
+      : null;
   }
 
   private async applyBranchSignal(

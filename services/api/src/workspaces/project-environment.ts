@@ -182,11 +182,15 @@ export class GithubProjectManifestSource implements ProjectManifestSource {
         "GitHub installation is unavailable",
       );
     }
-    const client = new FacilityGithubClient(await this.factory(installation.installationId), {
-      owner: repository.owner,
-      repo: repository.name,
-      defaultBranch: repository.defaultBranch,
-    });
+    const client = new FacilityGithubClient(
+      await this.factory(installation.installationId, repository.githubRepositoryId),
+      {
+        githubRepositoryId: repository.githubRepositoryId,
+        owner: repository.owner,
+        repo: repository.name,
+        defaultBranch: repository.defaultBranch,
+      },
+    );
     const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
     const commitSha = await client.getBranchSha(developmentBranch);
     const content = (await client.getContent(".facility.yml", commitSha)) as {

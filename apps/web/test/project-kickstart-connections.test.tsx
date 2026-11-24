@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, type Mock, vi } from "vitest";
 import KickstartPage from "../app/(app)/(org)/projects/new/page";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 let container: HTMLDivElement;
 let root: Root;
-let fetch: ReturnType<typeof vi.fn>;
+let fetch: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
 const installations = [
   {
     id: "a",
@@ -110,4 +110,29 @@ it("rejects an owner mismatch before creating an orphaned draft", async () => {
   expect(
     fetch.mock.calls.some(([url, init]) => url === "/api/v1/projects" && init?.method === "POST"),
   ).toBe(false);
+});
+
+it("does not reuse the old App when a failed preview is retried with another installation", async () => {
+  const original = fetch.getMockImplementation();
+  if (!original) throw new Error("Missing fetch fixture");
+  let saved: Record<string, unknown> | undefined;
+  fetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === "/api/v1/projects/project/repos") {
+      if (init?.method === "POST")
+        saved = { id: "repo", owner: "alpha", name: "service", installationId: "a" };
+      return Response.json(init?.method === "POST" ? saved : saved ? [saved] : []);
+    }
+    if (url.includes("/kickstart/preview"))
+      return Response.json({ error: { message: "provider unavailable" } }, { status: 503 });
+    return original(url, init);
+  });
+  await click("type owner/name");
+  await type("acme/payments-service", "alpha/service");
+  await click("Preview kickstart");
+  await click("Second Alpha · alpha");
+  await click("Preview kickstart");
+  expect(container.textContent).toContain("This draft already uses another GitHub connection");
+  expect(
+    fetch.mock.calls.filter(([url]) => String(url).includes("/kickstart/preview")),
+  ).toHaveLength(1);
 });

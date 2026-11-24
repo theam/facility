@@ -8,6 +8,7 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { openConnection } from "../github/connections.js";
+import { githubPayloadMatchesRepository } from "../github/repository-binding.js";
 import { parseGithubJson, verifyGithubSignature } from "../github/webhook.js";
 import type { AppConfig } from "../types.js";
 
@@ -107,12 +108,13 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
           }
 
           const repositoryIdentity = githubRepositoryIdentity(payload);
-          const repository = repositoryIdentity
+          const candidate = repositoryIdentity
             ? (
                 await app.facilityDb
                   .select({
                     id: projectRepositories.id,
                     projectId: projectRepositories.projectId,
+                    githubRepositoryId: projectRepositories.githubRepositoryId,
                   })
                   .from(projectRepositories)
                   .where(
@@ -127,6 +129,10 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
               )[0]
             : undefined;
 
+          const repository =
+            candidate && githubPayloadMatchesRepository(candidate.githubRepositoryId, payload)
+              ? candidate
+              : undefined;
           const id = `gh_${installation.id}_${delivery}`;
           const inserted = await app.facilityDb
             .insert(githubWebhookEvents)

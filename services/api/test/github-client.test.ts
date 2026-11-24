@@ -112,3 +112,26 @@ describe("FacilityGithubClient", () => {
     expect(createPullRequest).not.toHaveBeenCalled();
   });
 });
+
+it("refuses executable configuration and writes when a pinned repository slug is reused", async () => {
+  let currentId = 123;
+  const read = vi.fn(async () => ({ data: { content: "configuration" } }));
+  const write = vi.fn(async () => ({ data: {} }));
+  const client = new FacilityGithubClient(
+    {
+      rest: {
+        repos: { get: async () => ({ data: { id: currentId, name: "app" } }), getContent: read },
+        git: { createRef: write },
+      },
+    } as unknown as Octokit,
+    { owner: "acme", repo: "app", defaultBranch: "main", githubRepositoryId: 123 },
+  );
+  await client.getContent(".facility.yml", "a".repeat(40));
+  currentId = 987;
+  await expect(client.getContent(".agents/builder.md")).rejects.toThrow("identity changed");
+  await expect(client.createBranch("feature/test", "a".repeat(40))).rejects.toThrow(
+    "identity changed",
+  );
+  expect(read).toHaveBeenCalledOnce();
+  expect(write).not.toHaveBeenCalled();
+});

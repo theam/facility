@@ -37,6 +37,7 @@ const fake = vi.hoisted(() => ({
     appId: number;
     installationId: number;
     repositories?: unknown;
+    repositoryIds?: unknown;
     permissions?: unknown;
   }>,
   revoked: new Set<number>(),
@@ -78,6 +79,7 @@ vi.mock("@octokit/app", () => ({
             appId: this.id,
             installationId: id,
             repositories: args.repositories,
+            repositoryIds: args.repository_ids,
             permissions: args.permissions,
           });
           return { data: { token: `token-${this.id}`, expires_at: "2099-01-01T00:00:00Z" } };
@@ -524,11 +526,11 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
     expect(
       fake.calls
         .slice(-2)
-        .map((call) => ({ appId: call.appId, repositories: call.repositories }))
+        .map((call) => ({ appId: call.appId, scope: call.repositoryIds ?? call.repositories }))
         .sort((a, b) => a.appId - b.appId),
     ).toEqual([
-      { appId: base + 1, repositories: ["nau"] },
-      { appId: base + 2, repositories: ["related"] },
+      { appId: base + 1, scope: [123] },
+      { appId: base + 2, scope: ["related"] },
     ]);
     await db.delete(projectRepositories).where(eq(projectRepositories.id, relatedId));
   });
@@ -538,11 +540,12 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
     number: number,
     secret: string,
     delivery = crypto.randomUUID(),
+    repositoryId = 123,
   ) {
     const payload = JSON.stringify({
       action: "opened",
       installation: { id: number },
-      repository: { name: "nau", owner: { login: newOwner } },
+      repository: { id: repositoryId, name: "nau", owner: { login: newOwner } },
       issue: { number: 1 },
     });
     return app.inject({
@@ -586,6 +589,48 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
     expect((await webhook(null, base, legacySecret)).statusCode).toBe(202);
     // The legacy installation no longer owns this repository after the rebind.
     expect(queued.length).toBe(initial + 1);
+  });
+  it("rejects a genuine webhook for a replacement repository at the same slug", async () => {
+    const before = queued.length;
+    expect(
+      (await webhook(connectionId, base + 1, webhookSecret, crypto.randomUUID(), 999)).statusCode,
+    ).toBe(202);
+    expect(queued.length).toBe(before);
+  });
+  it("checks installation membership on initial connection, including public repositories", async () => {
+    const payload = { installationId: base + 1, owner: newOwner, name: "public-excluded" };
+    fake.excludedRepositories.add(`${base + 1}/public-excluded`);
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/projects/${projectId}/repos`,
+        headers: auth(),
+        payload,
+      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json().error.code).toBe("github_repo_not_found");
+      expect(
+        (
+          await db
+            .select()
+            .from(projectRepositories)
+            .where(eq(projectRepositories.projectId, projectId))
+        ).some((row) => row.name === payload.name),
+      ).toBe(false);
+    } finally {
+      fake.excludedRepositories.delete(`${base + 1}/public-excluded`);
+    }
+  });
+  it("uses immutable repository scopes for API clients and rejects unbounded maintainer tokens", async () => {
+    await createGithubClientFactory(config, db)(base + 1, 123);
+    expect(fake.calls.at(-1)).toMatchObject({ installationId: base + 1, repositoryIds: [123] });
+    const factory = createGithubMaintainerTokenFactory(config, db);
+    await expect(factory({ installationId: base + 1, repositories: [] })).rejects.toThrow(
+      "repository scope",
+    );
+    await expect(
+      factory({ installationId: base + 1, repositories: ["nau"], repositoryIds: [123] }),
+    ).rejects.toThrow("repository scope");
   });
   it("runs the real worker only for the currently selected App, including queued receipts across a switch", async () => {
     fake.installations.set(base + 5, { appId: base + 2, owner: newOwner });

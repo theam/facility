@@ -130,6 +130,7 @@ export class StoryIntegrationNotifications {
           repositoryId: projectRepositories.id,
           owner: projectRepositories.owner,
           repo: projectRepositories.name,
+          githubRepositoryId: projectRepositories.githubRepositoryId,
           installationId: githubInstallations.installationId,
         })
         .from(projectRepositories)
@@ -165,7 +166,7 @@ export class StoryIntegrationNotifications {
         cursor.pending = saved.pending;
       }
       if (cursor.pending.length) {
-        const client = await this.github(target.installationId);
+        const client = await this.github(target.installationId, target.githubRepositoryId);
         if (!client.request) throw new Error("github_requests_unavailable");
         for (const event of cursor.pending) {
           // Renew before each bounded request. A crash after 204 can replay the

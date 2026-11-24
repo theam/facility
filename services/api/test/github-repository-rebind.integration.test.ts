@@ -3,6 +3,8 @@ import { newId } from "@facility/core";
 import {
   createDb,
   githubInstallations,
+  githubIssues,
+  githubWebhookEvents,
   migrate,
   orgs,
   projectRepositories,
@@ -13,10 +15,15 @@ import {
 } from "@facility/db";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import type { AgentCatalogService } from "../src/agents/catalog.js";
+import { GithubAgentTriggerService } from "../src/agents/github-triggers.js";
 import type { GithubClientFactory, Octokit } from "../src/github/client.js";
+import { GithubMirrorService } from "../src/github/mirror.js";
 import { rebindRepository } from "../src/github/rebind-repository.js";
+import { GithubRepositoryBindingChanged } from "../src/github/repository-binding.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+import { parseProjectManifest } from "../src/workspaces/project-environment.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
@@ -205,5 +212,191 @@ it("makes ordinary turn enqueue wait for the project topology fence", async () =
     await lock;
     const turn = (await enqueued).turn;
     if (turn) await db.update(turns).set({ state: "succeeded" }).where(eq(turns.id, turn.id));
+  }
+});
+
+it("drops an in-flight webhook if the App switches while its catalog is loading", async () => {
+  const entered = latch(),
+    release = latch();
+  const manifest = parseAgentManifest(
+    `---\nname: reviewer\ndescription: Review\nengine: codex\nmodel: gpt-5.5\nenabled: true\ntriggers:\n  - type: github\n    name: opened\n    event: pull_request\n    actions: [opened]\n---\nReview.`,
+    "reviewer.md",
+  );
+  const catalog = {
+    list: async () => {
+      entered.resolve();
+      await release.promise;
+      return [{ manifest }];
+    },
+  } as unknown as AgentCatalogService;
+  const worker = new GithubAgentTriggerService(
+    db,
+    catalog,
+    service,
+    {
+      load: async () =>
+        parseProjectManifest(
+          `version: 1\nrepositories:\n  primary: github.com/${owner}/app\nenvironment:\n  setup: echo setup\n  start: 'true'\n`,
+        ),
+    },
+    "test",
+  );
+  const id = `gh_${crypto.randomUUID()}`;
+  await db.insert(githubWebhookEvents).values({
+    id,
+    orgId,
+    projectId,
+    repositoryId: repoId,
+    installationId: oldInstallation,
+    verified: true,
+    eventType: "pull_request",
+    payload: {
+      action: "opened",
+      repository: { id: 456, name: "app", owner: { login: owner } },
+      pull_request: { number: 321, title: "Review", head: { ref: "feature/321" } },
+    },
+  });
+  const pending = worker.handleInbound(id);
+  try {
+    await entered.promise;
+    await rebindRepository(db, async () => provider(), scope, input);
+    release.resolve();
+    expect(await pending).toEqual({ matched: 0, queued: 0, merged: 0 });
+    expect(
+      await db.select().from(stories).where(eq(stories.externalId, "pull-request:321")),
+    ).toHaveLength(0);
+    expect(
+      (await db.select().from(githubWebhookEvents).where(eq(githubWebhookEvents.id, id)))[0]
+        ?.processedAt,
+    ).toBeTruthy();
+  } finally {
+    release.resolve();
+    await pending;
+    await db
+      .update(projectRepositories)
+      .set({ installationId: oldInstallation })
+      .where(eq(projectRepositories.id, repoId));
+  }
+});
+
+it("rechecks the binding after runtime creation, before queuing the first message", async () => {
+  const entered = latch(),
+    release = latch();
+  const runtime = new FakeWorkspaceRuntime(`/private/tmp/rebind-runtime-${projectId}`);
+  const create = runtime.create.bind(runtime);
+  vi.spyOn(runtime, "create").mockImplementation(async (input) => {
+    entered.resolve();
+    await release.promise;
+    return create(input);
+  });
+  const guarded = new StoryWorkspaceService(db, runtime);
+  const externalId = newId("story");
+  const pending = guarded
+    .start({
+      orgId,
+      projectId,
+      repositoryId: repoId,
+      expectedGithubBinding: {
+        repositoryId: repoId,
+        installationId: oldInstallation,
+        githubRepositoryId: 456,
+      },
+      provider: "github",
+      externalId,
+      title: "Bound trigger",
+      agent,
+      message: "Work",
+      messageDedupeKey: externalId,
+      actor: { type: "service", id: "github:test" },
+      workspace: { image: "test" },
+      trigger: { type: "github" },
+    })
+    .then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+  try {
+    await entered.promise;
+    await rebindRepository(db, async () => provider(), scope, input);
+    release.resolve();
+    expect(await pending).toMatchObject({ error: expect.any(GithubRepositoryBindingChanged) });
+    const [story] = await db.select().from(stories).where(eq(stories.externalId, externalId));
+    if (!story) throw new Error("Missing story fixture");
+    expect(await db.select().from(turns).where(eq(turns.storyId, story.id))).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await pending;
+    await db
+      .update(projectRepositories)
+      .set({ installationId: oldInstallation })
+      .where(eq(projectRepositories.id, repoId));
+  }
+});
+
+it("keeps mirror writes behind the same repository row fence as rebind", async () => {
+  const held = latch(),
+    release = latch();
+  const lock = db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${orgId}:${projectId}`}))`);
+    await tx
+      .select()
+      .from(projectRepositories)
+      .where(eq(projectRepositories.id, repoId))
+      .for("update");
+    held.resolve();
+    await release.promise;
+    await tx
+      .update(projectRepositories)
+      .set({ installationId: newInstallation })
+      .where(eq(projectRepositories.id, repoId));
+  });
+  await held.promise;
+  const mirror = new GithubMirrorService(db, async () => provider());
+  const pending = mirror
+    .handleWebhook({
+      id: `gh_${crypto.randomUUID()}`,
+      orgId,
+      projectId,
+      repositoryId: repoId,
+      installationId: oldInstallation,
+      eventType: "issues",
+      payload: {
+        repository: { id: 456, name: "app", owner: { login: owner } },
+        issue: {
+          number: 321,
+          title: "Must not mirror",
+          html_url: "https://github.test/issues/321",
+          state: "open",
+        },
+      },
+    })
+    .then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+  try {
+    await vi.waitFor(
+      async () => {
+        const rows = await db.execute(
+          sql`select count(*)::int as waiting from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like '%project_repositories%' and query like '%for share%'`,
+        );
+        expect(rows[0]?.waiting).toBeGreaterThan(0);
+      },
+      { timeout: 2000 },
+    );
+    release.resolve();
+    await lock;
+    expect(await pending).toMatchObject({ error: expect.any(GithubRepositoryBindingChanged) });
+    expect(
+      await db.select().from(githubIssues).where(eq(githubIssues.repositoryId, repoId)),
+    ).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await lock;
+    await pending;
+    await db
+      .update(projectRepositories)
+      .set({ installationId: oldInstallation })
+      .where(eq(projectRepositories.id, repoId));
   }
 });

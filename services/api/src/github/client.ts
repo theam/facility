@@ -46,7 +46,10 @@ export type Octokit = {
   };
 };
 
-export type GithubClientFactory = (installationId: number) => Promise<Octokit>;
+export type GithubClientFactory = (
+  installationId: number,
+  repositoryId?: number | null,
+) => Promise<Octokit>;
 /** Installation permissions a read-only turn receives: it can read code, pull requests,
  * issues and CI, and cannot push, merge, comment, review or change settings. */
 export const GITHUB_READ_ONLY_PERMISSIONS = {
@@ -77,7 +80,8 @@ export function grantedReadPermissions(
 
 export type GithubMaintainerTokenFactory = (input: {
   installationId: number;
-  repositories: string[];
+  repositories?: string[];
+  repositoryIds?: number[];
   /** Narrows the token below the installation's permissions; omitted, it keeps them all. */
   permissions?: Record<string, "read" | "write">;
 }) => Promise<{
@@ -88,9 +92,10 @@ export type GithubMaintainerTokenFactory = (input: {
 
 export function createGithubClientFactory(config: AppConfig, db?: FacilityDb): GithubClientFactory {
   if (db)
-    return async (installationId) =>
+    return async (installationId, repositoryId) =>
       createGithubClientFactory(await installationConfig(db, config, installationId))(
         installationId,
+        repositoryId,
       );
   if (!config.githubAppId || !config.githubAppPrivateKey) {
     throw new Error("GitHub App credentials are not configured");
@@ -100,8 +105,18 @@ export function createGithubClientFactory(config: AppConfig, db?: FacilityDb): G
     privateKey: config.githubAppPrivateKey,
     Octokit: RestOctokit,
   });
-  return async (installationId: number) => {
-    const client = (await app.getInstallationOctokit(installationId)) as unknown as Octokit;
+  return async (installationId: number, repositoryId?: number | null) => {
+    // A repository-scoped token also rejects slug reuse between metadata validation and a write.
+    const client = (repositoryId == null
+      ? await app.getInstallationOctokit(installationId)
+      : new RestOctokit({
+          auth: (
+            await app.octokit.request("POST /app/installations/{installation_id}/access_tokens", {
+              installation_id: installationId,
+              repository_ids: [repositoryId],
+            })
+          ).data.token,
+        })) as unknown as Octokit;
     client.repositoryInstallationId = async (owner, repo) => {
       const result = await app.octokit.request("GET /repos/{owner}/{repo}/installation", {
         owner,
@@ -142,7 +157,9 @@ export function createGithubMaintainerTokenFactory(
         })
       ).data,
   });
-  return async ({ installationId, repositories, permissions }) => {
+  return async ({ installationId, repositories, repositoryIds, permissions }) => {
+    if ((!repositories?.length && !repositoryIds?.length) || (repositories && repositoryIds))
+      throw new Error("Exactly one non-empty repository scope is required");
     const narrowed = permissions
       ? grantedReadPermissions(
           permissions,
@@ -159,7 +176,7 @@ export function createGithubMaintainerTokenFactory(
       "POST /app/installations/{installation_id}/access_tokens",
       {
         installation_id: installationId,
-        repositories,
+        ...(repositoryIds ? { repository_ids: repositoryIds } : { repositories }),
         ...(narrowed ? { permissions: narrowed } : {}),
       },
     );
@@ -178,6 +195,7 @@ export function createGithubMaintainerTokenFactory(
 }
 
 export type RepoRef = {
+  githubRepositoryId?: number | null;
   owner: string;
   repo: string;
   defaultBranch: string;
@@ -198,7 +216,23 @@ export class FacilityGithubClient {
     private readonly repo: RepoRef,
   ) {}
 
+  /** Re-check before each operation: an old slug can be reused after a transfer. */
+  private async assertRepositoryIdentity() {
+    if (this.repo.githubRepositoryId == null) return; // Existing unpinned installations stay compatible.
+    if (!this.octokit.rest.repos.get)
+      throw new Error("GitHub repository identity lookup unavailable");
+    const response = await this.octokit.rest.repos.get({
+      owner: this.repo.owner,
+      repo: this.repo.repo,
+    });
+    if (response.data.id !== this.repo.githubRepositoryId)
+      throw new Error(
+        "GitHub repository identity changed; update the project repository connection",
+      );
+  }
+
   async request(route: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    await this.assertRepositoryIdentity();
     if (!this.octokit.request) throw new Error("GitHub REST requests are unavailable");
     const response = await this.octokit.request(route, {
       owner: this.repo.owner,
@@ -213,6 +247,7 @@ export class FacilityGithubClient {
   }
 
   async getBranchSha(branch: string): Promise<string> {
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.repos.getBranch({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -222,6 +257,7 @@ export class FacilityGithubClient {
   }
 
   async getCommit(sha: string): Promise<{ sha: string; treeSha: string }> {
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.git.getCommit({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -231,6 +267,7 @@ export class FacilityGithubClient {
   }
 
   async getContent(path: string, ref?: string): Promise<unknown> {
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.repos.getContent({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -241,6 +278,7 @@ export class FacilityGithubClient {
   }
 
   async createBlob(content: string): Promise<string> {
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.git.createBlob({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -251,6 +289,7 @@ export class FacilityGithubClient {
   }
 
   async createTree(baseTree: string, tree: TreeItem[]): Promise<string> {
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.git.createTree({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -261,6 +300,7 @@ export class FacilityGithubClient {
   }
 
   async createCommit(message: string, tree: string, parents: string[]): Promise<string> {
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.git.createCommit({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -273,6 +313,7 @@ export class FacilityGithubClient {
 
   async createBranch(branch: string, sha: string): Promise<void> {
     this.refuseDefaultBranch(branch);
+    await this.assertRepositoryIdentity();
     await this.octokit.rest.git.createRef({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -283,6 +324,7 @@ export class FacilityGithubClient {
 
   async updateBranch(branch: string, sha: string, force = false): Promise<void> {
     this.refuseDefaultBranch(branch);
+    await this.assertRepositoryIdentity();
     await this.octokit.rest.git.updateRef({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -300,6 +342,7 @@ export class FacilityGithubClient {
     draft?: boolean;
   }): Promise<{ number: number; url: string }> {
     this.refuseDefaultBranch(args.head);
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.pulls.create({
       owner: this.repo.owner,
       repo: this.repo.repo,
@@ -321,6 +364,7 @@ export class FacilityGithubClient {
     if (!this.octokit.rest.pulls.list) {
       throw new Error("GitHub pull-request lookup is unavailable");
     }
+    await this.assertRepositoryIdentity();
     const response = await this.octokit.rest.pulls.list({
       owner: this.repo.owner,
       repo: this.repo.repo,

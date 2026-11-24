@@ -107,7 +107,9 @@ Additional installations of the same App can be registered on the connection car
 Connections belong to one Facility organization. Each App can be registered only once in an
 instance. Project-scoped keys cannot administer or enumerate organization connections. New project
 setup labels installations with their connection name; selecting one restricts repository discovery
-to that installation. Related repositories can use another connection. Workspace tokens remain
+to that installation. Manual connections also verify installation membership. If a failed kickstart
+preview already connected its draft with another App, change that repository connection in project
+settings before retrying; the draft never silently substitutes the previously selected App. Related repositories can use another connection. Workspace tokens remain
 limited to the repositories connected to the current project, and each token uses its own App's
 bot identity.
 
@@ -151,8 +153,17 @@ stores a deduplicated event, and dispatches triggers declared in `.agents/`. Dup
 do not create duplicate turns. A merged pull request marks its story done and suspends compute; it
 does not delete the workspace.
 Repository deliveries are processed only for their selected installation. The worker rechecks the
-stored repository binding before processing, so a receipt queued before a connection switch cannot
-be resolved again by repository name under a different App.
+stored repository binding before processing and again under repository or project locks when committing
+mirror updates, story changes and turn enqueue. A receipt queued or already in flight before a connection
+switch cannot start a turn under the new App. Nested reconciliation runs after the mirror transaction
+commits, without keeping a database connection open during provider calls.
+
+For repositories with a recorded immutable ID, API and workspace tokens use GitHub repository-ID
+scopes, executable configuration checks the same identity, and signed deliveries must carry that ID.
+Reusing an old repository name therefore does not transfer its Facility privileges or history to a
+replacement. Legacy rows without an ID retain their existing name-based behavior; verify and record
+their historical identity before transferring them. Legacy and ID-scoped workspace credentials are
+minted separately even when they use the same installation.
 
 Agents receive the same installation token capability, including reviewers, scheduled agents and
 planning agents outside the review cycle. Each token is limited to the repositories connected to

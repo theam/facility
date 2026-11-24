@@ -235,6 +235,11 @@ export default function KickstartPage() {
         (item) =>
           `${item.owner}/${item.name}`.toLowerCase() === `${owner}/${repoName}`.toLowerCase(),
       );
+      if (match && activeInstallation && match.installationId !== activeInstallation.id) {
+        throw new Error(
+          "This draft already uses another GitHub connection. Change the repository connection in project settings before retrying.",
+        );
+      }
       const connected =
         match ??
         (await apiJson<ProjectRepo>(`/v1/projects/${created.id}/repos`, {

@@ -648,6 +648,23 @@ async function resolveGithubRepository(
   }
   try {
     const response = await octokit.rest.repos.get({ owner: body.owner, repo: body.name });
+    let member = false;
+    try {
+      member =
+        !!octokit.repositoryInstallationId &&
+        (await octokit.repositoryInstallationId(
+          response.data.owner?.login ?? body.owner,
+          response.data.name,
+        )) === installationId;
+    } catch {
+      /* Fail closed without exposing provider error details. */
+    }
+    if (!member)
+      throw new ApiError(
+        400,
+        "github_repo_not_found",
+        "Repository is not available to the selected GitHub App installation",
+      );
     return {
       githubRepositoryId: response.data.id,
       owner: response.data.owner?.login ?? body.owner,

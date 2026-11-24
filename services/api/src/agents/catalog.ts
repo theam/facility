@@ -109,12 +109,16 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
 
     try {
       const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
-      const client = new FacilityGithubClient(await this.factory(installation.installationId), {
-        owner: repository.owner,
-        repo: repository.name,
-        defaultBranch: repository.defaultBranch,
-        developmentBranch,
-      });
+      const client = new FacilityGithubClient(
+        await this.factory(installation.installationId, repository.githubRepositoryId),
+        {
+          githubRepositoryId: repository.githubRepositoryId,
+          owner: repository.owner,
+          repo: repository.name,
+          defaultBranch: repository.defaultBranch,
+          developmentBranch,
+        },
+      );
       const commitSha = await client.getBranchSha(developmentBranch).catch((error: unknown) => {
         if (developmentBranch !== repository.defaultBranch) {
           throw new AgentCatalogError(
@@ -219,12 +223,16 @@ export class GithubAgentCatalogSource implements AgentCatalogSource {
     const path = `.agents/${parsedName.data}.md`;
     const agent = parseAgentManifest(input.source, path);
     const developmentBranch = await repositoryDevelopmentBranch(this.db, repository);
-    const client = new FacilityGithubClient(await this.factory(installation.installationId), {
-      owner: repository.owner,
-      repo: repository.name,
-      defaultBranch: repository.defaultBranch,
-      developmentBranch,
-    });
+    const client = new FacilityGithubClient(
+      await this.factory(installation.installationId, repository.githubRepositoryId),
+      {
+        githubRepositoryId: repository.githubRepositoryId,
+        owner: repository.owner,
+        repo: repository.name,
+        defaultBranch: repository.defaultBranch,
+        developmentBranch,
+      },
+    );
     const baseCommitSha = await client.getBranchSha(developmentBranch);
     if (baseCommitSha !== input.expectedCommitSha) {
       throw new AgentCatalogError(
