@@ -18,17 +18,36 @@ try {
     const args = process.argv.slice(2);
     if (process.env.GH_HOST && process.env.GH_HOST !== 'github.com') fail();
     if (args.some(arg => /^https?:\/\//.test(arg) && !/^https:\/\/(api\.)?github\.com(\/|$)/.test(arg))) fail();
-    let repo = process.env.GH_REPO || value.primary;
+    let explicit;
+    const targets = [];
+    const normalize = input => String(input).replace(/^https:\/\/github\.com\//, '').replace(/^github\.com\//, '').replace(/\.git$/, '').toLowerCase();
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--hostname' && args[i + 1] !== 'github.com') fail();
-      if (args[i].startsWith('--hostname=') && args[i] !== '--hostname=github.com') fail();
-      if (args[i] === '-R' || args[i] === '--repo') repo = args[++i];
-      else if (args[i].startsWith('--repo=')) repo = args[i].slice(7);
+      const arg = args[i];
+      if (arg === '--hostname' && args[i + 1] !== 'github.com') fail();
+      if (arg.startsWith('--hostname=') && arg !== '--hostname=github.com') fail();
+      if (arg === '-R' || arg === '--repo') explicit = normalize(args[++i]);
+      else if (arg.startsWith('--repo=')) explicit = normalize(arg.slice(7));
+      else if (arg.startsWith('-R') && arg.length > 2) explicit = normalize(arg.slice(2));
+      const target = arg.match(/^https:\/\/github\.com\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i)
+        || (args[0] === 'api' && arg.match(/^(?:https:\/\/api\.github\.com\/|\/)?repos\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i));
+      if (target) targets.push(normalize(target[1]));
     }
-    repo = String(repo).replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '').toLowerCase();
+    if (new Set(targets).size > 1 || (explicit && targets.some(target => target !== explicit))) fail();
+    let repo = targets[0] || explicit || (process.env.GH_REPO && normalize(process.env.GH_REPO));
+    if (!repo) {
+      const options = { encoding: 'utf8', timeout: 2000, maxBuffer: 8192, stdio: ['ignore', 'pipe', 'ignore'] };
+      const remote = cp.spawnSync('git', ['remote', 'get-url', 'origin'], options);
+      if (remote.status === 0) {
+        const origin = remote.stdout.trim().replace(/^git@github\.com:/, '').replace(/^ssh:\/\/git@github\.com\//, '');
+        repo = normalize(origin);
+      } else {
+        if (cp.spawnSync('git', ['rev-parse', '--is-inside-work-tree'], options).status === 0) fail();
+        repo = value.primary;
+      }
+    }
     if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repo) || typeof value.tokens[repo] !== 'string') fail();
     if (typeof value.gh !== 'string' || !path.isAbsolute(value.gh) || path.resolve(value.gh) === path.resolve(process.argv[1])) fail();
-    const result = cp.spawnSync(value.gh, args, { stdio: 'inherit', env: { ...process.env, GH_TOKEN: value.tokens[repo], GITHUB_TOKEN: value.tokens[repo] } });
+    const result = cp.spawnSync(value.gh, args, { stdio: 'inherit', env: { ...process.env, GH_REPO: repo, GH_TOKEN: value.tokens[repo], GITHUB_TOKEN: value.tokens[repo] } });
     process.exit(result.status === null ? 1 : result.status);
   }
   if (process.argv[2] !== 'get') process.exit(0);

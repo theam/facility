@@ -17,7 +17,11 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { AgentCatalogService } from "../src/agents/catalog.js";
 import { GithubAgentTriggerService } from "../src/agents/github-triggers.js";
-import type { GithubClientFactory, Octokit } from "../src/github/client.js";
+import {
+  bindGithubRepositoryClient,
+  type GithubClientFactory,
+  type Octokit,
+} from "../src/github/client.js";
 import { GithubMirrorService } from "../src/github/mirror.js";
 import { rebindRepository } from "../src/github/rebind-repository.js";
 import { GithubRepositoryBindingChanged } from "../src/github/repository-binding.js";
@@ -452,4 +456,41 @@ it("takes the project row before the repository row so disconnect cannot deadloc
   await release.promise;
   await disconnectFence;
   expect((await pending).mirrored).toBe(1);
+});
+
+it("does not mirror a replacement public repository's issues when its slug changes during GET", async () => {
+  let currentId = 456;
+  const client = bindGithubRepositoryClient(
+    {
+      request: async (route: string) => {
+        if (route.endsWith("/branches")) return { data: [] };
+        currentId = 999;
+        return {
+          data: [
+            {
+              number: 987,
+              title: "Replacement issue",
+              state: "closed",
+              html_url: "https://github.test/issues/987",
+            },
+          ],
+        };
+      },
+      rest: {
+        git: {},
+        pulls: {},
+        repos: {
+          get: async () => ({ data: { id: currentId, name: "app" } }),
+        },
+      },
+    } as unknown as Octokit,
+    456,
+  );
+  const before = await db.select().from(githubIssues).where(eq(githubIssues.repositoryId, repoId));
+  await expect(
+    new GithubMirrorService(db, async () => client).syncProject(orgId, projectId),
+  ).rejects.toThrow("identity changed");
+  expect(await db.select().from(githubIssues).where(eq(githubIssues.repositoryId, repoId))).toEqual(
+    before,
+  );
 });

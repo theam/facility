@@ -211,3 +211,70 @@ it("ignores a stale lower-priority Git credential helper", async () => {
   environment.GIT_CONFIG_GLOBAL = config;
   expect((await gitCredential()).stdout).toContain("password=synthetic-first");
 });
+
+it("routes gh by checkout, explicit repository, PR URL and API path with separate App tokens", async () => {
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  await writeFile(
+    file,
+    JSON.stringify({ ...saved, tokens: { ...saved.tokens, "acme/related": "synthetic-related" } }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    realGh,
+    `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, repo: process.env.GH_REPO }));\n`,
+    { mode: 0o700 },
+  );
+  const cwd = "repos/acme/related";
+  await mkdir(join(workspace.volumeRef, cwd), { recursive: true });
+  for (const args of [
+    ["init", "-q"],
+    ["remote", "add", "origin", "https://github.com/acme/related.git"],
+  ]) {
+    expect((await runtime.exec(workspace, { command: "git", args, cwd })).exitCode).toBe(0);
+  }
+  for (const [args, repo, token] of [
+    [["pr", "create", "--title", "Test", "--body", "Test"], "acme/related", "synthetic-related"],
+    [["pr", "view", "https://github.com/acme/app/pull/1"], "acme/app", "synthetic-first"],
+    [["api", "repos/acme/app/issues"], "acme/app", "synthetic-first"],
+    [["pr", "list", "-R", "acme/app"], "acme/app", "synthetic-first"],
+    [["pr", "list", "-Racme/app"], "acme/app", "synthetic-first"],
+  ] as const) {
+    const result = await runtime.exec(workspace, {
+      command: "gh",
+      args: [...args],
+      cwd,
+      env: environment,
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ repo, token });
+  }
+  const selected = await runtime.exec(workspace, {
+    command: "gh",
+    args: ["pr", "list"],
+    cwd,
+    env: { ...environment, GH_REPO: "acme/app" },
+  });
+  expect(JSON.parse(selected.stdout)).toEqual({ repo: "acme/app", token: "synthetic-first" });
+  for (const args of [
+    ["pr", "view", "https://github.com/foreign/repo/pull/1"],
+    ["api", "repos/foreign/repo/issues"],
+    ["pr", "view", "https://github.com/acme/app/pull/1", "-R", "acme/related"],
+  ]) {
+    const result = await runtime.exec(workspace, { command: "gh", args, cwd, env: environment });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("synthetic-");
+  }
+  await runtime.exec(workspace, {
+    command: "git",
+    args: ["remote", "set-url", "origin", "https://github.com/foreign/repo.git"],
+    cwd,
+  });
+  const foreign = await runtime.exec(workspace, {
+    command: "gh",
+    args: ["pr", "list"],
+    cwd,
+    env: environment,
+  });
+  expect(foreign.exitCode).not.toBe(0);
+  expect(foreign.stdout).not.toContain("synthetic-");
+});

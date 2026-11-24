@@ -159,7 +159,8 @@ switch cannot start a turn under the new App. Nested reconciliation runs after t
 commits, without keeping a database connection open during provider calls.
 
 For repositories with a recorded immutable ID, API and workspace tokens use GitHub repository-ID
-scopes, every repository API request checks the same identity, and signed deliveries must carry that ID.
+scopes, repository API requests check the same identity (also after public reads), and signed
+deliveries must carry that ID.
 Workspace preparation also verifies every checkout before and after fetching, and before executing
 project setup or preview commands. This is required even for public repositories: public reads can
 succeed independently of a token's selected repositories.
@@ -171,7 +172,11 @@ minted separately even when they use the same installation.
 Agents receive the same installation token capability, including reviewers, scheduled agents and
 planning agents outside the review cycle. Each token is limited to the repositories connected to
 the active Facility project, while retaining the App's complete maintainer permission set for those
-repositories. Only the review cycle's Reviewer turns receive a read-only token.
+repositories. Only the review cycle's Reviewer turns receive a read-only token. The turn-local `gh`
+wrapper selects the token from an explicit repository flag, PR URL, API repository path, `GH_REPO`,
+or the current checkout's origin. It uses the primary repository outside a checkout and rejects
+targets outside the turn's connected repository map. This keeps related checkouts on their own App
+and credentials, including mixed legacy and ID-scoped repositories.
 
 Installation tokens are short-lived and minted when work needs them. Revoking an installation or
 removing a repository stops future credentials and reconciliation; it does not erase existing

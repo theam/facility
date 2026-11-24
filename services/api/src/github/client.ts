@@ -64,23 +64,27 @@ export function bindGithubRepositoryClient(client: Octokit, repositoryId: number
     return result;
   };
   const guarded =
-    <T>(operation: (args: Record<string, unknown>) => Promise<T>) =>
+    <T>(operation: (args: Record<string, unknown>) => Promise<T>, read = false) =>
     async (args: Record<string, unknown>) => {
       await metadata(args);
-      return operation(args);
+      const response = await operation(args);
+      if (read) await metadata(args);
+      return response;
     };
   return {
     boundRepositoryId: repositoryId,
     request: request
       ? async (route, args = {}) => {
           await metadata(args);
-          return request(route, args);
+          const response = await request(route, args);
+          if (route.startsWith("GET ")) await metadata(args);
+          return response;
         }
       : undefined,
     repositoryInstallationId: client.repositoryInstallationId,
     rest: {
       git: {
-        getCommit: guarded(client.rest.git.getCommit),
+        getCommit: guarded(client.rest.git.getCommit, true),
         createBlob: guarded(client.rest.git.createBlob),
         createTree: guarded(client.rest.git.createTree),
         createCommit: guarded(client.rest.git.createCommit),
@@ -89,15 +93,15 @@ export function bindGithubRepositoryClient(client: Octokit, repositoryId: number
       },
       repos: {
         get: metadata,
-        getBranch: guarded(client.rest.repos.getBranch),
-        getContent: guarded(client.rest.repos.getContent),
+        getBranch: guarded(client.rest.repos.getBranch, true),
+        getContent: guarded(client.rest.repos.getContent, true),
         createInOrg: async () => {
           throw new Error("A bound GitHub client cannot create repositories");
         },
       },
       pulls: {
         create: guarded(client.rest.pulls.create),
-        list: client.rest.pulls.list ? guarded(client.rest.pulls.list) : undefined,
+        list: client.rest.pulls.list ? guarded(client.rest.pulls.list, true) : undefined,
       },
     },
   };

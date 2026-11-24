@@ -169,3 +169,35 @@ it("checks immutable identity before raw public reads and direct repository requ
   expect(getBranch).toHaveBeenCalledOnce();
   expect(request).not.toHaveBeenCalled();
 });
+
+it.each([
+  "request",
+  "getBranch",
+])("rejects a slug replacement during a public %s read", async (operation) => {
+  let id = 123;
+  const read = vi.fn(async () => {
+    id = 999;
+    return { data: { commit: { sha: "a".repeat(40) } } };
+  });
+  const bound = bindGithubRepositoryClient(
+    {
+      request: read,
+      rest: {
+        git: {},
+        pulls: {},
+        repos: {
+          get: async () => ({ data: { id, name: "app" } }),
+          getBranch: read,
+        },
+      },
+    } as unknown as Octokit,
+    123,
+  );
+  const args = { owner: "acme", repo: "app", branch: "main" };
+  const result =
+    operation === "request"
+      ? bound.request?.("GET /repos/{owner}/{repo}/issues", args)
+      : bound.rest.repos.getBranch(args);
+  await expect(result).rejects.toThrow("identity changed");
+  expect(read).toHaveBeenCalledOnce();
+});
