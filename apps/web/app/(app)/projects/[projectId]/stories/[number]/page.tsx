@@ -100,7 +100,11 @@ export default async function StoryPage({
       : null;
   const story = bundle.story;
   const activity = storyActivity(bundle);
-  const openAttention = bundle.attention.filter((item) => item.status === "open");
+  const openAttention = bundle.attention
+    .filter((item) => item.status === "open")
+    .sort(
+      (a, b) => Number(a.kind === "agent_ready_review") - Number(b.kind === "agent_ready_review"),
+    );
   const resolvedAttention = bundle.attention.filter((item) => item.status !== "open");
   const currentEnvironment = environment.ok ? environment.data : null;
   const agentRows = agents.ok ? agents.data.agents : [];
@@ -203,10 +207,18 @@ export default async function StoryPage({
         >
           {openAttention.map((item) => {
             const reviewNotice = isReviewNotice(item.kind);
+            const resultReview = item.kind === "agent_ready_review";
             const deliveryNotice = ["delivery_integration", "delivery_completion"].includes(
               item.kind,
             );
-            const failure = !reviewNotice && !deliveryNotice && item.kind !== "agent_waiting";
+            const failure =
+              !reviewNotice && !resultReview && !deliveryNotice && item.kind !== "agent_waiting";
+            const resultMessage =
+              resultReview && conversation.ok
+                ? [...conversation.data.messages, ...(conversation.data.related ?? [])].find(
+                    (message) => message.turnId === item.turnId && message.role === "agent",
+                  )
+                : null;
             return (
               <div
                 key={item.id}
@@ -231,6 +243,29 @@ export default async function StoryPage({
                     >
                       Review the candidate and findings
                     </Link>
+                  ) : null}
+                  {resultReview ? (
+                    <>
+                      <Link
+                        href={
+                          resultMessage
+                            ? storyReviewHref(
+                                projectId,
+                                story.id,
+                                undefined,
+                                resultMessage.id,
+                                `message-${resultMessage.id}`,
+                              )
+                            : "#conversation"
+                        }
+                        className="inline-flex min-h-11 items-center text-sm text-(--info) underline"
+                      >
+                        Review the result
+                      </Link>
+                      <p className="text-xs text-(--mut)">
+                        Dismissing this notice does not approve a delivery or restart work.
+                      </p>
+                    </>
                   ) : null}
                   {reviewNotice ? (
                     <p className="text-xs text-(--mut)">

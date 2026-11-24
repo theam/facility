@@ -9393,6 +9393,22 @@
                               "additionalProperties": false
                             }
                           },
+                          "resultReview": {
+                            "type": "object",
+                            "properties": {
+                              "messageId": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "messageId",
+                              "summary"
+                            ],
+                            "additionalProperties": false
+                          },
                           "delivery": {
                             "nullable": true,
                             "type": "object",

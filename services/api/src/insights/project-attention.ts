@@ -1,6 +1,6 @@
 import { readDecisionBrief } from "@facility/core";
 import { attentionItems, type FacilityDb, stories, storyPlanRevisions } from "@facility/db";
-import { and, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, type SQL, sql } from "drizzle-orm";
 import { readDeliveryBriefs } from "../stories/delivery-decision-brief.js";
 import { CostBudgetService } from "./costs.js";
 import { deliveryNeedsReview, readProjectDeliveryReviews } from "./project-delivery-reviews.js";
@@ -41,6 +41,7 @@ type AttentionStoryRow = {
   noticeCount: number;
   planRevision: number | null;
   hasDelivery: boolean;
+  onlyResultReviews: boolean;
 };
 
 export class ProjectAttentionService {
@@ -48,7 +49,7 @@ export class ProjectAttentionService {
 
   /** Pages contain whole stories, not a grouping of a truncated notice page.
    * Counts and revision details share a read-only snapshot. This projection
-   * does not classify urgency or decide who may approve a particular plan.
+   * orders non-blocking result reviews after other work waiting on a person.
    */
   async listStories(
     orgId: string,
@@ -95,7 +96,8 @@ export class ProjectAttentionService {
         select * from jsonb_to_recordset(${JSON.stringify(deliveryRows)}::jsonb)
           as r(story_id text, waiting_since timestamptz, search_text text)
       ), notice_groups as (
-        select story_id, count(*)::int as notice_count, min(created_at) as waiting_since
+        select story_id, count(*)::int as notice_count, min(created_at) as waiting_since,
+          bool_and(kind = 'agent_ready_review') as only_result_reviews
         from attention_items
         where org_id = ${orgId} and project_id = ${projectId} and status = 'open'
         group by story_id
@@ -112,7 +114,8 @@ export class ProjectAttentionService {
         select s.id as "storyId", s.title as "storyTitle", s.status as "storyStatus",
           least(n.waiting_since, p.proposed_at, d.waiting_since) as "waitingSince",
           (d.story_id is not null) as "hasDelivery",
-          coalesce(n.notice_count, 0)::int as "noticeCount", p.revision as "planRevision"
+          coalesce(n.notice_count, 0)::int as "noticeCount", p.revision as "planRevision",
+          coalesce(n.only_result_reviews, false) as "onlyResultReviews"
         from stories s
         left join notice_groups n on n.story_id = s.id
         left join pending_plans p on p.story_id = s.id
@@ -144,7 +147,8 @@ export class ProjectAttentionService {
         if (!counts) throw new Error("Attention story count was not returned");
         const rows = await tx.execute<AttentionStoryRow>(sql`
         ${candidates} select * from candidates
-        order by "waitingSince" asc, "storyId" asc limit ${query.limit} offset ${query.offset}
+        order by ("onlyResultReviews" and "planRevision" is null and not "hasDelivery") asc,
+          "waitingSince" asc, "storyId" asc limit ${query.limit} offset ${query.offset}
       `);
         const ids = rows.map((row) => row.storyId);
         const deliveryBriefs = await readDeliveryBriefs(
@@ -206,6 +210,22 @@ export class ProjectAttentionService {
               .groupBy(attentionItems.storyId, attentionItems.kind)
               .orderBy(attentionItems.kind)
           : [];
+        const resultReviews = ids.length
+          ? await tx.execute<{ storyId: string; messageId: string; summary: string }>(sql`
+            select distinct on (a.story_id) a.story_id as "storyId", m.id as "messageId",
+              left(a.detail, ${DETAIL_EXCERPT}::int) as summary
+            from attention_items a
+            join story_messages m on m.org_id = a.org_id and m.project_id = a.project_id
+              and m.story_id = a.story_id and m.turn_id = a.turn_id and m.role = 'agent'
+            where a.org_id = ${orgId} and a.project_id = ${projectId}
+              and a.story_id in (${sql.join(
+                ids.map((id) => sql`${id}`),
+                sql`, `,
+              )})
+              and a.status = 'open' and a.kind = 'agent_ready_review' and a.detail is not null
+            order by a.story_id, a.created_at desc, a.id desc, m.seq desc
+          `)
+          : [];
         return {
           generatedAt: now,
           total: counts.stories,
@@ -237,9 +257,23 @@ export class ProjectAttentionService {
           items: rows.map((row) => {
             const plan = plans.find((plan) => plan.storyId === row.storyId);
             const delivery = deliveries.get(row.storyId);
-            const { planRevision: _revision, hasDelivery: _hasDelivery, ...story } = row;
+            const {
+              planRevision: _revision,
+              hasDelivery: _hasDelivery,
+              onlyResultReviews: _onlyResultReviews,
+              ...story
+            } = row;
+            const resultReview = resultReviews.find((item) => item.storyId === row.storyId);
             return {
               ...story,
+              ...(resultReview
+                ? {
+                    resultReview: {
+                      messageId: resultReview.messageId,
+                      summary: resultReview.summary,
+                    },
+                  }
+                : {}),
               delivery: delivery
                 ? {
                     ...delivery,
@@ -297,7 +331,11 @@ export class ProjectAttentionService {
         .from(attentionItems)
         .innerJoin(stories, storyJoin)
         .where(and(scope, status, kind, search))
-        .orderBy(desc(attentionItems.createdAt), desc(attentionItems.id))
+        .orderBy(
+          asc(sql`${attentionItems.kind} = 'agent_ready_review'`),
+          desc(attentionItems.createdAt),
+          desc(attentionItems.id),
+        )
         .limit(query.limit)
         .offset(query.offset),
       // Status counts honour the search and kind filters so the tabs say how

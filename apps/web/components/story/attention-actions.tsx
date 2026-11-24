@@ -53,7 +53,7 @@ export function AttentionActions({
             Reply
           </Button>
         ) : null
-      ) : item.turnId && !isReviewNotice(item.kind) ? (
+      ) : item.turnId && item.kind !== "agent_ready_review" && !isReviewNotice(item.kind) ? (
         <Button size="sm" onClick={() => act("retry")} disabled={Boolean(pending)}>
           {pending === "retry" ? "Retrying…" : "Retry"}
         </Button>

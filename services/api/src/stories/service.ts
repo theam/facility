@@ -11,6 +11,7 @@ import {
   storyArtifacts,
   storyAssignees,
   storyConversations,
+  storyDeliveryPullRequests,
   storyEvidenceEvents,
   storyInputFiles,
   storyMessages,
@@ -530,6 +531,7 @@ export class StoryWorkspaceService {
     actor: StoryActor;
     metadata?: StoryMessageMetadata;
     attention?: { title: string; detail: string };
+    readyForReview?: string;
   }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
@@ -594,6 +596,57 @@ export class StoryWorkspaceService {
       await reconcileTurnBranch(tx, story, completed);
       const waiting = !input.attention && (await queueFollowup(tx, completed, story));
       if (!waiting) await seedReviewCycle(tx, completed, input.output, Boolean(input.attention));
+      if (
+        input.readyForReview &&
+        !input.attention &&
+        !waiting &&
+        !story.pullRequestNumber &&
+        story.status !== "done" &&
+        story.status !== "archived"
+      ) {
+        const scope = {
+          orgId: completed.orgId,
+          projectId: completed.projectId,
+          storyId: completed.storyId,
+        };
+        const [delivery, pending] = await Promise.all([
+          tx
+            .select({ number: storyDeliveryPullRequests.pullNumber })
+            .from(storyDeliveryPullRequests)
+            .where(
+              and(
+                eq(storyDeliveryPullRequests.orgId, scope.orgId),
+                eq(storyDeliveryPullRequests.projectId, scope.projectId),
+                eq(storyDeliveryPullRequests.storyId, scope.storyId),
+              ),
+            )
+            .limit(1),
+          tx
+            .select({ id: storyMessages.id })
+            .from(storyMessages)
+            .where(
+              and(
+                eq(storyMessages.orgId, scope.orgId),
+                eq(storyMessages.projectId, scope.projectId),
+                eq(storyMessages.storyId, scope.storyId),
+                eq(storyMessages.role, "user"),
+                isNull(storyMessages.turnId),
+                sql`${storyMessages.requestedAgentName} is not null`,
+              ),
+            )
+            .limit(1),
+        ]);
+        if (!delivery.length && !pending.length) {
+          await tx.insert(attentionItems).values({
+            ...scope,
+            id: newId("attn"),
+            turnId: completed.id,
+            kind: "agent_ready_review",
+            title: "Result ready to review",
+            detail: input.readyForReview,
+          });
+        }
+      }
       return completed;
     });
   }
@@ -1182,7 +1235,10 @@ export class StoryWorkspaceService {
               eq(attentionItems.status, "open"),
               input.actor.type === "user"
                 ? undefined
-                : notInArray(attentionItems.kind, [...REVIEW_DECISION_ATTENTION]),
+                : notInArray(attentionItems.kind, [
+                    ...REVIEW_DECISION_ATTENTION,
+                    "agent_ready_review",
+                  ]),
             ),
           )
           .returning({ id: attentionItems.id })
@@ -1205,7 +1261,8 @@ export class StoryWorkspaceService {
         if (!existing)
           throw new StoryServiceError("attention_not_found", "attention item not found", 404);
         if (
-          REVIEW_DECISION_ATTENTION.some((kind) => kind === existing.kind) &&
+          (existing.kind === "agent_ready_review" ||
+            REVIEW_DECISION_ATTENTION.some((kind) => kind === existing.kind)) &&
           input.actor.type !== "user"
         )
           throw new StoryServiceError(
@@ -1274,6 +1331,7 @@ export class StoryWorkspaceService {
     if (
       !attention.turnId ||
       attention.kind === "agent_waiting" ||
+      attention.kind === "agent_ready_review" ||
       REVIEW_DECISION_ATTENTION.some((kind) => kind === attention.kind)
     ) {
       throw new StoryServiceError(

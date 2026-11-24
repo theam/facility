@@ -76,6 +76,8 @@ export function attentionKindLabel(kind: string) {
   switch (kind) {
     case "agent_waiting":
       return "Agent waiting for a reply";
+    case "agent_ready_review":
+      return "Result ready to review";
     case "turn_error":
       return "Agent run failed";
     case "worker_interrupted":
@@ -160,6 +162,7 @@ export function attentionNotice(
 ): AttentionEntry {
   const resolved = notice.status === "resolved";
   const waiting = notice.kind === "agent_waiting";
+  const resultReview = notice.kind === "agent_ready_review";
   const review = isReviewNotice(notice.kind);
   const delivery = ["delivery_integration", "delivery_completion"].includes(notice.kind);
   const deliveryFailure = delivery && /failed|needs attention/i.test(notice.title);
@@ -167,18 +170,20 @@ export function attentionNotice(
     key: `attention:${notice.id}`,
     tone: resolved
       ? "machine"
-      : waiting || review || (delivery && !deliveryFailure)
+      : waiting || review || resultReview || (delivery && !deliveryFailure)
         ? "human"
         : "bad",
     title: delivery || review ? notice.title : attentionKindLabel(notice.kind),
     storyId: notice.storyId,
     storyTitle: notice.storyTitle,
     summary:
-      waiting || delivery || review
+      waiting || delivery || review || resultReview
         ? (notice.detail ??
           (review
             ? "Review the recorded candidate and findings in the story."
-            : "The agent is waiting for your reply."))
+            : resultReview
+              ? "The agent finished. Review the result in the story."
+              : "The agent is waiting for your reply."))
         : errorSummary(notice.detail),
     at: notice.createdAt,
     action:
@@ -187,9 +192,14 @@ export function attentionNotice(
             label: "Reply in the story",
             href: `${storyHref(projectId, notice.storyId)}#story-composer`,
           }
-        : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
+        : resultReview && !resolved
+          ? {
+              label: "Review result",
+              href: `${storyHref(projectId, notice.storyId)}#story-attention`,
+            }
+          : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
     item: resolved ? null : notice,
-    detail: waiting || delivery || review ? null : notice.detail,
+    detail: waiting || delivery || review || resultReview ? null : notice.detail,
     resolved: resolved
       ? { label: resolutionLabel(notice.resolution ?? null), at: notice.resolvedAt ?? null }
       : null,

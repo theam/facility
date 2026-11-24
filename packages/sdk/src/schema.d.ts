@@ -6737,6 +6737,10 @@ export interface operations {
                                 kind: string;
                                 count: number;
                             }[];
+                            resultReview?: {
+                                messageId: string;
+                                summary: string;
+                            };
                             delivery: {
                                 decisionBrief?: {
                                     /** @enum {string} */

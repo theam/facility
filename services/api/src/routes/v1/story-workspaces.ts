@@ -1260,7 +1260,11 @@ function nextOperations(
     operations.push("open_preview", "delete_workspace");
   if (attention.length > 0) operations.push("dismiss_attention");
   if (attention.some((item) => item.kind === "agent_waiting")) operations.push("reply");
-  if (attention.some((item) => item.turnId && item.kind !== "agent_waiting"))
+  if (
+    attention.some(
+      (item) => item.turnId && item.kind !== "agent_waiting" && item.kind !== "agent_ready_review",
+    )
+  )
     operations.push("retry");
   if (story.status === "working") operations.push("cancel_turn");
   return [...new Set(operations)];
