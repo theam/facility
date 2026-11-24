@@ -145,7 +145,7 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
           if (inserted.length === 0) {
             return reply.status(202).send({ ok: true, replayed: true });
           }
-          if (!githubWebhookRequiresWorker(eventType, payload)) {
+          if (!repository || !githubWebhookRequiresWorker(eventType, payload)) {
             await app.facilityDb
               .update(githubWebhookEvents)
               .set({ processedAt: new Date() })

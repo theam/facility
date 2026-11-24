@@ -150,6 +150,64 @@ environment:
     await rm(root, { recursive: true, force: true });
   });
 
+  it("configures each checkout with the identity of its own GitHub App", async () => {
+    const retained = await runtime.create({ id: newId("ws"), image: "facility-runner:test" });
+    const identityStoryId = newId("story");
+    await db.insert(stories).values({
+      id: identityStoryId,
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: identityStoryId,
+      title: "App identities",
+      createdBy: {},
+    });
+    await db.insert(workspaces).values({
+      id: retained.id,
+      orgId,
+      projectId,
+      storyId: identityStoryId,
+      provider: "fake",
+      externalRef: retained.externalRef,
+      volumeRef: retained.volumeRef,
+      state: "running",
+    });
+    const identities = [
+      { name: "primary-app[bot]", email: "1+primary-app[bot]@users.noreply.github.com" },
+      { name: "related-app[bot]", email: "2+related-app[bot]@users.noreply.github.com" },
+    ];
+    const scopedCredentials = {
+      ...credentials,
+      repositories: credentials.repositories.map((repo, index) => ({
+        ...repo,
+        gitIdentity: identities[index],
+      })),
+    };
+    const environment = new ProjectEnvironmentService(db, runtime, `file://${remotes}`);
+    await environment.prepare({
+      orgId,
+      projectId,
+      workspace: retained,
+      manifest,
+      credentials: scopedCredentials,
+      branch: "feature/app-identities",
+    });
+    for (const [index, repo] of scopedCredentials.repositories.entries()) {
+      for (const [field, expected] of [
+        ["user.name", identities[index]?.name],
+        ["user.email", identities[index]?.email],
+      ]) {
+        const result = await runtime.exec(retained, {
+          command: "git",
+          args: ["config", field ?? ""],
+          cwd: `repos/${repo.owner}/${repo.name}`,
+        });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.trim()).toBe(expected);
+      }
+    }
+  });
+
   it.each([
     false,
     true,

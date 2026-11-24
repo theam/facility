@@ -99,6 +99,23 @@ export async function installationConfig(
   };
 }
 
+/** Rotation verifies the App itself, independently of removed/suspended installations. */
+export async function inspectApp(appId: number, privateKey: string) {
+  validatePrivateKey(privateKey);
+  try {
+    const app = new App({ appId, privateKey });
+    const identity = (await app.octokit.request("GET /app")).data;
+    if (identity?.id !== appId || !identity.slug) throw new Error();
+    return { slug: identity.slug };
+  } catch {
+    throw new ApiError(
+      400,
+      "github_connection_validation_failed",
+      "GitHub could not verify the App key",
+    );
+  }
+}
+
 /** No arbitrary API hosts; credentials are sent only to GitHub's App API. */
 export async function inspectInstallation(
   appId: number,

@@ -249,6 +249,7 @@ export class ProjectEnvironmentService {
         "repository directory",
       );
       const cwd = repositoryPath(repository);
+      const gitIdentity = repository.gitIdentity ?? preparedInput.credentials.gitIdentity;
       const present = await this.runtime.exec(preparedInput.workspace, {
         signal: preparedInput.signal,
         command: "git",
@@ -274,14 +275,14 @@ export class ProjectEnvironmentService {
       await this.runCommand(
         preparedInput,
         "git",
-        ["config", "user.name", preparedInput.credentials.gitIdentity.name],
+        ["config", "user.name", gitIdentity.name],
         cwd,
         "git identity",
       );
       await this.runCommand(
         preparedInput,
         "git",
-        ["config", "user.email", preparedInput.credentials.gitIdentity.email],
+        ["config", "user.email", gitIdentity.email],
         cwd,
         "git identity",
       );

@@ -2628,7 +2628,14 @@ export interface operations {
     postWebhooksGithubConnectionId: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description HMAC-SHA256 over the exact request body. */
+                "X-Hub-Signature-256": string;
+                /** @description Sender-unique GitHub delivery id. */
+                "X-GitHub-Delivery": string;
+                /** @description GitHub webhook event name. */
+                "X-GitHub-Event": string;
+            };
             path: {
                 connectionId: string;
             };

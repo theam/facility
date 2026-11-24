@@ -2,13 +2,14 @@ import type { AgentTrigger } from "@facility/agents";
 import {
   auditEvents,
   type FacilityDb,
+  githubConnections,
   githubInstallations,
   githubWebhookEvents,
   projectRepositories,
   projects,
   stories,
 } from "@facility/db";
-import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
 import { storyDeliversThroughCycle } from "../stories/review-cycle-rules.js";
@@ -35,6 +36,7 @@ type GithubEvent = {
   orgId: string;
   projectId?: string;
   repositoryId?: string;
+  installationId?: string;
   eventType: string;
   payload: Record<string, unknown>;
 };
@@ -61,7 +63,49 @@ export class GithubAgentTriggerService {
         .limit(1)
     )[0];
     if (!event?.verified) return { matched: 0, queued: 0, merged: 0 };
-    if (event.projectId && !event.repositoryId) return { matched: 0, queued: 0, merged: 0 };
+    const binding =
+      event.projectId && event.repositoryId && event.installationId
+        ? (
+            await this.db
+              .select({ id: projectRepositories.id })
+              .from(projectRepositories)
+              .innerJoin(
+                githubInstallations,
+                and(
+                  eq(githubInstallations.id, projectRepositories.installationId),
+                  eq(githubInstallations.orgId, projectRepositories.orgId),
+                ),
+              )
+              .leftJoin(
+                githubConnections,
+                and(
+                  eq(githubConnections.id, githubInstallations.connectionId),
+                  eq(githubConnections.orgId, githubInstallations.orgId),
+                ),
+              )
+              .where(
+                and(
+                  eq(projectRepositories.orgId, event.orgId),
+                  eq(projectRepositories.projectId, event.projectId),
+                  eq(projectRepositories.id, event.repositoryId),
+                  eq(projectRepositories.installationId, event.installationId),
+                  isNull(githubInstallations.suspendedAt),
+                  or(
+                    isNull(githubInstallations.connectionId),
+                    and(isNotNull(githubConnections.id), isNull(githubConnections.disabledAt)),
+                  ),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : undefined;
+    if (!binding) {
+      await this.db
+        .update(githubWebhookEvents)
+        .set({ processedAt: new Date(), error: null })
+        .where(eq(githubWebhookEvents.id, event.id));
+      return { matched: 0, queued: 0, merged: 0 };
+    }
     return this.processInbound(event);
   }
 
@@ -72,6 +116,7 @@ export class GithubAgentTriggerService {
     const binding = {
       projectId: event.projectId ?? undefined,
       repositoryId: event.repositoryId ?? undefined,
+      installationId: event.installationId ?? undefined,
     };
     const receiptScope = and(
       eq(githubWebhookEvents.id, inboundEventId),
@@ -137,6 +182,9 @@ export class GithubAgentTriggerService {
             eq(projectRepositories.orgId, event.orgId),
             event.projectId ? eq(projectRepositories.projectId, event.projectId) : undefined,
             event.repositoryId ? eq(projectRepositories.id, event.repositoryId) : undefined,
+            event.installationId
+              ? eq(projectRepositories.installationId, event.installationId)
+              : undefined,
             eq(projectRepositories.owner, owner),
             eq(projectRepositories.name, name),
             eq(projects.status, "active"),

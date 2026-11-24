@@ -118,6 +118,9 @@ coordinate the webhook-secret change with GitHub and redeliver missed events. **
 blocks new credentials and webhook processing without deleting history. Already issued installation
 tokens can remain valid until their expiry; revoke them in GitHub when immediate revocation is
 required. Changes are read on use and do not require an API or worker restart.
+Rotation verifies the App identity independently of its installations, so removing an installation
+does not prevent recovery. Concurrent administration is revision-checked; reload and retry if another
+administrator changed the connection during verification.
 
 Existing installations keep their environment-configured default App and `/webhooks/github` URL.
 No secrets are copied from the environment into the new table. Login remains controlled by the
@@ -127,17 +130,19 @@ not grant anyone Facility access or provide another sign-in identity provider.
 ### Changing a project's connection after a repository transfer
 
 In **Project settings → Repositories → Change GitHub connection**, select the new installation and
-enter the new `owner/repository`. Facility compares GitHub's immutable repository ID, following the
-old repository's transfer redirect for legacy connections without a stored ID. If it cannot prove
-identity, it refuses the change rather than attaching old history to a different repository.
-It also refuses while the project has queued or running turns.
+enter the new `owner/repository`. Facility compares GitHub's immutable repository ID with the ID
+already recorded for the project and verifies that the selected App installation includes that
+repository. Public visibility alone is insufficient. It refuses while the project has queued or
+running turns; enqueue and the final connection change share the same project lock.
 
 This updates the existing repository record and preserves stories, workspaces and delivery evidence.
 Existing sandbox checkouts and historical URLs are not rewritten. Update the repository paths in
 `.facility.yml` through the project's normal review process and validate a new workspace before
-resuming execution. If the old URL no longer resolves and no immutable ID was stored, an operator
-must separately verify and migrate that identity; changing the input to an unrelated repository
-is not a supported bypass.
+resuming execution. Legacy rows without a recorded repository ID require a separately verified
+operator recovery before switching. Use evidence recorded before the transfer to establish the
+original immutable GitHub repository ID and backfill only the reviewed row. Looking up the old
+URL now is not historical proof: another repository may have reused that name. The normal UI
+cannot bypass this check or attach existing history to an unrelated repository.
 
 ## Runtime behavior
 
@@ -145,6 +150,9 @@ Facility verifies the HMAC before parsing a delivery, resolves the installation 
 stores a deduplicated event, and dispatches triggers declared in `.agents/`. Duplicate deliveries
 do not create duplicate turns. A merged pull request marks its story done and suspends compute; it
 does not delete the workspace.
+Repository deliveries are processed only for their selected installation. The worker rechecks the
+stored repository binding before processing, so a receipt queued before a connection switch cannot
+be resolved again by repository name under a different App.
 
 Agents receive the same installation token capability, including reviewers, scheduled agents and
 planning agents outside the review cycle. Each token is limited to the repositories connected to

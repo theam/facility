@@ -1,11 +1,12 @@
 import { newId } from "@facility/core";
 import { githubConnections, githubInstallations } from "@facility/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ApiError, notFound } from "../../errors.js";
 import {
   ConnectionSecrets,
+  inspectApp,
   inspectInstallation,
   openConnection,
   sealConnection,
@@ -166,24 +167,12 @@ export async function registerGithubConnectionRoutes(
       const row = await load(actor.orgId, (request.params as z.infer<typeof Params>).connectionId);
       const body = request.body as z.infer<typeof Update>;
       let credentials: string | undefined;
+      let slug: string | undefined;
       if (body.secrets || body.disabled === false) {
         const secrets = body.secrets ?? (await openConnection(row, config.secretMasterKey));
-        const installation = (
-          await db
-            .select()
-            .from(githubInstallations)
-            .where(
-              and(
-                eq(githubInstallations.orgId, actor.orgId),
-                eq(githubInstallations.connectionId, row.id),
-              ),
-            )
-            .limit(1)
-        )[0];
-        if (!installation)
-          throw new ApiError(409, "installation_required", "Connection has no installation");
-        await inspectInstallation(row.appId, secrets.privateKey, installation.installationId);
-        credentials = await sealConnection(row, secrets, config.secretMasterKey);
+        ({ slug } = await inspectApp(row.appId, secrets.privateKey));
+        // Enabling must never re-store a stale copy over a concurrent rotation.
+        if (body.secrets) credentials = await sealConnection(row, secrets, config.secretMasterKey);
       }
       const updated = (
         await db
@@ -194,12 +183,25 @@ export async function registerGithubConnectionRoutes(
               ? {}
               : { disabledAt: body.disabled ? new Date() : null }),
             ...(credentials ? { credentials } : {}),
-            updatedAt: new Date(),
+            ...(slug ? { slug } : {}),
+            revision: sql`${githubConnections.revision} + 1`,
+            updatedAt: sql`clock_timestamp()`,
           })
-          .where(and(eq(githubConnections.orgId, actor.orgId), eq(githubConnections.id, row.id)))
+          .where(
+            and(
+              eq(githubConnections.orgId, actor.orgId),
+              eq(githubConnections.id, row.id),
+              eq(githubConnections.revision, row.revision),
+            ),
+          )
           .returning()
       )[0];
-      if (!updated) throw notFound("GitHub connection not found");
+      if (!updated)
+        throw new ApiError(
+          409,
+          "github_connection_changed",
+          "Connection changed. Reload and retry.",
+        );
       return present(updated);
     },
   );

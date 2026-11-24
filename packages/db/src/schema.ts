@@ -168,6 +168,7 @@ export const githubConnections = pgTable(
     appId: bigint("app_id", { mode: "number" }).notNull(),
     slug: text("slug").notNull(),
     credentials: text("credentials").notNull(),
+    revision: integer("revision").notNull().default(0),
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
     ...timestamps,
   },

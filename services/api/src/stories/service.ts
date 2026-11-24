@@ -377,9 +377,11 @@ export class StoryWorkspaceService {
   async queueMessage(input: QueuedMessageInput) {
     if (input.trigger.type === REVIEW_TRIGGER)
       throw new StoryServiceError("message_invalid", "Use an explicit agent trigger", 400);
-    const queued = await this.db.transaction((rawTx) =>
-      this.storeMessage(rawTx as unknown as FacilityDb, input, false),
-    );
+    const queued = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      return this.storeMessage(tx, input, false);
+    });
     if (!queued)
       throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
     if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
@@ -1327,6 +1329,7 @@ export class StoryWorkspaceService {
   }) {
     const turn = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const active = (
         await tx

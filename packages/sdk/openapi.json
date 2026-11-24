@@ -1198,6 +1198,33 @@
             "in": "path",
             "name": "connectionId",
             "required": true
+          },
+          {
+            "name": "X-Hub-Signature-256",
+            "in": "header",
+            "required": true,
+            "description": "HMAC-SHA256 over the exact request body.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-GitHub-Delivery",
+            "in": "header",
+            "required": true,
+            "description": "Sender-unique GitHub delivery id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-GitHub-Event",
+            "in": "header",
+            "required": true,
+            "description": "GitHub webhook event name.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1333,7 +1360,11 @@
         "tags": [
           "GitHub"
         ],
-        "security": []
+        "security": [
+          {
+            "githubSignature": []
+          }
+        ]
       }
     },
     "/v1/me": {

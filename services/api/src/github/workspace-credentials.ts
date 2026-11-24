@@ -10,6 +10,7 @@ export type WorkspaceRepository = {
   defaultBranch: string;
   developmentBranch?: string;
   role: "primary" | "related";
+  gitIdentity?: GithubGitIdentity;
 };
 
 export type GithubWorkspaceCredentials = {
@@ -151,6 +152,7 @@ export class GithubWorkspaceCredentialBroker {
           defaultBranch: repository.defaultBranch,
           developmentBranch: await repositoryDevelopmentBranch(this.db, repository),
           role: repository.role as "primary" | "related",
+          gitIdentity: tokens.get(repository.installationId ?? "")?.gitIdentity,
         })),
       ),
       environment: {

@@ -6,6 +6,7 @@ import {
   createDb,
   githubConnections,
   githubInstallations,
+  githubPullRequests,
   githubWebhookEvents,
   migrate,
   orgs,
@@ -16,14 +17,19 @@ import {
 } from "@facility/db";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AgentCatalogService } from "../src/agents/catalog.js";
+import { GithubAgentTriggerService } from "../src/agents/github-triggers.js";
 import { buildApp } from "../src/app.js";
 import {
   createGithubClientFactory,
   createGithubMaintainerTokenFactory,
 } from "../src/github/client.js";
 import { installationConfig } from "../src/github/connections.js";
+import { GithubMirrorService } from "../src/github/mirror.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
+import type { StoryWorkspaceService } from "../src/stories/service.js";
 import type { AppConfig } from "../src/types.js";
+import type { ProjectManifestSource } from "../src/workspaces/project-environment.js";
 
 const fake = vi.hoisted(() => ({
   installations: new Map<number, { appId: number; owner: string }>(),
@@ -34,16 +40,35 @@ const fake = vi.hoisted(() => ({
     permissions?: unknown;
   }>,
   revoked: new Set<number>(),
+  invalidKeys: new Set<string>(),
+  excludedRepositories: new Set<string>(),
+  beforeApp: undefined as undefined | ((appId: number, privateKey: string) => Promise<void>),
 }));
 vi.mock("@octokit/app", () => ({
   App: class {
     id: number;
-    constructor(options: { appId: string | number }) {
+    key: string;
+    constructor(options: { appId: string | number; privateKey: string }) {
       this.id = Number(options.appId);
+      this.key = options.privateKey;
     }
     octokit = {
       request: async (route: string, args: Record<string, unknown> = {}) => {
-        if (route === "GET /app") return { data: { id: this.id, slug: `app-${this.id}` } };
+        if (route === "GET /app") {
+          await fake.beforeApp?.(this.id, this.key);
+          if (fake.invalidKeys.has(this.key))
+            throw new Error("invalid app key with sensitive context");
+          return { data: { id: this.id, slug: `app-${this.id}` } };
+        }
+        if (route === "GET /repos/{owner}/{repo}/installation") {
+          if (fake.excludedRepositories.has(`${this.id}/${args.repo}`))
+            throw new Error("not installed");
+          const entry = [...fake.installations.entries()].find(
+            ([, row]) => row.appId === this.id && row.owner === args.owner,
+          );
+          if (!entry) throw new Error("not installed");
+          return { data: { id: entry[0] } };
+        }
         const id = Number(args.installation_id);
         const entry = fake.installations.get(id);
         if (!entry || entry.appId !== this.id || fake.revoked.has(id))
@@ -190,6 +215,7 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
       orgId: "org_local",
       projectId,
       installationId: `ghi_${base}`,
+      githubRepositoryId: 123,
       owner: legacyOwner,
       name: "nau",
       defaultBranch: "dev",
@@ -441,6 +467,28 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
         ?.name,
     ).toBe("nau");
   });
+  it("refuses legacy identity guesses and public repositories outside the selected installation", async () => {
+    const url = `/v1/projects/${projectId}/repos/${repoId}`;
+    const payload = { installationId: base + 1, owner: newOwner, name: "nau" };
+    await db
+      .update(projectRepositories)
+      .set({ githubRepositoryId: null })
+      .where(eq(projectRepositories.id, repoId));
+    const legacy = await app.inject({ method: "PATCH", url, headers: auth(), payload });
+    expect(legacy.statusCode).toBe(409);
+    expect(legacy.json().error.code).toBe("repository_identity_required");
+    await db
+      .update(projectRepositories)
+      .set({ githubRepositoryId: 123 })
+      .where(eq(projectRepositories.id, repoId));
+    fake.excludedRepositories.add(`${base + 1}/nau`);
+    try {
+      const excluded = await app.inject({ method: "PATCH", url, headers: auth(), payload });
+      expect(excluded.statusCode).toBe(409);
+    } finally {
+      fake.excludedRepositories.delete(`${base + 1}/nau`);
+    }
+  });
   it("issues separate repository-limited credentials for a project spanning two Apps", async () => {
     const installation = (
       await db
@@ -469,6 +517,10 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
       [`${newOwner}/nau`]: `token-${base + 1}`,
       [`${relatedOwner}/related`]: `token-${base + 2}`,
     });
+    expect(result.repositories.map((repo) => repo.gitIdentity?.name)).toEqual([
+      `app-${base + 1}[bot]`,
+      `app-${base + 2}[bot]`,
+    ]);
     expect(
       fake.calls
         .slice(-2)
@@ -532,8 +584,119 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
     expect(events).toHaveLength(1);
     expect(events[0]?.repositoryId).toBe(repoId);
     expect((await webhook(null, base, legacySecret)).statusCode).toBe(202);
-    expect(queued.length).toBe(initial + 2);
+    // The legacy installation no longer owns this repository after the rebind.
+    expect(queued.length).toBe(initial + 1);
   });
+  it("runs the real worker only for the currently selected App, including queued receipts across a switch", async () => {
+    fake.installations.set(base + 5, { appId: base + 2, owner: newOwner });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/v1/github/connections/${secondConnection}/installations`,
+          headers: auth(),
+          payload: { installationId: base + 5 },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const otherInstallation = (
+      await db
+        .select()
+        .from(githubInstallations)
+        .where(eq(githubInstallations.installationId, base + 5))
+    )[0];
+    if (!otherInstallation) throw new Error("Missing overlap installation");
+    await db
+      .update(stories)
+      .set({ pullRequestNumber: 88, branch: "feature/review" })
+      .where(eq(stories.id, storyId));
+    const markMerged = vi.fn(async () => undefined);
+    const mirror = new GithubMirrorService(db, createGithubClientFactory(config, db));
+    const worker = new GithubAgentTriggerService(
+      db,
+      {} as AgentCatalogService,
+      { markMerged } as unknown as StoryWorkspaceService,
+      {} as ProjectManifestSource,
+      "runner:test",
+      mirror,
+    );
+    async function delivery(connection: string, installation: number, secret: string) {
+      const id = crypto.randomUUID();
+      const payload = JSON.stringify({
+        action: "closed",
+        installation: { id: installation },
+        repository: { id: 123, name: "nau", owner: { login: newOwner } },
+        pull_request: {
+          number: 88,
+          title: "Reviewed change",
+          state: "closed",
+          merged: true,
+          html_url: "https://github.test/pull/88",
+          head: { ref: "feature/review", sha: "a".repeat(40) },
+          base: { ref: "dev" },
+        },
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/webhooks/github/${connection}`,
+            headers: {
+              "content-type": "application/json",
+              "x-github-event": "pull_request",
+              "x-github-delivery": id,
+              "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`,
+            },
+            payload,
+          })
+        ).statusCode,
+      ).toBe(202);
+      const receipt = (await db.select().from(githubWebhookEvents)).find((row) =>
+        row.id.endsWith(id),
+      );
+      if (!receipt) throw new Error("Missing receipt");
+      return receipt.id;
+    }
+    const before = queued.length;
+    const other = await delivery(secondConnection, base + 5, otherSecret);
+    expect(queued.length).toBe(before);
+    expect(await worker.handleInbound(other)).toEqual({ matched: 0, queued: 0, merged: 0 });
+    expect(markMerged).not.toHaveBeenCalled();
+    const stale = await delivery(connectionId, base + 1, webhookSecret);
+    expect(queued.length).toBe(before + 1);
+    const current = (
+      await db.select().from(projectRepositories).where(eq(projectRepositories.id, repoId))
+    )[0];
+    await db
+      .update(projectRepositories)
+      .set({ installationId: otherInstallation.id })
+      .where(eq(projectRepositories.id, repoId));
+    try {
+      expect(await worker.handleInbound(stale)).toEqual({ matched: 0, queued: 0, merged: 0 });
+      expect(markMerged).not.toHaveBeenCalled();
+      expect(
+        await db
+          .select()
+          .from(githubPullRequests)
+          .where(eq(githubPullRequests.repositoryId, repoId)),
+      ).toHaveLength(0);
+      const accepted = await delivery(secondConnection, base + 5, otherSecret);
+      expect((await worker.handleInbound(accepted)).merged).toBe(1);
+      expect(markMerged).toHaveBeenCalledOnce();
+      expect(
+        await db
+          .select()
+          .from(githubPullRequests)
+          .where(eq(githubPullRequests.repositoryId, repoId)),
+      ).toHaveLength(1);
+    } finally {
+      await db
+        .update(projectRepositories)
+        .set({ installationId: current?.installationId })
+        .where(eq(projectRepositories.id, repoId));
+    }
+  });
+
   it("disables credentials and webhooks without falling back; rotation immediately uses the new secret", async () => {
     const url = `/v1/github/connections/${connectionId}`;
     expect(
@@ -561,7 +724,7 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
     ).toBe(200);
     expect((await webhook(connectionId, base + 1, webhookSecret)).statusCode).toBe(401);
     expect((await webhook(connectionId, base + 1, rotated)).statusCode).toBe(202);
-    fake.revoked.add(base + 1);
+    fake.invalidKeys.add(privateKey);
     expect(
       (
         await app.inject({
@@ -572,6 +735,90 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
         })
       ).statusCode,
     ).toBe(400);
+    fake.invalidKeys.delete(privateKey);
+  });
+  it("rotates and recovers an App after its old installations have been removed", async () => {
+    const url = `/v1/github/connections/${connectionId}`;
+    fake.revoked.add(base + 1);
+    const secrets = { privateKey, webhookSecret };
+    // The second installation remains active; the first one cannot veto App rotation.
+    expect(
+      (await app.inject({ method: "PATCH", url, headers: auth(), payload: { secrets } }))
+        .statusCode,
+    ).toBe(200);
+    fake.revoked.add(base + 3);
+    await app.inject({ method: "PATCH", url, headers: auth(), payload: { disabled: true } });
+    expect(
+      (await app.inject({ method: "PATCH", url, headers: auth(), payload: { disabled: false } }))
+        .statusCode,
+    ).toBe(200);
+    fake.installations.set(base + 4, { appId: base + 1, owner: `replacement-${base}` });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `${url}/installations`,
+          headers: auth(),
+          payload: { installationId: base + 4 },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await expect(createGithubClientFactory(config, db)(base + 1)).rejects.toThrow("revoked");
     fake.revoked.delete(base + 1);
+    fake.revoked.delete(base + 3);
+  });
+  it("does not let a delayed enable overwrite a successful credential rotation", async () => {
+    const url = `/v1/github/connections/${connectionId}`;
+    await app.inject({ method: "PATCH", url, headers: auth(), payload: { disabled: true } });
+    const replacement = generateKeyPairSync("rsa", { modulusLength: 2048 })
+      .privateKey.export({ type: "pkcs8", format: "pem" })
+      .toString();
+    let release!: () => void;
+    let entered!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const checking = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    fake.beforeApp = async (_appId, key) => {
+      if (key === privateKey) {
+        entered();
+        await paused;
+      }
+    };
+    const enable = app.inject({
+      method: "PATCH",
+      url,
+      headers: auth(),
+      payload: { disabled: false },
+    });
+    try {
+      await checking;
+      expect(
+        (
+          await app.inject({
+            method: "PATCH",
+            url,
+            headers: auth(),
+            payload: { secrets: { privateKey: replacement, webhookSecret: otherSecret } },
+          })
+        ).statusCode,
+      ).toBe(200);
+      release();
+      const result = await enable;
+      expect(result.statusCode).toBe(409);
+      const row = (
+        await db.select().from(githubConnections).where(eq(githubConnections.id, connectionId))
+      )[0];
+      expect(row?.disabledAt).not.toBeNull();
+      const decoded = JSON.parse(await open(row?.credentials ?? "", key));
+      expect(decoded.privateKey).toBe(replacement);
+      expect(decoded.webhookSecret).toBe(otherSecret);
+    } finally {
+      release();
+      fake.beforeApp = undefined;
+      await enable;
+    }
   });
 });

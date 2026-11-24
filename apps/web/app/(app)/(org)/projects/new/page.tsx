@@ -204,6 +204,14 @@ export default function KickstartPage() {
   async function loadPreview() {
     const s = source;
     if (!s || !name.trim() || !effectiveSlug) return;
+    const owner = s.kind === "existing" ? s.repo.owner : s.owner;
+    if (
+      activeInstallation &&
+      activeInstallation.accountLogin.toLowerCase() !== owner.toLowerCase()
+    ) {
+      setError(`Select a GitHub connection for ${owner} before creating the project.`);
+      return;
+    }
     setPhase("previewing");
     setError(null);
     try {
@@ -220,7 +228,6 @@ export default function KickstartPage() {
         }));
       setProject(created);
 
-      const owner = s.kind === "existing" ? s.repo.owner : s.owner;
       const repoName = s.kind === "existing" ? s.repo.name : s.name;
       const defaultBranch = s.kind === "existing" ? s.repo.defaultBranch : "main";
       const existing = await apiJson<ProjectRepo[]>(`/v1/projects/${created.id}/repos`);
@@ -360,6 +367,29 @@ export default function KickstartPage() {
               </button>
             </div>
 
+            {installations && installations.length > 1 ? (
+              <fieldset className="flex flex-wrap gap-2">
+                <legend className="sr-only">GitHub connection</legend>
+                {installations.map((inst) => (
+                  <button
+                    key={inst.id}
+                    type="button"
+                    disabled={!!inst.suspendedAt || !!inst.disabledAt}
+                    onClick={() => {
+                      setActiveInstallation(inst);
+                      setError(null);
+                      if (source?.kind === "existing") setSource(null);
+                      else if (source?.kind === "new")
+                        setSource({ ...source, owner: inst.accountLogin });
+                    }}
+                  >
+                    <PillTag active={inst.id === activeInstallation?.id}>
+                      {inst.connectionName ?? "Instance default"} · {inst.accountLogin}
+                    </PillTag>
+                  </button>
+                ))}
+              </fieldset>
+            ) : null}
             {tab === "pick" ? (
               <div className="flex flex-col gap-3">
                 {installations === null ? (
@@ -372,25 +402,6 @@ export default function KickstartPage() {
                   </div>
                 ) : (
                   <>
-                    {installations.length > 1 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {installations.map((inst) => (
-                          <button
-                            key={inst.id}
-                            type="button"
-                            disabled={!!inst.suspendedAt || !!inst.disabledAt}
-                            onClick={() => {
-                              setActiveInstallation(inst);
-                              setSource(null);
-                            }}
-                          >
-                            <PillTag active={inst.id === activeInstallation?.id}>
-                              {inst.connectionName ?? "Instance default"} · {inst.accountLogin}
-                            </PillTag>
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
                     <TextInput
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}

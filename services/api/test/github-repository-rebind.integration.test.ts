@@ -1,0 +1,209 @@
+import { parseAgentManifest } from "@facility/agents";
+import { newId } from "@facility/core";
+import {
+  createDb,
+  githubInstallations,
+  migrate,
+  orgs,
+  projectRepositories,
+  projects,
+  stories,
+  storyConversations,
+  turns,
+} from "@facility/db";
+import { eq, sql } from "drizzle-orm";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import type { GithubClientFactory, Octokit } from "../src/github/client.js";
+import { rebindRepository } from "../src/github/rebind-repository.js";
+import { StoryWorkspaceService } from "../src/stories/service.js";
+import { FakeWorkspaceRuntime } from "../src/workspaces/fake.js";
+
+const databaseUrl =
+  process.env.DATABASE_URL ?? "postgres://facility:facility@127.0.0.1:5461/facility_test";
+const { db, client } = createDb(databaseUrl);
+const orgId = newId("org"),
+  projectId = newId("proj"),
+  repoId = newId("repo"),
+  storyId = newId("story");
+const oldInstallation = newId("ghi"),
+  newInstallation = newId("ghi");
+const number = 70_000_000 + Math.floor(Math.random() * 1_000_000);
+const owner = `rebind-${projectId}`;
+const input = { installationId: number + 1, owner, name: "app" };
+const scope = { orgId, projectId, repoId };
+const agent = parseAgentManifest(
+  `---\nname: builder\ndescription: Test builder\nengine: codex\nmodel: gpt-5.5\nenabled: true\ntriggers:\n  - type: manual\n---\nImplement the request.`,
+  "builder.md",
+);
+const service = new StoryWorkspaceService(
+  db,
+  new FakeWorkspaceRuntime(`/private/tmp/rebind-${projectId}`),
+);
+const queue = () =>
+  service.queueMessage({
+    orgId,
+    projectId,
+    storyId,
+    body: "Work",
+    dedupeKey: newId("msg"),
+    agent,
+    actor: { type: "service", id: "regression" },
+    trigger: { type: "manual" },
+  });
+function latch() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+function provider(beforeLookup: () => Promise<unknown> = async () => undefined): Octokit {
+  return {
+    repositoryInstallationId: async () => number + 1,
+    rest: {
+      repos: {
+        get: async () => {
+          await beforeLookup();
+          return { data: { id: 456, owner: { login: owner }, name: "app", default_branch: "dev" } };
+        },
+      },
+    },
+  } as unknown as Octokit;
+}
+beforeAll(async () => {
+  await migrate(databaseUrl);
+  await db.insert(orgs).values({ id: orgId, name: "Rebind regression", slug: orgId });
+  await db.insert(projects).values({ id: projectId, orgId, name: "Rebind", slug: projectId });
+  await db.insert(githubInstallations).values([
+    {
+      id: oldInstallation,
+      orgId,
+      installationId: number,
+      accountId: number,
+      accountLogin: owner,
+      targetType: "Organization",
+    },
+    {
+      id: newInstallation,
+      orgId,
+      installationId: number + 1,
+      accountId: number,
+      accountLogin: owner,
+      targetType: "Organization",
+    },
+  ]);
+  await db.insert(projectRepositories).values({
+    id: repoId,
+    orgId,
+    projectId,
+    installationId: oldInstallation,
+    githubRepositoryId: 456,
+    owner,
+    name: "app",
+    defaultBranch: "dev",
+    role: "primary",
+  });
+  await db.insert(stories).values({
+    id: storyId,
+    orgId,
+    projectId,
+    repositoryId: repoId,
+    provider: "manual",
+    externalId: storyId,
+    title: "Idle story",
+    createdBy: {},
+  });
+  await db.insert(storyConversations).values({ id: newId("sess"), orgId, projectId, storyId });
+});
+afterAll(async () => {
+  await client.end();
+});
+
+it("does not hold a database connection while the factory resolves credentials", async () => {
+  const limited = createDb(databaseUrl, { max: 1 });
+  try {
+    const factory: GithubClientFactory = async () => {
+      await limited.db
+        .select()
+        .from(githubInstallations)
+        .where(eq(githubInstallations.id, newInstallation));
+      return provider();
+    };
+    const result = await rebindRepository(limited.db, factory, scope, input);
+    expect(result.installationId).toBe(newInstallation);
+  } finally {
+    await limited.client.end({ timeout: 1 });
+  }
+  await db
+    .update(projectRepositories)
+    .set({ installationId: oldInstallation })
+    .where(eq(projectRepositories.id, repoId));
+});
+
+it("rejects rebind when a real message is queued during the external lookup", async () => {
+  const entered = latch(),
+    release = latch();
+  const operation = rebindRepository(
+    db,
+    async () =>
+      provider(async () => {
+        entered.resolve();
+        await release.promise;
+      }),
+    scope,
+    input,
+  );
+  const result = operation.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  let turnId: string | undefined;
+  try {
+    await entered.promise;
+    turnId = (await queue()).turn?.id;
+    expect(turnId).toBeTruthy();
+    release.resolve();
+    expect(await result).toMatchObject({ error: { code: "project_busy" } });
+    expect(
+      (await db.select().from(projectRepositories).where(eq(projectRepositories.id, repoId)))[0]
+        ?.installationId,
+    ).toBe(oldInstallation);
+  } finally {
+    release.resolve();
+    await result;
+    if (turnId) await db.update(turns).set({ state: "succeeded" }).where(eq(turns.id, turnId));
+  }
+});
+
+it("makes ordinary turn enqueue wait for the project topology fence", async () => {
+  const held = latch(),
+    release = latch();
+  const lock = db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${orgId}:${projectId}`}))`);
+    held.resolve();
+    await release.promise;
+  });
+  await held.promise;
+  const enqueued = queue();
+  try {
+    await vi.waitFor(
+      async () => {
+        const rows = await db.execute(
+          sql`select count(*)::int as waiting from pg_locks where locktype = 'advisory' and not granted and objid = (hashtext(${`${orgId}:${projectId}`})::bigint & 4294967295)::oid`,
+        );
+        expect(rows[0]?.waiting).toBeGreaterThan(0);
+      },
+      { timeout: 2000, interval: 10 },
+    );
+    expect(
+      (await db.select().from(turns).where(eq(turns.storyId, storyId))).every(
+        (turn) => turn.state !== "queued",
+      ),
+    ).toBe(true);
+  } finally {
+    release.resolve();
+    await lock;
+    const turn = (await enqueued).turn;
+    if (turn) await db.update(turns).set({ state: "succeeded" }).where(eq(turns.id, turn.id));
+  }
+});

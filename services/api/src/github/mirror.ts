@@ -42,6 +42,7 @@ export class GithubMirrorService {
     orgId: string;
     projectId?: string;
     repositoryId?: string;
+    installationId?: string;
     eventType: string;
     payload: JsonObject;
   }) {
@@ -208,7 +209,7 @@ export class GithubMirrorService {
   private async repositoryForPayload(
     orgId: string,
     payload: JsonObject,
-    binding: { projectId?: string; repositoryId?: string },
+    binding: { projectId?: string; repositoryId?: string; installationId?: string },
   ) {
     const repository = object(payload.repository);
     const fullName = string(repository.full_name)?.split("/") ?? [];
@@ -225,6 +226,9 @@ export class GithubMirrorService {
               eq(projectRepositories.orgId, orgId),
               binding.projectId ? eq(projectRepositories.projectId, binding.projectId) : undefined,
               binding.repositoryId ? eq(projectRepositories.id, binding.repositoryId) : undefined,
+              binding.installationId
+                ? eq(projectRepositories.installationId, binding.installationId)
+                : undefined,
               eq(projectRepositories.owner, owner),
               eq(projectRepositories.name, name),
             ),

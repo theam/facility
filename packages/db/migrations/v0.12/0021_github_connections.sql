@@ -6,6 +6,7 @@ CREATE TABLE github_connections (
   app_id bigint NOT NULL UNIQUE,
   slug text NOT NULL,
   credentials text NOT NULL,
+  revision integer NOT NULL DEFAULT 0,
   disabled_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

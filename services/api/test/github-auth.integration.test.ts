@@ -1,6 +1,7 @@
 import { newId } from "@facility/core";
 import {
   createDb,
+  githubConnections,
   githubInstallations,
   migrate,
   orgMembers,
@@ -41,6 +42,7 @@ describe("direct GitHub browser login", async () => {
   const primaryEmail = `github-primary-${Date.now()}@personal.example`;
   let membershipState: "active" | "missing" = "active";
   let membershipChecks = 0;
+  let reportedInstallation = installationId;
   const fakeFetch: typeof fetch = async (input) => {
     const url = String(input);
     if (url.endsWith("/login/oauth/access_token"))
@@ -52,7 +54,7 @@ describe("direct GitHub browser login", async () => {
         { email: "unverified@example.com", verified: false, primary: false },
       ]);
     if (url.includes("/user/installations"))
-      return json({ installations: [{ id: installationId, account: { id: accountId } }] });
+      return json({ installations: [{ id: reportedInstallation, account: { id: accountId } }] });
     if (url.endsWith("/user/memberships/orgs/theam")) {
       membershipChecks += 1;
       return membershipState === "active"
@@ -118,6 +120,25 @@ describe("direct GitHub browser login", async () => {
       installationId,
       accountId,
       accountLogin: "facility",
+      targetType: "Organization",
+    });
+    const connectionId = newId("ghc");
+    await db.insert(githubConnections).values({
+      id: connectionId,
+      orgId,
+      name: "Repositories only",
+      appId: installationId + 200_000,
+      slug: "repo-only",
+      credentials: "unused-fixture",
+      disabledAt: new Date(),
+    });
+    await db.insert(githubInstallations).values({
+      id: newId("ghi"),
+      orgId,
+      connectionId,
+      installationId: installationId + 200_000,
+      accountId,
+      accountLogin: "repo-only",
       targetType: "Organization",
     });
   });
@@ -219,6 +240,27 @@ describe("direct GitHub browser login", async () => {
     });
     expect(callback.statusCode).toBe(401);
     expect(callback.json().error.code).toBe("bad_state");
+  });
+  it("does not admit an invited identity through an additional repository App", async () => {
+    reportedInstallation = installationId + 200_000;
+    try {
+      const start = await unrestrictedApp.inject({ method: "GET", url: "/auth/login" });
+      const cookie = required(
+        start.cookies.find((c) => c.name === "facility_oauth_state"),
+        "state",
+      );
+      const authorization = new URL(required(start.headers.location, "redirect"));
+      const callback = await unrestrictedApp.inject({
+        method: "GET",
+        url: `/auth/callback?code=github-code&state=${authorization.searchParams.get("state")}`,
+        headers: { cookie: `${cookie.name}=${cookie.value}` },
+      });
+      expect(callback.statusCode).toBe(403);
+      expect(callback.json().error.code).toBe("installation_access_required");
+      expect(callback.cookies.some((c) => c.name === "facility_session")).toBe(false);
+    } finally {
+      reportedInstallation = installationId;
+    }
   });
 });
 

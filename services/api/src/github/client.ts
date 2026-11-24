@@ -7,6 +7,8 @@ import { createGithubGitIdentityLoader, type GithubGitIdentity } from "./git-ide
 
 export type Octokit = {
   request?: (route: string, args?: Record<string, unknown>) => Promise<{ data: unknown }>;
+  /** App-authenticated lookup: public repository visibility is not installation membership. */
+  repositoryInstallationId?: (owner: string, repo: string) => Promise<number>;
   rest: {
     git: {
       getCommit: (
@@ -98,8 +100,17 @@ export function createGithubClientFactory(config: AppConfig, db?: FacilityDb): G
     privateKey: config.githubAppPrivateKey,
     Octokit: RestOctokit,
   });
-  return async (installationId: number) =>
-    (await app.getInstallationOctokit(installationId)) as unknown as Octokit;
+  return async (installationId: number) => {
+    const client = (await app.getInstallationOctokit(installationId)) as unknown as Octokit;
+    client.repositoryInstallationId = async (owner, repo) => {
+      const result = await app.octokit.request("GET /repos/{owner}/{repo}/installation", {
+        owner,
+        repo,
+      });
+      return result.data.id;
+    };
+    return client;
+  };
 }
 
 /**

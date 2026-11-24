@@ -321,7 +321,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
             try {
               const client = await createGithubClientForRepo(
                 db,
-                app.githubClientFactory ?? createGithubClientFactory(context.config, context.db),
+                app.githubClientFactory ?? createGithubClientFactory(context.config, db),
                 repository,
               );
               await client.getBranchSha(nextBranch);

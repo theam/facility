@@ -260,6 +260,7 @@ async function activeAccount(app: FastifyInstance, userId: string) {
           eq(users.id, userId),
           eq(users.status, "active"),
           isNull(githubInstallations.suspendedAt),
+          isNull(githubInstallations.connectionId),
         ),
       )
       .orderBy(orgMembers.createdAt)
