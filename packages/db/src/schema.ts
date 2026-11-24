@@ -157,6 +157,26 @@ export const apiKeys = pgTable(
   ],
 );
 
+export const githubConnections = pgTable(
+  "github_connections",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => orgs.id),
+    name: text("name").notNull(),
+    appId: bigint("app_id", { mode: "number" }).notNull(),
+    slug: text("slug").notNull(),
+    credentials: text("credentials").notNull(),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    unique("github_connections_org_id_uidx").on(table.orgId, table.id),
+    unique("github_connections_app_uidx").on(table.appId),
+  ],
+);
+
 export const githubInstallations = pgTable(
   "github_installations",
   {
@@ -165,13 +185,21 @@ export const githubInstallations = pgTable(
       .notNull()
       .references(() => orgs.id),
     installationId: bigint("installation_id", { mode: "number" }).notNull().unique(),
+    connectionId: text("connection_id"),
     accountId: bigint("account_id", { mode: "number" }).notNull().default(0),
     accountLogin: text("account_login").notNull(),
     targetType: text("target_type").notNull(),
     suspendedAt: timestamp("suspended_at", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [uniqueIndex("github_installations_org_id_uidx").on(table.orgId, table.id)],
+  (table) => [
+    uniqueIndex("github_installations_org_id_uidx").on(table.orgId, table.id),
+    foreignKey({
+      name: "github_installations_connection_scope_fk",
+      columns: [table.orgId, table.connectionId],
+      foreignColumns: [githubConnections.orgId, githubConnections.id],
+    }),
+  ],
 );
 
 /** Encrypted persistence used by the per-instance OAuth authorization server. */
@@ -230,6 +258,7 @@ export const projectRepositories = pgTable(
       .notNull()
       .references(() => projects.id),
     installationId: text("installation_id").references(() => githubInstallations.id),
+    githubRepositoryId: bigint("github_repository_id", { mode: "number" }),
     owner: text("owner").notNull(),
     name: text("name").notNull(),
     defaultBranch: text("default_branch").notNull(),

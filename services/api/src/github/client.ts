@@ -1,6 +1,8 @@
+import type { FacilityDb } from "@facility/db";
 import { App } from "@octokit/app";
 import { Octokit as RestOctokit } from "@octokit/rest";
 import type { AppConfig } from "../types.js";
+import { installationConfig } from "./connections.js";
 import { createGithubGitIdentityLoader, type GithubGitIdentity } from "./git-identity.js";
 
 export type Octokit = {
@@ -18,10 +20,10 @@ export type Octokit = {
     };
     repos: {
       get?: (args: Record<string, unknown>) => Promise<{
-        data: { name: string; owner?: { login?: string }; default_branch?: string };
+        data: { id?: number; name: string; owner?: { login?: string }; default_branch?: string };
       }>;
       createInOrg?: (args: Record<string, unknown>) => Promise<{
-        data: { name: string; owner?: { login?: string }; default_branch?: string };
+        data: { id?: number; name: string; owner?: { login?: string }; default_branch?: string };
       }>;
       getContent: (args: Record<string, unknown>) => Promise<{ data: unknown }>;
       getBranch: (args: Record<string, unknown>) => Promise<{ data: { commit: { sha: string } } }>;
@@ -82,7 +84,12 @@ export type GithubMaintainerTokenFactory = (input: {
   gitIdentity: GithubGitIdentity;
 }>;
 
-export function createGithubClientFactory(config: AppConfig): GithubClientFactory {
+export function createGithubClientFactory(config: AppConfig, db?: FacilityDb): GithubClientFactory {
+  if (db)
+    return async (installationId) =>
+      createGithubClientFactory(await installationConfig(db, config, installationId))(
+        installationId,
+      );
   if (!config.githubAppId || !config.githubAppPrivateKey) {
     throw new Error("GitHub App credentials are not configured");
   }
@@ -102,7 +109,13 @@ export function createGithubClientFactory(config: AppConfig): GithubClientFactor
  */
 export function createGithubMaintainerTokenFactory(
   config: AppConfig,
+  db?: FacilityDb,
 ): GithubMaintainerTokenFactory {
+  if (db)
+    return async (input) =>
+      createGithubMaintainerTokenFactory(
+        await installationConfig(db, config, input.installationId),
+      )(input);
   if (!config.githubAppId || !config.githubAppPrivateKey) {
     throw new Error("GitHub App credentials are not configured");
   }

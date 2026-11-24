@@ -1,4 +1,4 @@
-import { githubInstallations } from "@facility/db";
+import { githubConnections, githubInstallations } from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -9,6 +9,9 @@ import { DateValue, principal, type V1RouteContext } from "./shared.js";
 const InstallationSchema = z.object({
   id: z.string(),
   installationId: z.number(),
+  connectionId: z.string().nullable(),
+  connectionName: z.string().nullable(),
+  disabledAt: DateValue.nullable(),
   accountLogin: z.string(),
   targetType: z.string(),
   suspendedAt: DateValue.nullable(),
@@ -41,7 +44,7 @@ export async function registerGithubInstallationRoutes(
   app.get(
     "/v1/github/installations",
     {
-      config: { permission: "projects:kickstart" },
+      config: { permission: ["projects:kickstart", "repos:write"] },
       schema: { response: { 200: z.array(InstallationSchema) } },
     },
     async (request) => {
@@ -49,6 +52,9 @@ export async function registerGithubInstallationRoutes(
       requireOrgPrincipal(actor);
       return db
         .select({
+          connectionId: githubInstallations.connectionId,
+          connectionName: githubConnections.name,
+          disabledAt: githubConnections.disabledAt,
           id: githubInstallations.id,
           installationId: githubInstallations.installationId,
           accountLogin: githubInstallations.accountLogin,
@@ -56,6 +62,13 @@ export async function registerGithubInstallationRoutes(
           suspendedAt: githubInstallations.suspendedAt,
         })
         .from(githubInstallations)
+        .leftJoin(
+          githubConnections,
+          and(
+            eq(githubConnections.id, githubInstallations.connectionId),
+            eq(githubConnections.orgId, githubInstallations.orgId),
+          ),
+        )
         .where(eq(githubInstallations.orgId, actor.orgId));
     },
   );
@@ -63,7 +76,7 @@ export async function registerGithubInstallationRoutes(
   app.get(
     "/v1/github/installations/:installationId/repos",
     {
-      config: { permission: "projects:kickstart" },
+      config: { permission: ["projects:kickstart", "repos:write"] },
       schema: {
         params: z.object({ installationId: z.coerce.number().int() }),
         querystring: z.object({ query: z.string().optional() }),
@@ -93,7 +106,7 @@ export async function registerGithubInstallationRoutes(
       if (installation.suspendedAt) {
         throw new ApiError(409, "installation_suspended", "GitHub installation is suspended");
       }
-      const factory = app.githubClientFactory ?? createGithubClientFactory(config);
+      const factory = app.githubClientFactory ?? createGithubClientFactory(config, db);
       const octokit = await factory(installation.installationId);
       if (!octokit.request) {
         throw new ApiError(500, "github_request_unavailable", "GitHub request API unavailable");

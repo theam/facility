@@ -13,6 +13,7 @@ import { ApiError, notFound } from "../../errors.js";
 import { createGithubClientFactory } from "../../github/client.js";
 import { DevelopmentBranchSchema } from "../../github/development-branch.js";
 import { createGithubClientForRepo } from "../../github/kickstart.js";
+import { rebindRepository } from "../../github/rebind-repository.js";
 import { removeRepositoryConnection } from "../../github/repository-connections.js";
 import { projectNativePreviewsEnabled } from "../../workspaces/project-native-previews.js";
 import {
@@ -320,7 +321,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
             try {
               const client = await createGithubClientForRepo(
                 db,
-                app.githubClientFactory ?? createGithubClientFactory(context.config),
+                app.githubClientFactory ?? createGithubClientFactory(context.config, context.db),
                 repository,
               );
               await client.getBranchSha(nextBranch);
@@ -427,6 +428,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       schema: {
         params: IdParams,
         body: z.object({
+          installationId: z.number().int().positive().optional(),
           owner: z.string().min(1).max(100),
           name: z.string().min(1).max(100),
           defaultBranch: z.string().min(1).max(200).default("main"),
@@ -444,6 +446,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
       const id = projectId(request);
       await loadProject(db, actor.orgId, id);
       const body = request.body as {
+        installationId?: number;
         owner: string;
         name: string;
         defaultBranch: string;
@@ -453,19 +456,27 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
         description?: string;
         autoInit: boolean;
       };
-      const installation = (
-        await db
-          .select()
-          .from(githubInstallations)
-          .where(
-            and(
-              eq(githubInstallations.orgId, actor.orgId),
-              eq(githubInstallations.accountLogin, body.owner),
-              isNull(githubInstallations.suspendedAt),
-            ),
-          )
-          .limit(1)
-      )[0];
+      const installations = await db
+        .select()
+        .from(githubInstallations)
+        .where(
+          and(
+            eq(githubInstallations.orgId, actor.orgId),
+            eq(githubInstallations.accountLogin, body.owner),
+            ...(body.installationId
+              ? [eq(githubInstallations.installationId, body.installationId)]
+              : []),
+            isNull(githubInstallations.suspendedAt),
+          ),
+        )
+        .limit(2);
+      if (installations.length > 1)
+        throw new ApiError(
+          409,
+          "github_connection_required",
+          "Select a GitHub connection for this repository",
+        );
+      const installation = installations[0];
       if (!installation) {
         throw new ApiError(
           400,
@@ -503,6 +514,7 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
               orgId: actor.orgId,
               projectId: id,
               installationId: installation.id,
+              githubRepositoryId: repository.githubRepositoryId,
               owner: repository.owner,
               name: repository.name,
               defaultBranch: repository.defaultBranch ?? body.defaultBranch,
@@ -513,6 +525,37 @@ export async function registerProjectRoutes(app: FastifyInstance, context: V1Rou
         if (!row) throw new ApiError(500, "insert_failed", "Could not connect repository");
         return row;
       });
+    },
+  );
+
+  app.patch(
+    "/v1/projects/:projectId/repos/:repoId",
+    {
+      config: {
+        permission: "repos:write",
+        auditAction: "repo.connection.updated",
+        idempotent: true,
+      },
+      schema: {
+        params: z.object({ projectId: z.string(), repoId: z.string() }),
+        body: z.object({
+          installationId: z.number().int().positive(),
+          owner: z.string().min(1).max(100),
+          name: z.string().min(1).max(100),
+        }),
+        response: { 200: RepositorySchema },
+      },
+    },
+    async (request) => {
+      const actor = principal(request);
+      const params = request.params as { projectId: string; repoId: string };
+      await loadProject(db, actor.orgId, params.projectId);
+      return rebindRepository(
+        db,
+        app.githubClientFactory ?? createGithubClientFactory(context.config, db),
+        { ...params, orgId: actor.orgId },
+        request.body as { installationId: number; owner: string; name: string },
+      );
     },
   );
 
@@ -576,7 +619,7 @@ async function resolveGithubRepository(
     autoInit: boolean;
   },
 ) {
-  const factory = app.githubClientFactory ?? createGithubClientFactory(context.config);
+  const factory = app.githubClientFactory ?? createGithubClientFactory(context.config, context.db);
   const octokit = await factory(installationId);
   if (body.create === true || body.mode === "create") {
     if (!octokit.rest.repos.createInOrg) {
@@ -594,6 +637,7 @@ async function resolveGithubRepository(
       auto_init: body.autoInit,
     });
     return {
+      githubRepositoryId: response.data.id,
       owner: response.data.owner?.login ?? body.owner,
       name: response.data.name,
       defaultBranch: response.data.default_branch ?? "main",
@@ -605,6 +649,7 @@ async function resolveGithubRepository(
   try {
     const response = await octokit.rest.repos.get({ owner: body.owner, repo: body.name });
     return {
+      githubRepositoryId: response.data.id,
       owner: response.data.owner?.login ?? body.owner,
       name: response.data.name,
       defaultBranch: response.data.default_branch ?? "main",

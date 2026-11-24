@@ -29,6 +29,8 @@ type Installation = {
   accountLogin: string;
   targetType: string;
   suspendedAt?: string | null;
+  disabledAt?: string | null;
+  connectionName?: string | null;
 };
 
 type PickableRepo = {
@@ -145,7 +147,7 @@ export default function KickstartPage() {
         const list = await apiJson<Installation[]>("/v1/github/installations");
         if (cancelled) return;
         setInstallations(list);
-        setActiveInstallation(list[0] ?? null);
+        setActiveInstallation(list.find((item) => !item.suspendedAt && !item.disabledAt) ?? null);
       } catch (err) {
         if (cancelled) return;
         setInstallations([]);
@@ -231,6 +233,7 @@ export default function KickstartPage() {
         (await apiJson<ProjectRepo>(`/v1/projects/${created.id}/repos`, {
           method: "POST",
           body: JSON.stringify({
+            installationId: activeInstallation?.installationId,
             owner,
             name: repoName,
             defaultBranch,
@@ -375,10 +378,14 @@ export default function KickstartPage() {
                           <button
                             key={inst.id}
                             type="button"
-                            onClick={() => setActiveInstallation(inst)}
+                            disabled={!!inst.suspendedAt || !!inst.disabledAt}
+                            onClick={() => {
+                              setActiveInstallation(inst);
+                              setSource(null);
+                            }}
                           >
                             <PillTag active={inst.id === activeInstallation?.id}>
-                              {inst.accountLogin}
+                              {inst.connectionName ?? "Instance default"} · {inst.accountLogin}
                             </PillTag>
                           </button>
                         ))}

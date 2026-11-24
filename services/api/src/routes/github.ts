@@ -50,7 +50,7 @@ const PullRequestSchema = z.object({ number: z.number().int(), url: z.string().u
 
 export async function registerGithubRoutes(app: FastifyInstance, config: AppConfig) {
   const db = app.facilityDb;
-  const factory = () => createGithubClientFactory(config);
+  const factory = () => createGithubClientFactory(config, db);
 
   app.get(
     "/v1/projects/:projectId/kickstart/preview",
