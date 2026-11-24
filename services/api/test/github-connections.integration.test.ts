@@ -322,6 +322,53 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
       (await app.inject({ url: `/v1/github/installations/${base + 1}/repos`, headers })).statusCode,
     ).toBe(404);
   });
+  it("adds only verified installations of the selected App and rejects duplicate or foreign bindings", async () => {
+    const url = `/v1/github/connections/${connectionId}/installations`;
+    const foreign = await app.inject({
+      method: "POST",
+      url,
+      headers: auth(),
+      payload: { installationId: base + 2 },
+    });
+    expect(foreign.statusCode).toBe(400);
+    fake.installations.set(base + 3, { appId: base + 1, owner: `extra-${base}` });
+    const payload = { installationId: base + 3 };
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { authorization: `Bearer ${tokens.other}` },
+          payload,
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { authorization: `Bearer ${tokens.scoped}` },
+          payload,
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect((await app.inject({ method: "POST", url, headers: auth(), payload })).statusCode).toBe(
+      200,
+    );
+    expect((await app.inject({ method: "POST", url, headers: auth(), payload })).statusCode).toBe(
+      409,
+    );
+    const installation = (
+      await db
+        .select()
+        .from(githubInstallations)
+        .where(eq(githubInstallations.installationId, base + 3))
+    )[0];
+    expect(installation?.connectionId).toBe(connectionId);
+    expect(installation?.orgId).toBe("org_local");
+  });
+
   it("enforces connection tenant scope in PostgreSQL and works without a default App", async () => {
     await expect(
       db.insert(githubInstallations).values({
