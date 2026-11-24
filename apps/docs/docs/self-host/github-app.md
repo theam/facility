@@ -177,8 +177,10 @@ wrapper selects the token from an explicit repository flag, PR URL, API reposito
 or the current checkout's origin. It uses the primary repository outside a checkout and rejects
 targets outside the turn's connected repository map. This keeps related checkouts on their own App
 and credentials, including mixed legacy and ID-scoped repositories. If an unfamiliar CLI option
-makes destination parsing ambiguous, set `GH_REPO=owner/repo` explicitly. Option values such as issue
-bodies and titles never select the repository, and the wrapper preserves an explicit `GH_REPO`.
+makes destination parsing ambiguous, or the command is outside the supported `pr`/`issue`/`api`
+grammar, set `GH_REPO=owner/repo` explicitly. Option values such as issue bodies and titles never
+select the repository, and the wrapper preserves an explicit `GH_REPO`. Its inferred target selects
+credentials only; the child command keeps the caller or checkout default destination.
 
 Installation tokens are short-lived and minted when work needs them. Revoking an installation or
 removing a repository stops future credentials and reconciliation; it does not erase existing

@@ -20,6 +20,11 @@ try {
     if (args.some(arg => /^https?:\/\//.test(arg) && !/^https:\/\/(api\.)?github\.com(\/|$)/.test(arg))) fail();
     // Only positional command targets select credentials. Option values are data,
     // even when a body/title happens to contain a GitHub URL or look like -R.
+    // Host checks apply even when a command's option grammar is unknown.
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--hostname' && args[i + 1] !== 'github.com') fail();
+      if (args[i].startsWith('--hostname=') && args[i] !== '--hostname=github.com') fail();
+    }
     const kind = args[0], action = args[1];
     const urlActions = kind === 'pr'
       ? ['checkout', 'checks', 'close', 'comment', 'diff', 'edit', 'lock', 'merge', 'ready', 'reopen', 'review', 'unlock', 'view']
@@ -41,9 +46,11 @@ try {
       '--reason', '--branch', '--match-head-commit', '--subject', '--recover', '--interval', '-i',
       '--add-label', '--remove-label', '--add-assignee', '--remove-assignee', '--add-reviewer', '--remove-reviewer',
       '--add-project', '--remove-project', '--method', '-X', '--field', '-f', '--raw-field', '--input', '--header', '--cache'];
-    let explicit, target, ambiguous = false;
+    const knownCommand = kind === 'api' || (['pr', 'issue'].includes(kind)
+      && [...urlActions, 'create', 'list', 'status'].includes(action));
+    let explicit, target, ambiguous = !knownCommand;
     const positional = [];
-    for (let i = 0; i < args.length; i++) {
+    for (let i = 0; knownCommand && i < args.length; i++) {
       const arg = args[i];
       if (arg === '--') { positional.push(...args.slice(i + 1)); break; }
       if (arg === '--hostname') { if (args[++i] !== 'github.com') fail(); }
@@ -72,21 +79,25 @@ try {
       : urlActions.includes(action) && first.match(/^https:\/\/github\.com\/([a-z0-9_.-]+\/[a-z0-9_.-]+)(?:\/|$)/i);
     if (!ambiguous && match) target = normalize(match[1]);
     if (explicit && target && explicit !== target) fail();
-    let repo = ambiguous ? normalize(process.env.GH_REPO) : target || explicit || (process.env.GH_REPO && normalize(process.env.GH_REPO));
-    if (!repo) {
+    // The child's default destination comes only from caller context, never
+    // from our option parser. gh itself interprets explicit command targets.
+    let contextRepo = process.env.GH_REPO && normalize(process.env.GH_REPO);
+    if (!contextRepo) {
       const options = { encoding: 'utf8', timeout: 2000, maxBuffer: 8192, stdio: ['ignore', 'pipe', 'ignore'] };
       const remote = cp.spawnSync('git', ['remote', 'get-url', 'origin'], options);
       if (remote.status === 0) {
         const origin = remote.stdout.trim().replace(/^git@github\.com:/, '').replace(/^ssh:\/\/git@github\.com\//, '');
-        repo = normalize(origin);
+        contextRepo = normalize(origin);
       } else {
         if (cp.spawnSync('git', ['rev-parse', '--is-inside-work-tree'], options).status === 0) fail();
-        repo = value.primary;
+        contextRepo = value.primary;
       }
     }
+    const repo = ambiguous ? contextRepo : target || explicit || contextRepo;
+    if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(contextRepo) || typeof value.tokens[contextRepo] !== 'string') fail();
     if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/i.test(repo) || typeof value.tokens[repo] !== 'string') fail();
     if (typeof value.gh !== 'string' || !path.isAbsolute(value.gh) || path.resolve(value.gh) === path.resolve(process.argv[1])) fail();
-    const result = cp.spawnSync(value.gh, args, { stdio: 'inherit', env: { ...process.env, GH_REPO: process.env.GH_REPO || repo, GH_TOKEN: value.tokens[repo], GITHUB_TOKEN: value.tokens[repo] } });
+    const result = cp.spawnSync(value.gh, args, { stdio: 'inherit', env: { ...process.env, GH_REPO: process.env.GH_REPO || contextRepo, GH_TOKEN: value.tokens[repo], GITHUB_TOKEN: value.tokens[repo] } });
     process.exit(result.status === null ? 1 : result.status);
   }
   if (process.argv[2] !== 'get') process.exit(0);
