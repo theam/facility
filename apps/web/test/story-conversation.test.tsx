@@ -49,7 +49,7 @@ function exchange(seq: number, id: string, state: StoryTurnSummary["state"] = "s
     turnId: id,
     turn: run,
     author: { kind: "agent", id: "codex:s", name: "builder", handle: null, avatarUrl: null },
-    content: { kind: "final_response", progressMessages: 1, reportedModel: null },
+    content: { kind: "final_response", progressMessages: 0, reportedModel: null },
   });
   return { request, response };
 }
@@ -437,4 +437,248 @@ describe("run activity", () => {
     expect(container.textContent).toContain("Start of this run.");
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+});
+
+it("keeps live progress, a wait, and the follow-up result under the same request", async () => {
+  const initial = exchange(1, "turn-original", "running");
+  initial.response.content = { ...initial.response.content, progressMessages: 1 };
+  const waiting = {
+    ...turn("turn-followup", "queued"),
+    followupOf: "turn-original",
+    triggerType: "followup",
+    scheduledFor: "2026-09-10T00:20:00Z",
+    followupReason: "Waiting for the build to finish",
+    startedAt: null,
+    endedAt: null,
+  };
+  const running = { ...waiting, state: "running", startedAt: at };
+  const finished = { ...running, state: "succeeded", endedAt: at };
+  let followupState: StoryTurnSummary = waiting;
+  let showFinal = false;
+  const fetcher = vi.fn(async (url: string) => {
+    const followup = String(url).includes("turn-followup");
+    const after = Number(new URL(url, "http://example.test").searchParams.get("after"));
+    const run = followup ? followupState : initial.request.turn;
+    const progress = followup
+      ? run?.state === "queued"
+        ? []
+        : ["Checked the finished build", ...(showFinal ? ["Build passed"] : [])]
+      : ["Started the build"];
+    return new Response(
+      JSON.stringify({
+        turn: run,
+        order: "asc",
+        items: progress
+          .map((text, index) => ({
+            seq: index + 1,
+            turn_id: run?.id,
+            kind: "message",
+            text,
+          }))
+          .filter((item) => item.seq > after),
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const render = async (data: StoryConversationPage) => {
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={data}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+  };
+  await render(page([initial.request]));
+  expect(exchangeTexts()[0]).toContain("Started the build");
+  expect(exchangeTexts()[0]).not.toContain("Build passed");
+  expect(container.querySelector("details[open]")).toBeNull();
+
+  const source = turn("turn-original");
+  const withFollowup = (followup: StoryTurnSummary) => {
+    const decorated = { ...source, followup };
+    return [
+      { ...initial.response, body: "I will check again.", turn: decorated },
+      { ...initial.request, turn: decorated },
+    ];
+  };
+  await render(page(withFollowup(waiting)));
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]).toContain("Waiting…");
+  expect(exchangeTexts()[0]).toContain("Waiting for the build to finish");
+  expect(exchangeTexts()[0]).toContain("Next check");
+  expect(exchangeTexts()[0]).not.toContain("Completed");
+
+  followupState = running;
+  await render(page(withFollowup(running)));
+  expect(exchangeTexts()[0]).toContain("Checked the finished build");
+  expect(exchangeTexts()[0]).toContain("Running");
+
+  followupState = finished;
+  showFinal = true;
+  const result = {
+    ...initial.response,
+    id: "followup-result",
+    seq: 3,
+    body: "Build passed",
+    turn: finished,
+    turnId: finished.id,
+  };
+  const reloaded = page([result, ...withFollowup(finished)]);
+  await render(reloaded);
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]?.match(/Build passed/g)).toHaveLength(1);
+
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(reloaded);
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]).toContain("Started the build");
+  expect(exchangeTexts()[0]).toContain("Checked the finished build");
+  expect(exchangeTexts()[0]?.match(/Build passed/g)).toHaveLength(1);
+});
+
+it("loads all completed progress when a background tab becomes visible", async () => {
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  try {
+    const { request, response } = exchange(1, "turn-completed");
+    response.content.progressMessages = 2;
+    const fetcher = vi.fn(async (url: string) => {
+      const after = Number(new URL(url, "http://example.test").searchParams.get("after"));
+      return new Response(
+        JSON.stringify({
+          turn: request.turn,
+          order: "asc",
+          items: [
+            {
+              kind: "message",
+              turn_id: "turn-completed",
+              seq: after + 1,
+              text: after === 0 ? "First saved update" : "Second saved update",
+            },
+          ],
+          has_more: after === 0,
+          next_cursor: after === 0 ? 1 : null,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={page([response, request])}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+
+    async function setVisible(visible: boolean) {
+      await act(async () => {
+        visibility.mockReturnValue(visible ? "visible" : "hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    }
+    await setVisible(true);
+    expect(exchangeTexts()[0]).toContain("First saved update");
+    await setVisible(false);
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await setVisible(true);
+    expect(exchangeTexts()[0]).toContain("Second saved update");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await setVisible(false);
+    await setVisible(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps a second wait and its result in the original exchange", async () => {
+  const original = exchange(1, "turn-root");
+  const first = {
+    ...turn("turn-first"),
+    followupOf: "turn-root",
+    followupRootId: "turn-root",
+  };
+  const second = {
+    ...turn("turn-second", "queued"),
+    createdAt: "2026-09-10T00:03:00Z",
+    followupOf: "turn-first",
+    followupRootId: "turn-root",
+    followupReason: "The job is still running",
+    scheduledFor: "2026-09-10T00:04:00Z",
+    startedAt: null,
+    endedAt: null,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("{}", { status: 503 })),
+  );
+  const withSecond = (secondRun: StoryTurnSummary) => {
+    const firstRun = { ...first, followup: secondRun };
+    const originalRun = { ...turn("turn-root"), followup: firstRun };
+    return [
+      { ...original.request, turn: originalRun },
+      { ...original.response, body: "Started the job", turn: originalRun },
+      {
+        ...original.response,
+        id: "msg3",
+        seq: 3,
+        body: "First check complete",
+        turnId: first.id,
+        turn: firstRun,
+      },
+    ];
+  };
+  const render = async (data: StoryConversationPage) => {
+    await act(async () =>
+      root.render(
+        <StoryConversation
+          projectId="proj"
+          storyId="story"
+          initial={data}
+          waitingTurnIds={[]}
+          canExecute
+        />,
+      ),
+    );
+  };
+  await render(page(withSecond(second)));
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(exchangeTexts()[0]).toContain("First check complete");
+  expect(exchangeTexts()[0]).toContain("The job is still running");
+  expect(exchangeTexts()[0]?.match(/Waiting…/g)).toHaveLength(1);
+  expect(exchangeTexts()[0]).not.toContain("Completed");
+
+  const completed = { ...second, state: "succeeded", startedAt: at, endedAt: at };
+  const result = {
+    ...original.response,
+    id: "msg4",
+    seq: 4,
+    body: "Job finished",
+    turnId: second.id,
+    turn: completed,
+  };
+  const reloaded = page([result], withSecond(completed), 4);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(reloaded);
+  const [onlyExchange] = exchangeTexts();
+  expect(exchangeTexts()).toHaveLength(1);
+  expect(onlyExchange).toContain("Request 1");
+  expect(onlyExchange).toContain("First check complete");
+  expect(onlyExchange?.match(/Job finished/g)).toHaveLength(1);
 });
