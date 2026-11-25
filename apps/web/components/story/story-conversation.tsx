@@ -4,17 +4,19 @@ import { Button, StatusDot } from "@facility/ui";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/markdown";
+import { ConversationProgress } from "@/components/story/conversation-progress";
 import { ExpandableMarkdown } from "@/components/story/expandable-markdown";
 import { LoadMore, type LoadState } from "@/components/story/load-more";
 import { AgentLine, Person } from "@/components/story/participant";
 import { RunActivity } from "@/components/story/run-activity";
 import { CancelTurnButton } from "@/components/story/workspace-story-controls";
-import type { StoryConversationPage, StoryMessage } from "@/lib/api";
+import type { StoryConversationPage, StoryMessage, StoryTurnSummary } from "@/lib/api";
 import { clientApi } from "@/lib/client-api";
 import { storyConversationPath } from "@/lib/story-paths";
 import { requestPlanProposal } from "@/lib/story-plan-events";
 import {
   type Exchange,
+  exchangeKey,
   formatDurationBetween,
   formatTime,
   groupExchanges,
@@ -172,7 +174,7 @@ export function StoryConversation({
                 exchange={exchange}
                 projectId={projectId}
                 storyId={storyId}
-                waitingForReply={exchange.turn ? waitingTurnIds.includes(exchange.turn.id) : false}
+                waitingTurnIds={waitingTurnIds}
                 canExecute={canExecute}
                 canProposePlan={canProposePlan}
                 focusedId={focusedId}
@@ -192,15 +194,11 @@ export function StoryConversation({
   );
 }
 
-function exchangeKey(message: StoryMessage) {
-  return message.turnId ? `turn:${message.turnId}` : `message:${message.id}`;
-}
-
 function ExchangeCard({
   exchange,
   projectId,
   storyId,
-  waitingForReply,
+  waitingTurnIds,
   canExecute,
   canProposePlan,
   focusedId,
@@ -208,15 +206,17 @@ function ExchangeCard({
   exchange: Exchange;
   projectId: string;
   storyId: string;
-  waitingForReply: boolean;
+  waitingTurnIds: string[];
   canExecute: boolean;
   canProposePlan: boolean;
   focusedId?: string;
 }) {
-  const { turn, request, response } = exchange;
-  const status = runStatus(turn ?? null, { waitingForReply });
-  const agentName = turn?.agentName ?? request?.requestedAgentName ?? "agent";
-  const active = turn ? ["queued", "running"].includes(turn.state) : false;
+  const { turn, request, response, followups } = exchange;
+  const latest = followups.at(-1)?.turn ?? turn;
+  const status = runStatus(latest ?? null, {
+    waitingForReply: !!latest && waitingTurnIds.includes(latest.id),
+  });
+  const agentName = turn?.agentName ?? latest?.agentName ?? request?.requestedAgentName ?? "agent";
   return (
     <article
       className="flex flex-col border-b border-(--line)"
@@ -235,99 +235,173 @@ function ExchangeCard({
           focused={message.id === focusedId}
         />
       ))}
-      <div
-        id={response ? `message-${response.id}` : undefined}
-        tabIndex={-1}
-        className="flex min-w-0 scroll-mt-20 flex-col gap-3 py-4 pl-4 sm:pl-6"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <AgentLine
-            name={agentName}
-            turn={turn ?? null}
-            reportedModel={response?.content.reportedModel ?? null}
-          />
-          <div className="flex flex-wrap items-center gap-3 text-[11.5px] text-(--mut)">
+      {turn || request || response ? (
+        <RunBlock
+          key={turn?.id ?? request?.id}
+          projectId={projectId}
+          storyId={storyId}
+          agentName={agentName}
+          turn={turn}
+          response={response}
+          waitingForReply={!!turn && waitingTurnIds.includes(turn.id)}
+          canExecute={canExecute}
+          canProposePlan={canProposePlan && followups.length === 0}
+          focusedId={focusedId}
+          hasFollowup={followups.length > 0}
+        />
+      ) : null}
+      {followups.map(({ turn: followup, response: followupResponse }) => (
+        <RunBlock
+          key={followup.id}
+          projectId={projectId}
+          storyId={storyId}
+          agentName={agentName}
+          turn={followup}
+          response={followupResponse}
+          waitingForReply={waitingTurnIds.includes(followup.id)}
+          canExecute={canExecute}
+          canProposePlan={canProposePlan && latest?.id === followup.id}
+          focusedId={focusedId}
+          hasFollowup={latest?.id !== followup.id}
+        />
+      ))}
+    </article>
+  );
+}
+
+function RunBlock({
+  projectId,
+  storyId,
+  agentName,
+  turn,
+  response,
+  waitingForReply,
+  canExecute,
+  canProposePlan,
+  focusedId,
+  hasFollowup,
+}: {
+  projectId: string;
+  storyId: string;
+  agentName: string;
+  turn: StoryTurnSummary | null;
+  response: StoryMessage | null;
+  waitingForReply: boolean;
+  canExecute: boolean;
+  canProposePlan: boolean;
+  focusedId?: string;
+  hasFollowup?: boolean;
+}) {
+  const status = runStatus(turn, { waitingForReply });
+  const active = turn?.state === "queued" || turn?.state === "running";
+  const nextCheck = active && turn?.state === "queued" ? turn.scheduledFor : undefined;
+  return (
+    <div
+      id={response ? `message-${response.id}` : undefined}
+      tabIndex={-1}
+      className="flex min-w-0 scroll-mt-20 flex-col gap-3 py-4 pl-4 sm:pl-6"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <AgentLine
+          name={agentName}
+          turn={turn ?? null}
+          reportedModel={response?.content.reportedModel ?? null}
+        />
+        <div className="flex flex-wrap items-center gap-3 text-[11.5px] text-(--mut)">
+          {!hasFollowup ? (
             <span className="inline-flex items-center gap-2">
               <StatusDot tone={status.tone} pulse={status.pulse} />
               <span className={status.tone === "bad" ? "text-(--bad)" : "text-(--ink)"}>
                 {status.label}
               </span>
             </span>
-            {turn?.endedAt ? (
-              <time dateTime={turn.endedAt}>
-                {formatTime(turn.endedAt)}
-                {formatDurationBetween(turn.startedAt, turn.endedAt)
-                  ? ` · ${formatDurationBetween(turn.startedAt, turn.endedAt)}`
-                  : ""}
-              </time>
-            ) : turn?.startedAt ? (
-              <time dateTime={turn.startedAt}>since {formatTime(turn.startedAt)}</time>
-            ) : null}
-            {canExecute && active && turn ? (
-              <CancelTurnButton projectId={projectId} storyId={storyId} turnId={turn.id} inline />
-            ) : null}
-          </div>
+          ) : null}
+          {turn?.endedAt ? (
+            <time dateTime={turn.endedAt}>
+              {formatTime(turn.endedAt)}
+              {formatDurationBetween(turn.startedAt, turn.endedAt)
+                ? ` · ${formatDurationBetween(turn.startedAt, turn.endedAt)}`
+                : ""}
+            </time>
+          ) : turn?.startedAt ? (
+            <time dateTime={turn.startedAt}>since {formatTime(turn.startedAt)}</time>
+          ) : null}
+          {canExecute && active && turn ? (
+            <CancelTurnButton projectId={projectId} storyId={storyId} turnId={turn.id} inline />
+          ) : null}
         </div>
-        {response ? (
-          <ResponseBody message={response} focused={response.id === focusedId} />
-        ) : (
-          <p className="text-[13px] leading-relaxed text-(--mut)">{status.detail}</p>
-        )}
-        {response && canProposePlan ? (
-          <div>
-            <Button
-              size="sm"
-              onClick={() =>
-                requestPlanProposal({
-                  projectId,
-                  storyId,
-                  messageId: response.id,
-                  markdown: response.body,
-                  agentName: turn?.agentName,
-                })
-              }
-            >
-              Propose as plan
-            </Button>
-          </div>
-        ) : null}
-        {waitingForReply ? (
-          <div className="flex flex-wrap items-center gap-3 text-(--human)">
-            <p className="text-[13px]">
-              <span className="font-mono">{agentName}</span> is waiting for your answer.
-            </p>
-            {canExecute ? (
-              <Button size="sm" onClick={() => requestCompose(agentName)}>
-                Reply
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-        {turn?.state === "failed" && turn.error ? (
-          <details className="text-xs text-(--dim)">
-            <summary className="cursor-pointer">Error details</summary>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
-              {turn.error}
-            </pre>
-          </details>
-        ) : null}
-        {turn && !active ? (
-          <RunActivity
-            projectId={projectId}
-            storyId={storyId}
-            turnId={turn.id}
-            progressMessages={response?.content.progressMessages ?? null}
-          />
-        ) : turn ? (
-          <RunActivity
-            projectId={projectId}
-            storyId={storyId}
-            turnId={turn.id}
-            progressMessages={null}
-          />
-        ) : null}
       </div>
-    </article>
+      {turn &&
+      (turn.startedAt || active) &&
+      (active || !response || (response.content.progressMessages ?? 0) > 0) ? (
+        <ConversationProgress
+          key={turn.id}
+          projectId={projectId}
+          storyId={storyId}
+          turnId={turn.id}
+          state={turn.state}
+          finalResponse={response?.body}
+        />
+      ) : null}
+      {response ? (
+        <ResponseBody message={response} focused={response.id === focusedId} />
+      ) : (
+        <p className="text-[13px] leading-relaxed text-(--mut)">
+          {nextCheck ? (
+            <>
+              Next check <time dateTime={nextCheck}>{formatTime(nextCheck)}</time>.{" "}
+            </>
+          ) : null}
+          {status.detail}
+        </p>
+      )}
+      {response && canProposePlan ? (
+        <div>
+          <Button
+            size="sm"
+            onClick={() =>
+              requestPlanProposal({
+                projectId,
+                storyId,
+                messageId: response.id,
+                markdown: response.body,
+                agentName: turn?.agentName,
+              })
+            }
+          >
+            Propose as plan
+          </Button>
+        </div>
+      ) : null}
+      {waitingForReply ? (
+        <div className="flex flex-wrap items-center gap-3 text-(--human)">
+          <p className="text-[13px]">
+            <span className="font-mono">{agentName}</span> is waiting for your answer.
+          </p>
+          {canExecute ? (
+            <Button size="sm" onClick={() => requestCompose(agentName)}>
+              Reply
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {turn?.state === "failed" && turn.error ? (
+        <details className="text-xs text-(--dim)">
+          <summary className="cursor-pointer">Error details</summary>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
+            {turn.error}
+          </pre>
+        </details>
+      ) : null}
+      {turn ? (
+        <RunActivity
+          projectId={projectId}
+          storyId={storyId}
+          turnId={turn.id}
+          progressMessages={response?.content.progressMessages ?? null}
+        />
+      ) : null}
+    </div>
   );
 }
 
