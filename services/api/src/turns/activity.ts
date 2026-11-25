@@ -70,6 +70,32 @@ export function presentTurnEvent(event: StoredTurnEvent): ActivityItem {
   };
 }
 
+/**
+ * Conversation only gets engine-authored prose. In particular, a Claude
+ * assistant event can carry text and tool inputs in the same content array.
+ */
+export function presentTurnProgress(event: StoredTurnEvent): ActivityItem | null {
+  const data = record(event.data);
+  if (data.truncated === true) return null;
+  const prose =
+    event.type === "engine.assistant"
+      ? contentText(record(data.message).content)
+      : event.type === "engine.item.completed" && record(data.item).type === "agent_message"
+        ? text(record(data.item).text)
+        : null;
+  if (!prose) return null;
+  return {
+    seq: event.seq,
+    turn_id: event.turnId,
+    type: event.type,
+    kind: "message",
+    title: "Agent update",
+    ...bound(prose),
+    size_bytes: Buffer.byteLength(prose, "utf8"),
+    created_at: event.createdAt,
+  };
+}
+
 function describe(
   type: string,
   data: Record<string, unknown>,
@@ -88,6 +114,8 @@ function describe(
   switch (type) {
     case "turn.workflow_held":
       return { kind: "lifecycle", title: "Workflow held this run", text: text(data.reason) };
+    case "turn.followup_requested":
+      return { kind: "lifecycle", title: "Follow-up requested", text: text(data.reason) };
     case "turn.deferred":
       return {
         kind: "lifecycle",

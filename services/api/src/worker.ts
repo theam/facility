@@ -13,6 +13,7 @@ import type { StoryWorkspaceService } from "./stories/service.js";
 import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
 import { configureTurnQueue } from "./turn-queue.js";
+import { FOLLOWUP_TRIGGER } from "./turns/followup.js";
 import { ecsTaskProtection, WorkerTurnGuard } from "./worker-task-protection.js";
 
 const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
@@ -75,7 +76,9 @@ export async function startWorker() {
     TURN_LEASE_TIMEOUT_MS,
     (turn) => storyDomain.dispatcher.activateQueuedSuccessor(turn),
   );
-  const queuedAtStartup = await recoverQueuedTurns(db, (queue, data) => boss.send(queue, data));
+  const queuedAtStartup = await recoverQueuedTurns(db, (queue, data, options) =>
+    boss.send(queue, data, options ?? {}),
+  );
   await storyDomain.consultations.recover();
   await recoverPendingConsultations(storyDomain.consultations, (queue, data) =>
     boss.send(queue, data),
@@ -195,8 +198,8 @@ export async function startWorker() {
           TURN_LEASE_TIMEOUT_MS,
           (turn) => storyDomain.dispatcher.activateQueuedSuccessor(turn),
         );
-        const recoveredTurns = await recoverQueuedTurns(db, (name, payload) =>
-          boss.send(name, payload),
+        const recoveredTurns = await recoverQueuedTurns(db, (name, payload, options) =>
+          boss.send(name, payload, options ?? {}),
         );
         const suspendedWorkspaces = await storyDomain.stories.suspendFailedWorkspaces();
         const recoveredConsultations = await storyDomain.consultations.recover();
@@ -276,11 +279,20 @@ export async function recoverPendingTitles(
 
 export async function recoverQueuedTurns(
   db: FacilityDb,
-  enqueue: (queue: string, data: Record<string, unknown>) => Promise<unknown>,
+  enqueue: (
+    queue: string,
+    data: Record<string, unknown>,
+    options?: PgBoss.SendOptions,
+  ) => Promise<unknown>,
   limit = 1_000,
 ) {
   const queued = await db
-    .select({ id: turns.id, orgId: turns.orgId, projectId: turns.projectId })
+    .select({
+      id: turns.id,
+      orgId: turns.orgId,
+      projectId: turns.projectId,
+      triggerType: turns.triggerType,
+    })
     .from(turns)
     .where(
       and(
@@ -291,11 +303,20 @@ export async function recoverQueuedTurns(
     .orderBy(asc(turns.createdAt))
     .limit(limit);
   for (const turn of queued) {
-    await enqueue("turns.dispatch", {
+    const payload = {
       orgId: turn.orgId,
       projectId: turn.projectId,
       turnId: turn.id,
-    });
+    };
+    // Concurrent sweeps share a delivery window. A later sweep can redeliver
+    // after a queue failure, while the durable turn claim fences execution.
+    if (turn.triggerType === FOLLOWUP_TRIGGER)
+      await enqueue("turns.dispatch", payload, {
+        singletonKey: turn.id,
+        singletonSeconds: 60,
+        retryLimit: 2,
+      });
+    else await enqueue("turns.dispatch", payload);
   }
   return queued.length;
 }
