@@ -5,6 +5,7 @@ import pino from "pino";
 import { readConfig } from "./config.js";
 import { createGithubClientFactory } from "./github/client.js";
 import { registerGithubWebhookWorker } from "./github/webhook-worker.js";
+import { expireIdempotencyRecords, sanitizeSensitiveIdempotencyRecords } from "./idempotency.js";
 import { CostBudgetService } from "./insights/costs.js";
 import { reconciliationPage } from "./reconciliation.js";
 import type { StoryConsultationService } from "./stories/consultations.js";
@@ -66,6 +67,8 @@ export async function startWorker() {
     retryLimit: 0,
   });
   await boss.updateQueue("stories.complete", { name: "stories.complete", retryLimit: 0 });
+  const sanitizedIdempotencyAtStartup = await sanitizeSensitiveIdempotencyRecords(db);
+  const expiredIdempotencyAtStartup = await expireIdempotencyRecords(db);
   const interruptedAtStartup = await recoverInterruptedTurns(
     db,
     storyDomain.stories,
@@ -188,6 +191,8 @@ export async function startWorker() {
         }
         result = { ...outcome, title: undefined };
       } else if (queue === "agent.schedules") {
+        const sanitizedIdempotency = await sanitizeSensitiveIdempotencyRecords(db);
+        const expiredIdempotency = await expireIdempotencyRecords(db);
         const interruptedTurns = await recoverInterruptedTurns(
           db,
           storyDomain.stories,
@@ -214,6 +219,8 @@ export async function startWorker() {
         const recoveredReviewCycles = await storyDomain.reviewCycles.recover();
         result = {
           ...(await storyDomain.scheduler.tick()),
+          sanitizedIdempotency,
+          expiredIdempotency,
           interruptedTurns,
           recoveredTurns,
           suspendedWorkspaces,
@@ -240,6 +247,8 @@ export async function startWorker() {
       previewLifecycleAtStartup,
       recoveredPreviewsAtStartup,
       recoveredCompletionAtStartup,
+      sanitizedIdempotencyAtStartup,
+      expiredIdempotencyAtStartup,
     },
     "facility worker started",
   );
