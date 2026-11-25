@@ -68,6 +68,8 @@ export type PhaseInput = {
 
 export type PhaseResult = { phase: WorkPhase; reason: PhaseReason };
 
+export const RESULT_REVIEW_ATTENTION = "agent_ready_review";
+
 export function isGithubIssueStory(story: { provider: string; externalId: string }): boolean {
   return story.provider === "github" && /^issue:[1-9]\d*$/.test(story.externalId);
 }
@@ -87,7 +89,8 @@ export function derivePhase(input: PhaseInput): PhaseResult {
   if (input.activeTurn?.state === "running") return { phase: "in_progress", reason: "running" };
   if (input.activeTurn?.state === "queued") return { phase: "in_progress", reason: "queued" };
   if (input.issue?.state === "closed") return { phase: "done", reason: "issue_closed" };
-  if (input.openAttention.length > 0) return { phase: "attention", reason: "attention" };
+  if (input.openAttention.some(({ kind }) => kind !== RESULT_REVIEW_ATTENTION))
+    return { phase: "attention", reason: "attention" };
   if (pull?.state === "open" && pull.ciState === "failure") {
     return { phase: "attention", reason: "checks_failing" };
   }
@@ -104,6 +107,8 @@ export function derivePhase(input: PhaseInput): PhaseResult {
       reason: pull.reviewState === "approved" ? "approved" : "awaiting_review",
     };
   }
+  if (input.openAttention.some(({ kind }) => kind === RESULT_REVIEW_ATTENTION))
+    return { phase: "review", reason: "awaiting_review" };
   if (story) {
     // A closed, unmerged pull request is not delivery: the story keeps its own progress.
     if (pull?.state === "closed") return { phase: "in_progress", reason: "pull_request_closed" };

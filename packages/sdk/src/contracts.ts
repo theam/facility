@@ -371,6 +371,7 @@ export type WorkspaceStoryBundle = {
     id: string;
     turnId: string | null;
     kind: string;
+    resultMessageId?: string | null;
     title: string;
     detail: string | null;
     status: "open" | "resolved";
