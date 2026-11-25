@@ -74,7 +74,8 @@ the web, API, and MCP origins.
 
 Generate a new one-time handoff. Preview cookies expire and can be revoked. Each HTTP and WebSocket
 request revalidates membership, workspace, and service, so removing access should stop an existing
-session.
+session. An open WebSocket, such as a dev server's hot reload, is rechecked every 30 seconds: close
+code 4401 means access was revoked and 4408 means the session expired. Open the preview again.
 
 ## Cost appears unavailable
 

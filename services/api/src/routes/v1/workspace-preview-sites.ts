@@ -10,6 +10,7 @@ import {
   SITE_COOKIE,
   SITE_PREFIX,
 } from "../../workspaces/preview-sites.js";
+import { PreviewSocketWatch } from "../../workspaces/preview-socket-watch.js";
 
 const reservedCookie = (name: string) =>
   name === SITE_COOKIE || name.startsWith("facility_") || name.startsWith("__Host-facility");
@@ -95,6 +96,9 @@ function siteRequest(config: AppConfig, request: FastifyRequest) {
 
 export async function registerWorkspacePreviewSiteRoutes(root: FastifyInstance, config: AppConfig) {
   const previews = root.storyDomain.previews;
+  const sockets = new PreviewSocketWatch((sessionId, token) =>
+    previews.authorize(sessionId, token),
+  );
   await root.register(async (app) => {
     // Keep form, multipart, RSC/server-action and JSON payloads byte-for-byte.
     app.removeAllContentTypeParsers();
@@ -108,7 +112,7 @@ export async function registerWorkspacePreviewSiteRoutes(root: FastifyInstance, 
       const session = await previews.authorize(input.sessionId, input.token);
       assertSiteSession(input.site, session);
       const target = await previews.target(session, input.wirePath);
-      return { ...input, target };
+      return { ...input, session, target };
     };
     const proxy = async (request: FastifyRequest, reply: FastifyReply) => {
       const input = siteRequest(config, request);
@@ -204,8 +208,14 @@ export async function registerWorkspacePreviewSiteRoutes(root: FastifyInstance, 
         });
         socket.on("close", () => upstream?.terminate());
         void authorize(request)
-          .then(({ site, target }) => {
+          .then(({ site, session, target, token }) => {
             if (socket.readyState !== WebSocket.OPEN) return;
+            // The upgrade's authorization is re-run for as long as the socket is open.
+            const unwatch = sockets.watch(session, token, (code, reason) => {
+              socket.close(code, reason);
+              upstream?.terminate();
+            });
+            socket.on("close", unwatch);
             const url = new URL(target.url);
             url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
             const protocols = String(request.headers["sec-websocket-protocol"] ?? "")

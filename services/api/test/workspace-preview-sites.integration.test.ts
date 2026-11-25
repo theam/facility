@@ -2,12 +2,16 @@ import { createServer } from "node:http";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { registerWorkspacePreviewSiteRoutes } from "../src/routes/v1/workspace-preview-sites.js";
 import type { StoryDomain } from "../src/story-domain.js";
 import type { AppConfig } from "../src/types.js";
 import { assertSiteSession, SITE_COOKIE } from "../src/workspaces/preview-sites.js";
+import {
+  PREVIEW_REVALIDATE_MS,
+  PREVIEW_SOCKET_REVOKED,
+} from "../src/workspaces/preview-socket-watch.js";
 
 const site = {
   id: "app",
@@ -79,7 +83,12 @@ describe("stable preview HTTP and WebSocket integration", () => {
         },
         authorize: async (id: string, received: string) => {
           if (id !== sessionId || received !== token || state !== "active") throw invalid();
-          return { ...site, id, workspaceId: state === "active" ? site.workspaceId : "other" };
+          return {
+            ...site,
+            id,
+            workspaceId: state === "active" ? site.workspaceId : "other",
+            expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+          };
         },
         target: async (_session: unknown, path: string) => ({
           url: new URL(path, backendOrigin),
@@ -204,5 +213,34 @@ describe("stable preview HTTP and WebSocket integration", () => {
       socket.once("error", reject);
     });
     expect(result.trim()).toBe("app_session=authenticated");
+  });
+  it("closes an open WebSocket and its upstream once the grant is revoked", async () => {
+    // Earlier sockets of this session must be gone, or the new one joins their watch.
+    await expect.poll(() => wsServer.clients.size).toBe(0);
+    // Only the revalidation clock is faked; the sockets run for real.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const socket = new WebSocket(`${origin.replace("http:", "ws:")}${prefix}/socket`, {
+        headers,
+      });
+      const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+        socket.once("close", (code, reason) => resolve({ code, reason: reason.toString() })),
+      );
+      await new Promise((resolve) => socket.once("open", resolve));
+      socket.send("ping");
+      await new Promise((resolve) => socket.once("message", resolve));
+      await expect.poll(() => wsServer.clients.size).toBe(1);
+
+      state = "revoked";
+      await vi.advanceTimersByTimeAsync(PREVIEW_REVALIDATE_MS);
+      await expect(closed).resolves.toEqual({
+        code: PREVIEW_SOCKET_REVOKED,
+        reason: "Preview access revoked",
+      });
+      await expect.poll(() => wsServer.clients.size).toBe(0);
+    } finally {
+      state = "active";
+      vi.useRealTimers();
+    }
   });
 });

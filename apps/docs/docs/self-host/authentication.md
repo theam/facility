@@ -144,8 +144,10 @@ expiry, and revocation status.
 
 The preview origin must be on a different registered site from Facility control origins. Opening a
 service creates a one-time handoff; consuming it sets a host-only preview cookie. The preview proxy
-rechecks membership on each HTTP request and WebSocket upgrade, so revoking membership, the
-session, or the workspace stops continued access.
+rechecks membership on each HTTP request and WebSocket upgrade, and every 30 seconds while a
+WebSocket stays open, so revoking membership, the session, or the workspace stops continued access.
+An open WebSocket closes with code 4401 within 30 seconds of losing access, and with 4408 when the
+session expires.
 
 Never send a Facility API key, OAuth token, or control-plane session cookie to the application
 running inside a preview.
