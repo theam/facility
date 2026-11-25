@@ -49,6 +49,7 @@ export function githubIssueCommandMatches(
 export async function githubSenderCanStartAgent(input: {
   factory: GithubClientFactory;
   installationId: number;
+  githubRepositoryId?: number | null;
   owner: string;
   repo: string;
   sender: unknown;
@@ -62,7 +63,7 @@ export async function githubSenderCanStartAgent(input: {
     return false;
   }
   try {
-    const client = await input.factory(input.installationId);
+    const client = await input.factory(input.installationId, input.githubRepositoryId);
     if (!client.request) return false;
     const result = await client.request(
       "GET /repos/{owner}/{repo}/collaborators/{username}/permission",

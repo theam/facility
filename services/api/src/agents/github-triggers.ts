@@ -2,15 +2,21 @@ import type { AgentTrigger } from "@facility/agents";
 import {
   auditEvents,
   type FacilityDb,
+  githubConnections,
   githubInstallations,
   githubWebhookEvents,
   projectRepositories,
   projects,
   stories,
 } from "@facility/db";
-import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { GithubClientFactory } from "../github/client.js";
 import type { GithubMirrorService } from "../github/mirror.js";
+import {
+  type GithubRepositoryBinding,
+  GithubRepositoryBindingChanged,
+  githubPayloadMatchesRepository,
+} from "../github/repository-binding.js";
 import { storyDeliversThroughCycle } from "../stories/review-cycle-rules.js";
 import type { StoryWorkspaceService } from "../stories/service.js";
 import { workflowPolicyFromSettings } from "../stories/workflow-policy.js";
@@ -35,6 +41,7 @@ type GithubEvent = {
   orgId: string;
   projectId?: string;
   repositoryId?: string;
+  installationId?: string;
   eventType: string;
   payload: Record<string, unknown>;
 };
@@ -61,7 +68,58 @@ export class GithubAgentTriggerService {
         .limit(1)
     )[0];
     if (!event?.verified) return { matched: 0, queued: 0, merged: 0 };
-    if (event.projectId && !event.repositoryId) return { matched: 0, queued: 0, merged: 0 };
+    const binding =
+      event.projectId && event.repositoryId && event.installationId
+        ? (
+            await this.db
+              .select({
+                id: projectRepositories.id,
+                githubRepositoryId: projectRepositories.githubRepositoryId,
+              })
+              .from(projectRepositories)
+              .innerJoin(
+                githubInstallations,
+                and(
+                  eq(githubInstallations.id, projectRepositories.installationId),
+                  eq(githubInstallations.orgId, projectRepositories.orgId),
+                ),
+              )
+              .leftJoin(
+                githubConnections,
+                and(
+                  eq(githubConnections.id, githubInstallations.connectionId),
+                  eq(githubConnections.orgId, githubInstallations.orgId),
+                ),
+              )
+              .where(
+                and(
+                  eq(projectRepositories.orgId, event.orgId),
+                  eq(projectRepositories.projectId, event.projectId),
+                  eq(projectRepositories.id, event.repositoryId),
+                  eq(projectRepositories.installationId, event.installationId),
+                  isNull(githubInstallations.suspendedAt),
+                  or(
+                    isNull(githubInstallations.connectionId),
+                    and(isNotNull(githubConnections.id), isNull(githubConnections.disabledAt)),
+                  ),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : undefined;
+    if (
+      !binding ||
+      !githubPayloadMatchesRepository(
+        binding.githubRepositoryId,
+        event.payload as Record<string, unknown>,
+      )
+    ) {
+      await this.db
+        .update(githubWebhookEvents)
+        .set({ processedAt: new Date(), error: null })
+        .where(eq(githubWebhookEvents.id, event.id));
+      return { matched: 0, queued: 0, merged: 0 };
+    }
     return this.processInbound(event);
   }
 
@@ -72,6 +130,7 @@ export class GithubAgentTriggerService {
     const binding = {
       projectId: event.projectId ?? undefined,
       repositoryId: event.repositoryId ?? undefined,
+      installationId: event.installationId ?? undefined,
     };
     const receiptScope = and(
       eq(githubWebhookEvents.id, inboundEventId),
@@ -98,6 +157,13 @@ export class GithubAgentTriggerService {
         .where(receiptScope);
       return result;
     } catch (error) {
+      if (error instanceof GithubRepositoryBindingChanged) {
+        await this.db
+          .update(githubWebhookEvents)
+          .set({ processedAt: new Date(), error: null })
+          .where(receiptScope);
+        return { matched: 0, queued: 0, merged: 0 };
+      }
       // Provider errors may contain credential-bearing request headers; persist only a safe code.
       await this.db
         .update(githubWebhookEvents)
@@ -121,6 +187,7 @@ export class GithubAgentTriggerService {
           id: projects.id,
           orgId: projects.orgId,
           repositoryId: projectRepositories.id,
+          githubRepositoryId: projectRepositories.githubRepositoryId,
           installationId: projectRepositories.installationId,
           settings: projects.settings,
         })
@@ -137,6 +204,9 @@ export class GithubAgentTriggerService {
             eq(projectRepositories.orgId, event.orgId),
             event.projectId ? eq(projectRepositories.projectId, event.projectId) : undefined,
             event.repositoryId ? eq(projectRepositories.id, event.repositoryId) : undefined,
+            event.installationId
+              ? eq(projectRepositories.installationId, event.installationId)
+              : undefined,
             eq(projectRepositories.owner, owner),
             eq(projectRepositories.name, name),
             eq(projects.status, "active"),
@@ -144,10 +214,24 @@ export class GithubAgentTriggerService {
         )
         .limit(1)
     )[0];
-    if (!project) return { matched: 0, queued: 0, merged: 0 };
+    if (!project || !githubPayloadMatchesRepository(project.githubRepositoryId, event.payload))
+      return { matched: 0, queued: 0, merged: 0 };
+
+    const expectedGithubBinding: GithubRepositoryBinding | undefined = project.installationId
+      ? {
+          repositoryId: project.repositoryId,
+          installationId: project.installationId,
+          githubRepositoryId: project.githubRepositoryId,
+        }
+      : undefined;
 
     if (isMergedPullRequest(event)) {
-      const merged = await this.markMerged(project.id, project.repositoryId, event);
+      const merged = await this.markMerged(
+        project.id,
+        project.repositoryId,
+        event,
+        expectedGithubBinding,
+      );
       return { matched: 0, queued: 0, merged };
     }
 
@@ -163,6 +247,7 @@ export class GithubAgentTriggerService {
     );
     if (linkedStory && eventIdentity.pullRequestNumber) {
       await this.storiesService.associatePullRequest({
+        expectedGithubBinding,
         orgId: event.orgId,
         projectId: project.id,
         storyId: linkedStory.id,
@@ -231,6 +316,7 @@ export class GithubAgentTriggerService {
         !(await githubSenderCanStartAgent({
           factory: this.githubFactory,
           installationId: installation.installationId,
+          githubRepositoryId: project.githubRepositoryId,
           owner,
           repo: name,
           sender: event.payload.sender,
@@ -257,6 +343,7 @@ export class GithubAgentTriggerService {
     let queued = 0;
     for (const { manifest, trigger } of matches) {
       const result = await this.storiesService.start({
+        expectedGithubBinding,
         orgId: event.orgId,
         projectId: project.id,
         repositoryId: project.repositoryId,
@@ -273,6 +360,7 @@ export class GithubAgentTriggerService {
       });
       if (eventIdentity.pullRequestNumber) {
         await this.storiesService.associatePullRequest({
+          expectedGithubBinding,
           orgId: event.orgId,
           projectId: project.id,
           storyId: result.story.id,
@@ -302,7 +390,12 @@ export class GithubAgentTriggerService {
     return { matched: 0, queued: 0, merged: 0 };
   }
 
-  private async markMerged(projectId: string, repositoryId: string, event: GithubEvent) {
+  private async markMerged(
+    projectId: string,
+    repositoryId: string,
+    event: GithubEvent,
+    expectedGithubBinding?: GithubRepositoryBinding,
+  ) {
     const pullRequest = object(event.payload.pull_request);
     const number = numberValue(pullRequest.number);
     const branch = string(object(pullRequest.head).ref);
@@ -316,6 +409,7 @@ export class GithubAgentTriggerService {
     );
     if (!story || story.deletedAt) return 0;
     await this.storiesService.markMerged({
+      expectedGithubBinding,
       orgId: event.orgId,
       projectId,
       storyId: story.id,

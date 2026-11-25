@@ -84,7 +84,7 @@ export class ReviewCycleSource {
     const repository = await this.files.identity(scope, pull.repositoryId, db);
     if (pull.repository.toLowerCase() !== `${repository.owner}/${repository.name}`.toLowerCase())
       throw new ReviewCycleStop("A connected repository changed during review.");
-    const client = await this.factory(repository.installationNumber);
+    const client = await this.factory(repository.installationNumber, repository.githubRepositoryId);
     if (!client.request) throw new ReviewCycleStop("GitHub evidence is unavailable.");
     signal.throwIfAborted();
     const args = {
@@ -157,7 +157,7 @@ export class ReviewCycleSource {
     const repository = await this.files.identity(scope, pull.repositoryId);
     if (pull.repository.toLowerCase() !== `${repository.owner}/${repository.name}`.toLowerCase())
       throw new ReviewCycleStop("A connected repository changed during review.");
-    const client = await this.factory(repository.installationNumber);
+    const client = await this.factory(repository.installationNumber, repository.githubRepositoryId);
     if (!client.request) throw new ReviewCycleStop("GitHub is unavailable for this repository.");
     const args = {
       owner: repository.owner,

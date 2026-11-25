@@ -82,6 +82,7 @@ describe("authoritative GitHub sender permission", () => {
       input: {
         factory,
         installationId: 123,
+        githubRepositoryId: 456,
         owner: "acme",
         repo: "app",
         sender: { type: "User", login: "contributor" },
@@ -95,7 +96,7 @@ describe("authoritative GitHub sender permission", () => {
   ])("admits current %s access through the scoped installation", async (permission) => {
     const { request, factory, input } = fixture(permission);
     await expect(githubSenderCanStartAgent(input)).resolves.toBe(true);
-    expect(factory).toHaveBeenCalledWith(123);
+    expect(factory).toHaveBeenCalledWith(123, 456);
     expect(request).toHaveBeenCalledWith(
       "GET /repos/{owner}/{repo}/collaborators/{username}/permission",
       {
@@ -104,6 +105,14 @@ describe("authoritative GitHub sender permission", () => {
         username: "contributor",
       },
     );
+  });
+
+  it("retains legacy permission lookups without a repository pin", async () => {
+    const { factory, input } = fixture();
+    await expect(
+      githubSenderCanStartAgent({ ...input, githubRepositoryId: undefined }),
+    ).resolves.toBe(true);
+    expect(factory).toHaveBeenCalledWith(123, undefined);
   });
 
   it.each([

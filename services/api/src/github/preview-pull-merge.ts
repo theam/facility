@@ -10,7 +10,9 @@ const pullSnapshot = z.object({
   number: z.number().int().positive(),
   merged: z.boolean(),
   head: z.object({ sha }),
-  base: z.object({ repo: z.object({ full_name: z.string() }) }),
+  base: z.object({
+    repo: z.object({ full_name: z.string(), id: z.number().int().positive().optional() }),
+  }),
   merge_commit_sha: sha.nullable(),
 });
 
@@ -98,6 +100,8 @@ export async function readPreviewPullMerge(
   if (!parsed.success) throw unavailable();
   const pull = parsed.data;
   if (
+    (repository.githubRepositoryId != null &&
+      pull.base.repo.id !== repository.githubRepositoryId) ||
     pull.number !== target.pullNumber ||
     pull.base.repo.full_name.toLowerCase() !== key ||
     pull.head.sha.toLowerCase() !== target.headSha.toLowerCase()

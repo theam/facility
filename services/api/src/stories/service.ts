@@ -39,6 +39,10 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import {
+  assertGithubRepositoryBinding,
+  type GithubRepositoryBinding,
+} from "../github/repository-binding.js";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
 import {
   deliveryNeedsReview,
@@ -87,6 +91,7 @@ export type StoryActor = { type: "user" | "service" | "system"; id: string };
 export type StoryTitleSource = "user" | "github" | "schedule" | "pending" | "fallback";
 
 export type StartStoryInput = {
+  expectedGithubBinding?: GithubRepositoryBinding;
   orgId: string;
   projectId: string;
   repositoryId?: string;
@@ -164,6 +169,7 @@ export class StoryServiceError extends Error {
 }
 
 type QueuedMessageInput = {
+  expectedGithubBinding?: GithubRepositoryBinding;
   attachmentIds?: string[];
   orgId: string;
   projectId: string;
@@ -200,6 +206,7 @@ export class StoryWorkspaceService {
     const aggregate = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockIdentity(
         tx,
         `${input.orgId}:${input.projectId}:${input.repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
@@ -382,6 +389,7 @@ export class StoryWorkspaceService {
     }
 
     const queued = await this.queueMessage({
+      expectedGithubBinding: input.expectedGithubBinding,
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: aggregate.story.id,
@@ -397,9 +405,12 @@ export class StoryWorkspaceService {
   async queueMessage(input: QueuedMessageInput) {
     if (input.trigger.type === REVIEW_TRIGGER)
       throw new StoryServiceError("message_invalid", "Use an explicit agent trigger", 400);
-    const queued = await this.db.transaction((rawTx) =>
-      this.storeMessage(rawTx as unknown as FacilityDb, input, false),
-    );
+    const queued = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
+      return this.storeMessage(tx, input, false);
+    });
     if (!queued)
       throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
     if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
@@ -1435,6 +1446,7 @@ export class StoryWorkspaceService {
   }) {
     const turn = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const active = (
         await tx
@@ -2318,6 +2330,7 @@ export class StoryWorkspaceService {
   }
 
   async markMerged(input: {
+    expectedGithubBinding?: GithubRepositoryBinding;
     orgId: string;
     projectId: string;
     storyId: string;
@@ -2327,6 +2340,8 @@ export class StoryWorkspaceService {
   }) {
     const complete = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       const complete = !isGithubIssueStory(story);
@@ -2358,9 +2373,16 @@ export class StoryWorkspaceService {
   }
 
   /** Reconcile only the exact mirrored source issue; never infer closure from a related PR. */
-  async reconcileIssue(orgId: string, projectId: string, storyId: string) {
+  async reconcileIssue(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    expectedGithubBinding?: GithubRepositoryBinding,
+  ) {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, { orgId, projectId });
+      await assertGithubRepositoryBinding(tx, { orgId, projectId }, expectedGithubBinding);
       await lockStory(tx, orgId, projectId, storyId);
       const story = await scopedStory(tx, orgId, projectId, storyId);
       if (
@@ -2457,6 +2479,7 @@ export class StoryWorkspaceService {
   }
 
   async associatePullRequest(input: {
+    expectedGithubBinding?: GithubRepositoryBinding;
     orgId: string;
     projectId: string;
     storyId: string;
@@ -2466,6 +2489,8 @@ export class StoryWorkspaceService {
   }) {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       if (

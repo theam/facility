@@ -607,7 +607,11 @@ describe("agent catalog and full GitHub workspace credentials", async () => {
   });
 
   it("keeps maintainer permissions while narrowing installation tokens to project repositories", async () => {
-    const calls: Array<{ installationId: number; repositories: string[] }> = [];
+    const calls: Array<{
+      installationId: number;
+      repositories?: string[];
+      repositoryIds?: number[];
+    }> = [];
     const broker = new GithubWorkspaceCredentialBroker(db, async (request) => {
       calls.push(request);
       return {
