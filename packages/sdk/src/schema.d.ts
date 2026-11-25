@@ -7576,6 +7576,10 @@ export interface operations {
                                 kind: string;
                                 count: number;
                             }[];
+                            resultReview?: {
+                                messageId: string;
+                                summary: string;
+                            };
                             delivery: {
                                 decisionBrief?: {
                                     /** @enum {string} */
@@ -8077,6 +8081,7 @@ export interface operations {
                                 id: string;
                                 turnId: string | null;
                                 kind: string;
+                                resultMessageId?: string | null;
                                 title: string;
                                 detail: string | null;
                                 /** Format: date-time */
@@ -8353,6 +8358,7 @@ export interface operations {
                             id: string;
                             turnId: string | null;
                             kind: string;
+                            resultMessageId?: string | null;
                             title: string;
                             detail: string | null;
                             /** Format: date-time */

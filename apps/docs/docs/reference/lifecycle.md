@@ -22,6 +22,12 @@ can later be restored with the same conversation.
 The API returns `needs_attention` plus `next_operations` so clients do not have to infer every
 action from the state string. Attention items are retained as history after retry or dismissal.
 
+**Attention** puts blocking questions and other required decisions first. A completed assignment
+can also leave a **Ready to review** notice linked to its final result. This sits below blockers
+and does not turn a successful run into an error or block further authorized work. Reading or
+dismissing a finished result does not approve a plan, accept a pull-request delivery, or deploy.
+Existing plan and pull-request delivery reviews keep their own decision controls.
+
 ## Turn states
 
 | State | Meaning |

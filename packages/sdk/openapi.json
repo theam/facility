@@ -10594,6 +10594,22 @@
                               "additionalProperties": false
                             }
                           },
+                          "resultReview": {
+                            "type": "object",
+                            "properties": {
+                              "messageId": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "messageId",
+                              "summary"
+                            ],
+                            "additionalProperties": false
+                          },
                           "delivery": {
                             "nullable": true,
                             "type": "object",
@@ -12779,6 +12795,10 @@
                               "kind": {
                                 "type": "string"
                               },
+                              "resultMessageId": {
+                                "nullable": true,
+                                "type": "string"
+                              },
                               "title": {
                                 "type": "string"
                               },
@@ -13719,6 +13739,10 @@
                             "type": "string"
                           },
                           "kind": {
+                            "type": "string"
+                          },
+                          "resultMessageId": {
+                            "nullable": true,
                             "type": "string"
                           },
                           "title": {
