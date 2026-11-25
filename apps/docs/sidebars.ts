@@ -27,6 +27,7 @@ const sidebars: SidebarsConfig = {
         "self-host/aws",
         "self-host/authentication",
         "self-host/github-app",
+        "self-host/client-plugin",
       ],
     },
     {
@@ -37,6 +38,7 @@ const sidebars: SidebarsConfig = {
         "guides/kickstart",
         "guides/existing-repo",
         "guides/operate-story",
+        "guides/client-plugin",
         "guides/story-input-files",
         "guides/project-overview",
         "guides/validate-workspace-loop",

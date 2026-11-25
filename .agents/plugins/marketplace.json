@@ -1,0 +1,32 @@
+{
+  "name": "facility",
+  "interface": {
+    "displayName": "Facility"
+  },
+  "plugins": [
+    {
+      "name": "facility",
+      "source": "./plugins/facility",
+      "category": "Productivity",
+      "description": "Operate Facility stories from your agent: start a story from a ticket, review and decide its plan, and follow the build until the pull requests and preview are ready, with people at the approval gates. Connect the Facility MCP server separately with codex mcp add.",
+      "author": {
+        "name": "The Agile Monkeys"
+      },
+      "homepage": "https://theam.github.io/facility/guides/client-plugin",
+      "repository": "https://github.com/theam/facility",
+      "license": "Apache-2.0",
+      "keywords": ["facility", "ai-sdlc", "agents", "github", "planning", "delivery"],
+      "skills": "./skills/",
+      "interface": {
+        "displayName": "Facility",
+        "shortDescription": "Operate Facility stories from your agent.",
+        "developerName": "The Agile Monkeys",
+        "category": "Productivity",
+        "defaultPrompt": [
+          "Start this task in Facility.",
+          "What is waiting on me in Facility?"
+        ]
+      }
+    }
+  ]
+}

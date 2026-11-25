@@ -69,7 +69,9 @@ The server exposes forty-eight task-oriented tools:
 
 ## Connect Claude Code or Codex
 
-Register the same Streamable HTTP endpoint in either client. Replace the example origin with the
+The [client plugin](../guides/client-plugin.md) registers this endpoint and adds skills that run the
+story workflow with these tools. To connect without it, register the same Streamable HTTP endpoint
+in either client. Replace the example origin with the
 Facility deployment:
 
 ```bash
