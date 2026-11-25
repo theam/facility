@@ -72,6 +72,11 @@ services:
       GITHUB_CLONE_TOKEN: ${GITHUB_CLONE_TOKEN:-}
       FACILITY_WORKSPACE_DRIVER: docker
       FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
+      # The api proxies previews from its own container, where 127.0.0.1 is not the
+      # host: the containers carrying this label join each workspace network instead.
+      FACILITY_DOCKER_PREVIEW_PROXY_LABEL: facility.preview-proxy=true
+    labels:
+      facility.preview-proxy: "true"
     ports: ["4400:4400"]
     volumes:
       # The API inspects workspace state through the host Docker daemon.
@@ -110,6 +115,8 @@ services:
       # The Docker provider launches persistent workspaces on the host daemon.
       FACILITY_WORKSPACE_DRIVER: docker
       FACILITY_WORKSPACE_IMAGE: ${FACILITY_WORKSPACE_IMAGE:-facility-runner:dev}
+      # The worker publishes preview endpoints during project setup.
+      FACILITY_DOCKER_PREVIEW_PROXY_LABEL: facility.preview-proxy=true
     volumes:
       # Workspace volumes outlive these API and worker containers.
       - /var/run/docker.sock:/var/run/docker.sock

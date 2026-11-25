@@ -27,6 +27,16 @@ const WORKSPACE_LABEL = "facility.workspace.id";
 const KIND_LABEL = "facility.workload.kind";
 const KIND = "workspace-v2";
 
+export type DockerWorkspaceRuntimeOptions = {
+  /**
+   * Docker label (`key=value`) of the containers that proxy previews when the control plane runs
+   * in containers, as in the Compose bundle. Those containers join each workspace network and
+   * reach its preview gateway by container name. Without it, the API runs on the daemon host and
+   * dials the gateway port published on the host loopback.
+   */
+  previewProxyLabel?: string;
+};
+
 export class DockerWorkspaceRuntime implements WorkspaceRuntime {
   readonly provider = "docker" as const;
 
@@ -64,7 +74,10 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     await transferInputFile(this, target.workspace, "remove", file, target.transport);
   }
 
-  constructor(private readonly docker = new Docker()) {}
+  constructor(
+    private readonly docker = new Docker(),
+    private readonly options: DockerWorkspaceRuntimeOptions = {},
+  ) {}
 
   async create(input: CreateWorkspace): Promise<WorkspaceHandle> {
     assertWorkspaceId(input.id);
@@ -236,6 +249,7 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       : await this.wake(workspace);
     if (!handle.computeRef || handle.state !== "running")
       throw new WorkspaceRuntimeError("workspace_not_running", "Workspace compute is not running");
+    if (ports.length > 0) await this.attachPreviewProxies(this.assertLocator(workspace).network);
     return this.endpoints(handle.computeRef, ports);
   }
 
@@ -321,6 +335,8 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
       .catch((error) => {
         if (!isDockerNotFound(error)) throw error;
       });
+    // A network with attached preview proxies cannot be removed.
+    await this.detachPreviewProxies(names.network);
     await this.docker
       .getNetwork(names.network)
       .remove()
@@ -349,7 +365,10 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
           `Docker did not publish service ${port.service} on port ${port.port}`,
         );
       }
-      return { ...port, url: `http://127.0.0.1:${binding.HostPort}` };
+      const url = this.options.previewProxyLabel
+        ? `http://${details.Name.replace(/^\//, "")}:${gatewayPort}`
+        : `http://127.0.0.1:${binding.HostPort}`;
+      return { ...port, url };
     });
   }
 
@@ -427,6 +446,49 @@ export class DockerWorkspaceRuntime implements WorkspaceRuntime {
     const stream = await this.docker.pull(image);
     await new Promise<void>((resolve, reject) =>
       this.docker.modem.followProgress(stream, (error) => (error ? reject(error) : resolve())),
+    );
+  }
+
+  private async previewProxies(): Promise<string[]> {
+    const label = this.options.previewProxyLabel;
+    if (!label) return [];
+    const containers = await this.docker.listContainers({ all: true, filters: { label: [label] } });
+    return containers.map((container) => container.Id);
+  }
+
+  /** Idempotent: proxies recreated since the last expose rejoin the workspace network here. */
+  private async attachPreviewProxies(network: string): Promise<void> {
+    if (!this.options.previewProxyLabel) return;
+    const proxies = await this.previewProxies();
+    if (proxies.length === 0) {
+      throw new WorkspaceRuntimeError(
+        "preview_proxy_unavailable",
+        `No container carries the preview proxy label ${this.options.previewProxyLabel}`,
+      );
+    }
+    await Promise.all(
+      proxies.map((Container) =>
+        this.docker
+          .getNetwork(network)
+          .connect({ Container })
+          .catch((error) => {
+            if (!isAlreadyConnected(error)) throw error;
+          }),
+      ),
+    );
+  }
+
+  private async detachPreviewProxies(network: string): Promise<void> {
+    const proxies = await this.previewProxies();
+    await Promise.all(
+      proxies.map((Container) =>
+        this.docker
+          .getNetwork(network)
+          .disconnect({ Container, Force: true })
+          .catch((error) => {
+            if (!isDockerNotFound(error) && !isNotConnected(error)) throw error;
+          }),
+      ),
     );
   }
 
@@ -550,6 +612,18 @@ function isDockerNotFound(error: unknown) {
   return Boolean(
     error && typeof error === "object" && (error as { statusCode?: number }).statusCode === 404,
   );
+}
+
+function isAlreadyConnected(error: unknown) {
+  return /already exists in network|already connected/i.test(errorMessage(error));
+}
+
+function isNotConnected(error: unknown) {
+  return /is not connected/i.test(errorMessage(error));
+}
+
+function errorMessage(error: unknown) {
+  return String((error as { message?: string } | undefined)?.message ?? "");
 }
 
 function isAlreadyStopped(error: unknown) {

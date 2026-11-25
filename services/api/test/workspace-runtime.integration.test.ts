@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { PassThrough } from "node:stream";
 import { newId } from "@facility/core";
 import { engineSessions, storyMessages, turns, workspaces } from "@facility/db";
 import Docker from "dockerode";
@@ -87,6 +88,70 @@ describe.skipIf(!enabled)("DockerWorkspaceRuntime integration", () => {
     } finally {
       exec.mockRestore();
       await runtime.destroy(workspace);
+    }
+  }, 120_000);
+  it("serves previews to a containerized API through the workspace network, not the host loopback", async () => {
+    const docker = new Docker();
+    const image = process.env.FACILITY_WORKSPACE_TEST_IMAGE ?? "facility-runner:serialized";
+    const tag = randomBytes(6).toString("hex");
+    const label = `facility.preview-proxy-test=${tag}`;
+    // Stand-in for the Compose api container: its own bridge network and the proxy label.
+    const apiNetwork = await docker.createNetwork({ Name: `facility-test-api-${tag}` });
+    const api = await docker.createContainer({
+      Image: image,
+      Entrypoint: ["sleep", "infinity"],
+      Labels: { "facility.preview-proxy-test": tag },
+      HostConfig: { NetworkMode: `facility-test-api-${tag}` },
+    });
+    await api.start();
+    const fetchFromApi = async (url: string) => {
+      const execution = await api.exec({
+        Cmd: [
+          "node",
+          "-e",
+          "fetch(process.argv[1]).then((r) => console.log(r.status), (e) => console.log(e.cause?.code ?? e.message))",
+          url,
+        ],
+        AttachStdout: true,
+        AttachStderr: true,
+      });
+      const stream = await execution.start({});
+      const output = new PassThrough();
+      let text = "";
+      output.on("data", (chunk: Buffer) => {
+        text += chunk.toString("utf8");
+      });
+      docker.modem.demuxStream(stream, output, output);
+      await new Promise((resolve) => stream.once("end", resolve));
+      return text.trim();
+    };
+    const runtime = new DockerWorkspaceRuntime(docker, { previewProxyLabel: label });
+    const ports = [{ service: "web", port: 3210, protocol: "http" as const }];
+    const workspace = (await runtime.create({
+      id: `ws_${randomBytes(12).toString("hex")}`,
+      image,
+      environment: { FACILITY_PREVIEW_GATEWAY_TOKEN: randomBytes(32).toString("base64url") },
+      ports,
+    })) as WorkspaceLocator;
+    try {
+      // What the shipped Compose bundle stores today: the host loopback, unreachable from the API.
+      const [loopback] = await new DockerWorkspaceRuntime(docker).expose(workspace, ports);
+      expect(loopback?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(await fetchFromApi(loopback?.url ?? "")).toBe("ECONNREFUSED");
+
+      const [endpoint] = await runtime.expose(workspace, ports);
+      expect(endpoint?.url).toMatch(/^http:\/\/facility-ws-[a-f0-9]{24}:\d+$/);
+      // The gateway answers; it refuses the request because it carries no gateway token.
+      expect(await fetchFromApi(endpoint?.url ?? "")).toBe("401");
+      expect((await runtime.inspect(workspace)).endpoints).toEqual([endpoint]);
+
+      await runtime.destroy(workspace);
+      const attached = await api.inspect();
+      expect(Object.keys(attached.NetworkSettings.Networks)).toEqual([`facility-test-api-${tag}`]);
+    } finally {
+      await runtime.destroy(workspace);
+      await api.remove({ force: true });
+      await apiNetwork.remove();
     }
   }, 120_000);
   it("renews Git and gh credentials in an existing runner without replacing its volume", async () => {
