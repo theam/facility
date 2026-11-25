@@ -1,7 +1,10 @@
 import { createFacilityMcpServer } from "@facility/mcp";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { ApiError } from "../errors.js";
+import { followupToolInput, registerFollowup, verifyTurnToolToken } from "../turns/followup.js";
 import type { AppConfig } from "../types.js";
 
 const MCP_SCOPE = "facility:mcp";
@@ -39,36 +42,79 @@ export async function registerMcpRoutes(app: FastifyInstance, config: AppConfig)
         apiUrl: `http://127.0.0.1:${config.port}`,
         apiKey: bearer,
       });
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      let closed = false;
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        void transport.close();
-        void server.close();
-      };
-      request.raw.once("aborted", close);
-      reply.raw.once("close", close);
-      reply.hijack();
-      try {
-        await server.connect(transport);
-        await transport.handleRequest(request.raw, reply.raw, request.body);
-      } catch (error) {
-        request.log.error({ err: error }, "embedded MCP request failed");
-        close();
-        if (!reply.raw.headersSent) {
-          reply.raw.writeHead(500, { "content-type": "application/json" });
-          reply.raw.end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              error: { code: -32603, message: "Internal server error" },
-              id: null,
-            }),
-          );
-        }
-      }
+      await serveMcp(request, reply, server);
     },
   );
+
+  app.post(
+    "/internal/turn-tools",
+    { config: { public: true }, bodyLimit: 16_384, schema: { hide: true } },
+    async (request, reply) => {
+      const grant = verifyTurnToolToken(config.secretMasterKey, request.headers.authorization);
+      if (!grant) return reply.status(401).send({ error: "Invalid turn credential" });
+      const server = new McpServer({ name: "facility-turn", version: "1.0.0" });
+      server.registerTool(
+        "schedule_followup",
+        {
+          description:
+            "Schedule the next check in this assignment. Keep one check pending at a time and wait for confirmation before ending the current turn. Use a short public reason and non-secret job references. A person can cancel it or send a new request.",
+          inputSchema: followupToolInput,
+          annotations: { idempotentHint: true, destructiveHint: false },
+        },
+        async (input) => {
+          try {
+            const result = await registerFollowup(
+              app.facilityDb,
+              grant,
+              input,
+              config.secretMasterKey,
+            );
+            return { content: [{ type: "text", text: JSON.stringify(result) }] };
+          } catch (error) {
+            if (error instanceof ApiError)
+              return { isError: true, content: [{ type: "text", text: error.message }] };
+            request.log.error({ turnId: grant.turnId }, "turn follow-up persistence failed");
+            return {
+              isError: true,
+              content: [{ type: "text", text: "Could not confirm the follow-up" }],
+            };
+          }
+        },
+      );
+      await serveMcp(request, reply, server);
+    },
+  );
+}
+
+async function serveMcp(request: FastifyRequest, reply: FastifyReply, server: McpServer) {
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    void transport.close();
+    void server.close();
+  };
+  request.raw.once("aborted", close);
+  reply.raw.once("close", close);
+  reply.hijack();
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(request.raw, reply.raw, request.body);
+  } catch (error) {
+    request.log.error({ err: error }, "embedded MCP request failed");
+    close();
+    if (!reply.raw.headersSent) {
+      reply.raw.writeHead(500, { "content-type": "application/json" });
+      reply.raw.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal server error" },
+          id: null,
+        }),
+      );
+    }
+  }
 }
 
 function bearerToken(header: string | undefined) {

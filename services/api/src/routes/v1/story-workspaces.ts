@@ -26,6 +26,7 @@ import { IntegrationStateBody, updateIntegrationState } from "../../stories/inte
 import { readStoryLifecycle } from "../../stories/lifecycle.js";
 import { provisionalTitle, resolveDefaultAgent } from "../../stories/phase.js";
 import { readStoryPlans } from "../../stories/plans.js";
+import { FOLLOWUP_TRIGGER } from "../../turns/followup.js";
 import type { AppConfig } from "../../types.js";
 import { projectWorkspaceInput } from "../../workspaces/project-environment.js";
 import {
@@ -107,6 +108,7 @@ const StoryBundleQuery = z.object({
   evidence: z.enum(["recent", "none"]).default("recent"),
 });
 const ActivityQuery = z.object({
+  view: z.literal("progress").optional(),
   before: z.coerce.number().int().safe().min(0).optional(),
   after: z.coerce.number().int().safe().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(10),
@@ -693,17 +695,18 @@ export async function registerStoryWorkspaceRoutes(app: FastifyInstance, config:
     async (request) => {
       const { projectId, storyId, turnId } = request.params as z.infer<typeof TurnParams>;
       const actor = principal(request);
-      return storyResponse(
-        await translate(() =>
-          domain.stories.cancelTurn({
-            orgId: actor.orgId,
-            projectId,
-            storyId,
-            turnId,
-            actor: principalActor(actor),
-          }),
-        ),
+      const scope = { orgId: actor.orgId, projectId, storyId };
+      const result = await translate(() =>
+        domain.stories.cancelTurn({ ...scope, turnId, actor: principalActor(actor) }),
       );
+      const canceled = result.turns.find((turn) => turn.id === turnId);
+      if (
+        canceled?.triggerType === FOLLOWUP_TRIGGER &&
+        canceled.state === "canceled" &&
+        !canceled.startedAt
+      )
+        await domain.dispatcher.activateQueuedStorySuccessor(scope);
+      return storyResponse(result);
     },
   );
 
