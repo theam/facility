@@ -1433,6 +1433,9 @@ export const turns = pgTable(
       .on(table.projectId, table.agentName, table.triggerKey, table.scheduledFor)
       .where(sql`${table.scheduledFor} is not null`),
     index("turns_org_story_created_idx").on(table.orgId, table.storyId, table.createdAt.desc()),
+    // The worker's recovery scans read every org's queued and stale running turns.
+    index("turns_queued_created_idx").on(table.createdAt).where(sql`${table.state} = 'queued'`),
+    index("turns_running_updated_idx").on(table.updatedAt).where(sql`${table.state} = 'running'`),
     check("turns_engine_check", sql`${table.engine} in ('claude_code', 'codex')`),
     check("turns_next_event_seq_check", sql`${table.nextEventSeq} > 0`),
     check(
