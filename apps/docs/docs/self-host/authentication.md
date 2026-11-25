@@ -47,7 +47,9 @@ loopback. It is rejected under `NODE_ENV=production` and must never be used thro
 
 An owner or authorized administrator creates API keys through the UI or `/v1/keys`. The plaintext
 token is returned once. Keys can be organization-wide according to their role or restricted to one
-project. Send the token as:
+project. When `Idempotency-Key` is supplied, Facility does not store the plaintext token for replay;
+a same-key retry returns `idempotency_outcome_indeterminate`. Startup also sanitizes replay rows
+written by older releases without making those requests repeatable. Send the token as:
 
 ```http
 Authorization: Bearer <facility-api-key>

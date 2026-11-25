@@ -1,7 +1,6 @@
 import { can, keyLookup, newId, open, seal, verifyKey } from "@facility/core";
 import {
   apiKeys,
-  auditEvents,
   createDb,
   githubInstallations,
   orgMembers,
@@ -28,10 +27,15 @@ import type { JWTVerifyGetKey } from "jose";
 import PgBoss from "pg-boss";
 import { uuidv7 } from "uuidv7";
 import { z } from "zod";
+import { writeAuditEvent } from "./audit.js";
 import { registerAuthorizationServer } from "./auth/authorization-server.js";
 import { readConfig } from "./config.js";
 import { ApiError, sendError } from "./errors.js";
-import { beginIdempotentRequest, completeIdempotentRequest } from "./idempotency.js";
+import {
+  beginIdempotentRequest,
+  completeIdempotentRequest,
+  sanitizeSensitiveIdempotencyRecords,
+} from "./idempotency.js";
 import { looksLikeJwt, oauthConfigFromApp, verifyAccessToken } from "./oauth.js";
 import {
   enrichOpenApi,
@@ -203,23 +207,7 @@ export async function buildApp(
   app.decorateRequest(
     "audit",
     async function audit(this: FastifyRequest, action: string, target, payload = {}) {
-      const principal = this.principal;
-      if (!principal) return;
-      this.log.info(
-        { action, target, payload, actor: { type: principal.type, id: principal.id } },
-        "facility access event",
-      );
-      const projectId = (this.params as Record<string, string | undefined>)?.projectId;
-      await db.insert(auditEvents).values({
-        id: newId("evt"),
-        orgId: principal.orgId,
-        projectId,
-        actor: { type: principal.type, id: principal.id },
-        action,
-        target,
-        payload,
-        requestId: this.id,
-      });
+      await writeAuditEvent(db, this, action, target, payload);
     },
   );
 
@@ -384,6 +372,7 @@ export async function buildApp(
   await app.register(swaggerUi, { routePrefix: "/docs" });
 
   app.addHook("onReady", async () => {
+    await sanitizeSensitiveIdempotencyRecords(db);
     for (const route of routeRecords) {
       if (route.method === "OPTIONS" && route.url === "*") continue;
       if (publicPrefixes.some((prefix) => route.url.startsWith(prefix))) continue;

@@ -296,7 +296,8 @@ permissions. Project routes verify both organization ownership and optional key 
 ## Idempotency
 
 Authenticated `POST`, `PATCH`, `PUT`, and `DELETE` routes accept `Idempotency-Key` from 8 through 200
-characters. The key is scoped to principal, method, and path and retained for 24 hours.
+characters. The key is scoped to principal, method, and path and retained for 24 hours. The worker
+removes expired records.
 
 - The same key and body replay the original status and JSON response with
   `idempotency-status: replayed`.
@@ -304,6 +305,11 @@ characters. The key is scoped to principal, method, and path and retained for 24
 - A concurrent request returns `idempotency_in_progress` and `retry-after: 1`.
 - An uncertain committed outcome is sealed as `idempotency_outcome_indeterminate` rather than
   automatically repeated.
+- Responses containing one-time credentials are not stored for replay. The first request receives
+  the credential; a same-key retry returns `idempotency_outcome_indeterminate` and must inspect or
+  revoke the issued credential before creating another one.
+- On startup, the API and worker replace any secret-bearing `/v1/keys` replay rows written by older
+  releases with the same indeterminate response while retaining the row's replay protection.
 
 Use a random key per logical mutation and reuse it only to retry that exact operation.
 

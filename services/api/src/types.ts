@@ -100,5 +100,6 @@ declare module "fastify" {
     orgAdmin?: boolean;
     idempotent?: boolean;
     partitionIdempotencyByAuthSurface?: boolean;
+    idempotencyReplay?: import("./idempotency.js").IdempotencyReplayPolicy;
   }
 }

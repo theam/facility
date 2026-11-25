@@ -1,12 +1,42 @@
 import { createHash } from "node:crypto";
 import { type FacilityDb, idempotencyRecords } from "@facility/db";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { interactiveSessionCookie } from "./auth/interactive-session.js";
 import { ApiError } from "./errors.js";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60_000;
 const IDEMPOTENCY_PENDING_TIMEOUT_MS = 15 * 60_000;
+
+export type IdempotencyReplayPolicy = "replay" | "refuse";
+
+export function indeterminateIdempotencyResponse() {
+  return {
+    error: {
+      code: "idempotency_outcome_indeterminate",
+      message: "The original request may have completed; automatic replay is refused",
+    },
+  };
+}
+
+export function storedIdempotencyCompletion(
+  statusCode: number,
+  payload: unknown,
+  replayPolicy: IdempotencyReplayPolicy = "replay",
+) {
+  if (statusCode >= 500 || replayPolicy === "refuse") {
+    return {
+      kind: "indeterminate" as const,
+      statusCode: 409,
+      responseBody: indeterminateIdempotencyResponse(),
+    };
+  }
+  return {
+    kind: "replayable" as const,
+    statusCode,
+    responseBody: parsePayload(payload),
+  };
+}
 
 export async function beginIdempotentRequest(
   db: FacilityDb,
@@ -90,8 +120,15 @@ export async function beginIdempotentRequest(
   }
   if (existing.state !== "completed" || existing.statusCode === null) {
     const staleBefore = new Date(Date.now() - IDEMPOTENCY_PENDING_TIMEOUT_MS);
-    const reclaimed = await db
-      .delete(idempotencyRecords)
+    const responseBody = indeterminateIdempotencyResponse();
+    const sealed = await db
+      .update(idempotencyRecords)
+      .set({
+        state: "completed",
+        statusCode: 409,
+        responseBody,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(idempotencyRecords.id, id),
@@ -101,7 +138,12 @@ export async function beginIdempotentRequest(
         ),
       )
       .returning({ id: idempotencyRecords.id });
-    if (reclaimed.length > 0) return beginIdempotentRequest(db, request, reply);
+    if (sealed.length > 0) {
+      request.idempotencyReplayed = true;
+      reply.header("idempotency-status", "indeterminate");
+      reply.type("application/json").serializer((value) => JSON.stringify(value));
+      return reply.status(409).send(responseBody);
+    }
     reply.header("retry-after", "1");
     throw new ApiError(
       409,
@@ -126,18 +168,21 @@ export async function completeIdempotentRequest(
 ) {
   const id = request.idempotencyId;
   if (!id) return;
-  if (reply.statusCode >= 500) {
-    await db.delete(idempotencyRecords).where(eq(idempotencyRecords.id, id));
-    request.idempotencyId = undefined;
+  const completion = storedIdempotencyCompletion(
+    reply.statusCode,
+    payload,
+    request.routeOptions.config?.idempotencyReplay ?? "replay",
+  );
+  if (completion.kind === "indeterminate") {
+    await finalizeIndeterminateIdempotentRequest(db, request);
     return;
   }
-  const responseBody = parsePayload(payload);
   const completed = await db
     .update(idempotencyRecords)
     .set({
       state: "completed",
-      statusCode: reply.statusCode,
-      responseBody,
+      statusCode: completion.statusCode,
+      responseBody: completion.responseBody,
       updatedAt: new Date(),
     })
     .where(and(eq(idempotencyRecords.id, id), eq(idempotencyRecords.state, "pending")))
@@ -164,12 +209,7 @@ export async function finalizeIndeterminateIdempotentRequest(
     .set({
       state: "completed",
       statusCode: 409,
-      responseBody: {
-        error: {
-          code: "idempotency_outcome_indeterminate",
-          message: "The original request may have completed; automatic replay is refused",
-        },
-      },
+      responseBody: indeterminateIdempotencyResponse(),
       updatedAt: new Date(),
     })
     .where(and(eq(idempotencyRecords.id, id), eq(idempotencyRecords.state, "pending")))
@@ -180,7 +220,7 @@ export async function finalizeIndeterminateIdempotentRequest(
   request.idempotencyId = undefined;
 }
 
-/** Remove a pending replay record when its client disconnected before a response. */
+/** Remove a pending record only after the caller has established that no mutation committed. */
 export async function abandonIdempotentRequest(db: FacilityDb, request: FastifyRequest) {
   const id = request.idempotencyId;
   if (!id) return;
@@ -198,6 +238,30 @@ export async function expireIdempotencyRecords(db: FacilityDb, now = new Date())
   const rows = await db
     .delete(idempotencyRecords)
     .where(lt(idempotencyRecords.expiresAt, now))
+    .returning({ id: idempotencyRecords.id });
+  return rows.length;
+}
+
+/**
+ * Replace responses written by older releases before they can expose a
+ * one-time API-key secret. Keeping the row sealed prevents the same mutation
+ * from becoming eligible to run again during the retention window.
+ */
+export async function sanitizeSensitiveIdempotencyRecords(db: FacilityDb) {
+  const rows = await db
+    .update(idempotencyRecords)
+    .set({
+      state: "completed",
+      statusCode: 409,
+      responseBody: indeterminateIdempotencyResponse(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(idempotencyRecords.path, "/v1/keys"),
+        sql`jsonb_exists(coalesce(${idempotencyRecords.responseBody}, '{}'::jsonb), 'secret')`,
+      ),
+    )
     .returning({ id: idempotencyRecords.id });
   return rows.length;
 }

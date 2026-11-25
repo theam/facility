@@ -1,9 +1,11 @@
 import { generateApiKey, newId } from "@facility/core";
-import { apiKeys, orgMembers, orgs, roles, users } from "@facility/db";
+import { apiKeys, type FacilityDb, orgMembers, orgs, roles, users } from "@facility/db";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { writeAuditEvent } from "../../audit.js";
 import { ApiError, notFound } from "../../errors.js";
+import { abandonIdempotentRequest } from "../../idempotency.js";
 import type { Principal } from "../../types.js";
 import {
   AnyObject,
@@ -373,7 +375,7 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
   app.post(
     "/v1/keys",
     {
-      config: { permission: "keys:issue" },
+      config: { permission: "keys:issue", idempotencyReplay: "refuse" },
       schema: {
         body: z.object({ name: z.string(), roleId: z.string(), projectId: z.string().optional() }),
         response: { 200: CreatedApiKeySchema },
@@ -386,28 +388,49 @@ export async function registerMeMembersRolesRoutes(app: FastifyInstance, context
       await assertProjectInOrg(p, body.projectId);
       const projectId = p.projectId ?? body.projectId;
       const key = await generateApiKey("fak");
-      const row = (
-        await db
-          .insert(apiKeys)
-          .values({
-            id: key.id,
-            orgId: p.orgId,
-            name: body.name,
-            prefix: key.lookup,
-            last4: key.last4,
-            hash: key.hash,
-            scopeType: projectId ? "project" : "org",
-            projectId,
-            roleId: body.roleId,
-            createdBy: p.id,
-          })
-          .returning()
-      )[0];
-      await request.audit(
-        "key.issued",
-        { type: "key", id: key.id },
-        { name: body.name, last4: key.last4 },
-      );
+      let row: typeof apiKeys.$inferSelect | undefined;
+      let failedInsideTransaction = false;
+      try {
+        row = await db.transaction(async (rawTx) => {
+          try {
+            const tx = rawTx as unknown as FacilityDb;
+            const inserted = (
+              await tx
+                .insert(apiKeys)
+                .values({
+                  id: key.id,
+                  orgId: p.orgId,
+                  name: body.name,
+                  prefix: key.lookup,
+                  last4: key.last4,
+                  hash: key.hash,
+                  scopeType: projectId ? "project" : "org",
+                  projectId,
+                  roleId: body.roleId,
+                  createdBy: p.id,
+                })
+                .returning()
+            )[0];
+            if (!inserted) throw new Error("API key could not be created");
+            await writeAuditEvent(
+              tx,
+              request,
+              "key.issued",
+              { type: "key", id: key.id },
+              { name: body.name, last4: key.last4 },
+            );
+            return inserted;
+          } catch (error) {
+            failedInsideTransaction = true;
+            throw error;
+          }
+        });
+      } catch (error) {
+        // A callback failure is rolled back before db.transaction rejects, so it
+        // is safe to retry. A commit-phase failure is uncertain and stays sealed.
+        if (failedInsideTransaction) await abandonIdempotentRequest(db, request);
+        throw error;
+      }
       return { ...publicRow(row ?? {}), secret: key.secret };
     },
   );
