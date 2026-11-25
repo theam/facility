@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseAgentManifest } from "@facility/agents";
 import { newId } from "@facility/core";
 import {
@@ -48,7 +50,7 @@ const agent = parseAgentManifest(
 );
 const service = new StoryWorkspaceService(
   db,
-  new FakeWorkspaceRuntime(`/private/tmp/rebind-${projectId}`),
+  new FakeWorkspaceRuntime(join(tmpdir(), `rebind-${projectId}`)),
 );
 const queue = () =>
   service.queueMessage({
@@ -286,7 +288,7 @@ it("drops an in-flight webhook if the App switches while its catalog is loading"
 it("rechecks the binding after runtime creation, before queuing the first message", async () => {
   const entered = latch(),
     release = latch();
-  const runtime = new FakeWorkspaceRuntime(`/private/tmp/rebind-runtime-${projectId}`);
+  const runtime = new FakeWorkspaceRuntime(join(tmpdir(), `rebind-runtime-${projectId}`));
   const create = runtime.create.bind(runtime);
   vi.spyOn(runtime, "create").mockImplementation(async (input) => {
     entered.resolve();
