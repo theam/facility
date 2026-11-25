@@ -17,6 +17,7 @@ import {
   storyDeliveryAcceptanceRequests,
   storyDeliveryAcceptances,
   storyEvidenceEvents,
+  storyMessages,
   storyPlanDecisions,
   storyPlanRepositoryRefs,
   storyPreviewConvergences,
@@ -704,6 +705,89 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     }
   });
 
+  it.each([
+    ["held", "releases"],
+    ["running", "does not release"],
+  ] as const)("canceling a %s turn through the API %s the story queue", async (state, outcome) => {
+    const released = outcome === "releases";
+    await savePolicy(policy({ planApprovalAgents: ["builder"] }));
+    const builder = (await domain.catalog.sync(orgId, projectId)).find(
+      (agent) => agent.name === "builder",
+    );
+    if (!builder) throw Error("Missing builder");
+    const storyId = newId("story");
+    const scope = { orgId, projectId, storyId };
+    await db.insert(stories).values({
+      ...scope,
+      id: storyId,
+      provider: "manual",
+      externalId: storyId,
+      title: "Canceled queue fixture",
+      createdBy: { type: "user", id: userId },
+    });
+    await db.insert(storyConversations).values({ id: newId("sess"), ...scope });
+    const message = (body: string) =>
+      domain.stories.queueMessage({
+        ...scope,
+        body,
+        dedupeKey: randomUUID(),
+        agent: builder,
+        actor: { type: "user", id: userId },
+        trigger: { type: "ui" },
+      });
+    const first = await message("Build the feature");
+    if (!first.turn) throw Error("Expected a queued turn");
+    const turnId = first.turn.id;
+    expect(await domain.dispatcher.dispatch({ orgId, projectId, turnId })).toMatchObject({
+      state: "held",
+    });
+    // A claimed turn belongs to its worker until the native process has stopped.
+    if (state === "running")
+      await db
+        .update(turns)
+        .set({ state: "running", startedAt: new Date(), retryAfter: null })
+        .where(eq(turns.id, turnId));
+    const waiting = await message("Also update the changelog");
+    expect(waiting).toMatchObject({ queued: true, turn: undefined });
+    const release = vi
+      .spyOn(domain.dispatcher, "activateQueuedSuccessor")
+      .mockImplementation(async (canceled) => {
+        await domain.stories.activateNextMessage({
+          ...canceled,
+          agent: builder,
+          actor: { type: "user", id: userId },
+        });
+      });
+    try {
+      const canceled = await app.inject({
+        method: "POST",
+        url: `${path(storyId)}/turns/${turnId}/cancel`,
+        headers: headers(),
+      });
+      expect(canceled.statusCode, canceled.body).toBe(200);
+      const [pending] = await db
+        .select()
+        .from(storyMessages)
+        .where(eq(storyMessages.id, waiting.message.id));
+      if (released) {
+        expect(release).toHaveBeenCalledWith({ ...scope, turnId });
+        expect(pending?.turnId).toEqual(expect.any(String));
+        expect(
+          canceled.json().turns.filter((turn: { state: string }) => turn.state === "queued"),
+        ).toHaveLength(1);
+      } else {
+        expect(release).not.toHaveBeenCalled();
+        expect(pending?.turnId).toBeNull();
+      }
+    } finally {
+      release.mockRestore();
+      await db
+        .update(turns)
+        .set({ state: "canceled", endedAt: new Date() })
+        .where(eq(turns.storyId, storyId));
+      await savePolicy();
+    }
+  });
   it("can hold admission with a single database connection without a nested pool checkout", async () => {
     await savePolicy(policy({ planApprovalAgents: ["builder"] }));
     const value = await delivery();

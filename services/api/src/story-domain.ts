@@ -119,6 +119,9 @@ export function createStoryDomain(input: {
     {
       onSuspend: (scope) => previewConvergence.suspend(scope),
       onResume: (scope) => previewConvergence.resume(scope),
+      onQueuedTurnCanceled: async (scope) => {
+        await dispatcher.activateQueuedSuccessor(scope);
+      },
     },
   );
   const reviewSource = new ReviewCycleSource(input.db, githubFactory);
