@@ -170,6 +170,11 @@ export function createStoryDomain(input: {
     costs,
     runtime,
     { cycles: reviewCycles },
+    {
+      apiUrl: input.config.runnerApiUrl ?? input.config.publicUrl,
+      secret: input.config.secretMasterKey,
+      insecureDev: input.config.facilityInsecureDev,
+    },
   );
   const previewConvergenceExecutor = new StoryPreviewConvergenceExecutor(
     input.db,

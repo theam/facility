@@ -21,6 +21,7 @@ export type AppConfig = {
   secretMasterKey: string;
   port: number;
   publicUrl: string;
+  runnerApiUrl?: string;
   webUrl?: string;
   // Browser origin used only for proxied preview application content. In
   // production this must be HTTPS on a registered site separate from every

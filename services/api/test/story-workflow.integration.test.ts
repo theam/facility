@@ -1008,6 +1008,75 @@ describe("interactive workflow policy and exact delivery acceptance API", () => 
     expect((await observed()).execution.turns).toMatchObject([
       { turnId, state: "canceled", endedAt: expect.any(String) },
     ]);
+
+    const replacement = await post(
+      `${path(value.id)}/plan/decisions`,
+      {
+        expected_revision: 2,
+        expected_decision_revision: approval.decisionRevision,
+        intent: "approve",
+        idempotency_key: randomUUID(),
+      },
+      headers(),
+    );
+    expect(replacement.statusCode, replacement.body).toBe(200);
+    const replacementUrl = `${path(value.id)}/plan/decisions/${replacement.json().request.id}`;
+    const replacementReview = await app.inject({
+      url: replacementUrl,
+      headers: { cookie: otherCookie },
+    });
+    const replacementApproval = await post(
+      `${replacementUrl}/confirm`,
+      { proof: replacementReview.json().proof, idempotency_key: randomUUID() },
+      { cookie: otherCookie },
+    );
+    expect(replacementApproval.statusCode, replacementApproval.body).toBe(200);
+
+    const originalId = newId("turn");
+    const followupId = newId("turn");
+    const assignment = {
+      ...scope,
+      conversationId,
+      agentName: builder.name,
+      manifestHash: builder.hash,
+      manifest: builder,
+      engine: builder.engine,
+      model: builder.model,
+      createdBy: { type: "user", id: userId },
+    };
+    const now = new Date();
+    await db.insert(turns).values({
+      ...assignment,
+      id: originalId,
+      triggerType: "manual",
+      state: "succeeded",
+      startedAt: now,
+      endedAt: now,
+    });
+    await recordPlanExecution(db, scope, originalId, authorization);
+    await db.insert(turns).values({
+      ...assignment,
+      id: followupId,
+      triggerType: "followup",
+      triggerKey: originalId,
+      scheduledFor: now,
+    });
+    // The current plan independently passes admission. The handoff belongs to
+    // the previous approval and must stop before reservation or remote work.
+    expect(
+      await authorizePlanExecution(db, scope, builder, assignment.createdBy, followupId),
+    ).toMatchObject({ planRevision: 2 });
+    const computeCalls = compute.map((method) => method.mock.calls.length);
+    expect(
+      await domain.dispatcher.dispatch({ orgId, projectId, turnId: followupId }),
+    ).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("original plan authorization"),
+    });
+    expect(compute.map((method) => method.mock.calls.length)).toEqual(computeCalls);
+    expect(
+      await db.select().from(budgetReservations).where(eq(budgetReservations.turnId, followupId)),
+    ).toHaveLength(0);
     await savePolicy();
   });
   it("holds successors after a failure until a later interactive decision", async () => {
