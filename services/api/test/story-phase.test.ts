@@ -113,6 +113,31 @@ describe("work phase derivation", () => {
     expect(derivePhase({ story: startedStory, openAttention: [] }).phase).toBe("in_progress");
   });
 
+  it("treats a finished result as review without masking work or a real blocker", () => {
+    const result = { kind: "agent_ready_review" };
+    expect(derivePhase({ story: startedStory, openAttention: [result] })).toEqual({
+      phase: "review",
+      reason: "awaiting_review",
+    });
+    expect(
+      derivePhase({ story: startedStory, openAttention: [result, { kind: "agent_waiting" }] }),
+    ).toEqual({ phase: "attention", reason: "attention" });
+    expect(
+      derivePhase({
+        story: startedStory,
+        openAttention: [result],
+        activeTurn: { state: "queued" },
+      }),
+    ).toEqual({ phase: "in_progress", reason: "queued" });
+    expect(
+      derivePhase({
+        story: startedStory,
+        openAttention: [result],
+        pullRequest: { ...openPull, ciState: "failure" },
+      }),
+    ).toEqual({ phase: "attention", reason: "checks_failing" });
+  });
+
   it("marks merged, completed, closed, archived, and deleted work as finished", () => {
     expect(
       derivePhase({

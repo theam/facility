@@ -5,11 +5,14 @@ import { repositoryDevelopmentBranch } from "./development-branch.js";
 import type { GithubGitIdentity } from "./git-identity.js";
 
 export type WorkspaceRepository = {
+  githubRepositoryId?: number | null;
+  installationNumber?: number;
   owner: string;
   name: string;
   defaultBranch: string;
   developmentBranch?: string;
   role: "primary" | "related";
+  gitIdentity?: GithubGitIdentity;
 };
 
 export type GithubWorkspaceCredentials = {
@@ -89,27 +92,51 @@ export class GithubWorkspaceCredentialBroker {
       );
     }
 
+    // Do not combine IDs and names in one token: legacy rows lack historical identity,
+    // and a name-scoped token must never grant access to a pinned repository's replacement.
+    const scopeKey = (repository: (typeof repositories)[number]) =>
+      `${repository.installationId}:${repository.githubRepositoryId == null ? "legacy" : "pinned"}`;
     const tokens = new Map(
       await Promise.all(
-        installations.map(async (installation) => {
-          const names = repositories
-            .filter((repository) => repository.installationId === installation.id)
-            .map((repository) => repository.name);
-          return [
-            installation.id,
-            await this.tokenFactory({
-              installationId: installation.installationId,
-              repositories: names,
-              ...(options.readOnly ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } } : {}),
-            }),
-          ] as const;
+        installations.flatMap((installation) => {
+          const linked = repositories.filter(
+            (repository) => repository.installationId === installation.id,
+          );
+          return [false, true].flatMap((pinned) => {
+            const group = linked.filter(
+              (repository) => (repository.githubRepositoryId != null) === pinned,
+            );
+            const first = group[0];
+            if (!first) return [];
+            return [
+              (async () =>
+                [
+                  scopeKey(first),
+                  await this.tokenFactory({
+                    installationId: installation.installationId,
+                    ...(pinned
+                      ? {
+                          repositoryIds: group.flatMap((repository) =>
+                            repository.githubRepositoryId == null
+                              ? []
+                              : [repository.githubRepositoryId],
+                          ),
+                        }
+                      : { repositories: group.map((repository) => repository.name) }),
+                    ...(options.readOnly
+                      ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } }
+                      : {}),
+                  }),
+                ] as const)(),
+            ];
+          });
         }),
       ),
     );
     const credentialMap = Object.fromEntries(
       repositories.map((repository) => {
         const token = repository.installationId
-          ? tokens.get(repository.installationId)?.token
+          ? tokens.get(scopeKey(repository))?.token
           : undefined;
         if (!token) {
           throw new GithubWorkspaceCredentialError(
@@ -128,9 +155,7 @@ export class GithubWorkspaceCredentialBroker {
       );
     }
     const primaryToken = credentialMap[`${primary.owner}/${primary.name}`.toLowerCase()];
-    const primaryCredential = primary.installationId
-      ? tokens.get(primary.installationId)
-      : undefined;
+    const primaryCredential = primary.installationId ? tokens.get(scopeKey(primary)) : undefined;
     const expiresAt = new Date(
       Math.min(
         ...[...tokens.values()].map((credential) => new Date(credential.expiresAt).getTime()),
@@ -146,11 +171,16 @@ export class GithubWorkspaceCredentialBroker {
       gitIdentity: primaryCredential.gitIdentity,
       repositories: await Promise.all(
         repositories.map(async (repository) => ({
+          githubRepositoryId: repository.githubRepositoryId,
+          installationNumber: installations.find(
+            (installation) => installation.id === repository.installationId,
+          )?.installationId,
           owner: repository.owner,
           name: repository.name,
           defaultBranch: repository.defaultBranch,
           developmentBranch: await repositoryDevelopmentBranch(this.db, repository),
           role: repository.role as "primary" | "related",
+          gitIdentity: tokens.get(scopeKey(repository))?.gitIdentity,
         })),
       ),
       environment: {

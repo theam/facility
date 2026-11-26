@@ -49,6 +49,7 @@ import type {
   ProjectManifestSource,
 } from "../workspaces/project-environment.js";
 import type { WorkspaceLocator, WorkspaceRuntime } from "../workspaces/runtime.js";
+import { agentOutcome } from "./agent-outcome.js";
 import type { AgentEngineRegistry, AgentTurnResult } from "./engines.js";
 import { AgentEngineError, nativeSessionFromEvent, observationFailureEvidence } from "./engines.js";
 import { appendTurnEvent } from "./events.js";
@@ -611,6 +612,10 @@ export class TurnDispatcher {
               detail: redactString(outcome.attention, secrets),
             }
           : undefined,
+        readyForReview:
+          !cycle && outcome.readyForReview
+            ? redactString(outcome.readyForReview, secrets).slice(0, 1_000)
+            : undefined,
         metadata: {
           content: "final_response",
           engine: manifest.engine,
@@ -1401,14 +1406,6 @@ function boundedEvent(value: Record<string, unknown>): Record<string, unknown> {
   return serialized.length <= 64_000
     ? value
     : { truncated: true, payload: `${serialized.slice(0, 63_900)}…` };
-}
-
-function agentOutcome(output: string): { output: string; attention?: string } {
-  const match = /<facility-needs-attention>([\s\S]*?)<\/facility-needs-attention>\s*$/.exec(output);
-  if (!match) return { output };
-  const attention = match[1]?.trim();
-  if (!attention) return { output };
-  return { output: output.slice(0, match.index).trim(), attention };
 }
 
 /** Credentials of the Reviewer's own engine; it loses every other declared project secret,

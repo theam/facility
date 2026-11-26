@@ -473,6 +473,7 @@ async function resolvePrincipal(
               eq(orgMembers.orgId, orgId),
               eq(users.status, "active"),
               isNull(githubInstallations.suspendedAt),
+              isNull(githubInstallations.connectionId),
             ),
           )
           .limit(1)

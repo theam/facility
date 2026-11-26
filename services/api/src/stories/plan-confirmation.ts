@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { interactiveSessionCookie } from "../auth/interactive-session.js";
 import { ApiError } from "../errors.js";
 
 export const PLAN_CONFIRMATION_TTL_MS = 15 * 60_000;
@@ -27,8 +28,8 @@ export function interactivePlanActor(request: {
   cookies: Record<string, string | undefined>;
 }): InteractivePlanActor {
   const actor = request.principal;
-  const sessionCookie = request.cookies.facility_session;
-  if (request.headers.authorization !== undefined || actor?.type !== "user" || !sessionCookie)
+  const sessionCookie = interactiveSessionCookie(request);
+  if (actor?.type !== "user" || !sessionCookie)
     throw new ApiError(
       403,
       "interactive_confirmation_required",

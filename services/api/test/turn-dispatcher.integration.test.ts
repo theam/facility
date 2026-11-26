@@ -11,6 +11,7 @@ import {
   createDb,
   engineSessions,
   githubInstallations,
+  githubPullRequests,
   migrate,
   orgMembers,
   orgs,
@@ -19,9 +20,13 @@ import {
   projects,
   roles,
   stories,
+  storyDeliveryPullRequests,
+  storyDeliveryScopes,
   storyEvidenceEvents,
   storyInputFiles,
   storyMessages,
+  storyPlanRevisions,
+  storyPlanStates,
   turnEvents,
   turnGitEvidence,
   turns,
@@ -38,6 +43,7 @@ import { AgentCatalogService, type AgentCatalogSource } from "../src/agents/cata
 import { buildApp } from "../src/app.js";
 import { GithubWorkspaceCredentialBroker } from "../src/github/workspace-credentials.js";
 import { CostBudgetService } from "../src/insights/costs.js";
+import { ProjectAttentionService } from "../src/insights/project-attention.js";
 import { StoryWorkspaceService } from "../src/stories/service.js";
 import { TurnDispatcher } from "../src/turns/dispatcher.js";
 import {
@@ -95,6 +101,7 @@ describe("turn dispatcher end to end", async () => {
   const orgId = newId("org");
   const projectId = newId("proj");
   const installationRowId = newId("ghi");
+  const repositoryId = newId("repo");
   const queuedTurns: string[] = [];
   const authorizedActor = { type: "user" as const, id: newId("user") };
   const roleId = newId("role");
@@ -319,7 +326,7 @@ environment:
       targetType: "Organization",
     });
     await db.insert(projectRepositories).values({
-      id: newId("repo"),
+      id: repositoryId,
       orgId,
       projectId,
       installationId: installationRowId,
@@ -639,6 +646,276 @@ environment:
     expect(history).toEqual([
       expect.objectContaining({ status: "resolved", resolution: "replied" }),
     ]);
+  });
+
+  it("publishes one non-blocking review linked to the finished report, below blockers", async () => {
+    engine.outputOverride =
+      "The evaluation is finished.\n\n<facility-ready-for-review>Review the evaluation results.</facility-ready-for-review>";
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `result-review-${suffix}`,
+      title: "Review the synthetic benchmark",
+      agent: builder,
+      message: "Compare the models",
+      messageDedupeKey: `result-review-${suffix}`,
+      actor: authorizedActor,
+      workspace: { image: "facility-runner:test" },
+    });
+    const turn = started.queued.turn;
+    if (!turn) throw new Error("Expected a turn");
+    const scope = { orgId, projectId, storyId: started.story.id };
+    await dispatcher.dispatch({ orgId, projectId, turnId: turn.id });
+    engine.outputOverride = undefined;
+    await dispatcher.dispatch({ orgId, projectId, turnId: turn.id });
+    const result = await storiesService.get(orgId, projectId, scope.storyId);
+    expect(result.story.status).toBe("working");
+    expect(result.turns[0]?.state).toBe("succeeded");
+    expect(result.attention).toEqual([
+      expect.objectContaining({
+        kind: "agent_ready_review",
+        status: "open",
+        detail: "Review the evaluation results.",
+        turnId: turn.id,
+      }),
+    ]);
+    const report = (await storiesService.conversation(orgId, projectId, scope.storyId)).at(-1);
+    expect(report?.body).toBe("The evaluation is finished.");
+    const reviewNotice = result.attention[0];
+    if (!reviewNotice || !report) throw new Error("Expected a notice and report");
+    const [blocker] = await db
+      .insert(stories)
+      .values({
+        id: newId("story"),
+        orgId,
+        projectId,
+        provider: "manual",
+        externalId: `result-review-blocker-${suffix}`,
+        title: "Benchmark needs a human decision",
+        status: "attention",
+        createdBy: authorizedActor,
+      })
+      .returning();
+    if (!blocker) throw new Error("Expected a blocking story");
+    await db.insert(attentionItems).values({
+      id: newId("attn"),
+      orgId,
+      projectId,
+      storyId: blocker.id,
+      kind: "agent_waiting",
+      title: "Pick a benchmark",
+      createdAt: new Date(reviewNotice.createdAt.getTime() + 10_000),
+    });
+    const page = await new ProjectAttentionService(db).listStories(orgId, projectId, {
+      category: "all",
+      q: "benchmark",
+      limit: 2,
+      offset: 0,
+    });
+    expect(page.items).toEqual([
+      expect.objectContaining({ storyId: blocker.id }),
+      expect.objectContaining({
+        storyId: scope.storyId,
+        resultReview: { messageId: report.id, summary: "Review the evaluation results." },
+      }),
+    ]);
+    await expect(
+      storiesService.dismissAttention({
+        ...scope,
+        attentionId: reviewNotice.id,
+        actor: { type: "service", id: "agent" },
+      }),
+    ).rejects.toMatchObject({ code: "review_human_required" });
+    await expect(
+      storiesService.dismissAttention({
+        ...scope,
+        attentionId: reviewNotice.id,
+        actor: authorizedActor,
+      }),
+    ).rejects.toMatchObject({ code: "review_human_required" });
+
+    const next = await storiesService.queueMessage({
+      ...scope,
+      body: "Check one more detail",
+      dedupeKey: `result-review-cancel-${suffix}`,
+      agent: builder,
+      actor: authorizedActor,
+      trigger: { type: "manual" },
+    });
+    if (!next.turn) throw new Error("Expected a queued turn");
+    const canceled = await storiesService.cancelTurn({
+      ...scope,
+      turnId: next.turn.id,
+      actor: authorizedActor,
+    });
+    expect(canceled.story.status).toBe("ready");
+    const latest = await storiesService.conversationPage(orgId, projectId, scope.storyId, {
+      limit: 1,
+    });
+    expect(latest.messages.every((message) => message.id !== report.id)).toBe(true);
+    expect(canceled.attention.find((item) => item.id === reviewNotice.id)?.resultMessageId).toBe(
+      report.id,
+    );
+    const noticeList = await new ProjectAttentionService(db).list(orgId, projectId, {
+      status: "open",
+      q: "Review the evaluation results",
+      limit: 10,
+      offset: 0,
+    });
+    expect(noticeList.items).toEqual([
+      expect.objectContaining({ id: reviewNotice.id, resultMessageId: report.id }),
+    ]);
+
+    const questionId = newId("attn");
+    await db.insert(attentionItems).values({
+      ...scope,
+      id: questionId,
+      kind: "agent_waiting",
+      title: "A separate question",
+    });
+    await db.update(stories).set({ status: "attention" }).where(eq(stories.id, scope.storyId));
+    const unblocked = await storiesService.dismissAttention({
+      ...scope,
+      attentionId: questionId,
+      actor: authorizedActor,
+    });
+    expect(unblocked.story.status).toBe("ready");
+    expect(unblocked.attention.find((item) => item.id === reviewNotice.id)?.status).toBe("open");
+
+    const dismissed = await storiesService.dismissAttention({
+      ...scope,
+      attentionId: reviewNotice.id,
+      actor: authorizedActor,
+      interactiveUser: true,
+    });
+    expect(dismissed.story.status).toBe("ready");
+    expect(dismissed.attention.find((item) => item.id === reviewNotice.id)).toMatchObject({
+      status: "resolved",
+      resolution: "dismissed",
+    });
+  });
+
+  it.each([
+    "plan",
+    "blocker",
+  ] as const)("does not add a result review on top of a pending %s", async (kind) => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `result-awaiting-${kind}-${suffix}`,
+      title: "Prepare a synthetic report",
+      agent: builder,
+      message: "Prepare a report",
+      messageDedupeKey: `result-awaiting-${kind}-${suffix}`,
+      actor: authorizedActor,
+      workspace: { image: "facility-runner:test" },
+    });
+    const turn = started.queued.turn;
+    if (!turn) throw new Error("Expected a turn");
+    const scope = { orgId, projectId, storyId: started.story.id };
+    // The gate is recorded after admission but before final output is committed.
+    engine.beforeNextRun = async () => {
+      if (kind === "plan") {
+        await db.insert(storyPlanRevisions).values({
+          ...scope,
+          revision: 1,
+          digest: "a".repeat(64),
+          markdown: "# Plan",
+          repositories: [{ repositoryId: "repo-fixture", repository: `${owner}/${repository}` }],
+          agents: [
+            {
+              name: builder.name,
+              manifestHash: builder.hash,
+              engine: builder.engine,
+              model: builder.model,
+              repositoryId: "repo-fixture",
+              catalogCommitSha: "b".repeat(40),
+              observedAt: new Date().toISOString(),
+            },
+          ],
+          proposedBy: { ...authorizedActor, name: null },
+        });
+        await db.insert(storyPlanStates).values({ ...scope, revision: 1 });
+      } else {
+        await db.insert(attentionItems).values({
+          ...scope,
+          id: newId("attn"),
+          kind: "agent_waiting",
+          title: "A pending decision",
+        });
+      }
+    };
+    engine.outputOverride =
+      "The draft is available.\n<facility-ready-for-review>Review the draft.</facility-ready-for-review>";
+    const result = await dispatcher.dispatch({ orgId, projectId, turnId: turn.id });
+    engine.outputOverride = undefined;
+    expect(result.state).toBe("succeeded");
+    const story = await storiesService.get(orgId, projectId, scope.storyId);
+    expect(story.attention.some((item) => item.kind === "agent_ready_review")).toBe(false);
+    expect(story.attention.filter((item) => item.status === "open")).toHaveLength(
+      kind === "plan" ? 0 : 1,
+    );
+  });
+
+  it.each([
+    "open",
+    "merged",
+  ] as const)("does not hide an independent result behind a %s PR unless its delivery still needs review", async (state) => {
+    const started = await storiesService.start({
+      orgId,
+      projectId,
+      provider: "manual",
+      externalId: `result-delivery-${state}-${suffix}`,
+      title: "Prepare a synthetic report",
+      agent: builder,
+      message: "Prepare a report",
+      messageDedupeKey: `result-delivery-${state}-${suffix}`,
+      actor: authorizedActor,
+      workspace: { image: "facility-runner:test" },
+    });
+    const turn = started.queued.turn;
+    if (!turn) throw new Error("Expected a turn");
+    const scope = { orgId, projectId, storyId: started.story.id };
+    const number = state === "open" ? 6701 : 6702;
+    await db.insert(githubPullRequests).values({
+      id: newId("ghp"),
+      orgId,
+      projectId,
+      repositoryId,
+      number,
+      state,
+      title: "Fixture PR",
+      headRef: "fixture",
+      headSha: "a".repeat(40),
+      baseRef: "main",
+      htmlUrl: `https://github.com/${owner}/${repository}/pull/${number}`,
+    });
+    await db.insert(storyDeliveryScopes).values({
+      ...scope,
+      revision: 1,
+      declaredComplete: true,
+      updatedBy: authorizedActor,
+    });
+    await db.insert(storyDeliveryPullRequests).values({
+      ...scope,
+      repositoryId,
+      pullNumber: number,
+      isPrimary: true,
+    });
+    await storiesService.completeTurn({
+      orgId,
+      projectId,
+      turnId: turn.id,
+      actor: { type: "service", id: "fixture-agent" },
+      output: "The follow-up report is available.",
+      readyForReview: "Review the follow-up report.",
+    });
+    const bundle = await storiesService.get(orgId, projectId, scope.storyId);
+    expect(bundle.attention.some((item) => item.kind === "agent_ready_review")).toBe(
+      state === "merged",
+    );
   });
 
   it("carries the asked question into a prompt rebuilt for a different agent", async () => {
@@ -2341,9 +2618,13 @@ Review the request.
         context: handoff.context,
       });
     };
+    if (mode === "quiet-result")
+      engine.outputOverride =
+        "The external job is pending.\n<facility-ready-for-review>Review the draft.</facility-ready-for-review>";
     expect(await dispatcher.dispatch({ orgId, projectId, turnId: initial.id })).toMatchObject({
       state: "succeeded",
     });
+    if (mode === "quiet-result") engine.outputOverride = undefined;
     const [queued] = await db
       .select()
       .from(turns)
@@ -2359,6 +2640,12 @@ Review the request.
     if (!queued) throw new Error("Expected a persisted follow-up");
     return { scope, initial, queued, workspace: started.workspace };
   }
+
+  it("does not raise a result review when a follow-up is scheduled", async () => {
+    const { scope } = await startFollowup("quiet-result");
+    const story = await storiesService.get(orgId, projectId, scope.storyId);
+    expect(story.attention.some((item) => item.kind === "agent_ready_review")).toBe(false);
+  });
 
   async function due(turnId: string, minutes = 0) {
     const now = new Date(Date.now() - minutes * 60_000 - 1_000);
