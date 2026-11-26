@@ -6,6 +6,7 @@ import type {
   ProjectOverview,
 } from "./api";
 import { errorSummary, isReviewNotice, safeExternalUrl } from "./story-presentation";
+import { storyReviewHref } from "./story-review-navigation";
 
 // Presentation decisions for the project overview, kept free of React so the
 // state interpretation is unit-testable. Server data stays untouched; these
@@ -76,6 +77,8 @@ export function attentionKindLabel(kind: string) {
   switch (kind) {
     case "agent_waiting":
       return "Agent waiting for a reply";
+    case "agent_ready_review":
+      return "Result ready to review";
     case "turn_error":
       return "Agent run failed";
     case "worker_interrupted":
@@ -122,7 +125,7 @@ export const ATTENTION_PREVIEW_LIMIT = 5;
 /**
  * The overview's attention block: the newest few things waiting on a person,
  * and how many there are in total. A budget alert stops every agent, so it
- * leads; everything else is newest first.
+ * leads; finished results come last. Within each group, show the newest first.
  */
 export function latestAttention(
   overview: Pick<ProjectOverview, "attention" | "review" | "spend">,
@@ -135,7 +138,10 @@ export function latestAttention(
     ...signals,
   ].sort(
     (left, right) =>
-      Number(left.at !== null) - Number(right.at !== null) || timeOf(right.at) - timeOf(left.at),
+      Number(left.at !== null) - Number(right.at !== null) ||
+      Number(left.item?.kind === "agent_ready_review") -
+        Number(right.item?.kind === "agent_ready_review") ||
+      timeOf(right.at) - timeOf(left.at),
   );
   return {
     entries: entries.slice(0, limit),
@@ -160,6 +166,7 @@ export function attentionNotice(
 ): AttentionEntry {
   const resolved = notice.status === "resolved";
   const waiting = notice.kind === "agent_waiting";
+  const resultReview = notice.kind === "agent_ready_review";
   const review = isReviewNotice(notice.kind);
   const delivery = ["delivery_integration", "delivery_completion"].includes(notice.kind);
   const deliveryFailure = delivery && /failed|needs attention/i.test(notice.title);
@@ -167,18 +174,20 @@ export function attentionNotice(
     key: `attention:${notice.id}`,
     tone: resolved
       ? "machine"
-      : waiting || review || (delivery && !deliveryFailure)
+      : waiting || review || resultReview || (delivery && !deliveryFailure)
         ? "human"
         : "bad",
     title: delivery || review ? notice.title : attentionKindLabel(notice.kind),
     storyId: notice.storyId,
     storyTitle: notice.storyTitle,
     summary:
-      waiting || delivery || review
+      waiting || delivery || review || resultReview
         ? (notice.detail ??
           (review
             ? "Review the recorded candidate and findings in the story."
-            : "The agent is waiting for your reply."))
+            : resultReview
+              ? "The agent finished. Review the result in the story."
+              : "The agent is waiting for your reply."))
         : errorSummary(notice.detail),
     at: notice.createdAt,
     action:
@@ -187,9 +196,22 @@ export function attentionNotice(
             label: "Reply in the story",
             href: `${storyHref(projectId, notice.storyId)}#story-composer`,
           }
-        : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
+        : resultReview
+          ? {
+              label: resolved ? "Open result" : "Review result",
+              href: notice.resultMessageId
+                ? storyReviewHref(
+                    projectId,
+                    notice.storyId,
+                    undefined,
+                    notice.resultMessageId,
+                    `message-${notice.resultMessageId}`,
+                  )
+                : `${storyHref(projectId, notice.storyId)}#story-attention`,
+            }
+          : { label: "Open the story", href: storyHref(projectId, notice.storyId) },
     item: resolved ? null : notice,
-    detail: waiting || delivery || review ? null : notice.detail,
+    detail: waiting || delivery || review || resultReview ? null : notice.detail,
     resolved: resolved
       ? { label: resolutionLabel(notice.resolution ?? null), at: notice.resolvedAt ?? null }
       : null,

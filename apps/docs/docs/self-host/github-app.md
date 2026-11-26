@@ -10,8 +10,9 @@ OIDC configuration separately; do not confuse its client secret with the GitHub 
 
 ## Create the App
 
-Create one GitHub App for the Facility instance and install it only on repositories the instance
-may automate. Grant read/write access to Contents, Issues, Pull requests, Workflows, Actions,
+Create a default GitHub App for the Facility instance and install it only on repositories the instance
+may automate. Additional private Apps can be registered in organization settings, so repositories in
+different GitHub organizations do not require making the default App public. Grant read/write access to Contents, Issues, Pull requests, Workflows, Actions,
 Checks, and Deployments; grant read access to Metadata and organization membership. Add account
 email access if GitHub OAuth is also used for sign-in.
 
@@ -89,17 +90,97 @@ unknown or suspended installation cannot be guessed into another tenant.
 After login, create a Facility project and choose repositories from that installation. The primary
 repository owns configuration and delivery; related repositories must be connected explicitly.
 
+## Additional private Apps
+
+In **Settings → GitHub connections**, an organization administrator (`org:write`) can register an
+App name, numeric App ID, PEM private key, webhook secret (at least 32 characters), and installation
+ID. Create and install the App in GitHub first; Facility verifies that the key authenticates that
+App and that the active installation belongs to it. Registration does not create an App, install
+it, broaden its permissions, or change its visibility. Use a distinct webhook secret for each App.
+
+After saving, copy the connection's webhook URL into the GitHub App settings. It has the form
+`<PUBLIC_URL>/webhooks/github/<connection-id>`. Use the same event subscriptions listed above and
+redeliver a test event. The URL selects a connection; it is not an authentication secret. Facility
+checks its signature and binds the signed installation to that same connection and organization.
+Additional installations of the same App can be registered on the connection card.
+
+Connections belong to one Facility organization. Each App can be registered only once in an
+instance. Project-scoped keys cannot administer or enumerate organization connections. New project
+setup labels installations with their connection name; selecting one restricts repository discovery
+to that installation. Manual connections also verify installation membership. If a failed kickstart
+preview already connected its draft with another App, change that repository connection in project
+settings before retrying; the draft never silently substitutes the previously selected App. Related repositories can use another connection. Workspace tokens remain
+limited to the repositories connected to the current project, and each token uses its own App's
+bot identity.
+
+The private key and webhook secret are encrypted in PostgreSQL with `SECRET_MASTER_KEY`, bound to
+the connection, organization and App ID, and never returned by the API. API and worker must share
+that key. Back up the database and master key securely. **Rotate credentials** replaces both values;
+coordinate the webhook-secret change with GitHub and redeliver missed events. **Disable connection**
+blocks new credentials and webhook processing without deleting history. Already issued installation
+tokens can remain valid until their expiry; revoke them in GitHub when immediate revocation is
+required. Changes are read on use and do not require an API or worker restart.
+Rotation verifies the App identity independently of its installations, so removing an installation
+does not prevent recovery. Concurrent administration is revision-checked; reload and retry if another
+administrator changed the connection during verification.
+
+Existing installations keep their environment-configured default App and `/webhooks/github` URL.
+No secrets are copied from the environment into the new table. Login remains controlled by the
+existing OAuth/OIDC configuration, invitation and membership rules; adding a repository App does
+not grant anyone Facility access or provide another sign-in identity provider.
+
+### Changing a project's connection after a repository transfer
+
+In **Project settings → Repositories → Change GitHub connection**, select the new installation and
+enter the new `owner/repository`. Facility compares GitHub's immutable repository ID with the ID
+already recorded for the project and verifies that the selected App installation includes that
+repository. Public visibility alone is insufficient. It refuses while the project has queued or
+running turns; enqueue and the final connection change share the same project lock.
+
+This updates the existing repository record and preserves stories, workspaces and delivery evidence.
+Existing sandbox checkouts and historical URLs are not rewritten. Update the repository paths in
+`.facility.yml` through the project's normal review process and validate a new workspace before
+resuming execution. Legacy rows without a recorded repository ID require a separately verified
+operator recovery before switching. Use evidence recorded before the transfer to establish the
+original immutable GitHub repository ID and backfill only the reviewed row. Looking up the old
+URL now is not historical proof: another repository may have reused that name. The normal UI
+cannot bypass this check or attach existing history to an unrelated repository.
+
 ## Runtime behavior
 
 Facility verifies the HMAC before parsing a delivery, resolves the installation to one organization,
 stores a deduplicated event, and dispatches triggers declared in `.agents/`. Duplicate deliveries
 do not create duplicate turns. A merged pull request marks its story done and suspends compute; it
 does not delete the workspace.
+Repository deliveries are processed only for their selected installation. The worker rechecks the
+stored repository binding before processing and again under repository or project locks when committing
+mirror updates, story changes and turn enqueue. A receipt queued or already in flight before a connection
+switch cannot start a turn under the new App. Nested reconciliation runs after the mirror transaction
+commits, without keeping a database connection open during provider calls.
+
+For repositories with a recorded immutable ID, API and workspace tokens use GitHub repository-ID
+scopes, repository API requests check the same identity (also after public reads), and signed
+deliveries must carry that ID.
+Workspace preparation also verifies every checkout before and after fetching, and before executing
+project setup or preview commands. This is required even for public repositories: public reads can
+succeed independently of a token's selected repositories.
+Reusing an old repository name therefore does not transfer its Facility privileges or history to a
+replacement. Legacy rows without an ID retain their existing name-based behavior; verify and record
+their historical identity before transferring them. Legacy and ID-scoped workspace credentials are
+minted separately even when they use the same installation.
 
 Agents receive the same installation token capability, including reviewers, scheduled agents and
 planning agents outside the review cycle. Each token is limited to the repositories connected to
 the active Facility project, while retaining the App's complete maintainer permission set for those
-repositories. Only the review cycle's Reviewer turns receive a read-only token.
+repositories. Only the review cycle's Reviewer turns receive a read-only token. The turn-local `gh`
+wrapper selects the token from an explicit repository flag, PR URL, API repository path, `GH_REPO`,
+or the current checkout's origin. It uses the primary repository outside a checkout and rejects
+targets outside the turn's connected repository map. This keeps related checkouts on their own App
+and credentials, including mixed legacy and ID-scoped repositories. If an unfamiliar CLI option
+makes destination parsing ambiguous, or the command is outside the supported `pr`/`issue`/`api`
+grammar, set `GH_REPO=owner/repo` explicitly. Option values such as issue bodies and titles never
+select the repository, and the wrapper preserves an explicit `GH_REPO`. Its inferred target selects
+credentials only; the child command keeps the caller or checkout default destination.
 
 Installation tokens are short-lived and minted when work needs them. Revoking an installation or
 removing a repository stops future credentials and reconciliation; it does not erase existing

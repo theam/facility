@@ -1,5 +1,6 @@
 import { Divider, Eyebrow } from "@facility/ui";
 import { ErrorNotice, Offline } from "@/components/offline";
+import { GithubConnections } from "@/components/settings/github-connections";
 import { KeysManager } from "@/components/settings/keys-manager";
 import { MembersList } from "@/components/settings/members-list";
 import { api, type Member, type MemberRow } from "@/lib/api";
@@ -55,6 +56,8 @@ export default async function SettingsPage() {
           <ErrorNotice message="Members or roles could not be loaded." />
         )}
       </section>
+
+      <GithubConnections canManage={hasPermission(me.data.permissions, "org:write")} />
 
       <Divider />
 

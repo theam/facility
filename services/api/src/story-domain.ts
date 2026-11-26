@@ -75,16 +75,9 @@ export function createStoryDomain(input: {
   maintainerTokenFactory?: GithubMaintainerTokenFactory;
 }): StoryDomain {
   const runtime = input.runtime ?? workspaceRuntime(input.config, input.db);
-  const githubFactory =
-    input.githubFactory ??
-    (input.config.githubAppId && input.config.githubAppPrivateKey
-      ? createGithubClientFactory(input.config)
-      : unavailableGithubFactory);
+  const githubFactory = input.githubFactory ?? createGithubClientFactory(input.config, input.db);
   const tokenFactory =
-    input.maintainerTokenFactory ??
-    (input.config.githubAppId && input.config.githubAppPrivateKey
-      ? createGithubMaintainerTokenFactory(input.config)
-      : unavailableTokenFactory);
+    input.maintainerTokenFactory ?? createGithubMaintainerTokenFactory(input.config, input.db);
   const catalog = new AgentCatalogService(
     input.db,
     new GithubAgentCatalogSource(input.db, githubFactory),
@@ -99,6 +92,7 @@ export function createStoryDomain(input: {
     undefined,
     undefined,
     (scope) => variables.values(scope),
+    githubFactory,
   );
   const previewConvergence = new StoryPreviewConvergenceService(
     input.db,
@@ -207,7 +201,7 @@ export function createStoryDomain(input: {
     projectManifests,
     input.config.workspaceImage,
     mirror,
-    githubFactory === unavailableGithubFactory ? undefined : githubFactory,
+    githubFactory,
   );
   return {
     inputFiles: new StoryInputFileService(
@@ -296,11 +290,3 @@ class UnsupportedWorkspaceRuntime implements WorkspaceRuntime {
     return this.unavailable();
   }
 }
-
-const unavailableGithubFactory: GithubClientFactory = async () => {
-  throw new Error("GitHub App credentials are not configured");
-};
-
-const unavailableTokenFactory: GithubMaintainerTokenFactory = async () => {
-  throw new Error("GitHub App credentials are not configured");
-};

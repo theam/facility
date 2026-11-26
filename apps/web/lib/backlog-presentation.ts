@@ -42,7 +42,13 @@ export function activityLine(item: BacklogItem, now = new Date()): string {
     }`;
   }
   if (item.activity.state === "queued") return `${item.activity.agentName ?? "An agent"} is queued`;
-  const facility = item.attention.find((entry) => entry.source === "facility");
+  const facility =
+    item.attention.find(
+      (entry) => entry.source === "facility" && entry.kind !== "agent_ready_review",
+    ) ??
+    (item.phase === "review"
+      ? item.attention.find((entry) => entry.source === "facility")
+      : undefined);
   if (facility) {
     return facility.kind === "agent_waiting" ? "Waiting for your reply" : facility.title;
   }

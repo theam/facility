@@ -10,6 +10,7 @@ import {
 import {
   agentManifests,
   apiKeys,
+  attentionItems,
   createDb,
   githubInstallations,
   migrate,
@@ -116,8 +117,10 @@ describe("revision-bound story plans and interactive confirmation API", () => {
     repositoryId: repoId as string | undefined,
   }));
   let app: Awaited<ReturnType<typeof buildApp>>;
+  let domain: ReturnType<typeof createStoryDomain>;
   let catalog: AgentCatalogService;
   let cookie: string, secondCookie: string, viewerCookie: string, oauth: string;
+  let executorCookie: string, executorOAuth: string;
   const path = (storyId: string, selected = projectId) =>
     `/v1/projects/${selected}/workspace-stories/${storyId}/plan`;
   const headers = (name = "writer") => ({ authorization: `Bearer ${credentials[name]}` });
@@ -242,10 +245,12 @@ describe("revision-bound story plans and interactive confirmation API", () => {
       name: `plan-writer-${suffix}`,
       permissions: ["projects:read", "projects:write"],
     });
+    const executorId = newId("user");
     for (const [id, roleId] of [
       [userId, writerRole],
       [secondUserId, writerRole],
       [viewerUserId, "role_bundled_viewer"],
+      [executorId, "role_bundled_owner"],
     ] as const) {
       await db
         .insert(users)
@@ -291,20 +296,25 @@ describe("revision-bound story plans and interactive confirmation API", () => {
     ]);
     await key("writer", projectId, writerRole);
     await key("viewer", projectId, "role_bundled_viewer");
+    await key("executor", projectId, "role_bundled_owner");
     await key("otherProject", otherProjectId, "role_bundled_owner");
     await key("tenant", tenantProjectId, "role_bundled_owner", otherOrgId);
     cookie = `facility_session=${await mintSessionCookie(config, userId, orgId)}`;
     secondCookie = `facility_session=${await mintSessionCookie(config, secondUserId, orgId)}`;
     viewerCookie = `facility_session=${await mintSessionCookie(config, viewerUserId, orgId)}`;
-    oauth = await new SignJWT({ org_id: orgId, scope: "facility:mcp" })
-      .setProtectedHeader({ alg: "ES256", kid: "plan-tests" })
-      .setIssuer("https://facility.test")
-      .setAudience("https://mcp.facility.test/mcp")
-      .setSubject(userId)
-      .setIssuedAt()
-      .setExpirationTime("15m")
-      .sign(signing.privateKey);
-    const domain = createStoryDomain({ db, config, runtime, enqueue, githubFactory: upstream });
+    executorCookie = `facility_session=${await mintSessionCookie(config, executorId, orgId)}`;
+    const mintOAuth = (subject: string) =>
+      new SignJWT({ org_id: orgId, scope: "facility:mcp" })
+        .setProtectedHeader({ alg: "ES256", kid: "plan-tests" })
+        .setIssuer("https://facility.test")
+        .setAudience("https://mcp.facility.test/mcp")
+        .setSubject(subject)
+        .setIssuedAt()
+        .setExpirationTime("15m")
+        .sign(signing.privateKey);
+    oauth = await mintOAuth(userId);
+    executorOAuth = await mintOAuth(executorId);
+    domain = createStoryDomain({ db, config, runtime, enqueue, githubFactory: upstream });
     catalog = new AgentCatalogService(db, { load: loadCatalog });
     domain.catalog = catalog;
     app = await buildApp(config, { rateLimitMax: 10_000, storyDomain: domain });
@@ -316,6 +326,68 @@ describe("revision-bound story plans and interactive confirmation API", () => {
     expect(enqueue).not.toHaveBeenCalled();
     expect(upstream).not.toHaveBeenCalled();
     for (const call of runtimeCalls) expect(call).not.toHaveBeenCalled();
+  });
+
+  it("lets only an authorized browser user dismiss a result review without starting queued work", async () => {
+    const id = await story();
+    const attentionId = newId("attn");
+    await db.insert(attentionItems).values({
+      id: attentionId,
+      orgId,
+      projectId,
+      storyId: id,
+      kind: "agent_ready_review",
+      title: "Ready to review",
+    });
+    const url = `/v1/projects/${projectId}/workspace-stories/${id}/attention/${attentionId}/dismiss`;
+    const dismiss = (auth: Record<string, string> = {}, key: string = randomUUID()) =>
+      app.inject({ method: "POST", url, headers: { ...auth, "idempotency-key": key } });
+    const activation = vi.spyOn(domain.dispatcher, "activateQueuedStorySuccessor");
+    try {
+      expect((await dismiss()).statusCode).toBe(401);
+      expect((await dismiss({ cookie: viewerCookie })).statusCode).toBe(403);
+      for (const name of ["otherProject", "tenant"]) {
+        expect((await dismiss(headers(name))).statusCode).toBe(404);
+      }
+      for (const auth of [
+        headers("executor"),
+        { authorization: `Bearer ${executorOAuth}` },
+        { authorization: `Bearer ${executorOAuth}`, cookie: executorCookie },
+      ]) {
+        const denied = await dismiss(auth);
+        expect(denied.statusCode, denied.body).toBe(403);
+        expect(denied.json()).toMatchObject({ error: { code: "review_human_required" } });
+      }
+      const [unchanged] = await db
+        .select()
+        .from(attentionItems)
+        .where(eq(attentionItems.id, attentionId));
+      expect(unchanged).toMatchObject({ status: "open", resolvedBy: null });
+      const browserKey = randomUUID();
+      for (const key of [browserKey, browserKey, randomUUID()]) {
+        const result = await dismiss({ cookie: executorCookie }, key);
+        expect(result.statusCode, result.body).toBe(200);
+        expect(result.json()).not.toHaveProperty("dismissedAttentionKind");
+        expect(result.json().attention).toEqual([
+          expect.objectContaining({ id: attentionId, resultMessageId: null }),
+        ]);
+      }
+      const delegatedReplay = await dismiss(
+        { authorization: `Bearer ${executorOAuth}` },
+        browserKey,
+      );
+      expect(delegatedReplay.statusCode, delegatedReplay.body).toBe(403);
+      const [updated] = await db
+        .select()
+        .from(attentionItems)
+        .where(eq(attentionItems.id, attentionId));
+      expect(updated).toMatchObject({ status: "resolved", resolution: "dismissed" });
+      const [unchangedStory] = await db.select().from(stories).where(eq(stories.id, id));
+      expect(unchangedStory?.status).toBe("ready");
+      expect(activation).not.toHaveBeenCalled();
+    } finally {
+      activation.mockRestore();
+    }
   });
 
   it("scopes authenticated reads/writes by tenant, project and permission without catalog reads for metadata", async () => {

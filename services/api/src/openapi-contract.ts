@@ -77,7 +77,7 @@ export function enrichOpenApi(document: OpenApiDocument, routes: OpenApiRouteRec
       if (route?.permission) {
         operation.security ??= [{ bearerAuth: [] }, { sessionCookie: [] }];
         operation["x-facility-permission"] = route.permission;
-      } else if (path === "/webhooks/github") {
+      } else if (path === "/webhooks/github" || path === "/webhooks/github/{connectionId}") {
         operation.security ??= [{ githubSignature: [] }];
       } else {
         operation.security ??= [];
@@ -103,7 +103,10 @@ export function enrichOpenApi(document: OpenApiDocument, routes: OpenApiRouteRec
       ].includes(String(operation.operationId));
       if (route?.idempotent || requiresMatchingKey)
         addIdempotencyHeader(operation, requiresMatchingKey);
-      if (method === "post" && path === "/webhooks/github") {
+      if (
+        method === "post" &&
+        (path === "/webhooks/github" || path === "/webhooks/github/{connectionId}")
+      ) {
         addHeaders(operation, [
           ["X-Hub-Signature-256", "HMAC-SHA256 over the exact request body."],
           ["X-GitHub-Delivery", "Sender-unique GitHub delivery id."],

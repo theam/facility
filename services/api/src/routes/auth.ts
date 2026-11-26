@@ -200,7 +200,14 @@ async function ensureGithubUserTransaction(
     .from(orgMembers)
     .innerJoin(roles, eq(orgMembers.roleId, roles.id))
     .innerJoin(githubInstallations, eq(githubInstallations.orgId, orgMembers.orgId))
-    .where(and(eq(orgMembers.userId, invited.id), isNull(githubInstallations.suspendedAt)))
+    .where(
+      and(
+        eq(orgMembers.userId, invited.id),
+        isNull(githubInstallations.suspendedAt),
+        // Repository connections do not grant a new browser identity binding.
+        isNull(githubInstallations.connectionId),
+      ),
+    )
     .orderBy(orgMembers.createdAt, orgMembers.orgId);
   const admitted = memberships.find(({ installation }) =>
     identity.installations.some(

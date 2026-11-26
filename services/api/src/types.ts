@@ -99,5 +99,6 @@ declare module "fastify" {
     public?: boolean;
     orgAdmin?: boolean;
     idempotent?: boolean;
+    partitionIdempotencyByAuthSurface?: boolean;
   }
 }

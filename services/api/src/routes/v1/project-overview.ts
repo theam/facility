@@ -34,6 +34,7 @@ const AttentionItem = StoryReference.extend({
   id: z.string(),
   turnId: z.string().nullable(),
   kind: z.string(),
+  resultMessageId: z.string().nullable().optional(),
   title: z.string(),
   detail: z.string().nullable(),
   createdAt: DateValue,
@@ -179,6 +180,7 @@ export const ProjectAttentionStoriesResponse = z.object({
       waitingSince: DateValue,
       noticeCount: z.number(),
       noticeKinds: z.array(z.object({ kind: z.string(), count: z.number() })),
+      resultReview: z.object({ messageId: z.string(), summary: z.string() }).optional(),
       delivery: AttentionDelivery.nullable(),
       plan: z
         .object({

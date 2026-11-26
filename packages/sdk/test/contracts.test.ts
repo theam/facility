@@ -41,6 +41,18 @@ function fixture(payload: unknown = { ok: true }, status = 200) {
 }
 
 describe("generated 0.12 contract", () => {
+  it.each([
+    "/webhooks/github",
+    "/webhooks/github/{connectionId}",
+  ])("requires the signed GitHub contract for %s", async (path) => {
+    const source = JSON.parse(await readFile(new URL("../openapi.json", import.meta.url), "utf8"));
+    const operation = source.paths[path].post;
+    expect(operation.security).toEqual([{ githubSignature: [] }]);
+    for (const name of ["X-Hub-Signature-256", "X-GitHub-Delivery", "X-GitHub-Event"])
+      expect(operation.parameters).toContainEqual(
+        expect.objectContaining({ in: "header", name, required: true }),
+      );
+  });
   it("keeps the committed declarations current", async () => {
     const openApiUrl = new URL("../openapi.json", import.meta.url);
     const declarationUrl = new URL("../src/schema.d.ts", import.meta.url);
