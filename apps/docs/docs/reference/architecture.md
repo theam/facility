@@ -90,7 +90,10 @@ membership, workspace, service, expiry, and revocation.
 ## GitHub boundary
 
 The GitHub App installation is both the repository discovery boundary and the credential source for
-workspaces. Facility issues short-lived installation tokens restricted to repositories connected
+workspaces. Organization administrators can register encrypted App connections and select an
+installation per project repository. API and worker resolve credentials through that binding;
+legacy installations continue to use the environment-configured default App. Each additional
+connection has its own signed webhook endpoint. See [GitHub App setup](../self-host/github-app.md#additional-private-apps). Facility issues short-lived installation tokens restricted to repositories connected
 to the active project while retaining the App's configured maintainer-level permission set.
 
 Signed webhooks update the local issue, branch, pull-request, review, check, and workflow mirror and

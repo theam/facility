@@ -11,6 +11,7 @@ import {
   storyArtifacts,
   storyAssignees,
   storyConversations,
+  storyDeliveryScopes,
   storyEvidenceEvents,
   storyInputFiles,
   storyMessages,
@@ -23,8 +24,30 @@ import {
   users,
   workspaces,
 } from "@facility/db";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
+import {
+  assertGithubRepositoryBinding,
+  type GithubRepositoryBinding,
+} from "../github/repository-binding.js";
 import { CostBudgetService, releaseOpenTurnReservation } from "../insights/costs.js";
+import {
+  deliveryNeedsReview,
+  readProjectDeliveryReviews,
+} from "../insights/project-delivery-reviews.js";
 import {
   ACTIVITY_NOISE_TYPES,
   PROGRESS_NOISE_TYPES,
@@ -50,16 +73,17 @@ import type {
   WorkspaceLocator,
   WorkspaceRuntime,
 } from "../workspaces/runtime.js";
+import { resultMessageId } from "./attention-result.js";
 import { reconcileTurnBranch } from "./branch.js";
 import { type InputFileReference, validateInputFileReferences } from "./input-files.js";
-import { isGithubIssueStory } from "./phase.js";
+import { isGithubIssueStory, RESULT_REVIEW_ATTENTION } from "./phase.js";
 import { REVIEW_TRIGGER } from "./review-cycle-rules.js";
 import {
   REVIEW_DECISION_ATTENTION,
   reviewHoldsQueue,
   seedReviewCycle,
 } from "./review-cycle-state.js";
-import { authorizePlanExecution } from "./workflow-execution.js";
+import { authorizePlanExecution, readWorkflowPlan } from "./workflow-execution.js";
 import { lockWorkflowExecution, lockWorkflowProject } from "./workflow-policy.js";
 
 export type StoryActor = { type: "user" | "service" | "system"; id: string };
@@ -67,6 +91,7 @@ export type StoryActor = { type: "user" | "service" | "system"; id: string };
 export type StoryTitleSource = "user" | "github" | "schedule" | "pending" | "fallback";
 
 export type StartStoryInput = {
+  expectedGithubBinding?: GithubRepositoryBinding;
   orgId: string;
   projectId: string;
   repositoryId?: string;
@@ -144,6 +169,7 @@ export class StoryServiceError extends Error {
 }
 
 type QueuedMessageInput = {
+  expectedGithubBinding?: GithubRepositoryBinding;
   attachmentIds?: string[];
   orgId: string;
   projectId: string;
@@ -180,6 +206,7 @@ export class StoryWorkspaceService {
     const aggregate = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockIdentity(
         tx,
         `${input.orgId}:${input.projectId}:${input.repositoryId ?? "none"}:${input.provider}:${input.externalId}`,
@@ -362,6 +389,7 @@ export class StoryWorkspaceService {
     }
 
     const queued = await this.queueMessage({
+      expectedGithubBinding: input.expectedGithubBinding,
       orgId: input.orgId,
       projectId: input.projectId,
       storyId: aggregate.story.id,
@@ -377,9 +405,12 @@ export class StoryWorkspaceService {
   async queueMessage(input: QueuedMessageInput) {
     if (input.trigger.type === REVIEW_TRIGGER)
       throw new StoryServiceError("message_invalid", "Use an explicit agent trigger", 400);
-    const queued = await this.db.transaction((rawTx) =>
-      this.storeMessage(rawTx as unknown as FacilityDb, input, false),
-    );
+    const queued = await this.db.transaction(async (rawTx) => {
+      const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
+      return this.storeMessage(tx, input, false);
+    });
     if (!queued)
       throw new StoryServiceError("message_create_failed", "message could not be stored", 500);
     if (queued.turn && queued.created) await this.onTurnQueued(queued.turn);
@@ -530,6 +561,7 @@ export class StoryWorkspaceService {
     actor: StoryActor;
     metadata?: StoryMessageMetadata;
     attention?: { title: string; detail: string };
+    readyForReview?: string;
   }) {
     return this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
@@ -594,6 +626,76 @@ export class StoryWorkspaceService {
       await reconcileTurnBranch(tx, story, completed);
       const waiting = !input.attention && (await queueFollowup(tx, completed, story));
       if (!waiting) await seedReviewCycle(tx, completed, input.output, Boolean(input.attention));
+      if (
+        input.readyForReview &&
+        !input.attention &&
+        !waiting &&
+        story.status !== "done" &&
+        story.status !== "archived"
+      ) {
+        const scope = {
+          orgId: completed.orgId,
+          projectId: completed.projectId,
+          storyId: completed.storyId,
+        };
+        const [delivery, pending, blockers, plan] = await Promise.all([
+          tx
+            .select({ revision: storyDeliveryScopes.revision })
+            .from(storyDeliveryScopes)
+            .where(
+              and(
+                eq(storyDeliveryScopes.orgId, scope.orgId),
+                eq(storyDeliveryScopes.projectId, scope.projectId),
+                eq(storyDeliveryScopes.storyId, scope.storyId),
+              ),
+            )
+            .limit(1),
+          tx
+            .select({ id: storyMessages.id })
+            .from(storyMessages)
+            .where(
+              and(
+                eq(storyMessages.orgId, scope.orgId),
+                eq(storyMessages.projectId, scope.projectId),
+                eq(storyMessages.storyId, scope.storyId),
+                eq(storyMessages.role, "user"),
+                isNull(storyMessages.turnId),
+                sql`${storyMessages.requestedAgentName} is not null`,
+              ),
+            )
+            .limit(1),
+          tx
+            .select({ id: attentionItems.id })
+            .from(attentionItems)
+            .where(
+              and(
+                eq(attentionItems.orgId, scope.orgId),
+                eq(attentionItems.projectId, scope.projectId),
+                eq(attentionItems.storyId, scope.storyId),
+                eq(attentionItems.status, "open"),
+                notInArray(attentionItems.kind, [RESULT_REVIEW_ATTENTION]),
+              ),
+            )
+            .limit(1),
+          readWorkflowPlan(tx, scope),
+        ]);
+        if (!pending.length && !blockers.length && plan.state.status !== "proposed") {
+          const review =
+            delivery.length || story.pullRequestNumber !== null
+              ? (await readProjectDeliveryReviews(tx, scope, new Date())).stories.get(scope.storyId)
+              : undefined;
+          // Only an actionable PR delivery supersedes a separate finished report.
+          if (!review || !deliveryNeedsReview(review))
+            await tx.insert(attentionItems).values({
+              ...scope,
+              id: newId("attn"),
+              turnId: completed.id,
+              kind: RESULT_REVIEW_ATTENTION,
+              title: "Result ready to review",
+              detail: input.readyForReview,
+            });
+        }
+      }
       return completed;
     });
   }
@@ -689,6 +791,7 @@ export class StoryWorkspaceService {
               eq(attentionItems.projectId, input.projectId),
               eq(attentionItems.storyId, input.storyId),
               eq(attentionItems.status, "open"),
+              notInArray(attentionItems.kind, [RESULT_REVIEW_ATTENTION]),
             ),
           )
           .limit(1)
@@ -1158,8 +1261,10 @@ export class StoryWorkspaceService {
     storyId: string;
     attentionId: string;
     actor: StoryActor;
+    interactiveUser?: boolean;
   }) {
-    await this.db.transaction(async (rawTx) => {
+    const interactive = input.actor.type === "user" && input.interactiveUser === true;
+    const dismissedAttentionKind = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
@@ -1183,9 +1288,10 @@ export class StoryWorkspaceService {
               input.actor.type === "user"
                 ? undefined
                 : notInArray(attentionItems.kind, [...REVIEW_DECISION_ATTENTION]),
+              interactive ? undefined : notInArray(attentionItems.kind, [RESULT_REVIEW_ATTENTION]),
             ),
           )
-          .returning({ id: attentionItems.id })
+          .returning({ kind: attentionItems.kind })
       )[0];
       if (!resolved) {
         const existing = (
@@ -1204,17 +1310,24 @@ export class StoryWorkspaceService {
         )[0];
         if (!existing)
           throw new StoryServiceError("attention_not_found", "attention item not found", 404);
+        if (existing.kind === RESULT_REVIEW_ATTENTION && !interactive)
+          throw new StoryServiceError(
+            "review_human_required",
+            "Dismiss this result from your Facility browser session",
+            403,
+          );
         if (
-          REVIEW_DECISION_ATTENTION.some((kind) => kind === existing.kind) &&
-          input.actor.type !== "user"
+          input.actor.type !== "user" &&
+          REVIEW_DECISION_ATTENTION.some((kind) => kind === existing.kind)
         )
           throw new StoryServiceError(
             "review_human_required",
             "A project member must resolve this review decision",
             403,
           );
-        return;
+        return existing.kind;
       }
+      if (resolved.kind === RESULT_REVIEW_ATTENTION) return resolved.kind;
       const remaining = (
         await tx
           .select({ id: attentionItems.id })
@@ -1225,6 +1338,7 @@ export class StoryWorkspaceService {
               eq(attentionItems.projectId, input.projectId),
               eq(attentionItems.storyId, input.storyId),
               eq(attentionItems.status, "open"),
+              notInArray(attentionItems.kind, [RESULT_REVIEW_ATTENTION]),
             ),
           )
           .limit(1)
@@ -1244,8 +1358,12 @@ export class StoryWorkspaceService {
           .set({ status: active ? "working" : "ready", updatedAt: new Date() })
           .where(and(eq(stories.orgId, input.orgId), eq(stories.id, input.storyId)));
       }
+      return resolved.kind;
     });
-    return this.get(input.orgId, input.projectId, input.storyId);
+    return {
+      ...(await this.get(input.orgId, input.projectId, input.storyId)),
+      dismissedAttentionKind,
+    };
   }
 
   async retryAttention(input: {
@@ -1274,6 +1392,7 @@ export class StoryWorkspaceService {
     if (
       !attention.turnId ||
       attention.kind === "agent_waiting" ||
+      attention.kind === RESULT_REVIEW_ATTENTION ||
       REVIEW_DECISION_ATTENTION.some((kind) => kind === attention.kind)
     ) {
       throw new StoryServiceError(
@@ -1327,6 +1446,7 @@ export class StoryWorkspaceService {
   }) {
     const turn = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const active = (
         await tx
@@ -1449,7 +1569,7 @@ export class StoryWorkspaceService {
         .where(and(eq(storyArtifacts.orgId, orgId), eq(storyArtifacts.storyId, storyId)))
         .orderBy(desc(storyArtifacts.createdAt)),
       this.db
-        .select()
+        .select({ ...getTableColumns(attentionItems), resultMessageId })
         .from(attentionItems)
         .where(and(eq(attentionItems.orgId, orgId), eq(attentionItems.storyId, storyId)))
         .orderBy(desc(attentionItems.createdAt))
@@ -2210,6 +2330,7 @@ export class StoryWorkspaceService {
   }
 
   async markMerged(input: {
+    expectedGithubBinding?: GithubRepositoryBinding;
     orgId: string;
     projectId: string;
     storyId: string;
@@ -2219,6 +2340,8 @@ export class StoryWorkspaceService {
   }) {
     const complete = await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       const complete = !isGithubIssueStory(story);
@@ -2250,9 +2373,16 @@ export class StoryWorkspaceService {
   }
 
   /** Reconcile only the exact mirrored source issue; never infer closure from a related PR. */
-  async reconcileIssue(orgId: string, projectId: string, storyId: string) {
+  async reconcileIssue(
+    orgId: string,
+    projectId: string,
+    storyId: string,
+    expectedGithubBinding?: GithubRepositoryBinding,
+  ) {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, { orgId, projectId });
+      await assertGithubRepositoryBinding(tx, { orgId, projectId }, expectedGithubBinding);
       await lockStory(tx, orgId, projectId, storyId);
       const story = await scopedStory(tx, orgId, projectId, storyId);
       if (
@@ -2349,6 +2479,7 @@ export class StoryWorkspaceService {
   }
 
   async associatePullRequest(input: {
+    expectedGithubBinding?: GithubRepositoryBinding;
     orgId: string;
     projectId: string;
     storyId: string;
@@ -2358,6 +2489,8 @@ export class StoryWorkspaceService {
   }) {
     await this.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as FacilityDb;
+      await lockWorkflowProject(tx, input);
+      await assertGithubRepositoryBinding(tx, input, input.expectedGithubBinding);
       await lockStory(tx, input.orgId, input.projectId, input.storyId);
       const story = await scopedStory(tx, input.orgId, input.projectId, input.storyId);
       if (

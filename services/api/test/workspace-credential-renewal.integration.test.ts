@@ -211,3 +211,191 @@ it("ignores a stale lower-priority Git credential helper", async () => {
   environment.GIT_CONFIG_GLOBAL = config;
   expect((await gitCredential()).stdout).toContain("password=synthetic-first");
 });
+
+it("routes gh by checkout, explicit repository, PR URL and API path with separate App tokens", async () => {
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  await writeFile(
+    file,
+    JSON.stringify({ ...saved, tokens: { ...saved.tokens, "acme/related": "synthetic-related" } }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    realGh,
+    `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, repo: process.env.GH_REPO }));\n`,
+    { mode: 0o700 },
+  );
+  const cwd = "repos/acme/related";
+  await mkdir(join(workspace.volumeRef, cwd), { recursive: true });
+  for (const args of [
+    ["init", "-q"],
+    ["remote", "add", "origin", "https://github.com/acme/related.git"],
+  ]) {
+    expect((await runtime.exec(workspace, { command: "git", args, cwd })).exitCode).toBe(0);
+  }
+  for (const [args, token] of [
+    [["pr", "create", "--title", "Test", "--body", "Test"], "synthetic-related"],
+    [["pr", "view", "https://github.com/acme/app/pull/1"], "synthetic-first"],
+    [["api", "repos/acme/app/issues"], "synthetic-first"],
+    [["pr", "list", "-R", "acme/app"], "synthetic-first"],
+    [["pr", "list", "-Racme/app"], "synthetic-first"],
+    [
+      ["pr", "create", "--draft", "--repo", "acme/app", "--title", "Test", "--body", "Test"],
+      "synthetic-first",
+    ],
+  ] as const) {
+    const result = await runtime.exec(workspace, {
+      command: "gh",
+      args: [...args],
+      cwd,
+      env: environment,
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ repo: "acme/related", token });
+  }
+  const selected = await runtime.exec(workspace, {
+    command: "gh",
+    args: ["pr", "list"],
+    cwd,
+    env: { ...environment, GH_REPO: "acme/app" },
+  });
+  expect(JSON.parse(selected.stdout)).toEqual({ repo: "acme/app", token: "synthetic-first" });
+  for (const args of [
+    ["pr", "view", "https://github.com/foreign/repo/pull/1"],
+    ["api", "repos/foreign/repo/issues"],
+    ["pr", "view", "https://github.com/acme/app/pull/1", "-R", "acme/related"],
+  ]) {
+    const result = await runtime.exec(workspace, { command: "gh", args, cwd, env: environment });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("synthetic-");
+  }
+  await runtime.exec(workspace, {
+    command: "git",
+    args: ["remote", "set-url", "origin", "https://github.com/foreign/repo.git"],
+    cwd,
+  });
+  const foreign = await runtime.exec(workspace, {
+    command: "gh",
+    args: ["pr", "list"],
+    cwd,
+    env: environment,
+  });
+  expect(foreign.exitCode).not.toBe(0);
+  expect(foreign.stdout).not.toContain("synthetic-");
+});
+
+it("does not treat URLs in gh body, title or API field values as the destination", async () => {
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  await writeFile(
+    file,
+    JSON.stringify({ ...saved, tokens: { ...saved.tokens, "acme/related": "synthetic-related" } }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    realGh,
+    `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, repo: process.env.GH_REPO }));\n`,
+    { mode: 0o700 },
+  );
+  for (const args of [
+    ["issue", "create", "--title", "Test", "--body", "https://github.com/acme/related/issues/42"],
+    ["pr", "comment", "7", "--body", "https://github.com/acme/related/pull/42"],
+    ["issue", "create", "--title", "Test", "--body", "-Racme/related"],
+    ["issue", "create", "--title", "--repo=acme/related", "--body", "Test"],
+    ["pr", "comment", "--body", "https://github.com/acme/related/pull/42", "7"],
+    [
+      "issue",
+      "edit",
+      "--remove-milestone",
+      "--body",
+      "https://github.com/acme/related/issues/42",
+      "7",
+    ],
+    ["pr", "edit", "7", "--title", "https://github.com/acme/related/pull/42"],
+    [
+      "api",
+      "--method",
+      "POST",
+      "repos/acme/app/issues",
+      "-f",
+      "body=https://github.com/acme/related/issues/42",
+    ],
+  ]) {
+    const result = await runtime.exec(workspace, {
+      command: "gh",
+      args,
+      env: { ...environment, GH_REPO: "acme/app" },
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ repo: "acme/app", token: "synthetic-first" });
+  }
+  const view = await runtime.exec(workspace, {
+    command: "gh",
+    args: ["pr", "view", "--json", "title", "https://github.com/acme/related/pull/42"],
+    env: environment,
+  });
+  expect(view.exitCode, view.stderr).toBe(0);
+  expect(JSON.parse(view.stdout)).toEqual({ repo: "acme/app", token: "synthetic-related" });
+});
+
+it("does not guess option arity for unknown gh flags", async () => {
+  await writeFile(realGh, `#!${process.execPath}\nprocess.stdout.write(process.env.GH_REPO);\n`, {
+    mode: 0o700,
+  });
+  for (const flag of ["--future-toggle", "-z", "-wz"]) {
+    const args = [
+      "issue",
+      "edit",
+      flag,
+      "--body",
+      "https://github.com/acme/related/issues/42",
+      "7",
+    ];
+    const refused = await runtime.exec(workspace, { command: "gh", args, env: environment });
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain("Set GH_REPO=owner/repo explicitly");
+    expect(refused.stdout).toBe("");
+    const explicit = await runtime.exec(workspace, {
+      command: "gh",
+      args,
+      env: { ...environment, GH_REPO: "acme/app" },
+    });
+    expect(explicit.exitCode, explicit.stderr).toBe(0);
+    expect(explicit.stdout).toBe("acme/app");
+  }
+});
+
+it("requires caller context for unsupported gh commands without interpreting their data", async () => {
+  const saved = JSON.parse(await readFile(file, "utf8"));
+  await writeFile(
+    file,
+    JSON.stringify({ ...saved, tokens: { ...saved.tokens, "acme/related": "synthetic-related" } }),
+    { mode: 0o600 },
+  );
+  await writeFile(
+    realGh,
+    `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ token: process.env.GH_TOKEN, repo: process.env.GH_REPO, args: process.argv.slice(2) }));\n`,
+    { mode: 0o700 },
+  );
+  const args = ["release", "create", "-p", "--notes", "-Racme/related", "v1"];
+  const refused = await runtime.exec(workspace, { command: "gh", args, env: environment });
+  expect(refused.exitCode).not.toBe(0);
+  expect(refused.stdout).toBe("");
+  const explicit = await runtime.exec(workspace, {
+    command: "gh",
+    args,
+    env: { ...environment, GH_REPO: "acme/app" },
+  });
+  expect(explicit.exitCode, explicit.stderr).toBe(0);
+  expect(JSON.parse(explicit.stdout)).toEqual({ repo: "acme/app", token: "synthetic-first", args });
+  for (const args of [
+    ["api", "--unknown", "--hostname", "foreign.example", "repos/acme/app"],
+    ["release", "list", "--hostname=foreign.example"],
+  ]) {
+    const foreign = await runtime.exec(workspace, {
+      command: "gh",
+      args,
+      env: { ...environment, GH_REPO: "acme/app" },
+    });
+    expect(foreign.exitCode).not.toBe(0);
+    expect(foreign.stdout).toBe("");
+  }
+});

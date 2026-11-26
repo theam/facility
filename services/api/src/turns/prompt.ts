@@ -57,7 +57,8 @@ export function buildPrompt(
       : "",
     "Continue in the existing worktree. You have full workspace, network, Docker, browser, git, and GitHub maintainer access. Preserve useful uncommitted work. Commit and push coherent changes when the task calls for it. Never merge the pull request or publish packages.",
     "Use git and gh (including gh api) for GitHub operations. Facility renews their scoped credentials during the turn. A missing GH_TOKEN environment variable does not mean GitHub access is unavailable; do not replace the managed credential helper or gh configuration with a token copied earlier in the session.",
-    "If you cannot continue without a human answer, end with exactly <facility-needs-attention>your concise question</facility-needs-attention>. Do not use that marker for a recoverable command or environment failure.",
+    "Keep doing any remaining authorized work. If you have reached a decision that truly needs a human before you can or may continue, end with exactly <facility-needs-attention>the specific decision or question</facility-needs-attention>. Do not use it for progress, a scheduled wait, or a recoverable failure.",
+    "When the requested work is finished and the result is ready for the human to review, end with exactly <facility-ready-for-review>what the human should review in this result</facility-ready-for-review>. This is not a blocker or approval. Do not use it for intermediate results, scheduled follow-ups, routine status updates, or deliveries that already have a plan or pull request review to act on. Use at most one of these markers per response.",
   ]
     .filter(Boolean)
     .join("\n\n");

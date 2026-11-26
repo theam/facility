@@ -10,6 +10,7 @@ import { repositoryDevelopmentBranch } from "../github/development-branch.js";
 
 export type ConsultationScope = { orgId: string; projectId: string; storyId: string };
 export type ConsultationRepository = {
+  githubRepositoryId?: number | null;
   id: string;
   orgId: string;
   projectId: string;
@@ -33,6 +34,7 @@ export type ConsultationFile = {
 };
 export const ConsultationRepositorySchema = z
   .object({
+    githubRepositoryId: z.number().int().positive().nullable().optional(),
     id: z.string().min(1).max(200),
     orgId: z.string().min(1).max(200),
     projectId: z.string().min(1).max(200),
@@ -122,8 +124,9 @@ export function underDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise
   });
 }
 function readOnlyFactory(factory: GithubClientFactory, signal: AbortSignal): GithubClientFactory {
-  return async (installationId) => {
-    const client = await underDeadline(factory(installationId), signal);
+  return async (installationId, repositoryId) => {
+    const client = await underDeadline(factory(installationId, repositoryId), signal);
+    const getRepository = client.rest.repos.get;
     const request = { signal, timeout: 10_000 };
     const noWrite = async (): Promise<never> => {
       throw new ApiError(403, "consultation_write_denied", "Consultation sources are read-only");
@@ -169,6 +172,13 @@ function readOnlyFactory(factory: GithubClientFactory, signal: AbortSignal): Git
           updateRef: noWrite,
         },
         repos: {
+          get: getRepository
+            ? (args) =>
+                underDeadline(
+                  getRepository({ owner: args.owner, repo: args.repo, request }),
+                  signal,
+                )
+            : undefined,
           getContent: (args) =>
             underDeadline(
               client.rest.repos.getContent({
@@ -246,6 +256,7 @@ export class GithubConsultationSources implements ConsultationSources {
         "The connected source repository is unavailable in this project",
       );
     return {
+      githubRepositoryId: row.repository.githubRepositoryId,
       id: row.repository.id,
       orgId: row.repository.orgId,
       projectId: row.repository.projectId,
@@ -285,7 +296,10 @@ export class GithubConsultationSources implements ConsultationSources {
           rows.slice(start, start + 4).map(async ({ id }) => {
             const repository = await this.identity(scope, id);
             const branch = await repositoryDevelopmentBranch(this.db, repository);
-            const client = await factory(repository.installationNumber);
+            const client = await factory(
+              repository.installationNumber,
+              repository.githubRepositoryId,
+            );
             const response = await client.rest.repos.getBranch({
               owner: repository.owner,
               repo: repository.name,
@@ -313,10 +327,10 @@ export class GithubConsultationSources implements ConsultationSources {
     const parts = source.path.split("/");
     if (parts.length > 12) throw denied();
     const identity = await this.identity(scope, source.repository_id);
-    const client = await readOnlyFactory(
-      this.factory,
-      AbortSignal.timeout(10_000),
-    )(identity.installationNumber);
+    const client = await readOnlyFactory(this.factory, AbortSignal.timeout(10_000))(
+      identity.installationNumber,
+      identity.githubRepositoryId,
+    );
     if (!client.request) throw denied();
     const repository = { owner: identity.owner, repo: identity.name };
     const commit = await client.rest.git.getCommit({

@@ -563,13 +563,16 @@ export class StoryCompletionService {
       if (configured.id !== claimed.repositoryId) throw new Error("integration_policy_changed");
       const target = await this.repositoryById(scope, claimed.repositoryId);
       if (!target.installationId) throw new Error("github_destination_unavailable");
-      const client = await this.github(target.installationId);
+      const client = await this.github(target.installationId, target.githubRepositoryId);
       const githubRequest = client.request;
       if (!githubRequest) throw new Error("github_requests_unavailable");
       await this.mutate(scope, async (service) => {
         const fresh = await service.read(scope);
         assertCandidate(fresh, claimed.candidateRevision);
+        const currentTarget = await service.repositoryById(scope, claimed.repositoryId);
         if (
+          currentTarget.installationId !== target.installationId ||
+          currentTarget.githubRepositoryId !== target.githubRepositoryId ||
           fresh.integration.policy.mode !== "repository_dispatch" ||
           fresh.integration.eventId !== claimed.eventId ||
           fresh.integration.repository !== `${target.owner}/${target.name}`
@@ -670,7 +673,12 @@ export class StoryCompletionService {
         initialSource.issue.state === "closed"
           ? undefined
           : initialSource.repository.installationId
-            ? (await this.github(initialSource.repository.installationId)).request
+            ? (
+                await this.github(
+                  initialSource.repository.installationId,
+                  initialSource.repository.githubRepositoryId,
+                )
+              ).request
             : undefined;
       if (initialSource.issue.state !== "closed" && !githubRequest)
         throw new Error("github_destination_unavailable");
@@ -1018,6 +1026,7 @@ export class StoryCompletionService {
         id: projectRepositories.id,
         owner: projectRepositories.owner,
         name: projectRepositories.name,
+        githubRepositoryId: projectRepositories.githubRepositoryId,
         installationId: githubInstallations.installationId,
       })
       .from(projectRepositories)
@@ -1060,6 +1069,7 @@ export class StoryCompletionService {
         id: projectRepositories.id,
         owner: projectRepositories.owner,
         name: projectRepositories.name,
+        githubRepositoryId: projectRepositories.githubRepositoryId,
         installationId: githubInstallations.installationId,
       })
       .from(projectRepositories)
@@ -1126,6 +1136,7 @@ export class StoryCompletionService {
         issue: githubIssues,
         sourceVersion: sql<string>`${githubIssues}.xmin::text`,
         repository: projectRepositories,
+        githubRepositoryId: projectRepositories.githubRepositoryId,
         installationId: githubInstallations.installationId,
       })
       .from(githubIssues)

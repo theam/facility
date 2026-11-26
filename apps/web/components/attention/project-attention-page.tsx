@@ -69,7 +69,7 @@ export default async function ProjectAttentionPage({
         <p className="eyebrow">Project</p>
         <h1 className="text-[26px] font-semibold tracking-tight">Attention</h1>
         <p className="text-sm text-(--mut)">
-          What needs a person now. Agents keep working on everything else.
+          Decisions that need you, followed by finished results to review.
         </p>
         {result.ok && query.category !== "pulls" ? (
           <p className={filtered ? "text-sm text-(--mut)" : "sr-only"} role="status">
@@ -144,18 +144,41 @@ export default async function ProjectAttentionPage({
                   </Link>
                 </section>
               ) : (
-                <Card title="Needs your decision" bodyClassName="px-0 py-0 sm:px-0">
+                <Card title="Needs your attention" bodyClassName="px-0 py-0 sm:px-0">
                   <ol aria-label="Pending stories" className="flex flex-col">
                     {result.data.items.map((item) => {
                       const target = storyHref(projectId, item.storyId);
                       const brief = item.plan?.decisionBrief;
+                      const resultReview = item.resultReview;
+                      const resultOnly =
+                        !!resultReview &&
+                        !item.plan &&
+                        !item.delivery &&
+                        item.noticeKinds.every(({ kind }) => kind === "agent_ready_review");
+                      const resultHref = resultReview
+                        ? storyReviewHref(
+                            projectId,
+                            item.storyId,
+                            undefined,
+                            resultReview.messageId,
+                            `message-${resultReview.messageId}`,
+                          )
+                        : null;
                       const review = item.plan
                         ? storyReviewHref(projectId, item.storyId, {
                             revision: item.plan.revision,
                             digest: item.plan.digest,
                           })
-                        : `${target}${item.delivery ? "#story-delivery" : "#story-attention"}`;
-                      const kind = item.plan ? "Plan" : item.delivery ? "Delivery" : "Notice";
+                        : resultOnly && resultHref
+                          ? resultHref
+                          : `${target}${item.delivery ? "#story-delivery" : "#story-attention"}`;
+                      const kind = item.plan
+                        ? "Plan"
+                        : item.delivery
+                          ? "Delivery"
+                          : resultOnly
+                            ? "Ready to review"
+                            : "Notice";
                       const tone = item.plan
                         ? ("human" as const)
                         : item.delivery
@@ -169,16 +192,20 @@ export default async function ProjectAttentionPage({
                           : !item.plan && item.delivery
                             ? (item.delivery.blocked?.message ??
                               `${item.delivery.candidate.requiredCount} required PRs · ${item.delivery.acceptance.status === "current" ? "Accepted" : "Awaiting review"}`)
-                            : !item.plan && !item.delivery
-                              ? item.noticeKinds
-                                  .map(({ kind }) => attentionKindLabel(kind))
-                                  .join(" · ")
-                              : null;
+                            : resultOnly
+                              ? resultReview.summary
+                              : !item.plan && !item.delivery
+                                ? item.noticeKinds
+                                    .map(({ kind }) => attentionKindLabel(kind))
+                                    .join(" · ")
+                                : null;
                       const action = item.plan
                         ? `Review plan r${item.plan.revision}`
                         : item.delivery
                           ? "Review delivery"
-                          : "Open notices";
+                          : resultOnly
+                            ? "Review result"
+                            : "Open notices";
                       return (
                         <li
                           key={item.storyId}
@@ -212,6 +239,14 @@ export default async function ProjectAttentionPage({
                               <p className="mt-1 line-clamp-2 break-words text-sm text-(--mut)">
                                 {summary}
                               </p>
+                            ) : null}
+                            {!resultOnly && resultHref ? (
+                              <Link
+                                href={resultHref}
+                                className="mt-1 inline-flex text-sm text-(--info) underline underline-offset-4"
+                              >
+                                Review finished result
+                              </Link>
                             ) : null}
                             <Link
                               href={review}

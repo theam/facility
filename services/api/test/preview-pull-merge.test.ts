@@ -186,3 +186,23 @@ describe("GitHub proof of a preview PR integration", () => {
     await expect(pending).rejects.toBe(reason);
   });
 });
+
+it("requires the recorded repository ID even when a replacement is publicly readable", async () => {
+  const scoped = credentials();
+  scoped.repositories = scoped.repositories.map((repository) => ({
+    ...repository,
+    githubRepositoryId: 123,
+  }));
+  for (const id of [undefined, 999]) {
+    await expect(
+      readPreviewPullMerge(target, scoped, undefined, async () =>
+        response(snapshot({ base: { repo: { full_name: "acme/app", id } } })),
+      ),
+    ).rejects.toMatchObject({ code: "preview_pull_request_changed" });
+  }
+  await expect(
+    readPreviewPullMerge(target, scoped, undefined, async () =>
+      response(snapshot({ base: { repo: { full_name: "acme/app", id: 123 } } })),
+    ),
+  ).resolves.toBe(integrated);
+});

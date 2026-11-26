@@ -76,8 +76,11 @@ describe("repository unlink API", () => {
       },
       { rateLimitMax: 10_000 },
     );
-    app.githubClientFactory = async () =>
-      ({ rest: { repos: { get: upstreamGet } } }) as unknown as Octokit;
+    app.githubClientFactory = async (installationId) =>
+      ({
+        repositoryInstallationId: async () => installationId,
+        rest: { repos: { get: upstreamGet } },
+      }) as unknown as Octokit;
     await app.ready();
   });
   afterAll(async () => {
