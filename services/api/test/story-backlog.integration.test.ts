@@ -72,6 +72,7 @@ describe("unified project backlog", async () => {
     changesStory: newId("story"),
     closedPullStory: newId("story"),
     mergedStory: newId("story"),
+    branchOnlyStory: newId("story"),
     manualStory: newId("story"),
     archivedStory: newId("story"),
     readyStory: newId("story"),
@@ -413,6 +414,15 @@ describe("unified project backlog", async () => {
     });
     await pull({ number: 218, state: "merged", headRef: "feature/18", closingIssues: [18] });
     await story({
+      id: ids.branchOnlyStory,
+      externalId: "manual:branch-only",
+      title: "Branch-linked story",
+      provider: "manual",
+      branch: "feature/branch-only",
+      turn: "succeeded",
+    });
+    await pull({ number: 219, state: "open", headRef: "feature/branch-only" });
+    await story({
       id: ids.manualStory,
       externalId: "manual:key",
       title: "Spontaneous request",
@@ -544,6 +554,10 @@ describe("unified project backlog", async () => {
       titleSource: "pending",
       issue: null,
       story: { provider: "manual" },
+    });
+    expect(itemFor(result, `story:${ids.branchOnlyStory}`)).toMatchObject({
+      phase: "review",
+      pullRequest: { number: 219 },
     });
     expect(itemFor(result, `pull-request:${repositoryId}:300`)).toMatchObject({
       kind: "pull_request",
