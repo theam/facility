@@ -10,6 +10,8 @@ import {
   workspaces,
 } from "@facility/db";
 import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { resultMessageId } from "../stories/attention-result.js";
+import { RESULT_REVIEW_ATTENTION } from "../stories/phase.js";
 import { type CostBudgetService, monthWindow } from "./costs.js";
 
 // The overview is the operator's entry point. It reads persisted control-plane
@@ -144,6 +146,7 @@ export class ProjectOverviewService {
           storyId: attentionItems.storyId,
           turnId: attentionItems.turnId,
           kind: attentionItems.kind,
+          resultMessageId,
           title: attentionItems.title,
           detail: attentionItems.detail,
           createdAt: attentionItems.createdAt,
@@ -156,7 +159,10 @@ export class ProjectOverviewService {
             eq(attentionItems.status, "open"),
           ),
         )
-        .orderBy(desc(attentionItems.createdAt))
+        .orderBy(
+          asc(sql`${attentionItems.kind} = ${RESULT_REVIEW_ATTENTION}`),
+          desc(attentionItems.createdAt),
+        )
         .limit(ATTENTION_LIMIT),
       this.db
         .select({ count: sql<number>`count(*)::int` })
@@ -280,6 +286,7 @@ export class ProjectOverviewService {
       ...storyRef(item.storyId),
       turnId: item.turnId,
       kind: item.kind,
+      resultMessageId: item.resultMessageId,
       title: item.title,
       detail: item.detail === null ? null : item.detail.slice(0, ERROR_EXCERPT * 2),
       createdAt: item.createdAt,
@@ -457,7 +464,11 @@ export class ProjectOverviewService {
 export function attentionAction(item: { kind: string; turnId: string | null }) {
   if (item.kind === "agent_waiting") return "reply" as const;
   // The review-cycle owner requires a human decision, never a failed-turn retry.
-  if (item.kind === "review_cycle_ready" || item.kind === "review_cycle_decision")
+  if (
+    item.kind === "review_cycle_ready" ||
+    item.kind === "review_cycle_decision" ||
+    item.kind === RESULT_REVIEW_ATTENTION
+  )
     return "dismiss" as const;
   if (item.turnId) return "retry" as const;
   return "dismiss" as const;

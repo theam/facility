@@ -1284,4 +1284,47 @@ describe("durable delivery integration, notices and source completion", () => {
     expect(operation).toMatchObject({ state: "completed", errorCode: null });
     expect(story?.status).toBe("done");
   }, 15000);
+  it("retries integration with the new App instead of dispatching through a stale client", async () => {
+    const f = await reviewFixture();
+    await domain.completion.setPolicy(f.scope, {
+      mode: "repository_dispatch",
+      repository: `example/${f.name}`,
+    });
+    const nextId = newId("ghi");
+    const nextNumber = installationNumber + 1;
+    await db.insert(githubInstallations).values({
+      id: nextId,
+      orgId,
+      installationId: nextNumber,
+      accountId: nextNumber,
+      accountLogin: "example",
+      targetType: "Organization",
+    });
+    const request = vi.fn(async () => ({ data: {} }));
+    const factory = vi.fn(async () => {
+      // Resolve A, then commit a same-slug connection change before dispatch takes its fence.
+      await db
+        .update(projectRepositories)
+        .set({ installationId: nextId })
+        .where(eq(projectRepositories.id, f.repositoryId));
+      return { request, rest: {} } as unknown as Octokit;
+    });
+    const service = new StoryCompletionService(db, factory, domain.stories, enqueue);
+    expect(await service.dispatchIntegration(f.scope)).toMatchObject({
+      claimed: true,
+      state: "failed",
+    });
+    expect(request).not.toHaveBeenCalled();
+    await db
+      .update(storyDeliveryIntegrations)
+      .set({ nextAttemptAt: new Date(0) })
+      .where(eq(storyDeliveryIntegrations.storyId, f.scope.storyId));
+    const retry = await service.dispatchIntegration(f.scope);
+    expect(retry, JSON.stringify(retry)).toMatchObject({ claimed: true, state: "dispatched" });
+    expect(factory.mock.calls).toEqual([
+      [installationNumber, null],
+      [nextNumber, null],
+    ]);
+    expect(request).toHaveBeenCalledOnce();
+  });
 });

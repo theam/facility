@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { type FacilityDb, idempotencyRecords } from "@facility/db";
 import { and, eq, lt } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { interactiveSessionCookie } from "./auth/interactive-session.js";
 import { ApiError } from "./errors.js";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60_000;
@@ -36,8 +37,15 @@ export async function beginIdempotentRequest(
   const path = request.url.split("?")[0] ?? request.url;
   const keyHash = sha256(key);
   const requestHash = sha256(stableJson(request.body));
+  // A delegated token and the browser may represent the same user. For
+  // mutations with browser-only decisions, keep their replay records separate.
+  const authScope = request.routeOptions.config?.partitionIdempotencyByAuthSurface
+    ? interactiveSessionCookie(request)
+      ? ":browser"
+      : ":non-browser"
+    : "";
   const id = `idem_${sha256(
-    `${principal.orgId}:${principal.type}:${principal.id}:${request.method}:${path}:${keyHash}`,
+    `${principal.orgId}:${principal.type}:${principal.id}:${request.method}:${path}:${keyHash}${authScope}`,
   )}`;
   const expiresAt = new Date(Date.now() + IDEMPOTENCY_TTL_MS);
   const inserted = await db

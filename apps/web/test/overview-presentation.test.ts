@@ -207,6 +207,30 @@ describe("latest attention", () => {
     ).toHaveLength(2);
   });
 
+  it("keeps an older decision ahead of a newer result in the compact view", () => {
+    const { entries } = latestAttention(
+      {
+        attention: {
+          openCount: 2,
+          items: [
+            notice("result", "2026-09-10T11:55:00Z", {
+              kind: "agent_ready_review",
+              resultMessageId: "msg-original-result",
+            }),
+            notice("decision", "2026-09-10T09:00:00Z", { kind: "agent_waiting" }),
+          ],
+        },
+        review: { total: 0, items: [] },
+        spend: noSpend,
+      },
+      "p1",
+    );
+    expect(entries.map(({ key }) => key)).toEqual(["attention:decision", "attention:result"]);
+    expect(entries[1]?.action?.href).toBe(
+      "/projects/p1/stories/story-result?messageId=msg-original-result#message-msg-original-result",
+    );
+  });
+
   it("is empty when nothing is open, whatever the resolved history holds", () => {
     expect(
       latestAttention(

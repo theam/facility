@@ -1,7 +1,14 @@
-import { githubInstallations, githubWebhookEvents, projectRepositories } from "@facility/db";
+import {
+  githubConnections,
+  githubInstallations,
+  githubWebhookEvents,
+  projectRepositories,
+} from "@facility/db";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { openConnection } from "../github/connections.js";
+import { githubPayloadMatchesRepository } from "../github/repository-binding.js";
 import { parseGithubJson, verifyGithubSignature } from "../github/webhook.js";
 import type { AppConfig } from "../types.js";
 
@@ -15,107 +22,146 @@ export async function registerWebhookRoutes(app: FastifyInstance, config: AppCon
       (_request, body, done) => done(null, body),
     );
 
-    webhookApp.post(
-      "/webhooks/github",
-      {
-        config: { public: true, rateLimit: false },
-        schema: { response: { 202: Response, 400: Response, 401: Response } },
-      },
-      async (request, reply) => {
-        const secret = config.githubAppWebhookSecret;
-        const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
-        const signature = header(request.headers["x-hub-signature-256"]);
-        const delivery = header(request.headers["x-github-delivery"]);
-        const eventType = header(request.headers["x-github-event"]);
-        if (
-          !secret ||
-          !delivery ||
-          !eventType ||
-          !verifyGithubSignature(rawBody, signature, secret)
-        ) {
-          return reply.status(401).send({ ok: false });
-        }
+    for (const path of ["/webhooks/github", "/webhooks/github/:connectionId"])
+      webhookApp.post(
+        path,
+        {
+          // Additional connections require a lookup before signature validation.
+          // Keep the normal ingress limit there; preserve the legacy route's policy.
+          config: { public: true, ...(path === "/webhooks/github" ? { rateLimit: false } : {}) },
+          schema: {
+            ...(path.includes(":connectionId")
+              ? { params: z.object({ connectionId: z.string() }) }
+              : {}),
+            response: { 202: Response, 400: Response, 401: Response },
+          },
+        },
+        async (request, reply) => {
+          const connectionId = (request.params as { connectionId?: string }).connectionId;
+          let secret = config.githubAppWebhookSecret;
+          let connectionOrg: string | undefined;
+          if (connectionId) {
+            const connection = (
+              await app.facilityDb
+                .select()
+                .from(githubConnections)
+                .where(eq(githubConnections.id, connectionId))
+                .limit(1)
+            )[0];
+            if (!connection || connection.disabledAt) return reply.status(401).send({ ok: false });
+            try {
+              secret = (await openConnection(connection, config.secretMasterKey)).webhookSecret;
+            } catch {
+              return reply.status(401).send({ ok: false });
+            }
+            connectionOrg = connection.orgId;
+          }
+          const rawBody = Buffer.isBuffer(request.body) ? request.body : Buffer.from("");
+          const signature = header(request.headers["x-hub-signature-256"]);
+          const delivery = header(request.headers["x-github-delivery"]);
+          const eventType = header(request.headers["x-github-event"]);
+          if (
+            !secret ||
+            !delivery ||
+            !eventType ||
+            !verifyGithubSignature(rawBody, signature, secret)
+          ) {
+            return reply.status(401).send({ ok: false });
+          }
 
-        let payload: Record<string, unknown>;
-        try {
-          const parsed = parseGithubJson(rawBody);
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          let payload: Record<string, unknown>;
+          try {
+            const parsed = parseGithubJson(rawBody);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              return reply.status(400).send({ ok: false });
+            }
+            payload = parsed as Record<string, unknown>;
+          } catch {
             return reply.status(400).send({ ok: false });
           }
-          payload = parsed as Record<string, unknown>;
-        } catch {
-          return reply.status(400).send({ ok: false });
-        }
-        const installationNumber = githubInstallationNumber(payload);
-        if (!installationNumber) {
-          request.log.warn({ delivery, eventType }, "github webhook has no installation identity");
-          return reply.status(202).send({ ok: true });
-        }
-        const installation = (
-          await app.facilityDb
-            .select()
-            .from(githubInstallations)
-            .where(eq(githubInstallations.installationId, installationNumber))
-            .limit(1)
-        )[0];
-        if (!installation || installation.suspendedAt) {
-          request.log.warn(
-            { delivery, eventType, installationNumber },
-            "github webhook installation is unknown or suspended",
-          );
-          return reply.status(202).send({ ok: true });
-        }
+          const installationNumber = githubInstallationNumber(payload);
+          if (!installationNumber) {
+            request.log.warn(
+              { delivery, eventType },
+              "github webhook has no installation identity",
+            );
+            return reply.status(202).send({ ok: true });
+          }
+          const installation = (
+            await app.facilityDb
+              .select()
+              .from(githubInstallations)
+              .where(eq(githubInstallations.installationId, installationNumber))
+              .limit(1)
+          )[0];
+          if (
+            !installation ||
+            installation.suspendedAt ||
+            (installation.connectionId ?? undefined) !== connectionId ||
+            (connectionOrg && connectionOrg !== installation.orgId)
+          ) {
+            request.log.warn(
+              { delivery, eventType, installationNumber },
+              "github webhook installation is unknown or suspended",
+            );
+            return reply.status(202).send({ ok: true });
+          }
 
-        const repositoryIdentity = githubRepositoryIdentity(payload);
-        const repository = repositoryIdentity
-          ? (
-              await app.facilityDb
-                .select({
-                  id: projectRepositories.id,
-                  projectId: projectRepositories.projectId,
-                })
-                .from(projectRepositories)
-                .where(
-                  and(
-                    eq(projectRepositories.orgId, installation.orgId),
-                    eq(projectRepositories.installationId, installation.id),
-                    eq(projectRepositories.owner, repositoryIdentity.owner),
-                    eq(projectRepositories.name, repositoryIdentity.name),
-                  ),
-                )
-                .limit(1)
-            )[0]
-          : undefined;
+          const repositoryIdentity = githubRepositoryIdentity(payload);
+          const candidate = repositoryIdentity
+            ? (
+                await app.facilityDb
+                  .select({
+                    id: projectRepositories.id,
+                    projectId: projectRepositories.projectId,
+                    githubRepositoryId: projectRepositories.githubRepositoryId,
+                  })
+                  .from(projectRepositories)
+                  .where(
+                    and(
+                      eq(projectRepositories.orgId, installation.orgId),
+                      eq(projectRepositories.installationId, installation.id),
+                      eq(projectRepositories.owner, repositoryIdentity.owner),
+                      eq(projectRepositories.name, repositoryIdentity.name),
+                    ),
+                  )
+                  .limit(1)
+              )[0]
+            : undefined;
 
-        const id = `gh_${installation.id}_${delivery}`;
-        const inserted = await app.facilityDb
-          .insert(githubWebhookEvents)
-          .values({
-            id,
-            orgId: installation.orgId,
-            installationId: installation.id,
-            projectId: repository?.projectId,
-            repositoryId: repository?.id,
-            eventType,
-            payload,
-            verified: true,
-          })
-          .onConflictDoNothing()
-          .returning({ id: githubWebhookEvents.id });
-        if (inserted.length === 0) {
-          return reply.status(202).send({ ok: true, replayed: true });
-        }
-        if (!githubWebhookRequiresWorker(eventType, payload)) {
-          await app.facilityDb
-            .update(githubWebhookEvents)
-            .set({ processedAt: new Date() })
-            .where(eq(githubWebhookEvents.id, id));
+          const repository =
+            candidate && githubPayloadMatchesRepository(candidate.githubRepositoryId, payload)
+              ? candidate
+              : undefined;
+          const id = `gh_${installation.id}_${delivery}`;
+          const inserted = await app.facilityDb
+            .insert(githubWebhookEvents)
+            .values({
+              id,
+              orgId: installation.orgId,
+              installationId: installation.id,
+              projectId: repository?.projectId,
+              repositoryId: repository?.id,
+              eventType,
+              payload,
+              verified: true,
+            })
+            .onConflictDoNothing()
+            .returning({ id: githubWebhookEvents.id });
+          if (inserted.length === 0) {
+            return reply.status(202).send({ ok: true, replayed: true });
+          }
+          if (!repository || !githubWebhookRequiresWorker(eventType, payload)) {
+            await app.facilityDb
+              .update(githubWebhookEvents)
+              .set({ processedAt: new Date() })
+              .where(eq(githubWebhookEvents.id, id));
+            return reply.status(202).send({ ok: true });
+          }
+          await app.enqueue("github.webhook", { inboundEventId: id });
           return reply.status(202).send({ ok: true });
-        }
-        await app.enqueue("github.webhook", { inboundEventId: id });
-        return reply.status(202).send({ ok: true });
-      },
-    );
+        },
+      );
   });
 }
 
