@@ -22,6 +22,7 @@ export type KickstartAnswers = {
 };
 
 export type GithubRepositoryRow = {
+  githubRepositoryId?: number | null;
   id: string;
   orgId: string;
   projectId: string;
@@ -49,12 +50,16 @@ export async function createGithubClientForRepo(
   if (!installation || installation.orgId !== repository.orgId || installation.suspendedAt) {
     throw new Error("GitHub installation is unavailable");
   }
-  return new FacilityGithubClient(await factory(installation.installationId), {
-    owner: repository.owner,
-    repo: repository.name,
-    defaultBranch: repository.defaultBranch,
-    developmentBranch: developmentBranch ?? (await repositoryDevelopmentBranch(db, repository)),
-  });
+  return new FacilityGithubClient(
+    await factory(installation.installationId, repository.githubRepositoryId),
+    {
+      githubRepositoryId: repository.githubRepositoryId,
+      owner: repository.owner,
+      repo: repository.name,
+      defaultBranch: repository.defaultBranch,
+      developmentBranch: developmentBranch ?? (await repositoryDevelopmentBranch(db, repository)),
+    },
+  );
 }
 
 export async function kickstartPreview(

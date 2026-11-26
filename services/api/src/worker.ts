@@ -26,10 +26,7 @@ export async function startWorker() {
   const boss = new PgBoss({ connectionString: config.databaseUrl });
   boss.on("error", (error) => logger.error({ err: error }, "pg-boss error"));
   await boss.start();
-  const githubFactory =
-    config.githubAppId && config.githubAppPrivateKey
-      ? createGithubClientFactory(config)
-      : undefined;
+  const githubFactory = createGithubClientFactory(config, db);
   const storyDomain = createStoryDomain({
     db,
     config,

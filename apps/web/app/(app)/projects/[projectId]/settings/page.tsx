@@ -4,6 +4,7 @@ import { ErrorNotice, Offline } from "@/components/offline";
 import { DevelopmentBranch } from "@/components/project/development-branch";
 import { DisconnectRepository } from "@/components/project/disconnect-repository";
 import { NativePreviews } from "@/components/project/native-previews";
+import { RepositoryConnection } from "@/components/project/repository-connection";
 import { WorkflowPolicy } from "@/components/project/workflow-policy";
 import { WorkspaceVariables } from "@/components/story/workspace-variables";
 import { api } from "@/lib/api";
@@ -150,6 +151,9 @@ export default async function ProjectSettingsPage({
                 <span className="ml-auto font-mono text-[11px] text-(--dim)">
                   {repo.defaultBranch}
                 </span>
+                {can(me.ok ? me.data.permissions : [], "repos:write") && (
+                  <RepositoryConnection projectId={projectId} repository={repo} />
+                )}
                 <DisconnectRepository
                   projectId={projectId}
                   repository={repo}

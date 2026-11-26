@@ -97,6 +97,27 @@ beforeEach(() => {
   mocks.queries = [];
 });
 describe("project Attention entry", () => {
+  it("labels a finished report and links to its exact conversation message", async () => {
+    if (!mocks.result.ok) throw new Error("Expected a project snapshot");
+    mocks.result.data.items.push({
+      storyId: "benchmark",
+      storyTitle: "Compare models",
+      storyStatus: "working",
+      waitingSince: "2026-11-05T09:00:00Z",
+      noticeCount: 1,
+      noticeKinds: [{ kind: "agent_ready_review", count: 1 }],
+      resultReview: { messageId: "msg-result", summary: "Read the comparison." },
+      delivery: null,
+      plan: null,
+    });
+    const root = await render();
+    const row = root.querySelector('ol[aria-label="Pending stories"] > li:last-child');
+    expect(row?.textContent).toContain("Ready to review");
+    expect(row?.textContent).toContain("Read the comparison.");
+    expect(row?.querySelector("h2 > a")?.getAttribute("href")).toBe(
+      "/projects/project/stories/benchmark?messageId=msg-result#message-msg-result",
+    );
+  });
   it("starts with a review list, with search folded and related views in the footer", async () => {
     const root = await render();
     expect(root.querySelector("form")?.closest("details")?.open).toBe(false);

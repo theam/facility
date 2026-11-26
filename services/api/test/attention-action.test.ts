@@ -5,6 +5,7 @@ describe("attention action projection", () => {
   it.each([
     "review_cycle_ready",
     "review_cycle_decision",
+    "agent_ready_review",
   ])("never advertises a retry for %s", (kind) => {
     expect(attentionAction({ kind, turnId: "reviewer-turn" })).toBe("dismiss");
   });

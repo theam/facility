@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "../types.js";
 import { registerBacklogRoutes } from "./v1/backlog.js";
+import { registerGithubConnectionRoutes } from "./v1/github-connections.js";
 import { registerGithubInstallationRoutes } from "./v1/github-installations.js";
 import { registerInsightsPipelineRoutes } from "./v1/insights-pipeline.js";
 import { registerMeMembersRolesRoutes } from "./v1/me-members-roles.js";
@@ -24,6 +25,7 @@ export async function registerV1Routes(app: FastifyInstance, config: AppConfig) 
   await registerMeMembersRolesRoutes(app, context);
   await registerProjectRoutes(app, context);
   await registerGithubInstallationRoutes(app, context);
+  await registerGithubConnectionRoutes(app, context);
   await registerInsightsPipelineRoutes(app, context);
   await registerBacklogRoutes(app, context);
   await registerProjectOverviewRoutes(app, context);

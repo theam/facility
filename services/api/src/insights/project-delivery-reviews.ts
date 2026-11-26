@@ -15,7 +15,7 @@ import {
   storyReviewCycles,
   turns,
 } from "@facility/db";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { observeUserAuthorities } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
 import {
@@ -33,6 +33,7 @@ import { ACTIVE_REVIEW_PHASES } from "../stories/review-cycle-state.js";
 import { workflowPolicyFromSettings } from "../stories/workflow-policy.js";
 
 type Scope = { orgId: string; projectId: string };
+type DeliveryScope = Scope & { storyId?: string };
 type ScopedTable =
   | typeof storyDeliveryScopes
   | typeof storyDeliveryPullRequests
@@ -42,10 +43,14 @@ type ScopedTable =
   | typeof githubPullRequests;
 const within = (table: ScopedTable, scope: Scope) =>
   and(eq(table.orgId, scope.orgId), eq(table.projectId, scope.projectId));
+const withinStory = (
+  table: Exclude<ScopedTable, typeof githubPullRequests>,
+  scope: DeliveryScope,
+) => and(within(table, scope), scope.storyId ? eq(table.storyId, scope.storyId) : undefined);
 
 /** Bulk metadata read inside the caller's snapshot. No Markdown, per-story
  * queries, GitHub calls, model calls or confirmation requests. */
-export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, now: Date) {
+export async function readProjectDeliveryReviews(db: FacilityDb, scope: DeliveryScope, now: Date) {
   const [
     projectRows,
     storyRows,
@@ -78,10 +83,11 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
         and(
           eq(stories.orgId, scope.orgId),
           eq(stories.projectId, scope.projectId),
+          scope.storyId ? eq(stories.id, scope.storyId) : undefined,
           isNull(stories.deletedAt),
         ),
       ),
-    db.select().from(storyDeliveryScopes).where(within(storyDeliveryScopes, scope)),
+    db.select().from(storyDeliveryScopes).where(withinStory(storyDeliveryScopes, scope)),
     db
       .select({
         link: storyDeliveryPullRequests,
@@ -100,7 +106,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
           eq(projectRepositories.id, storyDeliveryPullRequests.repositoryId),
         ),
       )
-      .where(within(storyDeliveryPullRequests, scope)),
+      .where(withinStory(storyDeliveryPullRequests, scope)),
     db
       .select({
         pull: {
@@ -138,12 +144,18 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
       .where(
         and(
           within(githubPullRequests, scope),
-          sql`(${githubPullRequests.state} = 'open' or
-      exists (select 1 from story_delivery_pull_requests l where l.org_id = ${scope.orgId} and l.project_id = ${scope.projectId}
-        and l.repository_id = ${githubPullRequests.repositoryId} and l.pull_number = ${githubPullRequests.number})
-      or exists (select 1 from stories s where s.org_id = ${scope.orgId} and s.project_id = ${scope.projectId}
-        and s.deleted_at is null and s.repository_id = ${githubPullRequests.repositoryId} and s.pull_request_number = ${githubPullRequests.number})
-    )`,
+          or(
+            scope.storyId ? undefined : eq(githubPullRequests.state, "open"),
+            sql`exists (select 1 from story_delivery_pull_requests l
+              where l.org_id = ${scope.orgId} and l.project_id = ${scope.projectId}
+                ${scope.storyId ? sql`and l.story_id = ${scope.storyId}` : sql``}
+                and l.repository_id = ${githubPullRequests.repositoryId} and l.pull_number = ${githubPullRequests.number})`,
+            sql`exists (select 1 from stories s
+              where s.org_id = ${scope.orgId} and s.project_id = ${scope.projectId}
+                ${scope.storyId ? sql`and s.id = ${scope.storyId}` : sql``}
+                and s.deleted_at is null and s.repository_id = ${githubPullRequests.repositoryId}
+                and s.pull_request_number = ${githubPullRequests.number})`,
+          ),
         ),
       ),
     db
@@ -178,11 +190,11 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
           eq(storyPlanDecisions.decisionRevision, storyPlanStates.decisionRevision),
         ),
       )
-      .where(within(storyPlanStates, scope)),
+      .where(withinStory(storyPlanStates, scope)),
     db
       .selectDistinctOn([storyDeliveryAcceptances.storyId])
       .from(storyDeliveryAcceptances)
-      .where(within(storyDeliveryAcceptances, scope))
+      .where(withinStory(storyDeliveryAcceptances, scope))
       .orderBy(storyDeliveryAcceptances.storyId, desc(storyDeliveryAcceptances.revision)),
     db
       .select({
@@ -193,7 +205,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
         observedAt: storyPreviewConvergences.updatedAt,
       })
       .from(storyPreviewConvergences)
-      .where(within(storyPreviewConvergences, scope)),
+      .where(withinStory(storyPreviewConvergences, scope)),
     db
       .select({
         id: projectRepositories.id,
@@ -233,6 +245,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
             and(
               eq(storyReviewCycles.orgId, scope.orgId),
               eq(storyReviewCycles.projectId, scope.projectId),
+              scope.storyId ? eq(storyReviewCycles.storyId, scope.storyId) : undefined,
               inArray(storyReviewCycles.phase, [...ACTIVE_REVIEW_PHASES]),
             ),
           ),
@@ -243,6 +256,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
             and(
               eq(turns.orgId, scope.orgId),
               eq(turns.projectId, scope.projectId),
+              scope.storyId ? eq(turns.storyId, scope.storyId) : undefined,
               eq(turns.agentName, builder ?? ""),
               inArray(turns.state, ["queued", "running"]),
             ),
@@ -458,7 +472,7 @@ export async function readProjectDeliveryReviews(db: FacilityDb, scope: Scope, n
       story.provider === "github" ? /^pull-request:(\d+)$/.exec(story.externalId) : null;
     if (source) reference(`${story.repositoryId}:${Number(source[1])}`, story, "source");
   }
-  const otherPullRequests = mirrors
+  const otherPullRequests = (scope.storyId ? [] : mirrors)
     .flatMap(({ pull, repository }) => {
       const name = `${repository.owner}/${repository.name}`;
       if (pull.state !== "open" || covered.has(`${name}#${pull.number}`)) return [];

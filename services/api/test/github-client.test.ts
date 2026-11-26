@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { FacilityGithubClient, type Octokit } from "../src/github/client.js";
+import {
+  bindGithubRepositoryClient,
+  FacilityGithubClient,
+  type Octokit,
+} from "../src/github/client.js";
 
 function fixture() {
   const createRef = vi.fn(async () => ({ data: {} }));
@@ -111,4 +115,89 @@ describe("FacilityGithubClient", () => {
     expect(updateRef).not.toHaveBeenCalled();
     expect(createPullRequest).not.toHaveBeenCalled();
   });
+});
+
+it("refuses executable configuration and writes when a pinned repository slug is reused", async () => {
+  let currentId = 123;
+  const read = vi.fn(async () => ({ data: { content: "configuration" } }));
+  const write = vi.fn(async () => ({ data: {} }));
+  const client = new FacilityGithubClient(
+    {
+      rest: {
+        repos: { get: async () => ({ data: { id: currentId, name: "app" } }), getContent: read },
+        git: { createRef: write },
+      },
+    } as unknown as Octokit,
+    { owner: "acme", repo: "app", defaultBranch: "main", githubRepositoryId: 123 },
+  );
+  await client.getContent(".facility.yml", "a".repeat(40));
+  currentId = 987;
+  await expect(client.getContent(".agents/builder.md")).rejects.toThrow("identity changed");
+  await expect(client.createBranch("feature/test", "a".repeat(40))).rejects.toThrow(
+    "identity changed",
+  );
+  expect(read).toHaveBeenCalledOnce();
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("checks immutable identity before raw public reads and direct repository requests", async () => {
+  let id = 123;
+  const request = vi.fn(async () => ({ data: {} }));
+  const getBranch = vi.fn(async () => ({ data: { commit: { sha: "a".repeat(40) } } }));
+  const bound = bindGithubRepositoryClient(
+    {
+      request,
+      rest: {
+        git: {},
+        pulls: {},
+        repos: {
+          get: async () => ({ data: { id, name: "app" } }),
+          getBranch,
+        },
+      },
+    } as unknown as Octokit,
+    123,
+  );
+  await bound.rest.repos.getBranch({ owner: "acme", repo: "app", branch: "main" });
+  id = 999;
+  await expect(
+    bound.rest.repos.getBranch({ owner: "acme", repo: "app", branch: "main" }),
+  ).rejects.toThrow("identity changed");
+  await expect(
+    bound.request?.("GET /repos/{owner}/{repo}/pulls/1", { owner: "acme", repo: "app" }),
+  ).rejects.toThrow("identity changed");
+  expect(getBranch).toHaveBeenCalledOnce();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it.each([
+  "request",
+  "getBranch",
+])("rejects a slug replacement during a public %s read", async (operation) => {
+  let id = 123;
+  const read = vi.fn(async () => {
+    id = 999;
+    return { data: { commit: { sha: "a".repeat(40) } } };
+  });
+  const bound = bindGithubRepositoryClient(
+    {
+      request: read,
+      rest: {
+        git: {},
+        pulls: {},
+        repos: {
+          get: async () => ({ data: { id, name: "app" } }),
+          getBranch: read,
+        },
+      },
+    } as unknown as Octokit,
+    123,
+  );
+  const args = { owner: "acme", repo: "app", branch: "main" };
+  const result =
+    operation === "request"
+      ? bound.request?.("GET /repos/{owner}/{repo}/issues", args)
+      : bound.rest.repos.getBranch(args);
+  await expect(result).rejects.toThrow("identity changed");
+  expect(read).toHaveBeenCalledOnce();
 });

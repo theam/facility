@@ -1,6 +1,7 @@
 import { newId } from "@facility/core";
 import {
   createDb,
+  githubConnections,
   githubInstallations,
   migrate,
   oauthArtifacts,
@@ -11,6 +12,7 @@ import {
 } from "@facility/db";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { and, eq, isNull } from "drizzle-orm";
 import { decodeJwt, exportJWK, generateKeyPair, SignJWT } from "jose";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -642,6 +644,56 @@ describe("Facility OAuth resource-server integration", async () => {
     });
     expect(rejectedRegistration.statusCode).toBe(400);
     expect(rejectedRegistration.json()).toMatchObject({ error: "invalid_client_metadata" });
+  });
+
+  it("does not replace suspended identity bindings with repository Apps for MCP or refresh", async () => {
+    const issued = await issueTokens();
+    const connectionId = newId("ghc");
+    const extraId = newId("ghi");
+    const number = 60_000_000 + Math.floor(Math.random() * 1_000_000);
+    await db.insert(githubConnections).values({
+      id: connectionId,
+      orgId,
+      name: "Repository App",
+      appId: number,
+      slug: "repo-only",
+      credentials: "unused",
+      disabledAt: new Date(),
+    });
+    await db.insert(githubInstallations).values({
+      id: extraId,
+      orgId,
+      connectionId,
+      installationId: number,
+      accountId: number,
+      accountLogin: "repo-only",
+      targetType: "Organization",
+    });
+    const identityWhere = and(
+      eq(githubInstallations.orgId, orgId),
+      isNull(githubInstallations.connectionId),
+    );
+    const bindings = await db.select().from(githubInstallations).where(identityWhere);
+    try {
+      await db.update(githubInstallations).set({ suspendedAt: new Date() }).where(identityWhere);
+      const denied = await app.inject({
+        url: "/v1/me",
+        headers: { authorization: `Bearer ${issued.access_token}` },
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(denied.json().error.code).toBe("not_provisioned");
+      const refresh = await issued.refresh();
+      expect(refresh.statusCode).toBe(400);
+      expect(refresh.json().error).toBe("invalid_grant");
+    } finally {
+      for (const row of bindings)
+        await db
+          .update(githubInstallations)
+          .set({ suspendedAt: row.suspendedAt })
+          .where(eq(githubInstallations.id, row.id));
+      await db.delete(githubInstallations).where(eq(githubInstallations.id, extraId));
+      await db.delete(githubConnections).where(eq(githubConnections.id, connectionId));
+    }
   });
 
   it("resolves a current member and rejects cross-tenant claims", async () => {
