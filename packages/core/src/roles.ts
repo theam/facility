@@ -24,6 +24,6 @@ export const BUNDLED_ROLES = [
   {
     name: "viewer",
     description: "Read-only access.",
-    permissions: allReads,
+    permissions: [...allReads, "sessions:observe"],
   },
 ] satisfies BundledRole[];

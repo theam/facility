@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { StoryActions } from "../components/story/story-actions";
 import type { StoryAgent, WorkspaceStory } from "../lib/api";
 import { storyDraftKey, writeStoryDraft } from "../lib/story-draft";
@@ -29,7 +29,7 @@ const baseStory = {
 } as WorkspaceStory;
 let container: HTMLDivElement;
 let root: Root;
-let fetch: ReturnType<typeof vi.fn>;
+let fetch: Mock<(input: string, options: RequestInit) => Promise<Response>>;
 let scroll: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -44,7 +44,11 @@ beforeEach(() => {
     value: scroll,
   });
   fetch = vi.fn(async () => Response.json({ queued: { queued: false } }));
-  vi.stubGlobal("fetch", fetch);
+  vi.stubGlobal("fetch", (input: string, options: RequestInit) =>
+    options.method === "GET" && input.endsWith("/session/status")
+      ? Promise.resolve(Response.json({ holder: null }))
+      : fetch(input, options),
+  );
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -305,8 +309,8 @@ describe("story composer continuity", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     const [firstCall, secondCall] = fetch.mock.calls;
     if (!firstCall || !secondCall) throw Error("Missing send attempts");
-    const first = JSON.parse(firstCall[1].body);
-    const second = JSON.parse(secondCall[1].body);
+    const first = JSON.parse(String(firstCall[1].body));
+    const second = JSON.parse(String(secondCall[1].body));
     expect(first.idempotency_key).toBe(second.idempotency_key);
     expect(first.agent).toBe("implementer");
     expect(first.message).toBe("Retry this exact request");
@@ -373,14 +377,14 @@ describe("story composer continuity", () => {
     await submit();
     const failed = fetch.mock.calls[0];
     if (!failed) throw Error("Missing failed attempt");
-    const key = JSON.parse(failed[1].body).idempotency_key;
+    const key = JSON.parse(String(failed[1].body)).idempotency_key;
     await render("person-b");
     await render();
     await click("Send a task");
     await submit();
     const retried = fetch.mock.calls[1];
     if (!retried) throw Error("Missing retry");
-    expect(JSON.parse(retried[1].body).idempotency_key).toBe(key);
+    expect(JSON.parse(String(retried[1].body)).idempotency_key).toBe(key);
   });
 
   it("uses a new request identity after the failed request is edited", async () => {
@@ -393,8 +397,8 @@ describe("story composer continuity", () => {
     await submit();
     const [original, changed] = fetch.mock.calls;
     if (!original || !changed) throw Error("Missing attempts");
-    expect(JSON.parse(changed[1].body).idempotency_key).not.toBe(
-      JSON.parse(original[1].body).idempotency_key,
+    expect(JSON.parse(String(changed[1].body)).idempotency_key).not.toBe(
+      JSON.parse(String(original[1].body)).idempotency_key,
     );
   });
 });

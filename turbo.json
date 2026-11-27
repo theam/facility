@@ -1,6 +1,8 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalPassThroughEnv": [
+    "FACILITY_SESSION_DIRECTORY",
+    "FACILITY_SESSION_READ",
     "FACILITY_GITHUB_CREDENTIALS",
     "FACILITY_PREVIEW_GATEWAY_TOKEN",
     "FACILITY_NATIVE_PREVIEW"

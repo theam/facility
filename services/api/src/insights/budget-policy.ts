@@ -5,6 +5,9 @@ export class BudgetPolicyError extends Error {
       | "budget_model_unpriced"
       | "budget_usage_unconfirmed"
       | "budget_reservation_not_found"
+      | "budget_session_closed"
+      | "budget_usage_regressed"
+      | "budget_usage_conflict"
       | "model_call_conflict"
       | "model_call_invalid"
       | "model_call_not_owned",

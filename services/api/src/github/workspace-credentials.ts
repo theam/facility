@@ -43,8 +43,9 @@ export class GithubWorkspaceCredentialBroker {
     orgId: string,
     projectId: string,
     options: { readOnly?: boolean } = {},
+    db = this.db,
   ): Promise<GithubWorkspaceCredentials> {
-    const repositories = await this.db
+    const repositories = await db
       .select()
       .from(projectRepositories)
       .where(
@@ -73,7 +74,7 @@ export class GithubWorkspaceCredentialBroker {
         "every project repository must have a GitHub installation",
       );
     }
-    const installations = await this.db
+    const installations = await db
       .select()
       .from(githubInstallations)
       .where(
@@ -112,21 +113,24 @@ export class GithubWorkspaceCredentialBroker {
               (async () =>
                 [
                   scopeKey(first),
-                  await this.tokenFactory({
-                    installationId: installation.installationId,
-                    ...(pinned
-                      ? {
-                          repositoryIds: group.flatMap((repository) =>
-                            repository.githubRepositoryId == null
-                              ? []
-                              : [repository.githubRepositoryId],
-                          ),
-                        }
-                      : { repositories: group.map((repository) => repository.name) }),
-                    ...(options.readOnly
-                      ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } }
-                      : {}),
-                  }),
+                  await this.tokenFactory(
+                    {
+                      installationId: installation.installationId,
+                      ...(pinned
+                        ? {
+                            repositoryIds: group.flatMap((repository) =>
+                              repository.githubRepositoryId == null
+                                ? []
+                                : [repository.githubRepositoryId],
+                            ),
+                          }
+                        : { repositories: group.map((repository) => repository.name) }),
+                      ...(options.readOnly
+                        ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } }
+                        : {}),
+                    },
+                    db,
+                  ),
                 ] as const)(),
             ];
           });
@@ -178,7 +182,7 @@ export class GithubWorkspaceCredentialBroker {
           owner: repository.owner,
           name: repository.name,
           defaultBranch: repository.defaultBranch,
-          developmentBranch: await repositoryDevelopmentBranch(this.db, repository),
+          developmentBranch: await repositoryDevelopmentBranch(db, repository),
           role: repository.role as "primary" | "related",
           gitIdentity: tokens.get(scopeKey(repository))?.gitIdentity,
         })),

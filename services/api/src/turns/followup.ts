@@ -3,13 +3,14 @@ import { newId } from "@facility/core";
 import {
   type FacilityDb,
   projects,
+  sessionWaiters,
   stories,
   storyMessages,
   turnEvents,
   turns,
   workspaces,
 } from "@facility/db";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { authorizeWorkspaceExecution } from "../auth/workspace-execution.js";
 import { ApiError } from "../errors.js";
@@ -314,8 +315,24 @@ export async function queueFollowup(db: FacilityDb, turn: Turn, story: Story, no
       ),
     )
     .limit(1);
+  // A connected person waiting for the native session goes ahead of automation.
   const canceled =
     !!pending ||
+    !!(
+      await db
+        .select({ id: sessionWaiters.id })
+        .from(sessionWaiters)
+        .where(
+          and(
+            eq(sessionWaiters.orgId, turn.orgId),
+            eq(sessionWaiters.projectId, turn.projectId),
+            eq(sessionWaiters.storyId, turn.storyId),
+            eq(sessionWaiters.waiting, true),
+            gt(sessionWaiters.expiresAt, now),
+          ),
+        )
+        .limit(1)
+    )[0] ||
     !storyCanFollowUp(story) ||
     !chain ||
     !canScheduleFollowup(chain, scheduledFor) ||

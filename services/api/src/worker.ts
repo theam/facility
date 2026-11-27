@@ -1,5 +1,5 @@
 import { budgetReservations, createDb, type FacilityDb, turns, turnUsage } from "@facility/db";
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import pino from "pino";
 import { readConfig } from "./config.js";
@@ -14,9 +14,8 @@ import type { StoryTitleService } from "./stories/titles.js";
 import { createStoryDomain } from "./story-domain.js";
 import { configureTurnQueue } from "./turn-queue.js";
 import { FOLLOWUP_TRIGGER } from "./turns/followup.js";
+import { TURN_LEASE_TIMEOUT_MS } from "./turns/lease-heartbeat.js";
 import { ecsTaskProtection, WorkerTurnGuard } from "./worker-task-protection.js";
-
-const TURN_LEASE_TIMEOUT_MS = 2 * 60 * 1_000;
 
 export async function startWorker() {
   const config = readConfig();
@@ -188,6 +187,7 @@ export async function startWorker() {
         }
         result = { ...outcome, title: undefined };
       } else if (queue === "agent.schedules") {
+        await storyDomain.sessions.reconcile();
         const interruptedTurns = await recoverInterruptedTurns(
           db,
           storyDomain.stories,
@@ -294,6 +294,7 @@ export async function recoverQueuedTurns(
     .where(
       and(
         eq(turns.state, "queued"),
+        sql`${turns.triggerType} <> 'interactive'`,
         or(isNull(turns.retryAfter), lte(turns.retryAfter, new Date())),
       ),
     )
@@ -387,7 +388,13 @@ export async function recoverInterruptedTurns(
       storyId: turns.storyId,
     })
     .from(turns)
-    .where(and(eq(turns.state, "running"), lte(turns.updatedAt, staleBefore)))
+    .where(
+      and(
+        eq(turns.state, "running"),
+        sql`${turns.triggerType} <> 'interactive'`,
+        lte(turns.updatedAt, staleBefore),
+      ),
+    )
     .orderBy(asc(turns.updatedAt))
     .limit(1_000);
   let recovered = 0;

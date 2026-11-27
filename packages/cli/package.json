@@ -33,6 +33,7 @@
     "node": "^22.13.0 || ^24.0.0"
   },
   "dependencies": {
+    "ws": "^8.18.3",
     "postgres": "^3.4.7"
   },
   "scripts": {

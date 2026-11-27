@@ -38,6 +38,13 @@ function question(
 }
 
 describe("turn conversation context", () => {
+  it("describes the actual GitHub credential lifetime for interactive sessions", () => {
+    expect(prompt([])).toContain("Facility renews their scoped credentials during the turn");
+    const interactive = buildPrompt(manifest, story, null, [], "interactive", [], [], "fixed");
+    expect(interactive).toContain("leave and attach again to prepare fresh credentials");
+    expect(interactive).not.toContain("Facility renews");
+  });
+
   it("includes a predecessor response appended after a review was queued, before the review request", () => {
     const result = prompt([
       message(1, "user", "Build the change", "builder"),

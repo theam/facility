@@ -352,17 +352,19 @@ export type WorkspaceStoryBundle = {
   completion?: StoryCompletion;
   /** Absent on older servers. Missing metadata never implies an approved plan. */
   plans?: StoryPlans;
+
+  session?: StorySessionStatus;
   story: WorkspaceStory;
   assignees: StoryAssignee[];
   workspace: StoryWorkspace | null;
   conversation: { id: string; summary: string | null } | null;
   turns: Array<{
     id: string;
-    triggerType?: string;
     agentName: string;
     engine: string;
     model: string;
     state: string;
+    triggerType?: string;
     error: string | null;
     createdAt: string;
   }>;
@@ -393,6 +395,25 @@ export type WorkspaceStoryBundle = {
   status: WorkspaceStory["status"];
   needs_attention: boolean;
   next_operations: string[];
+};
+
+export type StorySessionStatus = {
+  supported: boolean;
+  phase?: string;
+  completedByMerge?: boolean;
+  holder: {
+    turnId: string;
+    kind: "person" | "facility";
+    userId?: string;
+    name: string;
+    since: string;
+    trigger: string;
+    agent: string;
+    engine: string;
+    state: string;
+    message?: string;
+  } | null;
+  waiting: Array<{ userId: string; name: string | null; since: string }>;
 };
 export type StoryTimelineEntry = {
   id: string;

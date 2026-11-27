@@ -37,6 +37,8 @@ export function StoryActions({
   waitingAgent,
   artifacts,
   draftOwnerId,
+  session,
+  canControlSession = false,
   title,
 }: {
   projectId: string;
@@ -48,6 +50,8 @@ export function StoryActions({
   waitingAgent: string | null;
   artifacts: Artifact[];
   draftOwnerId?: string;
+  session?: WorkspaceStoryBundle["session"];
+  canControlSession?: boolean;
   /** Heading shown at the left of the action row, such as "Conversation". */
   title?: string;
 }) {
@@ -83,6 +87,18 @@ export function StoryActions({
 
   return (
     <div className="flex flex-col gap-3">
+      <SessionHolderBanner
+        session={session}
+        onTakeover={
+          canSend && canControlSession
+            ? () => {
+                setOpen(true);
+                setHasOpened(true);
+                setFocusRequest((value) => value + 1);
+              }
+            : undefined
+        }
+      />
       <div className="flex flex-wrap items-center justify-between gap-3">
         {title ? <h2 className="text-[15px] font-semibold">{title}</h2> : null}
         <section
@@ -116,7 +132,7 @@ export function StoryActions({
               Ask without changes
             </ButtonLink>
           ) : null}
-          {canExecute && activeTurn ? (
+          {canExecute && activeTurn && activeTurn.triggerType !== "interactive" ? (
             <CancelTurnButton
               projectId={projectId}
               storyId={story.id}
@@ -166,6 +182,7 @@ export function StoryActions({
                 close();
               }}
               onCancel={close}
+              canControlSession={canControlSession}
             />
           ) : null}
         </div>
@@ -174,6 +191,51 @@ export function StoryActions({
         {notice}
       </p>
     </div>
+  );
+}
+
+export function SessionHolderBanner({
+  session,
+  onTakeover,
+}: {
+  session?: WorkspaceStoryBundle["session"];
+  onTakeover?: () => void;
+}) {
+  if (!session) return null;
+  return (
+    <aside className="rounded-lg border border-(--line) p-3 text-sm" aria-label="Session holder">
+      {session.holder ? (
+        <p>
+          {session.holder.kind === "person"
+            ? `${session.holder.name} has an interactive session open`
+            : `${session.holder.agent} is running a Facility turn (${session.holder.trigger})`}{" "}
+          since{" "}
+          <time dateTime={session.holder.since}>
+            {new Date(session.holder.since).toLocaleString()}
+          </time>
+          .
+        </p>
+      ) : (
+        <p>The story session is free.</p>
+      )}
+      {session.waiting.length ? (
+        <p>
+          {session.waiting.map((person) => person.name ?? "A person").join(", ")} is waiting to
+          enter; queued messages run after.
+        </p>
+      ) : null}
+      {!session.supported ? (
+        <p>
+          Interactive sessions are not supported yet on this provider. The conversation remains
+          available read-only.
+        </p>
+      ) : null}
+      {session.supported && session.holder?.kind === "person" && onTakeover ? (
+        <Button type="button" size="sm" onClick={onTakeover}>
+          Take over and send a task
+        </Button>
+      ) : null}
+    </aside>
   );
 }
 
@@ -192,6 +254,7 @@ export function StoryComposer({
   formLabel = "Send a task",
   retargetRequest = 0,
   computeState,
+  canControlSession = false,
 }: {
   projectId: string;
   storyId: string;
@@ -207,6 +270,7 @@ export function StoryComposer({
   formLabel?: string;
   retargetRequest?: number;
   computeState?: StoryWorkspace["state"];
+  canControlSession?: boolean;
 }) {
   const router = useRouter();
   const defaultAgent =
@@ -227,6 +291,14 @@ export function StoryComposer({
   const [filesOpen, setFilesOpen] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [held, setHeld] = useState<NonNullable<
+    NonNullable<WorkspaceStoryBundle["session"]>["holder"]
+  > | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (held) dialog.current?.showModal?.();
+    else dialog.current?.close?.();
+  }, [held]);
   const form = useRef<HTMLFormElement>(null);
   const sending = useRef(false);
   const handledRetarget = useRef(0);
@@ -287,6 +359,33 @@ export function StoryComposer({
     sending.current = true;
     setPending(true);
     setError("");
+    try {
+      const status = await clientApi<NonNullable<WorkspaceStoryBundle["session"]>>(
+        "GET",
+        storyPath(projectId, storyId, "/session/status"),
+      );
+      if (!mounted.current) return;
+      if (!status.ok) {
+        setError(status.message);
+        return;
+      }
+      if (status.data.holder?.kind === "person") {
+        setHeld(status.data.holder);
+        return;
+      }
+    } finally {
+      sending.current = false;
+      if (mounted.current) setPending(false);
+    }
+    await send();
+  }
+
+  async function send(takeover = false) {
+    if (sending.current || !loaded || uploadBusy || uploadAttempt || !agent || !message.trim())
+      return;
+    sending.current = true;
+    setPending(true);
+    setError("");
     const key = draft.idempotencyKey ?? `ui-message-${crypto.randomUUID()}`;
     const attempt = { ...draft, idempotencyKey: key };
     setDraft(attempt);
@@ -294,7 +393,13 @@ export function StoryComposer({
     const result = await clientApi<{ queued: { queued: boolean } }>(
       "POST",
       storyPath(projectId, storyId, "/messages"),
-      { agent, message, attachment_ids: draft.attachmentIds, idempotency_key: key },
+      {
+        agent,
+        message,
+        attachment_ids: draft.attachmentIds,
+        idempotency_key: key,
+        ...(takeover && held ? { takeover_turn_id: held.turnId, confirm_takeover: true } : {}),
+      },
     );
     if (result.ok) clearSentStoryDraft(storageKey, attempt);
     if (!mounted.current) return;
@@ -304,6 +409,7 @@ export function StoryComposer({
       setError(result.message);
       return;
     }
+    setHeld(null);
     const sent = result.data.queued?.queued
       ? `Queued for ${agent}; it starts after the current run.`
       : `Sent to ${agent}.`;
@@ -329,6 +435,34 @@ export function StoryComposer({
       className="grid gap-3 rounded-lg border border-(--line) bg-(--bg) p-4 sm:p-5"
       aria-label={formLabel}
     >
+      <dialog
+        ref={dialog}
+        onCancel={() => setHeld(null)}
+        aria-label="Session is held"
+        className="border border-(--line) bg-(--bg) p-5 text-(--ink) backdrop:bg-black/50"
+      >
+        {held ? (
+          <>
+            <p>
+              {held.name} has had an interactive session open since{" "}
+              {new Date(held.since).toLocaleString()}.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button type="button" disabled={pending} onClick={() => void send(false)}>
+                Send when it ends
+              </Button>
+              {canControlSession ? (
+                <Button type="button" disabled={pending} onClick={() => void send(true)}>
+                  Take over and send now
+                </Button>
+              ) : null}
+              <Button type="button" disabled={pending} onClick={() => setHeld(null)}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </dialog>
       <Field label="Message">
         <TextArea
           aria-label="Message"
