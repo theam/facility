@@ -38,6 +38,7 @@ Facility origin; terminal clients authenticate with a bearer header.
 
 ```bash
 facility attach story_example
+facility --attach
 facility attach https://api.facility.example/projects/proj_example/stories/story_example
 facility new demo "Investigate the failing test"
 facility new demo --agent builder
@@ -48,8 +49,15 @@ facility preview demo#101 web
 
 `project#number` resolves a GitHub issue story in that project. Use the story id
 for manual stories, or when a number is ambiguous. Without a story argument,
-attach offers stories with open attention. Listings cover projects visible to
-the signed-in account. `--instance <api-origin>` selects another saved login.
+`facility attach` (also `facility --attach`) lists stories with open attention,
+including their current session holder. Enter text and press Enter to filter by
+title, project, story id, issue number, phase or holder; enter a displayed number
+to attach. Use `/all` to include stories without attention, `/needs-you` to
+return, `/` to clear a search, and `/next` or `/prev` to page. Prefix a numeric
+search with `/`, such as `/101`. `/cancel` leaves without attaching. Empty
+results keep the search open. Listings cover projects visible to the signed-in
+account. `--instance <api-origin>` selects another saved login. Ownership and
+permissions are checked again when entering the selected story.
 
 An initial ask creates a Facility turn, which you watch before entering. Without
 an ask, `new` prepares the workspace without sending an automated turn. The

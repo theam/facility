@@ -122,7 +122,9 @@ to check the full setup. The [CLI reference](apps/docs/docs/reference/cli.md)
 covers creating the repository configuration from a terminal. The
 [terminal sessions guide](apps/docs/docs/guides/terminal-sessions.md) covers
 `facility login`, `attach`, `new`, `stories` and `preview` for Docker story
-workspaces, including session ownership, takeover and imported usage.
+workspaces, including session ownership, takeover and imported usage. Run
+`facility attach` or `facility --attach` without a story to list, filter and
+choose a session.
 
 ## Before connecting more repositories
 

@@ -163,7 +163,7 @@ test("remote story commands resolve scoped references, page holders and open the
   if (!process.stdin.isTTY) await assert.rejects(attach(origin, "story_fixture"), /requires a terminal/);
 });
 
-test("attach reconnects, confirms the displayed holder, bridges binary input and resize, and restores the terminal", { timeout: 15_000 }, async (t) => {
+test("attach without a reference filters stories, connects the selection, confirms takeover and restores the terminal", { timeout: 15_000 }, async (t) => {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(server, "listening");
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -173,7 +173,12 @@ test("attach reconnects, confirms the displayed holder, bridges binary input and
   const stdin = new EventEmitter(); stdin.isTTY = true; stdin.isRaw = false;
   stdin.setRawMode = (raw) => { stdin.isRaw = raw; }; stdin.resume = () => undefined; stdin.pause = () => undefined;
   const stdout = new EventEmitter(); stdout.isTTY = true; stdout.columns = 80; stdout.rows = 24;
-  let transcript = ""; stdout.write = (value) => { transcript += value.toString(); return true; };
+  const selection = ["/all", "demo review ada", "1"];
+  let transcript = ""; stdout.write = (value) => {
+    transcript += value.toString();
+    if (value.toString().includes("Search or select:")) queueMicrotask(() => stdin.emit("data", Buffer.from(`${selection.shift()}\n`)));
+    return true;
+  };
   const reports = []; const reporter = { attach: (...args) => reports.push(["attach", ...args]), state: (...args) => reports.push(["state", ...args]), release: async () => reports.push(["release"]) };
   let operation;
   t.after(async () => {
@@ -184,11 +189,22 @@ test("attach reconnects, confirms the displayed holder, bridges binary input and
     await rm(directory, { recursive: true, force: true });
   });
   await saveInstance(origin, { access_token: "fixture-access", expires_at: Date.now() + 100_000, issuer: origin }, () => ({ status: 1 }));
-  globalThis.fetch = async () => Response.json({ story: { title: "Terminal fixture" }, turns: [{ engine: "codex" }] });
+  globalThis.fetch = async (value) => {
+    const url = new URL(value);
+    if (url.pathname === "/v1/projects") return Response.json([{ id: "proj_fixture", slug: "demo" }]);
+    if (url.pathname.endsWith("/backlog")) return Response.json({ items: [
+      { title: "Build", phase: "attention", attention: [{ id: "attention" }], story: { id: "story_other" } },
+      { title: "Review login", phase: "ready", attention: [], story: { id: "story_fixture" } },
+    ], total: 2 });
+    if (url.pathname.endsWith("/session-holders")) return Response.json({ holders: { story_fixture: { name: "Ada" } }, next_offset: null });
+    assert.equal(url.pathname, "/v1/projects/proj_fixture/workspace-stories/story_fixture");
+    return Response.json({ story: { title: "Terminal fixture" }, turns: [{ engine: "codex" }] });
+  };
   console.log = () => undefined;
   let connections = 0; const identities = new Set(); const controls = []; const input = [];
   server.on("connection", (socket, request) => {
     assert.equal(request.headers.authorization, "Bearer fixture-access");
+    assert.equal(new URL(request.url, origin).pathname, "/v1/projects/proj_fixture/workspace-stories/story_fixture/session");
     identities.add(new URL(request.url, origin).searchParams.get("client_id")); connections++;
     if (connections === 1) { socket.close(1001, "API restart"); return; }
     socket.send(JSON.stringify({ type: "holder", phase: "working", writer: false, holder: { kind: "facility", turnId: "turn_original", name: "builder", since: "2026-01-01T00:00:00Z" } }));
@@ -202,7 +218,7 @@ test("attach reconnects, confirms the displayed holder, bridges binary input and
       if (control.type === "leave") { socket.send(JSON.stringify({ type: "session_ended", reason: "left", message: "Session retained" })); socket.close(1000); }
     });
   });
-  operation = attach(origin, `${origin}/projects/proj_fixture/stories/story_fixture`, { stdin, stdout, reporter });
+  operation = attach(origin, undefined, { stdin, stdout, reporter });
   const wait = async (predicate) => { const until = Date.now() + 5000; while (!predicate()) { assert.ok(Date.now() < until, "terminal transition timed out"); await new Promise((resolve) => setTimeout(resolve, 10)); } };
   await wait(() => connections === 2 && reports.some((report) => report[0] === "state"));
   stdin.emit("data", Buffer.from([3])); await wait(() => transcript.includes("[y/N]"));

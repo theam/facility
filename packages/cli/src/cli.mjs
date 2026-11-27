@@ -43,7 +43,7 @@ function help() {
   ]);
   helpGroup("Story sessions", [
     ["login [url]", "sign in with your browser"],
-    ["attach [story]", "attach to a native Claude Code or Codex session"],
+    ["attach [story]", "attach, or list and filter stories (also --attach)"],
     ["new <project> [ask]", "create a story and attach (--agent, --issue)"],
     ["stories", "list stories and holders (--needs-you, --json)"],
     ["preview [story] [service]", "print a preview URL"],
@@ -84,7 +84,7 @@ export async function main(argv) {
     }
     if (flags.issue && !/^[1-9][0-9]*$/.test(flags.issue)) throw new Error("--issue requires a positive issue number");
     if (flags.help) {
-      console.log({ login: "facility login [url] — browser sign-in with a loopback callback on this computer", attach: "facility attach [project#number|story-id|url] [--instance url] — Ctrl-] leaves; Ctrl+C confirms takeover while watching", new: 'facility new <project> ["ask"] [--agent name] [--issue 123] [--instance url]', stories: "facility stories [--needs-you] [--json] [--instance url]", preview: "facility preview [story] [service] [--instance url]" }[command]);
+      console.log({ login: "facility login [url] — browser sign-in with a loopback callback on this computer", attach: "facility attach [project#number|story-id|url] [--instance url] (alias: facility --attach) — without a story, list and filter stories; Ctrl-] leaves; Ctrl+C confirms takeover while watching", new: 'facility new <project> ["ask"] [--agent name] [--issue 123] [--instance url]', stories: "facility stories [--needs-you] [--json] [--instance url]", preview: "facility preview [story] [service] [--instance url]" }[command]);
       return 0;
     }
     if (command === "login") {
@@ -211,7 +211,7 @@ function validateLocalFlags(command, flags) {
 }
 
 function extractInvocation(argv) {
-  return { command: argv[0], rest: argv.slice(1) };
+  return { command: argv[0] === "--attach" ? "attach" : argv[0], rest: argv.slice(1) };
 }
 
 function localHelp(command) {

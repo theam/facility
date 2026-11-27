@@ -33,8 +33,13 @@ facility preview [story] [service]
 ```
 
 Session commands accept `--instance <api-origin>` for multiple saved logins.
-Attach accepts `project#number`, a story id, or a story URL. It offers attention
-items when no story is supplied. Ctrl+C while watching confirms takeover;
+Attach accepts `project#number`, a story id, or a story URL. Without a story,
+`facility attach` or its alias `facility --attach` offers a searchable list,
+starting with stories that need attention. Type text and press Enter to filter
+by title, project, id, issue number, phase or holder. `/all` includes every story,
+`/needs-you` returns to attention, `/` clears the search, `/next` and `/prev`
+page, and `/cancel` leaves. Enter a displayed number to attach; use `/101` for
+a numeric search. Ctrl+C while watching confirms takeover;
 Ctrl-] leaves. A terminal is required for `attach` and `new`. See the
 [terminal sessions guide](../guides/terminal-sessions.md) for permissions,
 ownership, accounting, credential storage, provider limits and recovery.

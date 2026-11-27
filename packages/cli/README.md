@@ -8,6 +8,7 @@ Claude Code or Codex session on Docker.
 facility login https://api.facility.example
 facility stories --needs-you
 facility attach demo#101
+facility --attach
 facility new demo "Investigate the failing test"
 facility new demo --agent builder
 facility preview demo#101 web
@@ -20,6 +21,13 @@ cannot attach. Ctrl+C while watching confirms takeover, and Ctrl-] leaves.
 scripts. Vercel sessions remain read-only and report that interactive entry is
 not supported yet. See the [terminal guide](../../apps/docs/docs/guides/terminal-sessions.md)
 for ownership, permissions, persistence, budget, Herdr and recovery behavior.
+
+With no story argument, `facility attach` or `facility --attach` opens a numbered
+list of stories that need attention. Type a search and press Enter to filter by
+title, project, story id, issue number, phase or holder. Use `/all` to list every
+story, `/needs-you` to return, `/` to clear, `/next` and `/prev` to page, and
+`/cancel` to leave. Enter a displayed number to attach; prefix numeric searches
+with `/`, for example `/101`.
 
 ```bash
 cd your-repository

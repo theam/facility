@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline/promises";
 import { stripVTControlCharacters } from "node:util";
 import WebSocket from "ws";
 import { accessToken, readCredentials } from "./credentials.mjs";
 import { HerdrReporter } from "./herdr.mjs";
+import { pickStory } from "./story-picker.mjs";
 
 export const storyPath = (project, story) => `/v1/projects/${encodeURIComponent(project)}/workspace-stories/${encodeURIComponent(story)}`;
 export async function api(instance, path, body) {
@@ -31,7 +31,19 @@ export async function listStories(instance, needsYou = false) {
   }
   return result;
 }
-export async function resolveStory(instance, reference) {
+export async function listStorySessions(instance, needsYou = false) {
+  const stories = await listStories(instance, needsYou);
+  for (const projectId of new Set(stories.map((story) => story.project.id))) {
+    const holders = {}; let offset = 0;
+    do {
+      const result = await api(instance, `/v1/projects/${encodeURIComponent(projectId)}/session-holders?offset=${offset}&limit=1000`);
+      Object.assign(holders, result.holders); offset = result.next_offset;
+    } while (offset !== null && offset !== undefined);
+    for (const story of stories) if (story.project.id === projectId) story.session = { holder: holders[story.id] ?? null };
+  }
+  return stories;
+}
+export async function resolveStory(instance, reference, io = {}) {
   if (reference?.startsWith("http")) {
     const auth = await accessToken(instance);
     const url = new URL(reference);
@@ -43,16 +55,12 @@ export async function resolveStory(instance, reference) {
     if (value.startsWith("story_")) return { projectId, storyId: value };
     reference = `${projectId}#${value}`;
   }
-  const available = await listStories(instance, !reference);
+  const available = !reference && io.withHolders ? await listStorySessions(instance) : await listStories(instance);
   if (!reference) {
-    if (!available.length) throw new Error("No stories need your attention; use facility stories to list all stories");
-    available.forEach((item, index) => console.log(`${index + 1}. ${item.project.slug}: ${item.title}`));
-    const readline = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const index = Number(await readline.question("Attach to story: ")) - 1;
-      if (!Number.isInteger(index) || !available[index]) throw new Error("Invalid story selection");
-      reference = available[index].id;
-    } finally { readline.close(); }
+    if (!available.length) throw new Error("No stories found in your accessible projects");
+    const selected = await pickStory(available, io);
+    if (!selected) return null;
+    return { projectId: selected.project.id, storyId: selected.id, title: selected.title };
   }
   const match = /^(.*)#(\d+)$/.exec(reference);
   const found = available.filter((item) => item.id === reference || (match && [item.project.id, item.project.slug].includes(match[1]) && String(item.issue?.number ?? item.story.externalId) === match[2]));
@@ -80,7 +88,8 @@ export async function attach(instance, reference, { stdin = process.stdin, stdou
     if ((await readCredentials()).instances[origin]) instance = origin;
   }
   if (!stdin.isTTY || !stdout.isTTY) throw new Error("facility attach requires a terminal");
-  const target = await resolveStory(instance, reference);
+  const target = await resolveStory(instance, reference, { stdin, stdout, withHolders: true });
+  if (!target) return 0;
   const bundle = await api(instance, storyPath(target.projectId, target.storyId));
   const auth = await accessToken(instance);
   const resume = `${auth.url}/projects/${encodeURIComponent(target.projectId)}/stories/${encodeURIComponent(target.storyId)}`;
@@ -198,18 +207,9 @@ export async function remoteCommand(command, positional, flags) {
   const instance = flags.instance;
   if (command === "attach") return attach(instance, positional[0]);
   if (command === "stories") {
-    const stories = await listStories(instance, flags["needs-you"]);
-    const holders = new Map();
-    for (const projectId of new Set(stories.map((story) => story.project.id))) {
-      const projectHolders = {}; let offset = 0;
-      do {
-        const result = await api(instance, `/v1/projects/${encodeURIComponent(projectId)}/session-holders?offset=${offset}&limit=1000`);
-        Object.assign(projectHolders, result.holders); offset = result.next_offset;
-      } while (offset !== null && offset !== undefined);
-      holders.set(projectId, projectHolders);
-    }
+    const stories = await listStorySessions(instance, flags["needs-you"]);
     const rows = [];
-    for (const story of stories) rows.push({ project: story.project.slug, id: story.id, title: story.title, phase: story.phase, session: { holder: holders.get(story.project.id)?.[story.id] ?? null } });
+    for (const story of stories) rows.push({ project: story.project.slug, id: story.id, title: story.title, phase: story.phase, session: story.session });
     if (flags.json) console.log(JSON.stringify(rows));
     else for (const row of rows) console.log(`${row.project} ${row.id} · ${row.title} · ${row.session.holder?.name ?? "free"}`);
     return 0;
@@ -227,6 +227,7 @@ export async function remoteCommand(command, positional, flags) {
   }
   if (command === "preview") {
     const target = await resolveStory(instance, positional[0]);
+    if (!target) return 0;
     const bundle = await api(instance, storyPath(target.projectId, target.storyId));
     const services = bundle.workspace?.environment?.ports ?? [];
     const service = positional[1] ?? services[0]?.service;
