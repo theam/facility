@@ -110,6 +110,7 @@ export function bindGithubRepositoryClient(client: Octokit, repositoryId: number
 export type GithubClientFactory = (
   installationId: number,
   repositoryId?: number | null,
+  db?: FacilityDb,
 ) => Promise<Octokit>;
 /** Installation permissions a read-only turn receives: it can read code, pull requests,
  * issues and CI, and cannot push, merge, comment, review or change settings. */
@@ -139,13 +140,16 @@ export function grantedReadPermissions(
   ) as Record<string, "read" | "write">;
 }
 
-export type GithubMaintainerTokenFactory = (input: {
-  installationId: number;
-  repositories?: string[];
-  repositoryIds?: number[];
-  /** Narrows the token below the installation's permissions; omitted, it keeps them all. */
-  permissions?: Record<string, "read" | "write">;
-}) => Promise<{
+export type GithubMaintainerTokenFactory = (
+  input: {
+    installationId: number;
+    repositories?: string[];
+    repositoryIds?: number[];
+    /** Narrows the token below the installation's permissions; omitted, it keeps them all. */
+    permissions?: Record<string, "read" | "write">;
+  },
+  db?: FacilityDb,
+) => Promise<{
   token: string;
   expiresAt: string;
   gitIdentity: GithubGitIdentity;
@@ -153,8 +157,8 @@ export type GithubMaintainerTokenFactory = (input: {
 
 export function createGithubClientFactory(config: AppConfig, db?: FacilityDb): GithubClientFactory {
   if (db)
-    return async (installationId, repositoryId) =>
-      createGithubClientFactory(await installationConfig(db, config, installationId))(
+    return async (installationId, repositoryId, scopedDb = db) =>
+      createGithubClientFactory(await installationConfig(scopedDb, config, installationId))(
         installationId,
         repositoryId,
       );
@@ -199,9 +203,9 @@ export function createGithubMaintainerTokenFactory(
   db?: FacilityDb,
 ): GithubMaintainerTokenFactory {
   if (db)
-    return async (input) =>
+    return async (input, scopedDb = db) =>
       createGithubMaintainerTokenFactory(
-        await installationConfig(db, config, input.installationId),
+        await installationConfig(scopedDb, config, input.installationId),
       )(input);
   if (!config.githubAppId || !config.githubAppPrivateKey) {
     throw new Error("GitHub App credentials are not configured");

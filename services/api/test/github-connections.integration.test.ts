@@ -4,6 +4,7 @@ import {
   apiKeys,
   auditEvents,
   createDb,
+  type FacilityDb,
   githubConnections,
   githubInstallations,
   githubPullRequests,
@@ -452,6 +453,55 @@ describe("multiple GitHub Apps: authenticated API, worker credentials and signed
     expect(repos.statusCode).toBe(200);
     expect(repos.json().items[0].owner).toBe(newOwner);
   });
+  it("prepares session credentials in a single-connection transaction and sees an uncommitted disable", async () => {
+    const single = createDb(databaseUrl, { max: 1 });
+    const factory = createGithubClientFactory(config, single.db);
+    const token = createGithubMaintainerTokenFactory(config, single.db);
+    const broker = new GithubWorkspaceCredentialBroker(single.db, token);
+    try {
+      await expect(
+        single.db.transaction(async (rawTx) => {
+          const tx = rawTx as unknown as FacilityDb;
+          const installation = (
+            await tx
+              .select()
+              .from(githubInstallations)
+              .where(eq(githubInstallations.installationId, base + 1))
+          )[0]!;
+          await tx
+            .update(projectRepositories)
+            .set({ installationId: installation.id, owner: newOwner })
+            .where(eq(projectRepositories.id, repoId));
+          await expect(factory(base + 1, 123, tx)).resolves.toBeDefined();
+          await expect(
+            token({ installationId: base + 1, repositoryIds: [123] }, tx),
+          ).resolves.toMatchObject({ token: `token-${base + 1}` });
+          await expect(broker.issue("org_local", projectId, {}, tx)).resolves.toMatchObject({
+            environment: { GH_TOKEN: `token-${base + 1}` },
+          });
+          await tx
+            .update(githubConnections)
+            .set({ disabledAt: new Date() })
+            .where(eq(githubConnections.id, connectionId));
+          const calls = fake.calls.length;
+          await expect(factory(base + 1, 123, tx)).rejects.toMatchObject({
+            code: "github_connection_disabled",
+          });
+          await expect(
+            token({ installationId: base + 1, repositoryIds: [123] }, tx),
+          ).rejects.toMatchObject({ code: "github_connection_disabled" });
+          await expect(broker.issue("org_local", projectId, {}, tx)).rejects.toMatchObject({
+            code: "github_connection_disabled",
+          });
+          expect(fake.calls).toHaveLength(calls);
+          throw new Error("rollback session credential fixture");
+        }),
+      ).rejects.toThrow("rollback session credential fixture");
+    } finally {
+      await single.client.end({ timeout: 1 });
+    }
+  });
+
   it("rebinds a transferred repository without replacing its retained story references", async () => {
     const url = `/v1/projects/${projectId}/repos/${repoId}`;
     const headers = { ...auth(), "idempotency-key": `rebind-${projectId}` };

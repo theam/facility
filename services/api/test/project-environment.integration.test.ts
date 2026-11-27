@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { newId } from "@facility/core";
 import {
   createDb,
+  type FacilityDb,
   migrate,
   orgMembers,
   orgs,
@@ -208,7 +209,9 @@ environment:
       credentials: scoped,
       branch: "feature/identity",
     };
-    await expect(environment.prepare(input)).rejects.toMatchObject({
+    await expect(
+      db.transaction((tx) => environment.prepare(input, tx as unknown as FacilityDb)),
+    ).rejects.toMatchObject({
       code: "repository_identity_changed",
     });
     replaced = false;
@@ -224,7 +227,9 @@ environment:
       return result;
     });
     try {
-      await expect(environment.prepare(input)).rejects.toMatchObject({
+      await expect(
+        db.transaction((tx) => environment.prepare(input, tx as unknown as FacilityDb)),
+      ).rejects.toMatchObject({
         code: "repository_identity_changed",
       });
       const setup = await exec(retained, {
@@ -238,6 +243,10 @@ environment:
     } finally {
       spy.mockRestore();
     }
+    replaced = false;
+    await expect(
+      db.transaction((tx) => environment.prepare(input, tx as unknown as FacilityDb)),
+    ).resolves.toMatchObject({ primaryCwd: "repos/acme/app" });
   });
   it("configures each checkout with the identity of its own GitHub App", async () => {
     const retained = await runtime.create({ id: newId("ws"), image: "facility-runner:test" });

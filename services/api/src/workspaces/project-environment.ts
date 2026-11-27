@@ -187,7 +187,7 @@ export class GithubProjectManifestSource implements ProjectManifestSource {
       );
     }
     const client = new FacilityGithubClient(
-      await this.factory(installation.installationId, repository.githubRepositoryId),
+      await this.factory(installation.installationId, repository.githubRepositoryId, db),
       {
         githubRepositoryId: repository.githubRepositoryId,
         owner: repository.owner,
@@ -258,6 +258,7 @@ export class ProjectEnvironmentService {
     const client = await this.githubFactory(
       repository.installationNumber,
       repository.githubRepositoryId,
+      this.db,
     );
     const result = await client.rest.repos.get?.({
       owner: repository.owner,

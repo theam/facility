@@ -113,21 +113,24 @@ export class GithubWorkspaceCredentialBroker {
               (async () =>
                 [
                   scopeKey(first),
-                  await this.tokenFactory({
-                    installationId: installation.installationId,
-                    ...(pinned
-                      ? {
-                          repositoryIds: group.flatMap((repository) =>
-                            repository.githubRepositoryId == null
-                              ? []
-                              : [repository.githubRepositoryId],
-                          ),
-                        }
-                      : { repositories: group.map((repository) => repository.name) }),
-                    ...(options.readOnly
-                      ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } }
-                      : {}),
-                  }),
+                  await this.tokenFactory(
+                    {
+                      installationId: installation.installationId,
+                      ...(pinned
+                        ? {
+                            repositoryIds: group.flatMap((repository) =>
+                              repository.githubRepositoryId == null
+                                ? []
+                                : [repository.githubRepositoryId],
+                            ),
+                          }
+                        : { repositories: group.map((repository) => repository.name) }),
+                      ...(options.readOnly
+                        ? { permissions: { ...GITHUB_READ_ONLY_PERMISSIONS } }
+                        : {}),
+                    },
+                    db,
+                  ),
                 ] as const)(),
             ];
           });
